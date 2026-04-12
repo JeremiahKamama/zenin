@@ -5,11 +5,12 @@ services:
   # ── Backend (Node.js + Python) ────────────────────────────────────────────
   - type: web
     name: portv1-backend
-    runtime: node
+    runtime: docker
     plan: free
     rootDir: backend
-    buildCommand: npm install && pip install -r requirements.txt
-    startCommand: node index.js
+   # buildCommand: npm install && pip install -r requirements.txt
+    #startCommand: node index.js
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     autoDeploy: true
     envVars:
