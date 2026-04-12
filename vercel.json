@@ -1,3 +1,14 @@
 {
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD ./backend"
+    "experimentalServices": {
+        "frontend": {
+            "entrypoint": "frontend",
+            "routePrefix": "/",
+            "framework": "vite"
+        },
+        "backend": {
+            "entrypoint": "backend",
+            "routePrefix": "/_/backend"
+            "framework": "node"
+        }
+    }
 }
