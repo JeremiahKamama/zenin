@@ -11,7 +11,7 @@ export function OptionsModule() {
 
   useEffect(() => {
     // Fetch ALL tradeable assets for the dropdown
-    fetch("http://localhost:4000/api/options/crypto/all-assets")
+    fetch("https://portv1-oijx.onrender.com/api/options/crypto/all-assets")
       .then(res => res.json())
       .then(data => {
         if (data.assets && data.assets.length > 0) {
@@ -28,7 +28,7 @@ export function OptionsModule() {
   useEffect(() => {
     if (!activeAsset) return;
     setLoading(true);
-    fetch("http://localhost:4000/api/options/crypto", {
+    fetch("https://portv1-oijx.onrender.com/api/options/crypto", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currency: activeAsset, expiry: activeExpiry })
