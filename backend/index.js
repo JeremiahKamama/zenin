@@ -493,7 +493,8 @@ app.get("/api/watchlist", async (req, res) => {
   const symbols = assets.map((a) => a.symbol);
 
   // Stocks — fetch prices inline (no separate /api/prices call needed)
-  const prices = await fetchYFinancePrices(symbols);
+  const prices = {};
+    // await fetchYFinancePrices(symbols);
 
   const enrichedAssets = assets.map((asset) => ({
     ...asset,
