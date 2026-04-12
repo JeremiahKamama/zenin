@@ -23,7 +23,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     try {
       const type = asset.type || (asset.marketType ? "crypto" : "stock");
       const res = await fetch(
-        `http://localhost:4000/api/history?symbol=${asset.symbol}&type=${type}&interval=${activeInterval}`
+        `https://portv1-oijx.onrender.com/api/history?symbol=${asset.symbol}&type=${type}&interval=${activeInterval}`
       );
       const data = await res.json();
       setHistory(data.history || []);
@@ -37,7 +37,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const fetchPerformance = async () => {
     try {
       const type = asset.type || (asset.marketType ? "crypto" : "stock");
-      const res = await fetch(`http://localhost:4000/api/interval-performance?symbol=${asset.symbol}&type=${type}`);
+      const res = await fetch(`https://portv1-oijx.onrender.com/api/interval-performance?symbol=${asset.symbol}&type=${type}`);
       const data = await res.json();
       setPerformanceMap(data.performance || {});
     } catch (err) {
