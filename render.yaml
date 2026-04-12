@@ -1,0 +1,42 @@
+# Render deployment blueprint — https://render.com/docs/blueprint-spec
+# Commit this file and Render will auto-configure your services.
+
+services:
+  # ── Backend (Node.js + Python) ────────────────────────────────────────────
+  - type: web
+    name: portv1-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && pip install -r requirements.txt
+    startCommand: node index.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://portv1-oijx.onrender.com
+
+  # ── Frontend (React / Vite static site) ───────────────────────────────────
+  - type: web
+    name: portv1-frontend
+    runtime: static
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    routes:
+      # Send all routes to index.html so React Router / client-side nav works
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Cache hashed assets forever; never cache the HTML shell
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /
+        name: Cache-Control
+        value: no-cache

@@ -1,0 +1,5 @@
+
+> portfolio-manager-backend@0.1.0 start
+> node index.js
+
+Portfolio manager backend listening on http://localhost:4000

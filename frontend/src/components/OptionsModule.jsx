@@ -1,0 +1,150 @@
+import { useState, useEffect } from "react";
+
+export function OptionsModule() {
+  const [activeAsset, setActiveAsset] = useState("BTC");
+  const [availableExpiries, setAvailableExpiries] = useState([]);
+  const [activeExpiry, setActiveExpiry] = useState(null);
+  const [allAssets, setAllAssets] = useState(["BTC", "ETH", "SOL"]);
+  const [chain, setChain] = useState([]);
+  const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Fetch ALL tradeable assets for the dropdown
+    fetch("http://localhost:4000/api/options/crypto/all-assets")
+      .then(res => res.json())
+      .then(data => {
+        if (data.assets && data.assets.length > 0) {
+          setAllAssets(data.assets);
+        }
+      })
+      .catch(err => console.error("Error fetching all assets:", err));
+  }, []);
+
+  useEffect(() => {
+    setActiveExpiry(null); // Reset expiry when asset changes
+  }, [activeAsset]);
+
+  useEffect(() => {
+    if (!activeAsset) return;
+    setLoading(true);
+    fetch("http://localhost:4000/api/options/crypto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currency: activeAsset, expiry: activeExpiry })
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.chain) {
+        setChain(data.chain);
+        setAvailableExpiries(data.expiries || []);
+        if (!activeExpiry && data.expiry) {
+          setActiveExpiry(data.expiry);
+        }
+        setMetrics({
+          iv: parseFloat(data.market_metrics.iv) || 0.42,
+          pcr: data.market_metrics.p_c_ratio || 0.85,
+          skew: "Volatile"
+        });
+      }
+    })
+    .catch(err => console.error("Error fetching crypto options:", err))
+    .finally(() => setLoading(false));
+  }, [activeAsset, activeExpiry]);
+
+  const formatDate = (ts) => {
+    if (!ts) return "";
+    return new Date(ts * 1000).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric'
+    }).toUpperCase();
+  };
+
+  return (
+    <div className="view-container options-terminal">
+      <div className="portfolio-analytics-row">
+        <div className="metric-card glass">
+          <label>Implied Volatility <span className="live-pill">Live</span></label>
+          <div className="value">{(metrics.iv * 100).toFixed(1)}%</div>
+          <div className="change positive">▲ Real-time</div>
+        </div>
+        <div className="metric-card glass">
+          <label>Put/Call Ratio</label>
+          <div className="value">{metrics.pcr.toFixed(2)}</div>
+          <div className="change negative">▼ 0.05</div>
+        </div>
+        <div className="metric-card glass">
+          <label>Market Skew</label>
+          <div className="value">{metrics.skew}</div>
+          <div className="change positive">+14.2</div>
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header">
+          <div className="header-left">
+            <h2>{activeAsset} Option Chain</h2>
+            <div className="asset-count">{chain.length} Strikes Available</div>
+          </div>
+          
+          <div className="asset-dropdown-container">
+            <select 
+              className="asset-select glass"
+              value={activeAsset}
+              onChange={(e) => setActiveAsset(e.target.value)}
+            >
+              {allAssets.map(asset => (
+                <option key={asset} value={asset}>{asset}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="expiry-tabs">
+          {availableExpiries.map(ts => (
+            <button 
+              key={ts}
+              className={`expiry-pill ${activeExpiry === ts ? "active" : ""}`}
+              onClick={() => setActiveExpiry(ts)}
+            >
+              {formatDate(ts)}
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <div className="loading-state">Syncing {activeAsset} with Lyra Protocol...</div>
+        ) : (
+          <table className="option-chain-table">
+            <thead>
+              <tr>
+                <th>Delta</th>
+                <th>Bid</th>
+                <th>Ask</th>
+                <th className="strike-col">Strike</th>
+                <th>Bid</th>
+                <th>Ask</th>
+                <th>Theta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {chain.map((row) => (
+                <tr key={row.strike}>
+                  <td className="greek">{row.call?.delta?.toFixed(2) || "0.00"}</td>
+                  <td className="bid-ask positive">${row.call?.bid?.toFixed(2)}</td>
+                  <td className="bid-ask positive">${row.call?.ask?.toFixed(2)}</td>
+                  <td className="strike-col">{row.strike}</td>
+                  <td className="bid-ask negative">${row.put?.bid?.toFixed(2)}</td>
+                  <td className="bid-ask negative">${row.put?.ask?.toFixed(2)}</td>
+                  <td className="greek">
+                    {row.put?.theta?.toFixed(3) || "0.000"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
