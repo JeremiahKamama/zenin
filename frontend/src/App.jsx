@@ -6,7 +6,8 @@ import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://portv1-oijx.onrender.com
+  /api";
 
 function App() {
   const [categories, setCategories] = useState([]);
