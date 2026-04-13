@@ -6,8 +6,7 @@ import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com
-  /api";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 function App() {
   const [categories, setCategories] = useState([]);
