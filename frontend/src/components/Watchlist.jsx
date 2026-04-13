@@ -27,13 +27,16 @@ export function Watchlist({
   onThemeSelect,
   isInWatchlist,
   onToggleStar,
+  onPageChange,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [activeCategory, activeTheme, assets]);
+  if (typeof onPageChange === "function") {
+    onPageChange(currentPage, pagedAssets.map(a => a.symbol));
+  }
+}, [currentPage, activeTheme]);
 
   // Derive the displayed assets based on active theme (stocks only)
   const displayedAssets =
