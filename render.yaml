@@ -10,7 +10,7 @@ services:
     rootDir: backend
    # buildCommand: npm install && pip install -r requirements.txt
     #startCommand: node index.js
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./dockerfile
     healthCheckPath: /health
     autoDeploy: true
     envVars:
