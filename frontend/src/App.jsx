@@ -180,67 +180,94 @@ useEffect(() => {
   };
 
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
-    const normalizedQuantity = Math.max(0, quantity);
-    if (normalizedQuantity <= 0) return;
+  const normalizedQuantity = Math.max(0, quantity);
+  if (normalizedQuantity <= 0) return;
 
-    const direction = orderType === "buy" ? 1 : -1;
-    const actualQuantity = normalizedQuantity * direction;
+  const cost = (asset.price || 0) * normalizedQuantity;
 
-    const newTrade = {
-      id: Date.now(),
-      date: new Date().toISOString().split('T')[0],
-      asset: asset.symbol,
-      type: orderType.toUpperCase(),
-      price: asset.price || 0,
-      profit: 0,
-      status: "Open",
-      quantity: normalizedQuantity
+  if (orderType === "buy") {
+    if (cost > balance) {
+      alert(`Insufficient balance. You need $${(cost - balance).toFixed(2)} more to complete this purchase.`);
+      return;
+    }
+  }
+
+  if (orderType === "sell") {
+    const holding = portfolio.find(
+      item => item.symbol === asset.symbol &&
+      (item.marketType || "spot") === (asset.marketType || "spot")
+    );
+    if (!holding || holding.quantity <= 0) {
+      alert(`You don't hold any ${asset.symbol} to sell.`);
+      return;
+    }
+    if (normalizedQuantity > holding.quantity) {
+      alert(`You can only sell up to ${holding.quantity} ${asset.symbol}.`);
+      return;
+    }
+  }
+
+  const direction = orderType === "buy" ? 1 : -1;
+  const actualQuantity = normalizedQuantity * direction;
+
+  const newTrade = {
+    id: Date.now(),
+    date: new Date().toISOString().split('T')[0],
+    asset: asset.symbol,
+    type: orderType.toUpperCase(),
+    price: asset.price || 0,
+    profit: 0,
+    status: "Open",
+    quantity: normalizedQuantity
+  };
+  setTrades(prev => [newTrade, ...prev]);
+
+  try {
+    const holding = {
+      ...asset,
+      quantity: actualQuantity,
+      orderType,
+      date_added: new Date().toISOString()
     };
-    setTrades(prev => [newTrade, ...prev]);
 
-    try {
-      const holding = {
-        ...asset,
-        quantity: actualQuantity,
-        orderType,
-        date_added: new Date().toISOString()
-      };
+    const response = await fetch(`${BACKEND_URL}/db/portfolio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(holding)
+    });
 
-      const response = await fetch(`${BACKEND_URL}/db/portfolio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(holding)
-      });
+    if (!response.ok) throw new Error(`Failed to ${orderType} asset`);
 
-      if (!response.ok) throw new Error(`Failed to ${orderType} asset`);
-
-      const result = await response.json();
-
-      // Reload portfolio from database to get accurate state
-      fetch(`${BACKEND_URL}/db/portfolio`)
-        .then(res => res.json())
-        .then(data => {
-          // Re-attach prices from current assets state since DB doesn't store live prices
-          const priceMap = {};
-          assets.forEach(a => {
-            priceMap[a.symbol] = { price: a.price, priceChangePercent: a.priceChangePercent };
-          });
-          const holdings = (data.holdings || []).map(h => ({
-            ...h,
-            price: priceMap[h.symbol]?.price ?? h.price ?? asset.price,
-            priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? asset.priceChangePercent
-          }));
-          setPortfolio(holdings);
-        })
-        .catch(console.error);
-
-    } catch (err) {
-      console.error(`Failed to ${orderType} asset:`, err);
-      setTrades(prev => prev.filter(trade => trade.id !== newTrade.id));
+    // Update balance
+    if (orderType === "buy") {
+      setBalance(prev => prev - cost);
+    } else {
+      setBalance(prev => prev + cost);
     }
 
-    setSelectedAsset(null);
-  };
+    fetch(`${BACKEND_URL}/db/portfolio`)
+      .then(res => res.json())
+      .then(data => {
+        const priceMap = {};
+        assets.forEach(a => {
+          priceMap[a.symbol] = { price: a.price, priceChangePercent: a.priceChangePercent };
+        });
+        const holdings = (data.holdings || []).map(h => ({
+          ...h,
+          price: priceMap[h.symbol]?.price ?? h.price ?? asset.price,
+          priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? asset.priceChangePercent
+        }));
+        setPortfolio(holdings);
+      })
+      .catch(console.error);
+
+  } catch (err) {
+    console.error(`Failed to ${orderType} asset:`, err);
+    setTrades(prev => prev.filter(trade => trade.id !== newTrade.id));
+  }
+
+  setSelectedAsset(null);
+};
 
   const removeFromPortfolio = async (id) => {
     try {
@@ -384,6 +411,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             onSelectAsset={setSelectedAsset}
             calculatePortfolioValue={calculatePortfolioValue}
             calculatePortfolioGain={calculatePortfolioGain}
+            balance={balance}
+            onDeposit={deposit}
+            onWithdraw={withdraw}
           />
         )}
         {activeSection === "Watchlist" && (
@@ -634,6 +664,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           onConfirm={addToPortfolio}
           isInWatchlist={isInWatchlist}
           onToggleStar={toggleWatchlistStar}
+          portfolio={portfolio}
+          balance={balance}
         />
       )}
     </div>

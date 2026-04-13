@@ -1,9 +1,12 @@
-export function HomeModule({ 
-  portfolio, 
-  assets, 
-  onSelectAsset, 
-  calculatePortfolioValue, 
-  calculatePortfolioGain 
+export function HomeModule({
+  portfolio,
+  assets,
+  onSelectAsset,
+  calculatePortfolioValue,
+  calculatePortfolioGain,
+  balance = 0,
+  onDeposit,
+  onWithdraw
 }) {
   const topPositions = [...portfolio]
     .sort((a, b) => ((b.price || 0) * (b.quantity || 0)) - ((a.price || 0) * (a.quantity || 0)))
@@ -30,6 +33,28 @@ export function HomeModule({
           <label>Market Sentiment</label>
           <div className="value">Risk On</div>
           <div className="change positive">High Volatility Alpha</div>
+        </div>
+        <div className="metric-card glass">
+          <label>Available Balance</label>
+          <div className="value">${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+            <button
+              className="confirm-order-btn buy"
+              style={{ flex: 1, padding: "6px", fontSize: "12px" }}
+              onClick={() => {
+                const amt = parseFloat(prompt("Deposit amount:"));
+                if (amt > 0) onDeposit(amt);
+              }}
+            >+ Deposit</button>
+            <button
+              className="confirm-order-btn sell"
+              style={{ flex: 1, padding: "6px", fontSize: "12px" }}
+              onClick={() => {
+                const amt = parseFloat(prompt("Withdraw amount:"));
+                if (amt > 0) onWithdraw(amt);
+              }}
+            >− Withdraw</button>
+          </div>
         </div>
       </div>
 

@@ -4,7 +4,7 @@ const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 
-export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar }) {
+export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, portfolio = [], balance = 0 }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeInterval, setActiveInterval] = useState("1D");
@@ -211,12 +211,50 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
             <button className={`sell-selector ${orderType === 'sell' ? 'active' : ''}`} onClick={() => setOrderType('sell')}>Sell</button>
           </div>
         </div>
-
+        {orderType === "sell" && (() => {
+            const holding = portfolio.find(
+              p => p.symbol === asset.symbol &&
+              (p.marketType || "spot") === (asset.marketType || "spot")
+            );
+            const holdingQty = holding?.quantity || 0;
+            const holdingValue = holdingQty * (asset.price || 0);
+            return holdingQty > 0 ? (
+              <div style={{ padding: "8px 0", fontSize: "13px", color: "var(--color-text-secondary)" }}>
+                Your position: <strong style={{ color: "var(--color-text-primary)" }}>
+                  {holdingQty} {asset.symbol}
+                </strong> <span>(${holdingValue.toFixed(2)})</span>
+                {" · "}Max sell: <strong style={{ color: "var(--color-text-danger)" }}>{holdingQty}</strong>
+              </div>
+            ) : (
+              <div style={{ padding: "8px 0", fontSize: "13px", color: "var(--color-text-danger)" }}>
+                You don't hold any {asset.symbol}.
+              </div>
+            );
+          })()}
         <footer className="modal-footer">
           <div className="footer-left">
             <div className="quantity-input">
               <label>Quantity</label>
-              <input type="number" value={quantity} onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)} min="0.0001" step="any" />
+              <input
+                  type="number"
+                  value={quantity}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value) || 0;
+                    if (orderType === "sell") {
+                      const holding = portfolio.find(
+                        p => p.symbol === asset.symbol &&
+                        (p.marketType || "spot") === (asset.marketType || "spot")
+                      );
+                      const max = holding?.quantity || 0;
+                      setQuantity(Math.min(val, max));
+                    } else {
+                      setQuantity(val);
+                    }
+                  }}
+                  min="0.0001"
+                  max={orderType === "sell" ? (portfolio.find(p => p.symbol === asset.symbol)?.quantity || 0) : undefined}
+                  step="any"
+                />
             </div>
             <div className="total-value-display">
               <label>Total Value ($)</label>
