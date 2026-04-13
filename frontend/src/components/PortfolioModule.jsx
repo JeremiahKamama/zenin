@@ -166,35 +166,58 @@ export function PortfolioModule({
 
   return (
     <div style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
-      <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
-        <div className="metric-card glass">
-          <label>Account Value</label>
-          <div className="value">${calculatePortfolioValue().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div className={`change ${calculatePortfolioGain() >= 0 ? "positive" : "negative"}`}>
-            {calculatePortfolioGain() >= 0 ? "▲" : "▼"} ${Math.abs(calculatePortfolioGain()).toFixed(2)}
-          </div>
-        </div>
-        <div className="metric-card glass">
-          <label>Best Performing</label>
-          {portfolio.length > 0 ? (() => {
-            const best = [...portfolio].sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0))[0];
-            return <>
-              <div className="value">{best.symbol}</div>
-              <div className="change positive">+{best.priceChangePercent?.toFixed(2)}%</div>
-            </>;
-          })() : <div className="value">N/A</div>}
-        </div>
-      </div>
+        <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
+                <div className="metric-card glass">
+                  <label>Account Value</label>
+                  <div className="value">${calculatePortfolioValue().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  <div className={`change ${calculatePortfolioGain() >= 0 ? "positive" : "negative"}`}>
+                    {calculatePortfolioGain() >= 0 ? "▲" : "▼"} ${Math.abs(calculatePortfolioGain()).toFixed(2)}
+                  </div>
+                </div>
 
-      <CollapseSection title="Diversification">
-        <div className="watchlist-panel glass" style={{ cursor: "default" }}>
-          {themeSeries.length > 0 ? (
-            <Chart options={pieOptions} series={themeSeries} type="donut" height={240} width="100%" />
-          ) : (
-            <p className="meta" style={{ padding: "20px" }}>No holdings to display.</p>
-          )}
-        </div>
-      </CollapseSection>
+                <div className="metric-card glass">
+                  <label>Best Performing</label>
+                  {portfolio.length > 0 ? (() => {
+                    const best = [...portfolio].sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0))[0];
+                    return <>
+                      <div className="value">{best.symbol}</div>
+                      <div className="change positive">+{best.priceChangePercent?.toFixed(2)}%</div>
+                    </>;
+                  })() : <div className="value">N/A</div>}
+                </div>
+
+                <div className="metric-card glass" style={{ overflow: "hidden" }}>
+                  <label>Diversification</label>
+                  {themeSeries.length > 0 ? (
+                    <Chart
+                      options={{
+                        ...pieOptions,
+                        chart: { ...pieOptions.chart, sparkline: { enabled: false } },
+                        legend: { show: false },
+                        dataLabels: { enabled: false },
+                        plotOptions: { pie: { donut: { size: "70%" } } },
+                      }}
+                      series={themeSeries}
+                      type="donut"
+                      height={80}
+                      width="100%"
+                    />
+                  ) : (
+                    <div className="value" style={{ fontSize: "14px" }}>No holdings</div>
+                  )}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
+                    {themeLabels.slice(0, 4).map((label, i) => (
+                      <span key={label} style={{
+                        fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
+                        background: "rgba(255,255,255,0.06)", color: "var(--color-text-secondary)"
+                      }}>{label}</span>
+                    ))}
+                    {themeLabels.length > 4 && (
+                      <span style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>+{themeLabels.length - 4} more</span>
+                    )}
+                  </div>
+                </div>
+              </div>
 
       <CollapseSection title="Performance Chart">
         <div className="watchlist-panel glass">
