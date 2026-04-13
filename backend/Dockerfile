@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm install --build-from-source
 
 COPY requirements.txt ./
 RUN python3 -m venv /opt/venv && \
