@@ -76,7 +76,6 @@ function App() {
 
     setLoading(true);
     setError(null);
-    setAssets([]);
 
     const marketTypeQuery =
       activeCategory === "crypto" ? `&marketType=${cryptoMarketType}` : "";
