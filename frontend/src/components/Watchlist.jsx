@@ -46,9 +46,14 @@ export function Watchlist({
   const itemsPerPage = activeCategory === "stocks" ? 15 : displayedAssets.length;
   const totalPages = Math.max(1, Math.ceil(displayedAssets.length / itemsPerPage));
   const pagedAssets = displayedAssets.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  (currentPage - 1) * itemsPerPage,
+  currentPage * itemsPerPage
+);
+
+useEffect(() => {
+  onPageChange?.(currentPage, pagedAssets.map(a => a.symbol));
+}, [currentPage, activeTheme]);
+
 
   return (
     <section className="watchlist-panel">

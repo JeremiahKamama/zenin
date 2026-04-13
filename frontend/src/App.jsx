@@ -153,7 +153,27 @@ useEffect(() => {
       .catch(console.error);
   }, [activeTheme]);
 
+  const handlePageChange = (page, visibleSymbols) => {
+  if (activeCategory === "crypto" || !visibleSymbols.length) return;
 
+  fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}&symbols=${encodeURIComponent(visibleSymbols.join(","))}`)
+    .then(res => res.json())
+    .then(priceData => {
+      const priceMap = {};
+      (priceData.assets || []).forEach(a => {
+        priceMap[a.symbol] = {
+          price: a.price,
+          priceChangePercent: a.priceChangePercent
+        };
+      });
+      setAssets(prev => prev.map(a => ({
+        ...a,
+        price: priceMap[a.symbol]?.price ?? a.price,
+        priceChangePercent: priceMap[a.symbol]?.priceChangePercent ?? a.priceChangePercent
+      })));
+    })
+    .catch(console.error);
+  };
   const handleCategorySelect = (category) => {
     setActiveCategory(category);
     if (category !== "stocks") setActiveTheme("Robotics");
@@ -460,6 +480,7 @@ useEffect(() => {
                 onThemeSelect={setActiveTheme}
                 isInWatchlist={isInWatchlist}
                 onToggleStar={toggleWatchlistStar}
+                onPageChange={handlePageChange}
               />
             )}
           </div>
