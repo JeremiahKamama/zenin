@@ -70,6 +70,7 @@ function App() {
       .finally(() => setSearchLoading(false));
   }, [searchTerm, searchType]);
 
+// TO
   useEffect(() => {
     if (!activeCategory) return;
 
@@ -80,17 +81,43 @@ function App() {
     const marketTypeQuery =
       activeCategory === "crypto" ? `&marketType=${cryptoMarketType}` : "";
 
+    // Step 1: load asset list immediately (no prices)
     fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}${marketTypeQuery}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Server responded with ${res.status}`);
         return res.json();
       })
       .then((data) => {
-        // Prices are now included inline for all categories (including stocks)
-        setAssets(data.assets || []);
+        const allAssets = data.assets || [];
+        setAssets(allAssets);
+        setLoading(false);
+
+        // Step 2: fetch prices only for first 15 visible assets
+        if (activeCategory !== "crypto" && allAssets.length > 0) {
+          const visibleSymbols = allAssets.slice(0, 15).map(a => a.symbol).join(",");
+          fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}&symbols=${encodeURIComponent(visibleSymbols)}`)
+            .then(res => res.json())
+            .then(priceData => {
+              const priceMap = {};
+              (priceData.assets || []).forEach(a => {
+                priceMap[a.symbol] = {
+                  price: a.price,
+                  priceChangePercent: a.priceChangePercent
+                };
+              });
+              setAssets(prev => prev.map(a => ({
+                ...a,
+                price: priceMap[a.symbol]?.price ?? a.price,
+                priceChangePercent: priceMap[a.symbol]?.priceChangePercent ?? a.priceChangePercent
+              })));
+            })
+            .catch(console.error);
+        }
       })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        setError(err.message);
+        setLoading(false);
+      });
   }, [activeCategory, cryptoMarketType]);
 
   const handleCategorySelect = (category) => {
