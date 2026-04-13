@@ -2,8 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
 
 export function JournalModule({ trades = [] }) {
-  const [note, setNote] = useState("Market sentiment remains bullish but overextended. Watching for a pullback in high-beta tech symbols. Focused on rotation into energy/metals themes.");
   const [reportPage, setReportPage] = useState(1);
+  const [calendarCursor, setCalendarCursor] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [calendarMode, setCalendarMode] = useState("all"); // all | selected
+  const [calendarSearch, setCalendarSearch] = useState("");
+  const [selectedSymbols, setSelectedSymbols] = useState([]);
 
   useEffect(() => {
     setReportPage(1);
@@ -60,12 +66,16 @@ export function JournalModule({ trades = [] }) {
             ? Math.max(0, Math.round((dateObj.getTime() - lot.date.getTime()) / dayMs))
             : 0;
 
+          const normalizedCloseDate = /^\d{4}-\d{2}-\d{2}$/.test(trade.date || "")
+            ? trade.date
+            : (dateObj ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}` : "");
+
           realized.push({
             asset,
             pnl,
             holdDays,
             volume: price * matchedQty,
-            closeDate: trade.date
+            closeDate: normalizedCloseDate
           });
 
           lot.qty -= matchedQty;
@@ -203,7 +213,8 @@ export function JournalModule({ trades = [] }) {
       maxConsecutiveWin,
       maxConsecutiveLoss,
       largestLoss: Math.abs(largestLoss) <= eps ? 0 : largestLoss,
-      tradedAssetsReport
+      tradedAssetsReport,
+      realizedTrades: realized
     };
   }, [trades]);
 
@@ -252,6 +263,59 @@ export function JournalModule({ trades = [] }) {
     safeReportPage * reportRowsPerPage
   );
 
+  const tradedSymbols = analytics.tradedAssetsReport.map((row) => row.symbol);
+  const filteredSymbolSearch = tradedSymbols.filter((symbol) =>
+    symbol.toLowerCase().includes(calendarSearch.trim().toLowerCase())
+  );
+
+  const addCalendarSymbol = (symbol) => {
+    const s = (symbol || "").trim().toUpperCase();
+    if (!s) return;
+    setSelectedSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
+    setCalendarSearch("");
+  };
+
+  const removeCalendarSymbol = (symbol) => {
+    setSelectedSymbols((prev) => prev.filter((s) => s !== symbol));
+  };
+
+  const calendarPnlByDate = useMemo(() => {
+    const activeSet = new Set(selectedSymbols);
+    const byDate = new Map();
+    for (const trade of analytics.realizedTrades) {
+      if (!trade.closeDate) continue;
+      if (calendarMode === "selected" && !activeSet.has((trade.asset || "").toUpperCase())) {
+        continue;
+      }
+      byDate.set(trade.closeDate, (byDate.get(trade.closeDate) || 0) + (Number(trade.pnl) || 0));
+    }
+    return byDate;
+  }, [analytics.realizedTrades, calendarMode, selectedSymbols]);
+
+  const calendarMonthLabel = calendarCursor.toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric"
+  });
+  const calendarYear = calendarCursor.getFullYear();
+  const calendarMonth = calendarCursor.getMonth();
+  const firstDayOffset = new Date(calendarYear, calendarMonth, 1).getDay();
+  const monthDays = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+  const calendarCells = Array.from({ length: firstDayOffset + monthDays }, (_, idx) => {
+    const dayNum = idx - firstDayOffset + 1;
+    if (dayNum < 1) return { type: "blank", key: `b-${idx}` };
+    const key = `${calendarYear}-${String(calendarMonth + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+    const pnl = calendarPnlByDate.get(key);
+    return { type: "day", key, dayNum, pnl: Number.isFinite(pnl) ? pnl : null };
+  });
+
+  const moveCalendarMonth = (delta) => {
+    setCalendarCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
+  };
+
+  const moveCalendarYear = (delta) => {
+    setCalendarCursor((prev) => new Date(prev.getFullYear() + delta, prev.getMonth(), 1));
+  };
+
   return (
     <div className="view-container journal-dashboard">
       <div className="portfolio-analytics-row journal-top-cards">
@@ -287,7 +351,6 @@ export function JournalModule({ trades = [] }) {
       <div className="watchlist-panel glass">
         <div className="section-header">
           <h2>Analytics</h2>
-          <div className="asset-count">Statistics</div>
         </div>
         <div className="journal-stats-grid">
           {statsRows.map((stat) => (
@@ -323,14 +386,97 @@ export function JournalModule({ trades = [] }) {
             )}
           </div>
         </div>
+      </div>
 
-        <div className="notes-editor glass metric-card">
-          <label>Strategy Notes</label>
-          <textarea 
-            value={note} 
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Log your trading rationale..."
-          />
+      <div className="watchlist-panel glass">
+        <div className="section-header">
+          <h2>Calendar PnL</h2>
+        </div>
+        <div className="calendar-controls">
+          <div className="calendar-nav">
+            <button className="pagination-button" onClick={() => moveCalendarYear(-1)}>« Year</button>
+            <button className="pagination-button" onClick={() => moveCalendarMonth(-1)}>‹ Month</button>
+            <div className="pagination-label">{calendarMonthLabel}</div>
+            <button className="pagination-button" onClick={() => moveCalendarMonth(1)}>Month ›</button>
+            <button className="pagination-button" onClick={() => moveCalendarYear(1)}>Year »</button>
+          </div>
+          <div className="calendar-filter-toggle">
+            <button
+              className={`pagination-button ${calendarMode === "all" ? "active" : ""}`}
+              onClick={() => setCalendarMode("all")}
+            >
+              All Symbols
+            </button>
+            <button
+              className={`pagination-button ${calendarMode === "selected" ? "active" : ""}`}
+              onClick={() => setCalendarMode("selected")}
+            >
+              Selected Symbols
+            </button>
+          </div>
+          <div className="calendar-symbol-search">
+            <input
+              className="search-input"
+              placeholder="Search or type symbol..."
+              value={calendarSearch}
+              onChange={(e) => setCalendarSearch(e.target.value)}
+            />
+            <button className="pagination-button" onClick={() => addCalendarSymbol(calendarSearch)}>Add</button>
+          </div>
+          {calendarSearch.trim() && (
+            <div className="calendar-symbol-results">
+              {filteredSymbolSearch.length > 0 ? (
+                filteredSymbolSearch.slice(0, 8).map((symbol) => (
+                  <button
+                    key={symbol}
+                    className="theme-pill"
+                    onClick={() => addCalendarSymbol(symbol)}
+                  >
+                    {symbol}
+                  </button>
+                ))
+              ) : (
+                <span className="meta">No traded symbols found for this search.</span>
+              )}
+            </div>
+          )}
+          {selectedSymbols.length > 0 && (
+            <div className="calendar-selected-symbols">
+              {selectedSymbols.map((symbol) => (
+                <button
+                  key={symbol}
+                  className="theme-pill active"
+                  onClick={() => removeCalendarSymbol(symbol)}
+                  title="Remove symbol"
+                >
+                  {symbol} ×
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="calendar-grid-header">
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+            <div key={d}>{d}</div>
+          ))}
+        </div>
+        <div className="calendar-grid">
+          {calendarCells.map((cell) => {
+            if (cell.type === "blank") {
+              return <div key={cell.key} className="calendar-cell blank" />;
+            }
+            return (
+              <div key={cell.key} className={`calendar-cell ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>
+                <div className="calendar-day">{cell.dayNum}</div>
+                {cell.pnl != null && (
+                  <div className="calendar-pnl">
+                    {cell.pnl >= 0 ? "+" : ""}
+                    {formatValue(cell.pnl, true)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

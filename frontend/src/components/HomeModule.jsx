@@ -27,6 +27,15 @@ export function HomeModule({
 
   const portfolioValue = calculatePortfolioValue();
   const initialBalance = 10000;
+  const isTreasuryAsset = (asset) => {
+    const symbol = (asset?.symbol || "").toUpperCase();
+    return asset?.market === "Treasury" || /^USTY?\d+Y$/.test(symbol);
+  };
+  const formatAssetPrice = (asset) => {
+    const value = Number(asset?.price || 0);
+    if (isTreasuryAsset(asset)) return `${value.toFixed(2)}%`;
+    return `$${value.toFixed(2)}`;
+  };
 
   // Simulated chart data based on mode and interval
   const generateChartData = () => {
@@ -143,7 +152,7 @@ export function HomeModule({
         <div className="section-header" style={{ marginBottom: "8px" }}>
           <h2>Portfolio Performance</h2>
           <div style={{ display: "flex", gap: "6px" }}>
-            {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
+            {[["equity", "Equity Curve (Account Value)"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
               <button
                 key={mode}
                 onClick={() => setChartMode(mode)}
@@ -157,10 +166,15 @@ export function HomeModule({
             ))}
           </div>
         </div>
+        {chartMode === "equity" && (
+          <div style={{ marginBottom: "8px", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+            Equity curve shows account value over time: starting balance plus cumulative gains and losses.
+          </div>
+        )}
 
         <Chart
           options={chartOptions}
-          series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Portfolio Value", data: chartData }]}
+          series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve (Account Value)", data: chartData }]}
           type="area"
           height={220}
           width="100%"
@@ -186,7 +200,7 @@ export function HomeModule({
         {/* Top Positions */}
         <div className="watchlist-panel glass">
           <div className="section-header">
-            <h2>Top Positions</h2>
+            <h2 className="home-subsection-title">Top Positions</h2>
             <div className="asset-count">By Value</div>
           </div>
           <div className="home-asset-list">
@@ -199,7 +213,11 @@ export function HomeModule({
                       <span className="symbol">{asset.symbol}</span>
                     </div>
                     <div className="value-info">
-                      <div className="price">${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                      <div className="price">
+                        {isTreasuryAsset(asset)
+                          ? `${Number(asset.price || 0).toFixed(2)}%`
+                          : `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                      </div>
                       <div className="qty">{asset.quantity} Units</div>
                     </div>
                   </div>
@@ -217,8 +235,7 @@ export function HomeModule({
             
             <div style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
-                <h2>Top Gainers</h2>
-                <div className="asset-count positive">Today</div>
+                <h2 className="home-subsection-title">Top Gainers</h2>
               </div>
               <div className="home-asset-list">
                 {gainers.length > 0 ? gainers.map((asset) => (
@@ -227,7 +244,7 @@ export function HomeModule({
                       <span className="symbol">{asset.symbol}</span>
                     </div>
                     <div className="value-info">
-                      <div className="price">${(asset.price || 0).toFixed(2)}</div>
+                      <div className="price">{formatAssetPrice(asset)}</div>
                       <div className="change positive">+{(asset.priceChangePercent || 0).toFixed(2)}%</div>
                     </div>
                   </div>
@@ -237,8 +254,7 @@ export function HomeModule({
 
             <div style={{ flex: 1, paddingLeft: "12px" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
-                <h2>Top Losers</h2>
-                <div className="asset-count negative">Today</div>
+                <h2 className="home-subsection-title">Top Losers</h2>
               </div>
               <div className="home-asset-list">
                 {losers.length > 0 ? losers.map((asset) => (
@@ -247,7 +263,7 @@ export function HomeModule({
                       <span className="symbol">{asset.symbol}</span>
                     </div>
                     <div className="value-info">
-                      <div className="price">${(asset.price || 0).toFixed(2)}</div>
+                      <div className="price">{formatAssetPrice(asset)}</div>
                       <div className="change negative">{(asset.priceChangePercent || 0).toFixed(2)}%</div>
                     </div>
                   </div>

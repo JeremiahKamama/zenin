@@ -1,45 +1,12 @@
 import { useState, useMemo } from "react";
 import Chart from "react-apexcharts";
 
-function CollapseSection({ title, defaultOpen = true, children }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div style={{ marginBottom: "16px" }}>
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          cursor: "pointer", padding: "12px 0",
-          borderTop: "1px solid rgba(255,255,255,0.15)",
-          borderBottom: open ? "none" : "1px solid rgba(255,255,255,0.15)",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 500, color: "var(--color-text-primary)" }}>{title}</h2>
-        <span style={{
-          fontSize: "11px", color: "var(--color-text-secondary)",
-          userSelect: "none", padding: "2px 8px",
-          border: "0.5px solid rgba(255,255,255,0.1)",
-          borderRadius: "4px", background: "rgba(255,255,255,0.04)"
-        }}>
-          {open ? "▲ Collapse" : "▼ Expand"}
-        </span>
-      </div>
-      {open && (
-        <div style={{ paddingTop: "12px", paddingBottom: "4px" }}>
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function PortfolioModule({
   portfolio,
   trades = [],
   calculatePortfolioValue,
   calculatePortfolioGain,
-  onRemove,
-  onUpdateQuantity
+  onRemove
 }) {
   const [chartMode, setChartMode] = useState("equity");
   const [chartInterval, setChartInterval] = useState("1D");
@@ -211,10 +178,13 @@ export function PortfolioModule({
                 </div>
               </div>
 
-      <CollapseSection title="Performance Chart">
+      <div style={{ marginBottom: "16px" }}>
+        <div className="section-header" style={{ marginBottom: "12px" }}>
+          <h2>Performance Chart</h2>
+        </div>
         <div className="watchlist-panel glass">
           <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
-            {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
+            {[["equity", "Equity Curve (Account Value)"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
               <button key={mode} onClick={() => setChartMode(mode)} style={{
                 padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
                 background: chartMode === mode ? "rgba(56,189,248,0.15)" : "transparent",
@@ -223,9 +193,14 @@ export function PortfolioModule({
               }}>{label}</button>
             ))}
           </div>
+          {chartMode === "equity" && (
+            <div style={{ marginBottom: "8px", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+              Equity curve tracks total account value over time: starting capital plus cumulative profit and loss.
+            </div>
+          )}
           <Chart
             options={chartOptions}
-            series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Portfolio Value", data: chartData }]}
+            series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve (Account Value)", data: chartData }]}
             type="area" height={200} width="100%"
           />
           <div style={{ display: "flex", gap: "6px", marginTop: "8px", justifyContent: "center", flexWrap: "wrap" }}>
@@ -239,9 +214,12 @@ export function PortfolioModule({
             ))}
           </div>
         </div>
-      </CollapseSection>
+      </div>
 
-      <CollapseSection title="Holdings & Performance Metrics">
+      <div style={{ marginBottom: "16px" }}>
+        <div className="section-header" style={{ marginBottom: "12px" }}>
+          <h2>Holdings &amp; Performance Metrics</h2>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
 
           <div className="watchlist-panel glass">
@@ -276,11 +254,7 @@ export function PortfolioModule({
                           </div>
                         </div>
                         <div className="portfolio-quantity">
-                          <input
-                            type="number" min="0" step="0.01"
-                            value={item.quantity || 0}
-                            onChange={(e) => onUpdateQuantity(item.id, parseFloat(e.target.value) || 0)}
-                          />
+                          <div className="quantity-readonly">{Number(item.quantity || 0).toFixed(2)}</div>
                         </div>
                         <div className="portfolio-value">
                           <div className="position-value">${positionValue.toFixed(2)}</div>
@@ -333,7 +307,7 @@ export function PortfolioModule({
           </div>
 
         </div>
-      </CollapseSection>
+      </div>
     </div>
   );
 }

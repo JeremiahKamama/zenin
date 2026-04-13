@@ -412,10 +412,50 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
 
+  const sectionIcon = (section) => {
+    if (section === "Home") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 11.5L12 4l9 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M6 10v10h12V10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+    if (section === "Portfolio") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 7h16v11H4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M9 7V5h6v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+    if (section === "Watchlist") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9L12 3z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+    if (section === "Options") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 18h5V6H4zM15 18h5V10h-5z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+    return (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M6 4h12v16H6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M9 8h6M9 12h6M9 16h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  };
+
   return (
     <div className="app-layout">
       <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header">
+          <h1 className="sidebar-brand">Zenin</h1>
           <button
             className="sidebar-toggle-btn"
             onClick={() => setIsSidebarCollapsed((prev) => !prev)}
@@ -424,7 +464,6 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           >
             {isSidebarCollapsed ? "›" : "‹"}
           </button>
-          <h1 className="sidebar-brand">Zenin Capital</h1>
         </header>
         <nav className="sidebar-nav">
           {sections.map((section) => (
@@ -434,8 +473,11 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
               onClick={() => setActiveSection(section)}
               title={section}
             >
-              <span className="nav-short">{section.charAt(0)}</span>
-              <span className="nav-full">{section}</span>
+              {isSidebarCollapsed ? (
+                <span className="nav-icon">{sectionIcon(section)}</span>
+              ) : (
+                <span className="nav-full">{section}</span>
+              )}
             </button>
           ))}
         </nav>
@@ -548,7 +590,6 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
               calculatePortfolioValue={calculatePortfolioValue}
               calculatePortfolioGain={calculatePortfolioGain}
               onRemove={removeFromPortfolio}
-              onUpdateQuantity={updatePortfolioQuantity}
             />
           </div>
         )}
