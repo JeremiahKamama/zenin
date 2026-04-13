@@ -27,6 +27,15 @@ function App() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchType, setSearchType] = useState(null); // null, "tradfi" or "crypto"
   const [selectedAsset, setSelectedAsset] = useState(null);
+  const [balance, setBalance] = useState(10000);
+  const deposit = (amount) => {
+  setBalance(prev => prev + amount);
+};
+
+const withdraw = (amount) => {
+  if (amount > balance) return;
+  setBalance(prev => prev - amount);
+}; // or whatever default
 
   // Load portfolio from database on mount
   useEffect(() => {
