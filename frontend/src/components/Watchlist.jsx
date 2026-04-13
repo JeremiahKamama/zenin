@@ -21,8 +21,6 @@ export function Watchlist({
   assets,
   onAdd,
   loading,
-  marketType,
-  onMarketTypeChange,
   activeTheme,
   onThemeSelect,
   isInWatchlist,
@@ -93,24 +91,6 @@ useEffect(() => {
         </div>
       </header>
 
-      {/* Crypto spot/futures toggle */}
-      {activeCategory === "crypto" && (
-        <div className="market-tabs">
-          <button
-            className={marketType === "spot" ? "active" : ""}
-            onClick={() => onMarketTypeChange("spot")}
-          >
-            Spot
-          </button>
-          <button
-            className={marketType === "futures" ? "active" : ""}
-            onClick={() => onMarketTypeChange("futures")}
-          >
-            Futures
-          </button>
-        </div>
-      )}
-
       {/* Stock theme filter pills */}
       {activeCategory === "stocks" && (
         <div className="theme-tabs">
@@ -157,9 +137,6 @@ useEffect(() => {
                     </div>
 
                     <div className="asset-meta-group">
-                      {asset.marketType && (
-                        <span className="meta">{asset.marketType.toUpperCase()}</span>
-                      )}
                       {activeCategory === "stocks" && asset.category && (
                         <span className="category-badge">{asset.category}</span>
                       )}

@@ -124,7 +124,7 @@ async function fetchBinanceTicker(endpointBase, symbol) {
   return response.json();
 }
 
-async function fetchCryptoMarketData(marketType = "spot") {
+async function fetchCryptoMarketData() {
   const fetch = await resolveFetch();
 
   const coinMap = {
@@ -134,20 +134,20 @@ async function fetchCryptoMarketData(marketType = "spot") {
   };
 
   const allDbAssets = watchlist.getAll();
-  const customCrypto = allDbAssets.filter(a =>
-    (a.type === "crypto" || a.type === "stablecoin" || a.type === "exchange token" || a.type === "spot")
-    && (a.marketType || "spot") === marketType
-    && !watchlistData.crypto.some(pre => pre.symbol === a.symbol)
-  );
-
-  const combinedAssets = [
-    ...watchlistData.crypto,
-    ...customCrypto
-  ].map(asset => ({ ...asset, type: "crypto", marketType }));
+  const combinedAssets = allDbAssets
+    .filter((a) => {
+      const dbType = (a.type || "").toLowerCase();
+      return dbType === "crypto" || dbType === "stablecoin" || dbType === "exchange token" || dbType === "spot";
+    })
+    .map((asset) => ({ ...asset, type: asset.type || "crypto" }));
 
   const ids = combinedAssets
-    .map(a => coinMap[a.symbol] || a.symbol.toLowerCase())
+    .map((a) => coinMap[a.symbol] || a.symbol.toLowerCase())
     .join(",");
+
+  if (!ids) {
+    return [];
+  }
 
   try {
     const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
@@ -454,7 +454,7 @@ app.get("/api/search", async (req, res) => {
 });
 
 app.get("/api/watchlist", async (req, res) => {
-  const { category, marketType = "spot" } = req.query;
+  const { category } = req.query;
 
   if (!category) {
     return res.json(watchlistData);
@@ -470,8 +470,8 @@ app.get("/api/watchlist", async (req, res) => {
   // Crypto — live prices from Binance
   if (key === "crypto") {
     try {
-      const assets = await fetchCryptoMarketData(marketType);
-      return res.json({ category: key, marketType, assets });
+      const assets = await fetchCryptoMarketData();
+      return res.json({ category: key, assets });
     } catch (error) {
       return res.status(502).json({ error: error.message });
     }
@@ -668,10 +668,9 @@ app.get("/api/prices", async (req, res) => {
 });
 
 app.get("/api/crypto-market", async (req, res) => {
-  const { marketType = "spot" } = req.query;
   try {
-    const assets = await fetchCryptoMarketData(marketType);
-    res.json({ category: "crypto", marketType, assets });
+    const assets = await fetchCryptoMarketData();
+    res.json({ category: "crypto", assets });
   } catch (error) {
     res.status(502).json({ error: error.message });
   }

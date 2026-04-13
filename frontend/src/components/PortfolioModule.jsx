@@ -156,14 +156,6 @@ export function PortfolioModule({
     };
   }, [portfolio, portfolioValue]);
 
-  const metricDescriptions = {
-    sharpe: "Risk-adjusted return per unit of total risk. >1 is good, >2 is excellent.",
-    sortino: "Like Sharpe but penalises only downside volatility. >1 is solid.",
-    maxDrawdown: "Largest peak-to-trough decline. Lower is better.",
-    alpha: "Excess return vs market benchmark (annualised %). Positive = outperforming.",
-    beta: "Portfolio sensitivity to market moves. 1 = moves with market, >1 = more volatile."
-  };
-
   return (
     <div style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
         <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
@@ -274,13 +266,10 @@ export function PortfolioModule({
                         <div className="portfolio-left">
                           <div>
                             <strong>{item.symbol}</strong>
-                            <div style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>{item.name}</div>
-                            {item.marketType && <div className="meta">{item.marketType.toUpperCase()}</div>}
                           </div>
                         </div>
                         <div className="portfolio-center">
                           <div className="price-info">
-                            <div className="price">${(item.price || 0).toFixed(2)}</div>
                             <div className={`change ${gainPercent >= 0 ? "positive" : "negative"}`}>
                               {gainPercent >= 0 ? "+" : ""}{gainPercent.toFixed(2)}%
                             </div>
@@ -331,13 +320,10 @@ export function PortfolioModule({
                   { key: "beta", label: "Beta", value: metrics.beta, color: Math.abs(parseFloat(metrics.beta) - 1) < 0.3 ? "#38bdf8" : "#f59e0b" }
                 ].map(({ key, label, value, color }) => (
                   <div key={key} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                       <span style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>{label}</span>
                       <span style={{ fontSize: "18px", fontWeight: 500, color }}>{value}</span>
                     </div>
-                    <p style={{ margin: 0, fontSize: "11px", color: "var(--color-text-secondary)", lineHeight: 1.4 }}>
-                      {metricDescriptions[key]}
-                    </p>
                   </div>
                 ))}
               </div>

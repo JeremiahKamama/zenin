@@ -13,7 +13,6 @@ function App() {
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
   const [activeCategory, setActiveCategory] = useState("bonds");
-  const [cryptoMarketType, setCryptoMarketType] = useState("spot");
   const [activeTheme, setActiveTheme] = useState("Robotics");
   const [portfolio, setPortfolio] = useState([]);
   const [watchlistAssets, setWatchlistAssets] = useState([]);
@@ -103,10 +102,7 @@ useEffect(() => {
     setLoading(true);
     setError(null);
 
-    const marketTypeQuery =
-      activeCategory === "crypto" ? `&marketType=${cryptoMarketType}` : "";
-
-    fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}${marketTypeQuery}`)
+    fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Server responded with ${res.status}`);
         return res.json();
@@ -148,7 +144,7 @@ useEffect(() => {
         setError(err.message);
         setLoading(false);
       });
-  }, [activeCategory, cryptoMarketType]);
+  }, [activeCategory]);
 
 useEffect(() => {
     if (activeCategory !== "stocks" || !assets.length) return;
@@ -413,19 +409,35 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   };
 
   const [activeSection, setActiveSection] = useState("Home");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
 
   return (
     <div className="app-layout">
-      <aside className="sidebar">
+      <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header">
-          <h1>Zenin Capital</h1>
+          <button
+            className="sidebar-toggle-btn"
+            onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+            aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {isSidebarCollapsed ? "›" : "‹"}
+          </button>
+          <h1 className="sidebar-brand">Zenin Capital</h1>
         </header>
         <nav className="sidebar-nav">
-          <button className={`nav-btn ${activeSection === "Home" ? "active" : ""}`} onClick={() => setActiveSection("Home")}>Home</button>
-          <button className={`nav-btn ${activeSection === "Portfolio" ? "active" : ""}`} onClick={() => setActiveSection("Portfolio")}>Portfolio</button>
-          <button className={`nav-btn ${activeSection === "Watchlist" ? "active" : ""}`} onClick={() => setActiveSection("Watchlist")}>Watchlist</button>
-          <button className={`nav-btn ${activeSection === "Options" ? "active" : ""}`} onClick={() => setActiveSection("Options")}>Options</button>
-          <button className={`nav-btn ${activeSection === "Journal" ? "active" : ""}`} onClick={() => setActiveSection("Journal")}>Journal</button>
+          {sections.map((section) => (
+            <button
+              key={section}
+              className={`nav-btn ${activeSection === section ? "active" : ""}`}
+              onClick={() => setActiveSection(section)}
+              title={section}
+            >
+              <span className="nav-short">{section.charAt(0)}</span>
+              <span className="nav-full">{section}</span>
+            </button>
+          ))}
         </nav>
       </aside>
 
@@ -518,8 +530,6 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                 assets={assets}
                 onAdd={setSelectedAsset}
                 loading={loading}
-                marketType={cryptoMarketType}
-                onMarketTypeChange={setCryptoMarketType}
                 activeTheme={activeTheme}
                 onThemeSelect={setActiveTheme}
                 isInWatchlist={isInWatchlist}

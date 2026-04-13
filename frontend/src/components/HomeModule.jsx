@@ -7,12 +7,9 @@ export function HomeModule({
   onSelectAsset,
   calculatePortfolioValue,
   calculatePortfolioGain,
-  balance = 0,
-  onDeposit,
-  onWithdraw
+  balance = 0
 }) {
-  const [depositAmount, setDepositAmount] = useState("");
-  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [paymentAction, setPaymentAction] = useState(null); // deposit | withdraw | null
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
 
@@ -88,6 +85,21 @@ export function HomeModule({
   };
 
   const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
+  const PAYMENT_METHODS = ["PayPal", "Mpesa", "Bank Transfer"];
+
+  const openPaymentModal = (action) => {
+    setPaymentAction(action);
+  };
+
+  const closePaymentModal = () => {
+    setPaymentAction(null);
+  };
+
+  const handlePaymentMethodSelect = (method) => {
+    if (!paymentAction) return;
+    alert(`${paymentAction === "deposit" ? "Deposit" : "Withdraw"} via ${method} selected.`);
+    closePaymentModal();
+  };
 
   return (
     <div className="view-container home-dashboard">
@@ -109,33 +121,19 @@ export function HomeModule({
         <div className="metric-card glass">
           <label>Available Balance</label>
           <div className="value">${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-            <div style={{ display: "flex", flex: 1, border: "0.5px solid rgba(255,255,255,0.1)", borderRadius: "6px", overflow: "hidden" }}>
-              <input
-                type="number"
-                placeholder="Amount"
-                value={depositAmount}
-                onChange={e => setDepositAmount(e.target.value)}
-                style={{ flex: 1, background: "transparent", border: "none", padding: "4px 8px", fontSize: "12px", color: "var(--color-text-primary)", width: "60px" }}
-              />
-              <button
-                onClick={() => { const amt = parseFloat(depositAmount); if (amt > 0) { onDeposit(amt); setDepositAmount(""); } }}
-                style={{ padding: "4px 10px", background: "rgba(34,197,94,0.15)", border: "none", color: "#22c55e", fontSize: "12px", cursor: "pointer" }}
-              >Deposit</button>
-            </div>
-            <div style={{ display: "flex", flex: 1, border: "0.5px solid rgba(255,255,255,0.1)", borderRadius: "6px", overflow: "hidden" }}>
-              <input
-                type="number"
-                placeholder="Amount"
-                value={withdrawAmount}
-                onChange={e => setWithdrawAmount(e.target.value)}
-                style={{ flex: 1, background: "transparent", border: "none", padding: "4px 8px", fontSize: "12px", color: "var(--color-text-primary)", width: "60px" }}
-              />
-              <button
-                onClick={() => { const amt = parseFloat(withdrawAmount); if (amt > 0) { onWithdraw(amt); setWithdrawAmount(""); } }}
-                style={{ padding: "4px 10px", background: "rgba(239,68,68,0.15)", border: "none", color: "#ef4444", fontSize: "12px", cursor: "pointer" }}
-              >Withdraw</button>
-            </div>
+          <div className="balance-action-row">
+            <button
+              className="balance-action-btn deposit"
+              onClick={() => openPaymentModal("deposit")}
+            >
+              Deposit
+            </button>
+            <button
+              className="balance-action-btn withdraw"
+              onClick={() => openPaymentModal("withdraw")}
+            >
+              Withdraw
+            </button>
           </div>
         </div>
       </div>
@@ -199,7 +197,6 @@ export function HomeModule({
                   <div key={asset.id} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
                     <div className="symbol-info">
                       <span className="symbol">{asset.symbol}</span>
-                      <span className="name">{asset.name}</span>
                     </div>
                     <div className="value-info">
                       <div className="price">${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
@@ -228,7 +225,6 @@ export function HomeModule({
                   <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
                     <div className="symbol-info">
                       <span className="symbol">{asset.symbol}</span>
-                      <span className="name">{asset.name}</span>
                     </div>
                     <div className="value-info">
                       <div className="price">${(asset.price || 0).toFixed(2)}</div>
@@ -249,7 +245,6 @@ export function HomeModule({
                   <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
                     <div className="symbol-info">
                       <span className="symbol">{asset.symbol}</span>
-                      <span className="name">{asset.name}</span>
                     </div>
                     <div className="value-info">
                       <div className="price">${(asset.price || 0).toFixed(2)}</div>
@@ -263,6 +258,27 @@ export function HomeModule({
           </div>
         </div>
       </div>
+
+      {paymentAction && (
+        <div className="payment-method-overlay" onClick={closePaymentModal}>
+          <div className="payment-method-modal glass" onClick={(e) => e.stopPropagation()}>
+            <h3>{paymentAction === "deposit" ? "Choose Deposit Method" : "Choose Withdrawal Method"}</h3>
+            <p>Select how you want to proceed.</p>
+            <div className="payment-method-list">
+              {PAYMENT_METHODS.map((method) => (
+                <button
+                  key={method}
+                  className="payment-method-btn"
+                  onClick={() => handlePaymentMethodSelect(method)}
+                >
+                  {method}
+                </button>
+              ))}
+            </div>
+            <button className="payment-cancel-btn" onClick={closePaymentModal}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,30 +1,301 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Chart from "react-apexcharts";
 
 export function JournalModule({ trades = [] }) {
   const [note, setNote] = useState("Market sentiment remains bullish but overextended. Watching for a pullback in high-beta tech symbols. Focused on rotation into energy/metals themes.");
+  const [reportPage, setReportPage] = useState(1);
 
-  // Simple analytics from trades
-  const totalTrades = trades.length;
-  const buyVolume = trades.filter(t => t.type === "BUY").reduce((acc, t) => acc + (t.price * t.quantity), 0);
-  const sellVolume = trades.filter(t => t.type === "SELL").reduce((acc, t) => acc + (t.price * t.quantity), 0);
+  useEffect(() => {
+    setReportPage(1);
+  }, [trades]);
+
+  const analytics = useMemo(() => {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const eps = 1e-8;
+    const safeNum = (val) => {
+      const n = Number(val);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const parseTradeDate = (dateStr) => {
+      const d = new Date(dateStr);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+
+    const sortedTrades = [...trades].sort((a, b) => {
+      const ta = parseTradeDate(a.date)?.getTime() ?? 0;
+      const tb = parseTradeDate(b.date)?.getTime() ?? 0;
+      if (ta !== tb) return ta - tb;
+      return (a.id || 0) - (b.id || 0);
+    });
+
+    const lotsByAsset = new Map();
+    const realized = [];
+    let totalVolume = 0;
+
+    for (const trade of sortedTrades) {
+      const type = (trade.type || "").toUpperCase();
+      const asset = trade.asset || "UNKNOWN";
+      const qty = Math.max(0, safeNum(trade.quantity));
+      const price = safeNum(trade.price);
+      const dateObj = parseTradeDate(trade.date);
+      if (qty <= 0) continue;
+
+      totalVolume += price * qty;
+
+      if (type === "BUY") {
+        const lots = lotsByAsset.get(asset) || [];
+        lots.push({ qty, price, date: dateObj });
+        lotsByAsset.set(asset, lots);
+        continue;
+      }
+
+      if (type === "SELL") {
+        const lots = lotsByAsset.get(asset) || [];
+        let remaining = qty;
+        while (remaining > 0 && lots.length > 0) {
+          const lot = lots[0];
+          const matchedQty = Math.min(remaining, lot.qty);
+          const pnl = (price - lot.price) * matchedQty;
+          const holdDays = lot.date && dateObj
+            ? Math.max(0, Math.round((dateObj.getTime() - lot.date.getTime()) / dayMs))
+            : 0;
+
+          realized.push({
+            asset,
+            pnl,
+            holdDays,
+            volume: price * matchedQty,
+            closeDate: trade.date
+          });
+
+          lot.qty -= matchedQty;
+          remaining -= matchedQty;
+          if (lot.qty <= 0) lots.shift();
+        }
+        lotsByAsset.set(asset, lots);
+      }
+    }
+
+    const wins = realized.filter((r) => r.pnl > eps);
+    const losses = realized.filter((r) => r.pnl < -eps);
+    const breakevens = realized.filter((r) => Math.abs(r.pnl) <= eps);
+    const decisiveTrades = wins.length + losses.length;
+    const totalGainLoss = realized.reduce((acc, r) => acc + r.pnl, 0);
+    const avgHoldDays = realized.length
+      ? realized.reduce((acc, r) => acc + r.holdDays, 0) / realized.length
+      : 0;
+
+    const tradeDates = [...new Set(sortedTrades.map((t) => t.date).filter(Boolean))];
+    const activeDays = Math.max(1, tradeDates.length);
+
+    let maxConsecutiveWin = 0;
+    let maxConsecutiveLoss = 0;
+    let currentWin = 0;
+    let currentLoss = 0;
+    for (const r of realized) {
+      if (r.pnl > eps) {
+        currentWin += 1;
+        currentLoss = 0;
+      } else if (r.pnl < -eps) {
+        currentLoss += 1;
+        currentWin = 0;
+      } else {
+        currentWin = 0;
+        currentLoss = 0;
+      }
+      maxConsecutiveWin = Math.max(maxConsecutiveWin, currentWin);
+      maxConsecutiveLoss = Math.max(maxConsecutiveLoss, currentLoss);
+    }
+
+    const avgTradeWin = wins.length
+      ? wins.reduce((acc, r) => acc + r.pnl, 0) / wins.length
+      : 0;
+    const avgTradeLoss = losses.length
+      ? losses.reduce((acc, r) => acc + r.pnl, 0) / losses.length
+      : 0;
+
+    const largestGain = wins.length
+      ? Math.max(...wins.map((r) => r.pnl))
+      : 0;
+    const largestLoss = losses.length
+      ? Math.min(...losses.map((r) => r.pnl))
+      : 0;
+
+    const symbolStats = new Map();
+    const bumpSymbolExecution = (symbol) => {
+      const key = symbol || "UNKNOWN";
+      const row = symbolStats.get(key) || {
+        symbol: key,
+        executionCount: 0,
+        realizedCount: 0,
+        wins: 0,
+        losses: 0,
+        breakevens: 0,
+        totalHoldDays: 0,
+        totalGain: 0
+      };
+      row.executionCount += 1;
+      symbolStats.set(key, row);
+    };
+
+    for (const trade of sortedTrades) {
+      bumpSymbolExecution(trade.asset);
+    }
+
+    for (const r of realized) {
+      const key = r.asset || "UNKNOWN";
+      const row = symbolStats.get(key) || {
+        symbol: key,
+        executionCount: 0,
+        realizedCount: 0,
+        wins: 0,
+        losses: 0,
+        breakevens: 0,
+        totalHoldDays: 0,
+        totalGain: 0
+      };
+      row.realizedCount += 1;
+      row.totalHoldDays += r.holdDays;
+      row.totalGain += r.pnl;
+      if (r.pnl > eps) row.wins += 1;
+      else if (r.pnl < -eps) row.losses += 1;
+      else row.breakevens += 1;
+      symbolStats.set(key, row);
+    }
+
+    const tradedAssetsReport = [...symbolStats.values()]
+      .map((row) => {
+        const decisive = row.wins + row.losses;
+        const winRate = decisive ? (row.wins / decisive) * 100 : 0;
+        const avgDuration = row.realizedCount ? row.totalHoldDays / row.realizedCount : 0;
+        const avgGain = row.realizedCount ? row.totalGain / row.realizedCount : 0;
+        return {
+          symbol: row.symbol,
+          tradeCount: row.executionCount,
+          winRate,
+          tradeDuration: avgDuration,
+          avgGain,
+          totalGain: row.totalGain
+        };
+      })
+      .sort((a, b) => {
+        if (b.tradeCount !== a.tradeCount) return b.tradeCount - a.tradeCount;
+        if (b.totalGain !== a.totalGain) return b.totalGain - a.totalGain;
+        return a.symbol.localeCompare(b.symbol);
+      });
+
+    return {
+      totalTrades: sortedTrades.length,
+      avgHoldDays,
+      wins: wins.length,
+      losses: losses.length,
+      breakevens: breakevens.length,
+      winRate: decisiveTrades ? (wins.length / decisiveTrades) * 100 : 0,
+      totalGainLoss,
+      tradeExpectancy: realized.length ? totalGainLoss / realized.length : 0,
+      avgDailyGain: totalGainLoss / activeDays,
+      avgDailyVolume: totalVolume / activeDays,
+      largestGain,
+      totalVolume,
+      avgTradesPerDay: sortedTrades.length / activeDays,
+      avgTradeWin,
+      avgTradeLoss,
+      maxConsecutiveWin,
+      maxConsecutiveLoss,
+      largestLoss: Math.abs(largestLoss) <= eps ? 0 : largestLoss,
+      tradedAssetsReport
+    };
+  }, [trades]);
+
+  const winLossSeries = [
+    Math.max(analytics.wins, 0),
+    Math.max(analytics.losses, 0)
+  ];
+  const winLossOptions = {
+    chart: { type: "donut", background: "transparent" },
+    labels: ["Wins", "Losses"],
+    legend: { show: false },
+    stroke: { show: false },
+    dataLabels: { enabled: false },
+    colors: ["#22c55e", "#ef4444"],
+    plotOptions: { pie: { donut: { size: "70%" } } }
+  };
+
+  const statsRows = [
+    { label: "Total Gain/Loss", value: analytics.totalGainLoss, currency: true },
+    { label: "Trade Expectancy", value: analytics.tradeExpectancy, currency: true },
+    { label: "Avg Daily Gain", value: analytics.avgDailyGain, currency: true },
+    { label: "Avg Daily Volume", value: analytics.avgDailyVolume, currency: true },
+    { label: "Largest Gain", value: analytics.largestGain, currency: true },
+    { label: "Total Trades Volume", value: analytics.totalVolume, currency: true },
+    { label: "Avg # of Trades/day", value: analytics.avgTradesPerDay },
+    { label: "Avg Trade Win", value: analytics.avgTradeWin, currency: true },
+    { label: "Avg Trade Loss", value: analytics.avgTradeLoss, currency: true },
+    { label: "Max Consecutive Win", value: analytics.maxConsecutiveWin },
+    { label: "Max Consecutive Loss", value: analytics.maxConsecutiveLoss },
+    { label: "Largest Losses", value: analytics.largestLoss, currency: true }
+  ];
+
+  const formatValue = (val, currency = false) => {
+    const safeVal = Number.isFinite(Number(val)) ? Number(val) : 0;
+    if (currency) {
+      return `$${safeVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return safeVal.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  };
+
+  const reportRowsPerPage = 10;
+  const reportTotalPages = Math.max(1, Math.ceil(analytics.tradedAssetsReport.length / reportRowsPerPage));
+  const safeReportPage = Math.min(reportPage, reportTotalPages);
+  const pagedReportRows = analytics.tradedAssetsReport.slice(
+    (safeReportPage - 1) * reportRowsPerPage,
+    safeReportPage * reportRowsPerPage
+  );
 
   return (
     <div className="view-container journal-dashboard">
-      <div className="portfolio-analytics-row">
+      <div className="portfolio-analytics-row journal-top-cards">
         <div className="metric-card glass">
-          <label>Excution Count</label>
-          <div className="value">{totalTrades}</div>
-          <div className="change positive">Live Registry</div>
+          <label>Total Trades Taken</label>
+          <div className="value">{analytics.totalTrades}</div>
         </div>
         <div className="metric-card glass">
-          <label>Total Volume</label>
-          <div className="value">${(buyVolume + sellVolume).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-          <div className="change positive">Lifetime Flow</div>
+          <label>Average Hold</label>
+          <div className="value">{analytics.avgHoldDays.toFixed(1)}d</div>
         </div>
-        <div className="metric-card glass">
+        <div className="metric-card glass journal-winrate-card">
           <label>Win Rate</label>
-          <div className="value">{totalTrades > 0 ? "72.4%" : "N/A"}</div>
-          <div className="change positive">Dynamic Estimate</div>
+          <div className="value">{analytics.winRate.toFixed(1)}%</div>
+          <div className="journal-winrate-body">
+            <div className="journal-winrate-chart">
+              <Chart
+                options={winLossOptions}
+                series={winLossSeries.some((v) => v > 0) ? winLossSeries : [1, 1]}
+                type="donut"
+                height={120}
+              />
+            </div>
+            <div className="journal-winrate-breakdown">
+              <div><span className="dot win" /> Wins: {analytics.wins}</div>
+              <div><span className="dot breakeven" /> Breakevens: {analytics.breakevens}</div>
+              <div><span className="dot loss" /> Losses: {analytics.losses}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header">
+          <h2>Analytics</h2>
+          <div className="asset-count">Statistics</div>
+        </div>
+        <div className="journal-stats-grid">
+          {statsRows.map((stat) => (
+            <div key={stat.label} className="journal-stat-card">
+              <span className="journal-stat-label">{stat.label}</span>
+              <span className="journal-stat-value">{formatValue(stat.value, stat.currency)}</span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -41,7 +312,7 @@ export function JournalModule({ trades = [] }) {
                   <div className="greek">{trade.date}</div>
                   <div style={{fontWeight: 700}}>{trade.asset}</div>
                   <div className={trade.type === "BUY" ? "positive" : "negative"}>{trade.type}</div>
-                  <div className="price">${trade.price.toFixed(2)}</div>
+                  <div className="price">${(Number(trade.price) || 0).toFixed(2)}</div>
                   <div className="qty">× {trade.quantity}</div>
                 </div>
               ))
@@ -61,6 +332,64 @@ export function JournalModule({ trades = [] }) {
             placeholder="Log your trading rationale..."
           />
         </div>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header">
+          <h2>Traded Assets Report</h2>
+          <div className="asset-count">{analytics.tradedAssetsReport.length} Assets</div>
+        </div>
+        {analytics.tradedAssetsReport.length === 0 ? (
+          <div className="empty-state" style={{ padding: "24px", color: "#64748b" }}>
+            No traded assets yet.
+          </div>
+        ) : (
+          <>
+            <div className="journal-report-table-wrap">
+              <table className="journal-report-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Trade Count</th>
+                    <th>Win Rate</th>
+                    <th>Trade Duration</th>
+                    <th>Avg Gain</th>
+                    <th>Total Gain</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedReportRows.map((row) => (
+                    <tr key={row.symbol}>
+                      <td>{row.symbol}</td>
+                      <td>{row.tradeCount}</td>
+                      <td>{row.winRate.toFixed(1)}%</td>
+                      <td>{row.tradeDuration.toFixed(1)}d</td>
+                      <td className={row.avgGain >= 0 ? "positive" : "negative"}>{formatValue(row.avgGain, true)}</td>
+                      <td className={row.totalGain >= 0 ? "positive" : "negative"}>{formatValue(row.totalGain, true)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="pagination-controls">
+              <button
+                className="pagination-button"
+                disabled={safeReportPage === 1}
+                onClick={() => setReportPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <div className="pagination-label">Page {safeReportPage} of {reportTotalPages}</div>
+              <button
+                className="pagination-button"
+                disabled={safeReportPage === reportTotalPages}
+                onClick={() => setReportPage((p) => Math.min(reportTotalPages, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
