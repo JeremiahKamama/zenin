@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Chart from "react-apexcharts";
 import { Watchlist } from "./components/Watchlist";
+import { PortfolioModule } from "./components/PortfolioModule";
 import { AssetModal } from "./components/AssetModal";
 import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
@@ -531,145 +532,14 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
         {activeSection === "Portfolio" && (
           <div className="view-container">
-            <div className="portfolio-analytics-row">
-              <div className="metric-card glass">
-                <label>Account Value</label>
-                <div className="value">${calculatePortfolioValue().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                <div className={`change ${calculatePortfolioGain() >= 0 ? "positive" : "negative"}`}>
-                  {calculatePortfolioGain() >= 0 ? "▲" : "▼"} ${Math.abs(calculatePortfolioGain()).toFixed(2)}
-                </div>
-              </div>
-
-              <div className="metric-card glass">
-                <label>Best Performing</label>
-                {portfolio.length > 0 ? (
-                  (() => {
-                    const best = [...portfolio].sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0))[0];
-                    return (
-                      <>
-                        <div className="value">{best.symbol}</div>
-                        <div className="change positive">+{best.priceChangePercent?.toFixed(2)}%</div>
-                      </>
-                    );
-                  })()
-                ) : (
-                  <div className="value">N/A</div>
-                )}
-              </div>
-
-              <div className="metric-card chart-card glass">
-                <Chart
-                  options={{
-                    chart: { type: 'donut', background: 'transparent' },
-                    stroke: { show: false },
-                    colors: ['#38bdf8', '#22c55e', '#ef4444'],
-                    labels: ['Stocks', 'Crypto', 'ETFs'],
-                    legend: { show: false },
-                    dataLabels: { enabled: false },
-                    plotOptions: {
-                      pie: {
-                        donut: {
-                          size: '75%',
-                          labels: {
-                            show: true,
-                            name: { show: true, fontSize: '12px', color: '#94a3b8' },
-                            value: { show: true, fontSize: '16px', fontWeight: 700, color: '#f1f5f9' },
-                            total: { show: true, label: 'Allocation', color: '#64748b' }
-                          }
-                        }
-                      }
-                    }
-                  }}
-                  series={[
-                    portfolio.filter(i => !i.marketType).length, // Stocks
-                    portfolio.filter(i => i.marketType === 'spot' || i.marketType === 'futures').length, // Crypto
-                    portfolio.filter(i => i.theme === 'ETFs').length // ETFs
-                  ]}
-                  type="donut"
-                  width="140"
-                />
-              </div>
-            </div>
-
-            <section className="portfolio-panel">
-              <div className="section-header">
-                <h2>Holdings</h2>
-                <div className="asset-count">{portfolio.length} Positions</div>
-              </div>
-              {portfolio.length === 0 ? (
-                <p>No holdings yet. Add assets from the watchlist.</p>
-              ) : (
-                <>
-                  <div className="portfolio-list">
-                    {portfolio.map((item) => {
-                      const positionValue = (item.price || 0) * (item.quantity || 0);
-                      const prevPrice = item.price && item.priceChangePercent
-                        ? item.price / (1 + item.priceChangePercent / 100)
-                        : item.price;
-                      const positionGain = (item.price || 0) * (item.quantity || 0) - (prevPrice || 0) * (item.quantity || 0);
-                      const gainPercent = prevPrice && item.priceChangePercent ? item.priceChangePercent : 0;
-
-                      return (
-                        <div key={item.id} className="portfolio-card">
-                          <div className="portfolio-left">
-                            <div>
-                              <strong>{item.symbol}</strong>
-                              <div>{item.name}</div>
-                              {item.marketType && (
-                                <div className="meta">{item.marketType.toUpperCase()}</div>
-                              )}
-                            </div>
-                          </div>
-                          <div className="portfolio-center">
-                            <div className="price-info">
-                              <div className="price">${(item.price || 0).toFixed(2)}</div>
-                              <div className={`change ${gainPercent >= 0 ? 'positive' : 'negative'}`}>
-                                {gainPercent >= 0 ? '+' : ''}{gainPercent.toFixed(2)}%
-                              </div>
-                            </div>
-                          </div>
-                          <div className="portfolio-quantity">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.quantity || 0}
-                              onChange={(e) => updatePortfolioQuantity(item.id, parseFloat(e.target.value) || 0)}
-                              placeholder="Qty"
-                            />
-                          </div>
-                          <div className="portfolio-value">
-                            <div className="position-value">${positionValue.toFixed(2)}</div>
-                            <div className={`position-gain ${positionGain >= 0 ? 'positive' : 'negative'}`}>
-                              {positionGain >= 0 ? '+' : ''}${positionGain.toFixed(2)}
-                            </div>
-                          </div>
-                          <button
-                            className="portfolio-remove-button"
-                            title="Remove asset from portfolio"
-                            onClick={() => removeFromPortfolio(item.id)}
-                          >
-                            🗑️
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="portfolio-summary">
-                    <div className="summary-item">
-                      <span>Total Value:</span>
-                      <strong>${calculatePortfolioValue().toFixed(2)}</strong>
-                    </div>
-                    <div className="summary-item">
-                      <span>Total Gain/Loss:</span>
-                      <strong className={calculatePortfolioGain() >= 0 ? 'positive' : 'negative'}>
-                        ${calculatePortfolioGain().toFixed(2)}
-                      </strong>
-                    </div>
-                  </div>
-                </>
-              )}
-            </section>
+            <PortfolioModule
+              portfolio={portfolio}
+              trades={trades}
+              calculatePortfolioValue={calculatePortfolioValue}
+              calculatePortfolioGain={calculatePortfolioGain}
+              onRemove={removeFromPortfolio}
+              onUpdateQuantity={updatePortfolioQuantity}
+            />
           </div>
         )}
 

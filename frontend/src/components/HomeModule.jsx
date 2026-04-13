@@ -101,12 +101,6 @@ export function HomeModule({
         </div>
 
         <div className="metric-card glass">
-          <label>Diversification Health</label>
-          <div className="value">{portfolio.length > 5 ? "Strong" : "Diversifying"}</div>
-          <div className="change positive">{portfolio.length} Distinct Assets</div>
-        </div>
-
-        <div className="metric-card glass">
           <label>Market Sentiment</label>
           <div className="value">Risk On</div>
           <div className="change positive">High Volatility Alpha</div>
@@ -221,47 +215,51 @@ export function HomeModule({
         </div>
 
         {/* Gainers & Losers */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <div className="watchlist-panel glass">
-            <div className="section-header">
-              <h2>Top Gainers</h2>
-              <div className="asset-count positive">Today</div>
-            </div>
-            <div className="home-asset-list">
-              {gainers.length > 0 ? gainers.map((asset) => (
-                <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
-                  <div className="symbol-info">
-                    <span className="symbol">{asset.symbol}</span>
-                    <span className="name">{asset.name}</span>
+        <div className="watchlist-panel glass">
+          <div style={{ display: "flex", gap: "0" }}>
+            
+            <div style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
+              <div className="section-header" style={{ padding: "0 0 8px" }}>
+                <h2>Top Gainers</h2>
+                <div className="asset-count positive">Today</div>
+              </div>
+              <div className="home-asset-list">
+                {gainers.length > 0 ? gainers.map((asset) => (
+                  <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
+                    <div className="symbol-info">
+                      <span className="symbol">{asset.symbol}</span>
+                      <span className="name">{asset.name}</span>
+                    </div>
+                    <div className="value-info">
+                      <div className="price">${(asset.price || 0).toFixed(2)}</div>
+                      <div className="change positive">+{(asset.priceChangePercent || 0).toFixed(2)}%</div>
+                    </div>
                   </div>
-                  <div className="value-info">
-                    <div className="price">${(asset.price || 0).toFixed(2)}</div>
-                    <div className="change positive">+{(asset.priceChangePercent || 0).toFixed(2)}%</div>
-                  </div>
-                </div>
-              )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
+                )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
+              </div>
             </div>
-          </div>
 
-          <div className="watchlist-panel glass">
-            <div className="section-header">
-              <h2>Top Losers</h2>
-              <div className="asset-count negative">Today</div>
-            </div>
-            <div className="home-asset-list">
-              {losers.length > 0 ? losers.map((asset) => (
-                <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
-                  <div className="symbol-info">
-                    <span className="symbol">{asset.symbol}</span>
-                    <span className="name">{asset.name}</span>
+            <div style={{ flex: 1, paddingLeft: "12px" }}>
+              <div className="section-header" style={{ padding: "0 0 8px" }}>
+                <h2>Top Losers</h2>
+                <div className="asset-count negative">Today</div>
+              </div>
+              <div className="home-asset-list">
+                {losers.length > 0 ? losers.map((asset) => (
+                  <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
+                    <div className="symbol-info">
+                      <span className="symbol">{asset.symbol}</span>
+                      <span className="name">{asset.name}</span>
+                    </div>
+                    <div className="value-info">
+                      <div className="price">${(asset.price || 0).toFixed(2)}</div>
+                      <div className="change negative">{(asset.priceChangePercent || 0).toFixed(2)}%</div>
+                    </div>
                   </div>
-                  <div className="value-info">
-                    <div className="price">${(asset.price || 0).toFixed(2)}</div>
-                    <div className="change negative">{(asset.priceChangePercent || 0).toFixed(2)}%</div>
-                  </div>
-                </div>
-              )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
+                )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
+              </div>
             </div>
+
           </div>
         </div>
       </div>
