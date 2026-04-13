@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
@@ -11,7 +12,7 @@ export function OptionsModule() {
 
   useEffect(() => {
     // Fetch ALL tradeable assets for the dropdown
-    fetch("https://portv1-oijx.onrender.com/api/options/crypto/all-assets")
+    fetch(`${BACKEND_URL}/options/crypto/all-assets`)
       .then(res => res.json())
       .then(data => {
         if (data.assets && data.assets.length > 0) {
@@ -28,7 +29,7 @@ export function OptionsModule() {
   useEffect(() => {
     if (!activeAsset) return;
     setLoading(true);
-    fetch("https://portv1-oijx.onrender.com/api/options/crypto", {
+    fetch(`${BACKEND_URL}/options/crypto`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currency: activeAsset, expiry: activeExpiry })

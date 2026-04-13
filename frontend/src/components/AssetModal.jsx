@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import Chart from "react-apexcharts";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 
@@ -23,7 +24,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     try {
       const type = asset.type || (asset.marketType ? "crypto" : "stock");
       const res = await fetch(
-        `https://portv1-oijx.onrender.com/api/history?symbol=${asset.symbol}&type=${type}&interval=${activeInterval}`
+        `${BACKEND_URL}/history?symbol=${asset.symbol}&type=${type}&interval=${activeInterval}`
       );
       const data = await res.json();
       setHistory(data.history || []);
@@ -37,7 +38,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const fetchPerformance = async () => {
     try {
       const type = asset.type || (asset.marketType ? "crypto" : "stock");
-      const res = await fetch(`https://portv1-oijx.onrender.com/api/interval-performance?symbol=${asset.symbol}&type=${type}`);
+      const res = await fetch(`${BACKEND_URL}/interval-performance?symbol=${asset.symbol}&type=${type}`);
       const data = await res.json();
       setPerformanceMap(data.performance || {});
     } catch (err) {
