@@ -302,23 +302,30 @@ function fetchHistoryFromBinance(symbol, interval) {
   return new Promise(async (resolve, reject) => {
     try {
       const fetch = await resolveFetch();
-      // Map frontend shorthand to Binance intervals
       const intervalMap = {
-        "4H": "15m",
-        "1D": "1h",
-        "1W": "4h",
-        "3M": "1d",
-        "1Y": "1d",
-        "YTD": "1d",
-        "MAX": "1w",
+        "4H":  { interval: "15m", limit: 16 },
+        "1D":  { interval: "1h",  limit: 24 },
+        "1W":  { interval: "4h",  limit: 42 },
+        "3M":  { interval: "1d",  limit: 90 },
+        "1Y":  { interval: "1d",  limit: 365 },
+        "YTD": { interval: "1d",  limit: 365 },
+        "MAX": { interval: "1w",  limit: 200 },
       };
-      const binanceInterval = intervalMap[interval] || "1h";
+      const { interval: binanceInterval, limit } = intervalMap[interval] || intervalMap["1D"];
       const binanceSymbol = cryptoTickerMap[symbol] || `${symbol}USDT`;
-      
-      const response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${binanceInterval}&limit=500`);
-      if (!response.ok) throw new Error("Binance history fetch failed");
-      
-      const data = await response.json();
+
+      const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${binanceInterval}&limit=${limit}`;
+      console.log("Binance URL:", url);
+
+      const response = await fetch(url);
+      const text = await response.text();
+
+      if (!response.ok) {
+        console.error("Binance error response:", text);
+        throw new Error(`Binance history fetch failed: ${text}`);
+      }
+
+      const data = JSON.parse(text);
       const results = data.map(k => ({
         time: new Date(k[0]).toISOString(),
         open: parseFloat(k[1]),
@@ -326,7 +333,7 @@ function fetchHistoryFromBinance(symbol, interval) {
         low: parseFloat(k[3]),
         close: parseFloat(k[4]),
         volume: parseFloat(k[5]),
-        price: parseFloat(k[4]) // legacy support
+        price: parseFloat(k[4])
       }));
       resolve(results);
     } catch (e) {
