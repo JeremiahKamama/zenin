@@ -71,7 +71,7 @@ function App() {
   }, [searchTerm, searchType]);
 
 // TO
-  useEffect(() => {
+useEffect(() => {
     if (!activeCategory) return;
 
     setLoading(true);
@@ -80,7 +80,6 @@ function App() {
     const marketTypeQuery =
       activeCategory === "crypto" ? `&marketType=${cryptoMarketType}` : "";
 
-    // Step 1: load asset list immediately (no prices)
     fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}${marketTypeQuery}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Server responded with ${res.status}`);
@@ -91,9 +90,15 @@ function App() {
         setAssets(allAssets);
         setLoading(false);
 
-        // Step 2: fetch prices only for first 15 visible assets
         if (activeCategory !== "crypto" && allAssets.length > 0) {
-          const visibleSymbols = allAssets.slice(0, 15).map(a => a.symbol).join(",");
+          // Filter to current theme if stocks
+          const themeAssets = activeCategory === "stocks" && activeTheme && activeTheme !== "All"
+            ? allAssets.filter(a => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase())
+            : allAssets;
+
+          const visibleSymbols = themeAssets.slice(0, 15).map(a => a.symbol).join(",");
+          if (!visibleSymbols) return;
+
           fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}&symbols=${encodeURIComponent(visibleSymbols)}`)
             .then(res => res.json())
             .then(priceData => {
@@ -118,6 +123,36 @@ function App() {
         setLoading(false);
       });
   }, [activeCategory, cryptoMarketType]);
+
+useEffect(() => {
+    if (activeCategory !== "stocks" || !assets.length) return;
+
+    const themeAssets = activeTheme && activeTheme !== "All"
+      ? assets.filter(a => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase())
+      : assets;
+
+    const visibleSymbols = themeAssets.slice(0, 15).map(a => a.symbol).join(",");
+    if (!visibleSymbols) return;
+
+    fetch(`${BACKEND_URL}/watchlist?category=stocks&symbols=${encodeURIComponent(visibleSymbols)}`)
+      .then(res => res.json())
+      .then(priceData => {
+        const priceMap = {};
+        (priceData.assets || []).forEach(a => {
+          priceMap[a.symbol] = {
+            price: a.price,
+            priceChangePercent: a.priceChangePercent
+          };
+        });
+        setAssets(prev => prev.map(a => ({
+          ...a,
+          price: priceMap[a.symbol]?.price ?? a.price,
+          priceChangePercent: priceMap[a.symbol]?.priceChangePercent ?? a.priceChangePercent
+        })));
+      })
+      .catch(console.error);
+  }, [activeTheme]);
+
 
   const handleCategorySelect = (category) => {
     setActiveCategory(category);

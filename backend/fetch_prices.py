@@ -34,6 +34,11 @@ import yfinance as yf
 
 EXPLICIT_MAP = {
     # data.js symbol    : Yahoo Finance ticker
+    # FROM — no entry for treasury symbols
+# TO — add these three lines to EXPLICIT_MAP:
+    "UST10Y": "^TNX",   # 10-Year Treasury Yield
+    "UST30Y": "^TYX",   # 30-Year Treasury Yield
+    "UST5Y":  "^FVX",   # 5-Year Treasury Yield
     "SLX.AXS":          "SLX.AX",       # Silex Systems (ASX — .AXS is not valid)
     "034020.KS":        "034020.KS",    # DooSan Enerbility
     "000660.KS":        "000660.KS",    # SK Hynix

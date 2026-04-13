@@ -160,11 +160,12 @@ export function Watchlist({
                     {asset.price != null && (
                       <div className="asset-price">
                         <span className="price-val">
-                          $
+                          {asset.market === "Treasury" ? "" : "$"}
                           {asset.price.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                             })}
+                          {asset.market === "Treasury" ? "%" : ""}
                         </span>
                         {asset.priceChangePercent != null &&
                           (() => {
