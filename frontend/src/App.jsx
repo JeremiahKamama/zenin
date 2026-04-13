@@ -179,27 +179,25 @@ useEffect(() => {
     if (category !== "stocks") setActiveTheme("Robotics");
   };
 
-  const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
+const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const normalizedQuantity = Math.max(0, quantity);
     if (normalizedQuantity <= 0) return;
 
     const direction = orderType === "buy" ? 1 : -1;
     const actualQuantity = normalizedQuantity * direction;
 
-    // 1. Log the trade for the Journal
     const newTrade = {
       id: Date.now(),
       date: new Date().toISOString().split('T')[0],
       asset: asset.symbol,
       type: orderType.toUpperCase(),
       price: asset.price || 0,
-      profit: 0, // Initial execution
+      profit: 0,
       status: "Open",
       quantity: normalizedQuantity
     };
     setTrades(prev => [newTrade, ...prev]);
 
-    // 2. Add/Update holding in database (database handles accumulation)
     try {
       const holding = {
         ...asset,
@@ -214,40 +212,30 @@ useEffect(() => {
         body: JSON.stringify(holding)
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to ${orderType} asset`);
-      }
+      if (!response.ok) throw new Error(`Failed to ${orderType} asset`);
 
       const result = await response.json();
 
-      // 3. Update local state
-      const existingIndex = portfolio.findIndex(
-        (item) => item.symbol === asset.symbol &&
-          (item.marketType || "spot") === (asset.marketType || "spot")
-      );
-
-      if (existingIndex >= 0) {
-        // Update existing entry
-        const existing = portfolio[existingIndex];
-        const newQuantity = existing.quantity + actualQuantity;
-
-        if (newQuantity <= 0) {
-          // Remove from portfolio if quantity is zero or negative
-          setPortfolio(prev => prev.filter((_, index) => index !== existingIndex));
-        } else {
-          // Update quantity
-          setPortfolio(prev => prev.map((item, index) =>
-            index === existingIndex ? { ...item, quantity: newQuantity } : item
-          ));
-        }
-      } else if (actualQuantity > 0) {
-        // Add new entry only if buying (positive quantity)
-        setPortfolio(prev => [...prev, result]);
-      }
+      // Reload portfolio from database to get accurate state
+      fetch(`${BACKEND_URL}/db/portfolio`)
+        .then(res => res.json())
+        .then(data => {
+          // Re-attach prices from current assets state since DB doesn't store live prices
+          const priceMap = {};
+          assets.forEach(a => {
+            priceMap[a.symbol] = { price: a.price, priceChangePercent: a.priceChangePercent };
+          });
+          const holdings = (data.holdings || []).map(h => ({
+            ...h,
+            price: priceMap[h.symbol]?.price ?? h.price ?? asset.price,
+            priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? asset.priceChangePercent
+          }));
+          setPortfolio(holdings);
+        })
+        .catch(console.error);
 
     } catch (err) {
       console.error(`Failed to ${orderType} asset:`, err);
-      // Revert trade log on error
       setTrades(prev => prev.filter(trade => trade.id !== newTrade.id));
     }
 
