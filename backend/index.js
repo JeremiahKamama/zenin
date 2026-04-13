@@ -525,72 +525,77 @@ app.post("/api/options/crypto", async (req, res) => {
   const { currency = "ETH", expiry } = req.body;
   try {
     const fetch = await resolveFetch();
-    
-    // 1. Get ALL active instruments for the selected currency
-    const instRes = await fetch("https://api.lyra.finance/public/get_instruments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ currency, instrument_type: "option", expired: false })
-    });
-    const instData = await instRes.json();
-    const instruments = instData.result || [];
-    console.log(`[Options] Fetched ${instruments.length} instruments for ${currency}`);
-    
-    if (instruments.length === 0) return res.json({ chain: [], expiries: [] });
 
-    // 2. Discover all available expiries
-    const uniqueExpiries = [...new Set(instruments.map(i => i.option_details?.expiry))]
-      .filter(Boolean)
-      .sort((a, b) => a - b);
-    
-    // Choose selected expiry or default to closest
-    const targetExpiry = expiry ? parseInt(expiry) : uniqueExpiries[0];
-    const filteredInstruments = instruments.filter(i => i.option_details?.expiry === targetExpiry);
-    
-    // 3. Get tickers for this specific expiry
+    // 1. Get tickers directly — they contain all data including greeks
     const tickRes = await fetch("https://api.lyra.finance/public/get_tickers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instrument_type: "option", currency, expired: false, expiry: targetExpiry })
+      body: JSON.stringify({ instrument_type: "option", currency, expired: false })
     });
     const tickData = await tickRes.json();
-    const tickers = tickData.result || [];
+    const allTickers = tickData.result || [];
 
-    // 4. Group by Strike
+    console.log(`[Options] Fetched ${allTickers.length} tickers for ${currency}`);
+    if (allTickers.length > 0) console.log("[Options] Sample ticker keys:", Object.keys(allTickers[0]));
+
+    if (allTickers.length === 0) return res.json({ chain: [], expiries: [] });
+
+    // 2. Discover expiries from tickers
+    const uniqueExpiries = [...new Set(
+      allTickers
+        .map(t => t.option_details?.expiry || t.expiry)
+        .filter(Boolean)
+    )].sort((a, b) => a - b);
+
+    const targetExpiry = expiry ? parseInt(expiry) : uniqueExpiries[0];
+
+    // 3. Filter tickers for this expiry
+    const filteredTickers = allTickers.filter(t =>
+      (t.option_details?.expiry || t.expiry) === targetExpiry
+    );
+
+    console.log(`[Options] ${filteredTickers.length} tickers for expiry ${targetExpiry}`);
+    if (filteredTickers.length > 0) console.log("[Options] Sample filtered ticker:", JSON.stringify(filteredTickers[0]).slice(0, 500));
+
+    // 4. Group by strike
     const strikesMap = {};
-    
-    filteredInstruments.forEach(inst => {
-      const strike = parseFloat(inst.option_details.strike);
-      const type = inst.option_details.option_type;
-      const ticker = tickers.find(t => t.instrument_name === inst.instrument_name) || {};
 
-      if (!strikesMap[strike]) {
-        strikesMap[strike] = { strike, call: {}, put: {} };
-      }
+    filteredTickers.forEach(t => {
+      const optDetails = t.option_details || {};
+      const strike = parseFloat(optDetails.strike || t.strike || 0);
+      const optType = optDetails.option_type || t.option_type || "";
+      if (!strike || !optType) return;
+
+      if (!strikesMap[strike]) strikesMap[strike] = { strike, call: {}, put: {} };
 
       const info = {
-        bid: parseFloat(ticker.best_bid_price || 0),
-        ask: parseFloat(ticker.best_ask_price || 0),
-        delta: parseFloat(ticker.greeks?.delta || 0),
-        gamma: parseFloat(ticker.greeks?.gamma || 0),
-        vega: parseFloat(ticker.greeks?.vega || 0),
-        theta: parseFloat(ticker.greeks?.theta || 0),
-        iv: parseFloat(ticker.iv || 0)
+        bid: parseFloat(t.best_bid_price || t.bid || 0),
+        ask: parseFloat(t.best_ask_price || t.ask || 0),
+        delta: parseFloat(t.greeks?.delta ?? t.delta ?? 0),
+        gamma: parseFloat(t.greeks?.gamma ?? t.gamma ?? 0),
+        vega: parseFloat(t.greeks?.vega ?? t.vega ?? 0),
+        theta: parseFloat(t.greeks?.theta ?? t.theta ?? 0),
+        iv: parseFloat(t.iv || t.implied_volatility || 0),
+        volume: parseFloat(t.stats?.volume_24h || t.volume_24h || 0),
+        open_interest: parseFloat(t.open_interest || 0),
+        mark_price: parseFloat(t.mark_price || 0),
       };
 
-      if (type === "C") strikesMap[strike].call = info;
+      if (optType === "C") strikesMap[strike].call = info;
       else strikesMap[strike].put = info;
     });
 
     const chain = Object.values(strikesMap).sort((a, b) => a.strike - b.strike);
-    
-    res.json({ 
+
+    const iv = allTickers[0]?.iv || allTickers[0]?.implied_volatility || 0;
+
+    res.json({
       expiry: targetExpiry,
       expiries: uniqueExpiries,
-      chain: chain.slice(0, 15), 
+      chain: chain.slice(0, 20),
       market_metrics: {
-        iv: tickers[0]?.iv || 0,
-        p_c_ratio: 0.85 
+        iv: parseFloat(iv),
+        p_c_ratio: 0.85
       }
     });
   } catch (error) {

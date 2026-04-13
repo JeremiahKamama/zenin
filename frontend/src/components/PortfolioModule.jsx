@@ -9,16 +9,26 @@ function CollapseSection({ title, defaultOpen = true, children }) {
         onClick={() => setOpen(o => !o)}
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          cursor: "pointer", padding: "10px 0",
-          borderTop: "0.5px solid rgba(255,255,255,0.1)"
+          cursor: "pointer", padding: "12px 0",
+          borderTop: "1px solid rgba(255,255,255,0.15)",
+          borderBottom: open ? "none" : "1px solid rgba(255,255,255,0.15)",
         }}
       >
-        <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 500 }}>{title}</h2>
-        <span style={{ fontSize: "12px", color: "var(--color-text-secondary)", userSelect: "none" }}>
+        <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 500, color: "var(--color-text-primary)" }}>{title}</h2>
+        <span style={{
+          fontSize: "11px", color: "var(--color-text-secondary)",
+          userSelect: "none", padding: "2px 8px",
+          border: "0.5px solid rgba(255,255,255,0.1)",
+          borderRadius: "4px", background: "rgba(255,255,255,0.04)"
+        }}>
           {open ? "▲ Collapse" : "▼ Expand"}
         </span>
       </div>
-      {open && <div style={{ paddingTop: "8px" }}>{children}</div>}
+      {open && (
+        <div style={{ paddingTop: "12px", paddingBottom: "4px" }}>
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -155,7 +165,7 @@ export function PortfolioModule({
   };
 
   return (
-    <div>
+    <div style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
       <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
         <div className="metric-card glass">
           <label>Account Value</label>
@@ -176,12 +186,8 @@ export function PortfolioModule({
         </div>
       </div>
 
-      {/* Diversification Pie */}
       <CollapseSection title="Diversification">
-        <div
-          className="watchlist-panel glass"
-          style={{ cursor: "default" }}
-        >
+        <div className="watchlist-panel glass" style={{ cursor: "default" }}>
           {themeSeries.length > 0 ? (
             <Chart options={pieOptions} series={themeSeries} type="donut" height={240} width="100%" />
           ) : (
@@ -190,7 +196,6 @@ export function PortfolioModule({
         </div>
       </CollapseSection>
 
-      {/* Performance Chart */}
       <CollapseSection title="Performance Chart">
         <div className="watchlist-panel glass">
           <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
@@ -221,11 +226,9 @@ export function PortfolioModule({
         </div>
       </CollapseSection>
 
-      {/* Holdings + Performance Metrics side by side */}
       <CollapseSection title="Holdings & Performance Metrics">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
 
-          {/* Holdings */}
           <div className="watchlist-panel glass">
             <div className="section-header">
               <h2>Holdings</h2>
@@ -291,7 +294,6 @@ export function PortfolioModule({
             )}
           </div>
 
-          {/* Performance Metrics */}
           <div className="watchlist-panel glass">
             <div className="section-header" style={{ marginBottom: "16px" }}>
               <h2>Performance Metrics</h2>

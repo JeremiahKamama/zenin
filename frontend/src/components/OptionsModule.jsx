@@ -113,38 +113,42 @@ export function OptionsModule() {
           ))}
         </div>
 
-        {loading ? (
-          <div className="loading-state">Syncing {activeAsset} with Lyra Protocol...</div>
-        ) : (
-          <table className="option-chain-table">
-            <thead>
-              <tr>
-                <th>Delta</th>
-                <th>Bid</th>
-                <th>Ask</th>
-                <th className="strike-col">Strike</th>
-                <th>Bid</th>
-                <th>Ask</th>
-                <th>Theta</th>
-              </tr>
-            </thead>
-            <tbody>
-              {chain.map((row) => (
-                <tr key={row.strike}>
-                  <td className="greek">{row.call?.delta?.toFixed(2) || "0.00"}</td>
-                  <td className="bid-ask positive">${row.call?.bid?.toFixed(2)}</td>
-                  <td className="bid-ask positive">${row.call?.ask?.toFixed(2)}</td>
-                  <td className="strike-col">{row.strike}</td>
-                  <td className="bid-ask negative">${row.put?.bid?.toFixed(2)}</td>
-                  <td className="bid-ask negative">${row.put?.ask?.toFixed(2)}</td>
-                  <td className="greek">
-                    {row.put?.theta?.toFixed(3) || "0.000"}
-                  </td>
+          {loading ? (
+            <div className="loading-state">Syncing {activeAsset} with Lyra Protocol...</div>
+          ) : chain.length === 0 ? (
+            <div className="loading-state">No options data available for {activeAsset}.</div>
+          ) : (
+            <table className="option-chain-table">
+              <thead>
+                <tr>
+                  <th>IV</th>
+                  <th>Delta</th>
+                  <th>Bid</th>
+                  <th>Ask</th>
+                  <th className="strike-col">Strike</th>
+                  <th>Bid</th>
+                  <th>Ask</th>
+                  <th>Delta</th>
+                  <th>Theta</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+              </thead>
+              <tbody>
+                {chain.map((row) => (
+                  <tr key={row.strike}>
+                    <td className="greek">{row.call?.iv ? (row.call.iv * 100).toFixed(1) + "%" : "-"}</td>
+                    <td className="greek">{row.call?.delta?.toFixed(3) || "-"}</td>
+                    <td className="bid-ask positive">{row.call?.bid > 0 ? `$${row.call.bid.toFixed(4)}` : "-"}</td>
+                    <td className="bid-ask positive">{row.call?.ask > 0 ? `$${row.call.ask.toFixed(4)}` : "-"}</td>
+                    <td className="strike-col">{row.strike.toLocaleString()}</td>
+                    <td className="bid-ask negative">{row.put?.bid > 0 ? `$${row.put.bid.toFixed(4)}` : "-"}</td>
+                    <td className="bid-ask negative">{row.put?.ask > 0 ? `$${row.put.ask.toFixed(4)}` : "-"}</td>
+                    <td className="greek">{row.put?.delta?.toFixed(3) || "-"}</td>
+                    <td className="greek">{row.put?.theta ? row.put.theta.toFixed(4) : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
       </div>
     </div>
   );
