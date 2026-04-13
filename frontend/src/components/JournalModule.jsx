@@ -7,7 +7,8 @@ export function JournalModule({ trades = [] }) {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
-  const [calendarMode, setCalendarMode] = useState("all"); // all | selected
+  const [isSymbolsDropdownOpen, setIsSymbolsDropdownOpen] = useState(false);
+  const [symbolsButtonLabel, setSymbolsButtonLabel] = useState("All Symbols");
   const [calendarSearch, setCalendarSearch] = useState("");
   const [selectedSymbols, setSelectedSymbols] = useState([]);
 
@@ -263,20 +264,23 @@ export function JournalModule({ trades = [] }) {
     safeReportPage * reportRowsPerPage
   );
 
-  const tradedSymbols = analytics.tradedAssetsReport.map((row) => row.symbol);
-  const filteredSymbolSearch = tradedSymbols.filter((symbol) =>
+  const frequentTradedSymbols = analytics.tradedAssetsReport
+    .filter((row) => row.tradeCount > 0)
+    .map((row) => row.symbol);
+  const filteredSymbolSearch = frequentTradedSymbols.filter((symbol) =>
     symbol.toLowerCase().includes(calendarSearch.trim().toLowerCase())
   );
 
-  const addCalendarSymbol = (symbol) => {
+  const toggleCalendarSymbol = (symbol) => {
     const s = (symbol || "").trim().toUpperCase();
-    if (!s) return;
-    setSelectedSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
-    setCalendarSearch("");
-  };
-
-  const removeCalendarSymbol = (symbol) => {
-    setSelectedSymbols((prev) => prev.filter((s) => s !== symbol));
+    if (!s || !frequentTradedSymbols.includes(s)) return;
+    setSelectedSymbols((prev) =>
+      prev.includes(s) ? prev.filter((item) => item !== s) : [...prev, s]
+    );
+    setSymbolsButtonLabel("Ready Selected Symbols");
+    setTimeout(() => {
+      setSymbolsButtonLabel("All Symbols");
+    }, 1500);
   };
 
   const calendarPnlByDate = useMemo(() => {
@@ -284,13 +288,13 @@ export function JournalModule({ trades = [] }) {
     const byDate = new Map();
     for (const trade of analytics.realizedTrades) {
       if (!trade.closeDate) continue;
-      if (calendarMode === "selected" && !activeSet.has((trade.asset || "").toUpperCase())) {
+      if (activeSet.size > 0 && !activeSet.has((trade.asset || "").toUpperCase())) {
         continue;
       }
       byDate.set(trade.closeDate, (byDate.get(trade.closeDate) || 0) + (Number(trade.pnl) || 0));
     }
     return byDate;
-  }, [analytics.realizedTrades, calendarMode, selectedSymbols]);
+  }, [analytics.realizedTrades, selectedSymbols]);
 
   const calendarMonthLabel = calendarCursor.toLocaleDateString(undefined, {
     month: "long",
@@ -400,58 +404,40 @@ export function JournalModule({ trades = [] }) {
             <button className="pagination-button" onClick={() => moveCalendarMonth(1)}>Month ›</button>
             <button className="pagination-button" onClick={() => moveCalendarYear(1)}>Year »</button>
           </div>
-          <div className="calendar-filter-toggle">
+          <div className="calendar-symbols-row">
             <button
-              className={`pagination-button ${calendarMode === "all" ? "active" : ""}`}
-              onClick={() => setCalendarMode("all")}
+              className={`pagination-button ${selectedSymbols.length > 0 ? "active" : ""}`}
+              onClick={() => setIsSymbolsDropdownOpen((prev) => !prev)}
             >
-              All Symbols
-            </button>
-            <button
-              className={`pagination-button ${calendarMode === "selected" ? "active" : ""}`}
-              onClick={() => setCalendarMode("selected")}
-            >
-              Selected Symbols
+              {symbolsButtonLabel}
             </button>
           </div>
-          <div className="calendar-symbol-search">
-            <input
-              className="search-input"
-              placeholder="Search or type symbol..."
-              value={calendarSearch}
-              onChange={(e) => setCalendarSearch(e.target.value)}
-            />
-            <button className="pagination-button" onClick={() => addCalendarSymbol(calendarSearch)}>Add</button>
-          </div>
-          {calendarSearch.trim() && (
-            <div className="calendar-symbol-results">
-              {filteredSymbolSearch.length > 0 ? (
-                filteredSymbolSearch.slice(0, 8).map((symbol) => (
-                  <button
-                    key={symbol}
-                    className="theme-pill"
-                    onClick={() => addCalendarSymbol(symbol)}
-                  >
-                    {symbol}
-                  </button>
-                ))
-              ) : (
-                <span className="meta">No traded symbols found for this search.</span>
-              )}
-            </div>
-          )}
-          {selectedSymbols.length > 0 && (
-            <div className="calendar-selected-symbols">
-              {selectedSymbols.map((symbol) => (
-                <button
-                  key={symbol}
-                  className="theme-pill active"
-                  onClick={() => removeCalendarSymbol(symbol)}
-                  title="Remove symbol"
-                >
-                  {symbol} ×
-                </button>
-              ))}
+          {isSymbolsDropdownOpen && (
+            <div className="calendar-symbol-dropdown">
+              <div className="calendar-symbol-search">
+                <input
+                  className="search-input"
+                  placeholder="Search traded assets..."
+                  value={calendarSearch}
+                  onChange={(e) => setCalendarSearch(e.target.value)}
+                />
+              </div>
+              <div className="calendar-symbol-checklist">
+                {filteredSymbolSearch.length > 0 ? (
+                  filteredSymbolSearch.slice(0, 30).map((symbol) => (
+                    <label key={symbol} className="calendar-check-item">
+                      <input
+                        type="checkbox"
+                        checked={selectedSymbols.includes(symbol)}
+                        onChange={() => toggleCalendarSymbol(symbol)}
+                      />
+                      <span>{symbol}</span>
+                    </label>
+                  ))
+                ) : (
+                  <span className="meta">No traded symbols found.</span>
+                )}
+              </div>
             </div>
           )}
         </div>

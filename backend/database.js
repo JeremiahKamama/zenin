@@ -39,6 +39,25 @@ function initializeDatabase() {
     );
   `);
 
+  // Saved options calculations
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS options_calculations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      strategy TEXT NOT NULL,
+      net_pnl REAL NOT NULL,
+      delta REAL NOT NULL,
+      gamma REAL NOT NULL,
+      theta REAL NOT NULL,
+      vega REAL NOT NULL,
+      max_profit REAL,
+      max_loss REAL,
+      breakevens TEXT,
+      legs_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+
   console.log('Database initialized at:', dbPath);
 
   // Seed watchlist if empty
@@ -193,6 +212,66 @@ const watchlist = {
   }
 };
 
+const optionsCalculations = {
+  add: (payload) => {
+    const {
+      symbol,
+      strategy = "Custom",
+      netPnl = 0,
+      delta = 0,
+      gamma = 0,
+      theta = 0,
+      vega = 0,
+      maxProfit = null,
+      maxLoss = null,
+      breakevens = [],
+      legs = [],
+      createdAt = new Date().toISOString()
+    } = payload;
+
+    const stmt = db.prepare(`
+      INSERT INTO options_calculations (
+        symbol, strategy, net_pnl, delta, gamma, theta, vega, max_profit, max_loss, breakevens, legs_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const info = stmt.run(
+      symbol,
+      strategy,
+      Number(netPnl) || 0,
+      Number(delta) || 0,
+      Number(gamma) || 0,
+      Number(theta) || 0,
+      Number(vega) || 0,
+      Number.isFinite(Number(maxProfit)) ? Number(maxProfit) : null,
+      Number.isFinite(Number(maxLoss)) ? Number(maxLoss) : null,
+      JSON.stringify(Array.isArray(breakevens) ? breakevens : []),
+      JSON.stringify(Array.isArray(legs) ? legs : []),
+      createdAt
+    );
+
+    return { id: info.lastInsertRowid, ...payload, createdAt };
+  },
+
+  getRecent: (limit = 20, symbol = null) => {
+    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 20));
+    if (symbol) {
+      return db.prepare(`
+        SELECT * FROM options_calculations
+        WHERE symbol = ?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?
+      `).all(symbol, safeLimit);
+    }
+    return db.prepare(`
+      SELECT * FROM options_calculations
+      ORDER BY datetime(created_at) DESC, id DESC
+      LIMIT ?
+    `).all(safeLimit);
+  }
+};
+
 // Clear all data (for testing)
 function clearAllData() {
   db.exec('DELETE FROM portfolio_holdings');
@@ -204,5 +283,6 @@ module.exports = {
   initializeDatabase,
   portfolio,
   watchlist,
+  optionsCalculations,
   clearAllData
 };

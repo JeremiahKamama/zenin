@@ -31,10 +31,8 @@ export function Watchlist({
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
 
   useEffect(() => {
-  if (typeof onPageChange === "function") {
-    onPageChange(currentPage, pagedAssets.map(a => a.symbol));
-  }
-}, [currentPage, activeTheme]);
+    setCurrentPage(1);
+  }, [activeCategory, activeTheme]);
 
   // Derive the displayed assets based on active theme (stocks only)
   const displayedAssets =
@@ -44,16 +42,17 @@ export function Watchlist({
       )
       : assets;
 
-  const itemsPerPage = activeCategory === "stocks" ? 15 : displayedAssets.length;
+  const itemsPerPage = 10;
   const totalPages = Math.max(1, Math.ceil(displayedAssets.length / itemsPerPage));
   const pagedAssets = displayedAssets.slice(
   (currentPage - 1) * itemsPerPage,
   currentPage * itemsPerPage
 );
+const pageSymbols = pagedAssets.map((a) => a.symbol).join(",");
 
 useEffect(() => {
-  onPageChange?.(currentPage, pagedAssets.map(a => a.symbol));
-}, [currentPage, activeTheme]);
+  onPageChange?.(currentPage, pageSymbols ? pageSymbols.split(",") : []);
+}, [currentPage, activeTheme, activeCategory, pageSymbols]);
 
 
   return (
@@ -184,7 +183,7 @@ useEffect(() => {
             )}
           </div>
 
-          {activeCategory === "stocks" && totalPages > 1 && (
+          {totalPages > 1 && (
             <div className="pagination-controls">
               <button
                 className="pagination-button"

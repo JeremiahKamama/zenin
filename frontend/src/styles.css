@@ -1731,7 +1731,7 @@ button {
 }
 
 .calendar-nav,
-.calendar-filter-toggle,
+.calendar-symbols-row,
 .calendar-symbol-search,
 .calendar-symbol-results,
 .calendar-selected-symbols {
@@ -1741,8 +1741,39 @@ button {
   align-items: center;
 }
 
+.calendar-nav,
+.calendar-symbols-row {
+  justify-content: flex-end;
+}
+
 .calendar-symbol-search .search-input {
-  max-width: 260px;
+  max-width: 300px;
+}
+
+.calendar-symbol-dropdown {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.calendar-symbol-checklist {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.calendar-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: #cbd5e1;
+}
+
+.calendar-check-item input {
+  accent-color: #38bdf8;
 }
 
 .calendar-grid-header,

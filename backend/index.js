@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
-const { initializeDatabase, portfolio, watchlist } = require("./database");
+const { initializeDatabase, portfolio, watchlist, optionsCalculations } = require("./database");
 
 const app = express();
 
@@ -124,6 +124,12 @@ async function fetchBinanceTicker(endpointBase, symbol) {
   return response.json();
 }
 
+const CRYPTO_CACHE_TTL_MS = 60000;
+let cryptoMarketCache = {
+  ts: 0,
+  assets: []
+};
+
 async function fetchCryptoMarketData() {
   const fetch = await resolveFetch();
 
@@ -149,12 +155,26 @@ async function fetchCryptoMarketData() {
     return [];
   }
 
+  const now = Date.now();
+  if (cryptoMarketCache.assets.length > 0 && now - cryptoMarketCache.ts < CRYPTO_CACHE_TTL_MS) {
+    const cacheMap = new Map(cryptoMarketCache.assets.map((a) => [a.symbol, a]));
+    return combinedAssets.map((asset) => {
+      const cached = cacheMap.get(asset.symbol);
+      return {
+        ...asset,
+        price: cached?.price ?? null,
+        priceChangePercent: cached?.priceChangePercent ?? null,
+        volume: null
+      };
+    });
+  }
+
   try {
     const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
     const response = await fetch(url);
     const data = await response.json();
 
-    return combinedAssets.map(asset => {
+    const enriched = combinedAssets.map(asset => {
       const id = coinMap[asset.symbol] || asset.symbol.toLowerCase();
       const info = data[id];
       return {
@@ -164,9 +184,22 @@ async function fetchCryptoMarketData() {
         volume: null
       };
     });
+    cryptoMarketCache = {
+      ts: Date.now(),
+      assets: enriched.map((asset) => ({
+        symbol: asset.symbol,
+        price: asset.price,
+        priceChangePercent: asset.priceChangePercent
+      }))
+    };
+    return enriched;
   } catch (error) {
+    const cacheMap = new Map(cryptoMarketCache.assets.map((a) => [a.symbol, a]));
     return combinedAssets.map(asset => ({
-      ...asset, price: null, priceChangePercent: null, volume: null
+      ...asset,
+      price: cacheMap.get(asset.symbol)?.price ?? null,
+      priceChangePercent: cacheMap.get(asset.symbol)?.priceChangePercent ?? null,
+      volume: null
     }));
   }
 }
@@ -543,16 +576,17 @@ app.post("/api/options/crypto", async (req, res) => {
     // 2. Discover expiries from tickers
     const uniqueExpiries = [...new Set(
       allTickers
-        .map(t => t.option_details?.expiry || t.expiry)
-        .filter(Boolean)
+        .map((t) => Number(t.option_details?.expiry ?? t.expiry ?? t.expiration_timestamp))
+        .filter((v) => Number.isFinite(v) && v > 0)
     )].sort((a, b) => a - b);
 
-    const targetExpiry = expiry ? parseInt(expiry) : uniqueExpiries[0];
+    const targetExpiry = Number(expiry) || uniqueExpiries[0];
 
     // 3. Filter tickers for this expiry
-    const filteredTickers = allTickers.filter(t =>
-      (t.option_details?.expiry || t.expiry) === targetExpiry
-    );
+    const filteredTickers = allTickers.filter((t) => {
+      const tExp = Number(t.option_details?.expiry ?? t.expiry ?? t.expiration_timestamp);
+      return Number.isFinite(tExp) && tExp === targetExpiry;
+    });
 
     console.log(`[Options] ${filteredTickers.length} tickers for expiry ${targetExpiry}`);
     if (filteredTickers.length > 0) console.log("[Options] Sample filtered ticker:", JSON.stringify(filteredTickers[0]).slice(0, 500));
@@ -562,20 +596,21 @@ app.post("/api/options/crypto", async (req, res) => {
 
     filteredTickers.forEach(t => {
       const optDetails = t.option_details || {};
-      const strike = parseFloat(optDetails.strike || t.strike || 0);
-      const optType = optDetails.option_type || t.option_type || "";
+      const strike = parseFloat(optDetails.strike || t.strike || t.strike_price || 0);
+      const rawType = String(optDetails.option_type || t.option_type || t.kind || "").toUpperCase();
+      const optType = rawType === "CALL" ? "C" : rawType === "PUT" ? "P" : rawType;
       if (!strike || !optType) return;
 
       if (!strikesMap[strike]) strikesMap[strike] = { strike, call: {}, put: {} };
 
       const info = {
-        bid: parseFloat(t.best_bid_price || t.bid || 0),
-        ask: parseFloat(t.best_ask_price || t.ask || 0),
+        bid: parseFloat(t.best_bid_price ?? t.bid ?? t.bid_price ?? 0),
+        ask: parseFloat(t.best_ask_price ?? t.ask ?? t.ask_price ?? 0),
         delta: parseFloat(t.greeks?.delta ?? t.delta ?? 0),
         gamma: parseFloat(t.greeks?.gamma ?? t.gamma ?? 0),
         vega: parseFloat(t.greeks?.vega ?? t.vega ?? 0),
         theta: parseFloat(t.greeks?.theta ?? t.theta ?? 0),
-        iv: parseFloat(t.iv || t.implied_volatility || 0),
+        iv: parseFloat(t.iv ?? t.implied_volatility ?? t.mark_iv ?? 0),
         volume: parseFloat(t.stats?.volume_24h || t.volume_24h || 0),
         open_interest: parseFloat(t.open_interest || 0),
         mark_price: parseFloat(t.mark_price || 0),
@@ -587,7 +622,13 @@ app.post("/api/options/crypto", async (req, res) => {
 
     const chain = Object.values(strikesMap).sort((a, b) => a.strike - b.strike);
 
-    const iv = allTickers[0]?.iv || allTickers[0]?.implied_volatility || 0;
+    const iv = allTickers[0]?.iv || allTickers[0]?.implied_volatility || allTickers[0]?.mark_iv || 0;
+    const spotPrice = parseFloat(
+      allTickers[0]?.index_price ??
+      allTickers[0]?.underlying_price ??
+      allTickers[0]?.mark_price ??
+      0
+    );
 
     res.json({
       expiry: targetExpiry,
@@ -595,7 +636,8 @@ app.post("/api/options/crypto", async (req, res) => {
       chain: chain.slice(0, 20),
       market_metrics: {
         iv: parseFloat(iv),
-        p_c_ratio: 0.85
+        p_c_ratio: 0.85,
+        spot: Number.isFinite(spotPrice) ? spotPrice : 0
       }
     });
   } catch (error) {
@@ -643,12 +685,50 @@ app.get("/api/options/crypto/all-assets", async (req, res) => {
     const instData = await instRes.json();
     const instruments = instData.result || [];
     
-    // Extract unique base currencies
-    const currencies = [...new Set(instruments.map(i => i.base_currency))].sort();
+    // Extract unique base currencies with fallbacks for schema changes
+    const currencies = [...new Set(
+      instruments
+        .map((i) => i.base_currency || i.currency || i.base || i.underlying_asset)
+        .filter(Boolean)
+    )].sort();
     
     res.json({ assets: currencies });
   } catch (error) {
     res.status(502).json({ error: "Failed to fetch all assets from Lyra" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Options Calculator Persistence
+// ---------------------------------------------------------------------------
+app.get("/api/db/options-calculations", (req, res) => {
+  try {
+    const { limit = 20, symbol } = req.query;
+    const records = optionsCalculations.getRecent(limit, symbol || null).map((row) => ({
+      ...row,
+      breakevens: (() => {
+        try { return JSON.parse(row.breakevens || "[]"); } catch { return []; }
+      })(),
+      legs: (() => {
+        try { return JSON.parse(row.legs_json || "[]"); } catch { return []; }
+      })()
+    }));
+    res.json({ calculations: records });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/db/options-calculations", (req, res) => {
+  try {
+    const payload = req.body || {};
+    if (!payload.symbol) {
+      return res.status(400).json({ error: "symbol is required" });
+    }
+    const record = optionsCalculations.add(payload);
+    res.status(201).json(record);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

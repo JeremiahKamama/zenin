@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { Watchlist } from "./components/Watchlist";
 import { PortfolioModule } from "./components/PortfolioModule";
@@ -27,6 +27,8 @@ function App() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchType, setSearchType] = useState(null); // null, "tradfi" or "crypto"
   const [selectedAsset, setSelectedAsset] = useState(null);
+  const priceCacheRef = useRef(new Map());
+  const PRICE_CACHE_TTL_MS = 60000;
 
   const [balance, setBalance] = useState(() => {
     const saved = localStorage.getItem("zenin_balance");
@@ -95,8 +97,67 @@ function App() {
       .finally(() => setSearchLoading(false));
   }, [searchTerm, searchType]);
 
-// TO
-useEffect(() => {
+  const mergeAssetPrices = (incomingAssets, previousAssets = []) => {
+    const prevMap = new Map(previousAssets.map((a) => [a.symbol, a]));
+    const now = Date.now();
+    return incomingAssets.map((asset) => {
+      const cached = priceCacheRef.current.get(asset.symbol);
+      const prev = prevMap.get(asset.symbol);
+      const merged = {
+        ...asset,
+        price: asset.price ?? cached?.price ?? prev?.price ?? null,
+        priceChangePercent: asset.priceChangePercent ?? cached?.priceChangePercent ?? prev?.priceChangePercent ?? null
+      };
+      if (merged.price != null || merged.priceChangePercent != null) {
+        priceCacheRef.current.set(asset.symbol, {
+          price: merged.price,
+          priceChangePercent: merged.priceChangePercent,
+          ts: now
+        });
+      }
+      return merged;
+    });
+  };
+
+  const refreshSymbolsForCategory = async (category, symbols = []) => {
+    if (!symbols.length || category === "crypto") return;
+    const now = Date.now();
+    const uncachedSymbols = symbols.filter((symbol) => {
+      const cached = priceCacheRef.current.get(symbol);
+      return !cached || now - cached.ts > PRICE_CACHE_TTL_MS;
+    });
+
+    if (uncachedSymbols.length > 0) {
+      try {
+        const res = await fetch(`${BACKEND_URL}/watchlist?category=${category}&symbols=${encodeURIComponent(uncachedSymbols.join(","))}`);
+        const priceData = await res.json();
+        (priceData.assets || []).forEach((asset) => {
+          if (asset.price != null || asset.priceChangePercent != null) {
+            priceCacheRef.current.set(asset.symbol, {
+              price: asset.price ?? null,
+              priceChangePercent: asset.priceChangePercent ?? null,
+              ts: Date.now()
+            });
+          }
+        });
+      } catch (err) {
+        console.error("Price refresh failed:", err);
+      }
+    }
+
+    setAssets((prev) => prev.map((asset) => {
+      if (!symbols.includes(asset.symbol)) return asset;
+      const cached = priceCacheRef.current.get(asset.symbol);
+      if (!cached) return asset;
+      return {
+        ...asset,
+        price: cached.price ?? asset.price,
+        priceChangePercent: cached.priceChangePercent ?? asset.priceChangePercent
+      };
+    }));
+  };
+
+  useEffect(() => {
     if (!activeCategory) return;
 
     setLoading(true);
@@ -109,7 +170,7 @@ useEffect(() => {
       })
       .then((data) => {
         const allAssets = data.assets || [];
-        setAssets(allAssets);
+        setAssets((prev) => mergeAssetPrices(allAssets, prev));
         setLoading(false);
 
         if (activeCategory !== "crypto" && allAssets.length > 0) {
@@ -118,26 +179,9 @@ useEffect(() => {
             ? allAssets.filter(a => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase())
             : allAssets;
 
-          const visibleSymbols = themeAssets.slice(0, 15).map(a => a.symbol).join(",");
-          if (!visibleSymbols) return;
-
-          fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}&symbols=${encodeURIComponent(visibleSymbols)}`)
-            .then(res => res.json())
-            .then(priceData => {
-              const priceMap = {};
-              (priceData.assets || []).forEach(a => {
-                priceMap[a.symbol] = {
-                  price: a.price,
-                  priceChangePercent: a.priceChangePercent
-                };
-              });
-              setAssets(prev => prev.map(a => ({
-                ...a,
-                price: priceMap[a.symbol]?.price ?? a.price,
-                priceChangePercent: priceMap[a.symbol]?.priceChangePercent ?? a.priceChangePercent
-              })));
-            })
-            .catch(console.error);
+          const visibleSymbols = themeAssets.slice(0, 10).map((a) => a.symbol);
+          if (!visibleSymbols.length) return;
+          refreshSymbolsForCategory(activeCategory, visibleSymbols);
         }
       })
       .catch((err) => {
@@ -153,48 +197,14 @@ useEffect(() => {
       ? assets.filter(a => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase())
       : assets;
 
-    const visibleSymbols = themeAssets.slice(0, 15).map(a => a.symbol).join(",");
-    if (!visibleSymbols) return;
-
-    fetch(`${BACKEND_URL}/watchlist?category=stocks&symbols=${encodeURIComponent(visibleSymbols)}`)
-      .then(res => res.json())
-      .then(priceData => {
-        const priceMap = {};
-        (priceData.assets || []).forEach(a => {
-          priceMap[a.symbol] = {
-            price: a.price,
-            priceChangePercent: a.priceChangePercent
-          };
-        });
-        setAssets(prev => prev.map(a => ({
-          ...a,
-          price: priceMap[a.symbol]?.price ?? a.price,
-          priceChangePercent: priceMap[a.symbol]?.priceChangePercent ?? a.priceChangePercent
-        })));
-      })
-      .catch(console.error);
+    const visibleSymbols = themeAssets.slice(0, 10).map((a) => a.symbol);
+    if (!visibleSymbols.length) return;
+    refreshSymbolsForCategory("stocks", visibleSymbols);
   }, [activeTheme]);
 
   const handlePageChange = (page, visibleSymbols) => {
-  if (activeCategory === "crypto" || !visibleSymbols.length) return;
-
-  fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}&symbols=${encodeURIComponent(visibleSymbols.join(","))}`)
-    .then(res => res.json())
-    .then(priceData => {
-      const priceMap = {};
-      (priceData.assets || []).forEach(a => {
-        priceMap[a.symbol] = {
-          price: a.price,
-          priceChangePercent: a.priceChangePercent
-        };
-      });
-      setAssets(prev => prev.map(a => ({
-        ...a,
-        price: priceMap[a.symbol]?.price ?? a.price,
-        priceChangePercent: priceMap[a.symbol]?.priceChangePercent ?? a.priceChangePercent
-      })));
-    })
-    .catch(console.error);
+  if (!visibleSymbols.length) return;
+  refreshSymbolsForCategory(activeCategory, visibleSymbols.slice(0, 10));
   };
   const handleCategorySelect = (category) => {
     setActiveCategory(category);
