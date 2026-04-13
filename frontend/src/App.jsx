@@ -471,7 +471,7 @@ useEffect(() => {
                 categories={categories}
                 activeCategory={activeCategory}
                 onCategorySelect={handleCategorySelect}
-                assets={assets.filter(a => isInWatchlist(a.symbol, a.marketType))}
+                assets={assets}
                 onAdd={setSelectedAsset}
                 loading={loading}
                 marketType={cryptoMarketType}
