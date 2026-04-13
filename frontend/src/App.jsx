@@ -27,15 +27,31 @@ function App() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchType, setSearchType] = useState(null); // null, "tradfi" or "crypto"
   const [selectedAsset, setSelectedAsset] = useState(null);
-  const [balance, setBalance] = useState(10000);
-  const deposit = (amount) => {
-  setBalance(prev => prev + amount);
-};
 
-const withdraw = (amount) => {
-  if (amount > balance) return;
-  setBalance(prev => prev - amount);
-}; // or whatever default
+  const [balance, setBalance] = useState(() => {
+    const saved = localStorage.getItem("zenin_balance");
+    return saved ? parseFloat(saved) : 10000;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("zenin_balance", balance.toString());
+  }, [balance]);
+
+  const deposit = (amount) => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    setBalance(prev => prev + amt);
+  };
+
+  const withdraw = (amount) => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    if (amt > balance) {
+      alert("Insufficient balance to withdraw that amount.");
+      return;
+    }
+    setBalance(prev => prev - amt);
+  };
 
   // Load portfolio from database on mount
   useEffect(() => {
