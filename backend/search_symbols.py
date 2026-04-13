@@ -69,49 +69,32 @@ FALLBACK_CRYPTO = {
 
 
 def search_binance_crypto(query: str) -> list:
-    """Search Binance for crypto assets."""
+    """Search CoinGecko for crypto assets."""
     results = []
     try:
-        import yfinance as yf
-        
-        # In Yahoo Finance, crypto tickers end with -USD
-        query_upper = query.upper()
-        # Clean off any existing -USD just in case
-        if query_upper.endswith('-USD'):
-            base_symbol = query_upper[:-4]
-        else:
-            base_symbol = query_upper
-            
-        yf_symbol = f"{base_symbol}-USD"
-        
-        ticker = yf.Ticker(yf_symbol)
-        info = ticker.info
-        
-        # Crypto map for friendly names
-        crypto_map = {
-            'BTC': 'Bitcoin', 'ETH': 'Ethereum', 'BNB': 'Binance Coin',
-            'XRP': 'XRP', 'ADA': 'Cardano', 'SOL': 'Solana', 'DOGE': 'Dogecoin',
-            'DOT': 'Polkadot', 'BCH': 'Bitcoin Cash', 'LTC': 'Litecoin',
-            'SHIB': 'Shiba Inu', 'LINK': 'Chainlink', 'UNI': 'Uniswap',
-            'MATIC': 'Polygon', 'AVAX': 'Avalanche', 'XLM': 'Stellar',
-            'TRX': 'TRON', 'TON': 'Toncoin', 'ATOM': 'Cosmos', 'KAS': 'Kaspa'
-        }
-        
-        if info and 'symbol' in info and info.get('symbol'):
-            # It found a valid crypto asset
-            name = info.get('shortName', info.get('longName', ''))
-            if not name:
-                name = crypto_map.get(base_symbol, base_symbol)
-                
-            results.append({
-                'symbol': base_symbol,
-                'name': name,
-                'type': 'crypto',
-                'exchange': 'Crypto',
-            })
+        import requests
+        query_lower = query.lower()
+        url = f"https://api.coingecko.com/api/v3/search?query={query_lower}"
+        response = requests.get(url, timeout=10)
+        if not response.ok:
+            return results
+
+        data = response.json()
+        coins = data.get("coins", [])
+
+        for coin in coins[:5]:
+            symbol = coin.get("symbol", "").upper()
+            name = coin.get("name", "")
+            if symbol and name:
+                results.append({
+                    "symbol": symbol,
+                    "name": name,
+                    "type": "crypto",
+                    "exchange": "CoinGecko",
+                })
     except Exception as e:
         pass
-    
+
     return results
 
 

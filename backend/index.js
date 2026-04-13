@@ -125,14 +125,17 @@ async function fetchBinanceTicker(endpointBase, symbol) {
 }
 
 async function fetchCryptoMarketData(marketType = "spot") {
-  const endpointBase =
-    marketType === "futures"
-      ? "https://fapi.binance.com/fapi/v1/ticker/24hr"
-      : "https://api.binance.com/api/v3/ticker/24hr";
+  const fetch = await resolveFetch();
+
+  const coinMap = {
+    BTC: "bitcoin", ETH: "ethereum", BNB: "binancecoin",
+    XRP: "ripple", ADA: "cardano", SOL: "solana",
+    DOGE: "dogecoin", DOT: "polkadot", USDT: "tether", USDC: "usd-coin"
+  };
 
   const allDbAssets = watchlist.getAll();
-  const customCrypto = allDbAssets.filter(a => 
-    (a.type === "crypto" || a.type === "stablecoin" || a.type === "exchange token" || a.type === "spot") 
+  const customCrypto = allDbAssets.filter(a =>
+    (a.type === "crypto" || a.type === "stablecoin" || a.type === "exchange token" || a.type === "spot")
     && (a.marketType || "spot") === marketType
     && !watchlistData.crypto.some(pre => pre.symbol === a.symbol)
   );
@@ -140,36 +143,32 @@ async function fetchCryptoMarketData(marketType = "spot") {
   const combinedAssets = [
     ...watchlistData.crypto,
     ...customCrypto
-  ].map((asset) => ({
-    ...asset,
-    type: "crypto",
-    binanceSymbol: cryptoTickerMap[asset.symbol] || `${asset.symbol}USDT`,
-    marketType,
-  }));
+  ].map(asset => ({ ...asset, type: "crypto", marketType }));
 
-  return Promise.all(
-    combinedAssets.map(async (asset) => {
-      if (!asset.binanceSymbol) {
-        return {
-          ...asset,
-          price: asset.symbol === "USDT" ? 1 : null,
-          priceChangePercent: asset.symbol === "USDT" ? 0 : null,
-          volume: null,
-        };
-      }
-      try {
-        const ticker = await fetchBinanceTicker(endpointBase, asset.binanceSymbol);
-        return {
-          ...asset,
-          price: parseFloat(ticker.lastPrice),
-          priceChangePercent: parseFloat(ticker.priceChangePercent),
-          volume: parseFloat(ticker.volume),
-        };
-      } catch (error) {
-        return { ...asset, price: null, priceChangePercent: null, volume: null, error: error.message };
-      }
-    })
-  );
+  const ids = combinedAssets
+    .map(a => coinMap[a.symbol] || a.symbol.toLowerCase())
+    .join(",");
+
+  try {
+    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    return combinedAssets.map(asset => {
+      const id = coinMap[asset.symbol] || asset.symbol.toLowerCase();
+      const info = data[id];
+      return {
+        ...asset,
+        price: info?.usd ?? null,
+        priceChangePercent: info?.usd_24h_change ?? null,
+        volume: null
+      };
+    });
+  } catch (error) {
+    return combinedAssets.map(asset => ({
+      ...asset, price: null, priceChangePercent: null, volume: null
+    }));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,48 +297,46 @@ function searchYahooFinance(query, type = "tradfi") {
 
 // History
 // ---------------------------------------------------------------------------
-function fetchHistoryFromBinance(symbol, interval) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const fetch = await resolveFetch();
-      const intervalMap = {
-        "4H":  { interval: "15m", limit: 16 },
-        "1D":  { interval: "1h",  limit: 24 },
-        "1W":  { interval: "4h",  limit: 42 },
-        "3M":  { interval: "1d",  limit: 90 },
-        "1Y":  { interval: "1d",  limit: 365 },
-        "YTD": { interval: "1d",  limit: 365 },
-        "MAX": { interval: "1w",  limit: 200 },
-      };
-      const { interval: binanceInterval, limit } = intervalMap[interval] || intervalMap["1D"];
-      const binanceSymbol = cryptoTickerMap[symbol] || `${symbol}USDT`;
+async function fetchHistoryFromBinance(symbol, interval) {
+  const fetch = await resolveFetch();
 
-      const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${binanceInterval}&limit=${limit}`;
-      console.log("Binance URL:", url);
+  const intervalMap = {
+    "4H":  { days: 1 },
+    "1D":  { days: 1 },
+    "1W":  { days: 7 },
+    "3M":  { days: 90 },
+    "1Y":  { days: 365 },
+    "YTD": { days: 365 },
+    "MAX": { days: 2000 },
+  };
 
-      const response = await fetch(url);
-      const text = await response.text();
+  const { days } = intervalMap[interval] || intervalMap["1D"];
+  const coinMap = {
+    BTC: "bitcoin", ETH: "ethereum", BNB: "binancecoin",
+    XRP: "ripple", ADA: "cardano", SOL: "solana",
+    DOGE: "dogecoin", DOT: "polkadot", USDT: "tether", USDC: "usd-coin"
+  };
 
-      if (!response.ok) {
-        console.error("Binance error response:", text);
-        throw new Error(`Binance history fetch failed: ${text}`);
-      }
+  const coinId = coinMap[symbol] || symbol.toLowerCase();
+  const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`;
 
-      const data = JSON.parse(text);
-      const results = data.map(k => ({
-        time: new Date(k[0]).toISOString(),
-        open: parseFloat(k[1]),
-        high: parseFloat(k[2]),
-        low: parseFloat(k[3]),
-        close: parseFloat(k[4]),
-        volume: parseFloat(k[5]),
-        price: parseFloat(k[4])
-      }));
-      resolve(results);
-    } catch (e) {
-      reject(e);
-    }
-  });
+  const response = await fetch(url);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`CoinGecko fetch failed: ${text}`);
+  }
+
+  const data = await response.json();
+  const prices = data.prices || [];
+
+  return prices.map(([timestamp, price]) => ({
+    time: new Date(timestamp).toISOString(),
+    open: price,
+    high: price,
+    low: price,
+    close: price,
+    price: price
+  }));
 }
 
 function fetchHistoryFromYahoo(symbol, interval) {
