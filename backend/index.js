@@ -405,6 +405,47 @@ function searchYahooFinance(query, type = "tradfi") {
   });
 }
 
+// ---------------------------------------------------------------------------
+// USER BALANCE ENDPOINTS
+// ---------------------------------------------------------------------------
+
+app.get("/api/db/balance", (req, res) => {
+  try {
+    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
+    res.json({ balance: row?.balance ?? 10000 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add to database.js schema in initializeDatabase()
+
+// Balance endpoints in index.js
+app.get("/api/db/balance", (req, res) => {
+  try {
+    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
+    res.json({ balance: row?.balance ?? 10000 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/db/balance", (req, res) => {
+  try {
+    const { amount, type } = req.body;
+    if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
+    if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
+    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
+    const current = row?.balance ?? 10000;
+    const newBalance = type === "deposit" ? current + amount : current - amount;
+    if (newBalance < 0) return res.status(400).json({ error: "Insufficient balance" });
+    db.prepare("UPDATE user_balance SET balance = ? WHERE id = 1").run(newBalance);
+    res.json({ balance: newBalance });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});  
+
 // History
 // ---------------------------------------------------------------------------
 async function fetchHistoryFromBinance(symbol, interval) {
