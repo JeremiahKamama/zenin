@@ -296,7 +296,7 @@ function fetchYFinancePrices(originalSymbols) {
 
     console.log("Fetching prices — original:", originalSymbols);
     console.log("Normalised YF tickers:     ", yfSymbols);
-    const safeSymbol = sanitizeSymbol(symbol);
+    // const safeSymbol = sanitizeSymbol(symbol);
     const child = spawn("python3", ["fetch_prices.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";

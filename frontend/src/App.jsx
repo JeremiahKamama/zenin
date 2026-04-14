@@ -67,13 +67,6 @@ const withdraw = async (amount) => {
 
 
 // Add to database.js schema in initializeDatabase()
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_balance (
-    id INTEGER PRIMARY KEY,
-    balance REAL NOT NULL DEFAULT 10000
-  );
-`);
-db.prepare(`INSERT OR IGNORE INTO user_balance (id, balance) VALUES (1, 10000)`).run();
 
 // Balance endpoints in index.js
 app.get("/api/db/balance", (req, res) => {
