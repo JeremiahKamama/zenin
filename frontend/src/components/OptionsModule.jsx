@@ -30,13 +30,13 @@ export function OptionsModule() {
   useEffect(() => {
     if (!activeAsset) return;
 
-    const fetchChain = () => {
-      setLoading(true);
-      fetch(`${BACKEND_URL}/options/crypto`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currency: activeAsset, expiry: activeExpiry })
-      })
+    await fetch(`${BACKEND_URL}/options/crypto`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    currency: "BTC"
+  })
+})
       .then(res => res.json())
       .then(data => {
         if (data.chain) {
