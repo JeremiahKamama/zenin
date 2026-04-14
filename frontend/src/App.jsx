@@ -420,6 +420,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   const [activeSection, setActiveSection] = useState("Home");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [userEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
 
   const sectionIcon = (section) => {
@@ -462,7 +463,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   };
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header">
           <h1 className="sidebar-brand">Zenin</h1>
@@ -491,6 +492,16 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             </button>
           ))}
         </nav>
+
+        <div className="sidebar-footer">
+          <div className="user-icon">
+            {userEmail.charAt(0).toUpperCase()}
+          </div>
+          <span className="sidebar-footer-email" title={userEmail}>
+            {userEmail}
+          </span>
+        </div>
+
       </aside>
 
       <main className="main-content">
