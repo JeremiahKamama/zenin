@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com";
 
 export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
@@ -24,10 +24,9 @@ useEffect(() => {
   let isMounted = true; // prevent state update after unmount
 
   const fetchChain = async () => {
-    try {
       setLoading(true);
-
-      const res = await fetch(`${BACKEND_URL}/options/crypto`, {
+      try {
+        const res = await fetch(`${BACKEND_URL}/options/crypto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -48,8 +47,7 @@ useEffect(() => {
         setAvailableExpiries(Array.isArray(data.expiries) ? data.expiries : []);
 
         if (!activeExpiry && data.expiry) {
-          setActiveExpiry(data.expiry);
-          return; // 🔥 prevents flicker + duplicate fetch
+          setActiveExpiry(data.expiry); // 🔥 prevents flicker + duplicate fetch
         }
 
         setChain(data.chain);
@@ -68,7 +66,7 @@ useEffect(() => {
       console.error("Error fetching crypto options:", err);
       if (isMounted) setChain([]);
     } finally {
-      if (isMounted) setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -85,7 +83,7 @@ useEffect(() => {
 }, [activeAsset, activeExpiry]);
 
 useEffect(() => {
-  if (!activeExpiry) return; // prevent premature WS connection
+  const expiryToUse = activeExpiry;
 
   const ws = new WebSocket("wss://zenin-mx6w.onrender.com");
 
@@ -199,7 +197,7 @@ useEffect(() => {
               <tbody>
                 {chain.map((row) => (
                   <tr key={row.strike}>
-                    <td className="greek">{row.call?.iv ? (row.call.iv * 100).toFixed(1) + "%" : "-"}</td>
+                    <td className="greek">{row.call?.iv ? ((row.call?.iv || 0) * 100).toFixed(1) + "%" : "-"}</td>
                     <td className="greek">{row.call?.delta?.toFixed(3) || "-"}</td>
                     <td className="bid-ask positive">{row.call?.bid > 0 ? `$${row.call.bid.toFixed(4)}` : "-"}</td>
                     <td className="bid-ask positive">{row.call?.ask > 0 ? `$${row.call.ask.toFixed(4)}` : "-"}</td>
