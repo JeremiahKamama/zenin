@@ -467,7 +467,7 @@ const effectiveSpot = useMemo(() => {
   );
       {/* P&L Diagram */}
       <div className="watchlist-panel glass" style={{ padding: "20px" }}>
-        <><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
             <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>
             <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>At expiration — underlying price vs profit/loss</p>
@@ -492,11 +492,12 @@ const effectiveSpot = useMemo(() => {
               </p>
             </div>
           </div>
-        </div><Chart
+        </div>
+        <Chart
             options={chartOptions}
             series={[{ name: "P&L", data: pnlData }]}
             type="area"
             height={280}
             width="100%"/>
-    </div>
-}
+        </div>  
+); 
