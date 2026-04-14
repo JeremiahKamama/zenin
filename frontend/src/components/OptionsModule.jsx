@@ -11,17 +11,10 @@ export function OptionsModule() {
   const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    // Fetch ALL tradeable assets for the dropdown
-    fetch(`${BACKEND_URL}/options/crypto/all-assets`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.assets && data.assets.length > 0) {
-          setAllAssets(data.assets);
-        }
-      })
-      .catch(err => console.error("Error fetching all assets:", err));
-  }, []);
+ useEffect(() => {
+  // fallback assets (Derive supports these)
+  setAllAssets(["BTC", "ETH", "SOL"]);
+}, []);
 
   useEffect(() => {
     setActiveExpiry(null); // Reset expiry when asset changes
@@ -52,14 +45,14 @@ useEffect(() => {
       if (!isMounted) return;
 
       if (data && data.chain) {
-        setChain(data.chain);
-
         setAvailableExpiries(Array.isArray(data.expiries) ? data.expiries : []);
 
-        // ✅ Prevent infinite re-renders
         if (!activeExpiry && data.expiry) {
           setActiveExpiry(data.expiry);
+          return; // 🔥 prevents flicker + duplicate fetch
         }
+
+        setChain(data.chain);
 
         setMetrics({
           iv: parseFloat(data?.market_metrics?.iv) || 0.42,
@@ -91,7 +84,9 @@ useEffect(() => {
 
 }, [activeAsset, activeExpiry]);
 
-  useEffect(() => {
+useEffect(() => {
+  if (!activeExpiry) return; // prevent premature WS connection
+
   const ws = new WebSocket("wss://zenin-mx6w.onrender.com");
 
   ws.onopen = () => {
@@ -103,14 +98,23 @@ useEffect(() => {
   };
 
   ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
+    try {
+      const msg = JSON.parse(event.data);
 
-    if (msg.type === "greeks_update") {
-      setChain(msg.data);
+      if (msg.type === "greeks_update" && Array.isArray(msg.data)) {
+        setChain(msg.data);
+      }
+    } catch (e) {
+      console.error("WS parse error:", e);
     }
   };
 
+  ws.onerror = (e) => {
+    console.error("WebSocket error:", e);
+  };
+
   return () => ws.close();
+
 }, [activeAsset, activeExpiry]);
 
   const formatDate = (ts) => {
