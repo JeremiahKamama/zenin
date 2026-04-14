@@ -224,7 +224,7 @@ useEffect(() => {
         return res.json();
       })
       .then((data) => {
-        const allAssets = data.assets || [];
+        const allAssets = Array.isArray(data) ? data : data.assets || [];
         setAssets((prev) => mergeAssetPrices(allAssets, prev));
         setLoading(false);
 
