@@ -2,7 +2,6 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
-const safeSymbol = sanitizeSymbol(symbol);
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
 const { initializeDatabase, portfolio, watchlist, optionsCalculations } = require("./database");
@@ -297,7 +296,7 @@ function fetchYFinancePrices(originalSymbols) {
 
     console.log("Fetching prices — original:", originalSymbols);
     console.log("Normalised YF tickers:     ", yfSymbols);
-
+    const safeSymbol = sanitizeSymbol(symbol);
     const child = spawn("python3", ["fetch_prices.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
