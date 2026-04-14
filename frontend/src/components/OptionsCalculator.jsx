@@ -47,10 +47,10 @@ function blackScholes(S, K, T, r, sigma, type) {
   return { price, delta, gamma, theta, vega };
 }
 
-export function OptionsCalculator({ spotPrice = 0 }) {
+export function OptionsCalculator({ spotPrice = 0, chainData = [], activeAsset = "BTC", activeExpiry = null }) {
   const [symbol, setSymbol] = useState("BTC");
   const [symbolSearch, setSymbolSearch] = useState("BTC");
-  const [symbolOptions] = useState(["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE"]);
+  const [symbolOptions] = useState(["BTC", "ETH"]);
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
   const [legs, setLegs] = useState([{ ...EMPTY_LEG }]);
   const [activeStrategy, setActiveStrategy] = useState(null);
@@ -62,6 +62,28 @@ export function OptionsCalculator({ spotPrice = 0 }) {
 
   const filteredSymbols = symbolOptions.filter(s => s.toLowerCase().includes(symbolSearch.toLowerCase()));
 
+  // Auto-populate strike from chain data when available
+  const getChainStrikes = () => {
+    if (!chainData.length) return [];
+    return chainData.map(row => row.strike).filter(Boolean);
+  };
+
+  const getChainIV = (strike, type) => {
+    if (!chainData.length) return "";
+    const row = chainData.find(r => r.strike === parseFloat(strike));
+    if (!row) return "";
+    const side = type === "call" ? row.call : row.put;
+    return side?.iv ? (side.iv * 100).toFixed(1) : "";
+  };
+
+  const getChainPremium = (strike, type) => {
+    if (!chainData.length) return "";
+    const row = chainData.find(r => r.strike === parseFloat(strike));
+    if (!row) return "";
+    const side = type === "call" ? row.call : row.put;
+    return side?.mark_price ? side.mark_price.toFixed(4) : "";
+  };
+  
   const addLeg = () => setLegs(prev => [...prev, { ...EMPTY_LEG }]);
   const removeLeg = (i) => setLegs(prev => prev.filter((_, idx) => idx !== i));
   const updateLeg = (i, field, value) => setLegs(prev => prev.map((leg, idx) => idx === i ? { ...leg, [field]: value } : leg));
@@ -238,6 +260,7 @@ export function OptionsCalculator({ spotPrice = 0 }) {
           </div>
         </div>
 
+
         {/* Position Legs */}
         <div className="watchlist-panel glass" style={{ padding: "16px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
@@ -264,8 +287,23 @@ export function OptionsCalculator({ spotPrice = 0 }) {
                 {legs.map((leg, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                     <td style={{ padding: "6px 4px" }}>
-                      <input type="number" value={leg.strike} onChange={e => updateLeg(i, "strike", e.target.value)} placeholder={S.toString()}
-                        style={{ width: "80px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }} />
+                      <select
+                            value={leg.strike}
+                            onChange={e => {
+                                const strike = e.target.value;
+                                updateLeg(i, "strike", strike);
+                                const iv = getChainIV(strike, leg.type);
+                                const premium = getChainPremium(strike, leg.type);
+                                if (iv) updateLeg(i, "iv", iv);
+                                if (premium) updateLeg(i, "premium", premium);
+                            }}
+                            style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none", maxWidth: "90px" }}
+                            >
+                            <option value="">Strike</option>
+                            {getChainStrikes().map(s => (
+                                <option key={s} value={s}>{s.toLocaleString()}</option>
+                            ))}
+                        </select>
                     </td>
                     <td style={{ padding: "6px 4px" }}>
                       <input type="date" value={leg.expiry} onChange={e => updateLeg(i, "expiry", e.target.value)}

@@ -554,66 +554,84 @@ app.get("/api/watchlist", async (req, res) => {
 });
 
 // Lyra (Derive) Crypto Options Integration
+// Replace the /api/options/crypto route
 app.post("/api/options/crypto", async (req, res) => {
   const { currency = "ETH", expiry } = req.body;
+  const BASE = "https://api.derive.xyz";
+
   try {
     const fetch = await resolveFetch();
 
-    // 1. Get tickers directly — they contain all data including greeks
-    const tickRes = await fetch("https://api.lyra.finance/public/get_tickers", {
+    // 1. Get instruments for this currency
+    const instRes = await fetch(`${BASE}/public/get_instruments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instrument_type: "option", currency, expired: false })
+      body: JSON.stringify({ currency, instrument_type: "option", expired: false })
     });
-    const tickData = await tickRes.json();
-    const allTickers = tickData.result || [];
+    const instData = await instRes.json();
+    const instruments = instData.result || [];
 
-    console.log(`[Options] Fetched ${allTickers.length} tickers for ${currency}`);
-    if (allTickers.length > 0) console.log("[Options] Sample ticker keys:", Object.keys(allTickers[0]));
+    console.log(`[Options] ${instruments.length} instruments for ${currency}`);
+    if (instruments.length === 0) return res.json({ chain: [], expiries: [] });
 
-    if (allTickers.length === 0) return res.json({ chain: [], expiries: [] });
-
-    // 2. Discover expiries from tickers
+    // 2. Discover expiries
     const uniqueExpiries = [...new Set(
-      allTickers
-        .map((t) => Number(t.option_details?.expiry ?? t.expiry ?? t.expiration_timestamp))
-        .filter((v) => Number.isFinite(v) && v > 0)
+      instruments.map(i => i.option_details?.expiry).filter(Boolean)
     )].sort((a, b) => a - b);
 
-    const targetExpiry = Number(expiry) || uniqueExpiries[0];
+    const targetExpiry = expiry ? parseInt(expiry) : uniqueExpiries[0];
+    const filteredInstruments = instruments.filter(
+      i => i.option_details?.expiry === targetExpiry
+    );
 
-    // 3. Filter tickers for this expiry
-    const filteredTickers = allTickers.filter((t) => {
-      const tExp = Number(t.option_details?.expiry ?? t.expiry ?? t.expiration_timestamp);
-      return Number.isFinite(tExp) && tExp === targetExpiry;
-    });
+    console.log(`[Options] ${filteredInstruments.length} instruments for expiry ${targetExpiry}`);
 
-    console.log(`[Options] ${filteredTickers.length} tickers for expiry ${targetExpiry}`);
-    if (filteredTickers.length > 0) console.log("[Options] Sample filtered ticker:", JSON.stringify(filteredTickers[0]).slice(0, 500));
+    // 3. Fetch tickers in parallel (batched to avoid rate limits)
+    const batchSize = 20;
+    const allTickers = [];
+    for (let i = 0; i < filteredInstruments.length; i += batchSize) {
+      const batch = filteredInstruments.slice(i, i + batchSize);
+      const results = await Promise.all(batch.map(async inst => {
+        try {
+          const r = await fetch(`${BASE}/public/get_ticker`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ instrument_name: inst.instrument_name })
+          });
+          const d = await r.json();
+          return d.result || null;
+        } catch {
+          return null;
+        }
+      }));
+      allTickers.push(...results.filter(Boolean));
+    }
+
+    console.log(`[Options] Got ${allTickers.length} tickers`);
+    if (allTickers.length > 0) {
+      console.log("[Options] Sample ticker keys:", Object.keys(allTickers[0]).join(", "));
+      console.log("[Options] Sample ticker:", JSON.stringify(allTickers[0]).slice(0, 400));
+    }
 
     // 4. Group by strike
     const strikesMap = {};
-
-    filteredTickers.forEach(t => {
-      const optDetails = t.option_details || {};
-      const strike = parseFloat(optDetails.strike || t.strike || t.strike_price || 0);
-      const rawType = String(optDetails.option_type || t.option_type || t.kind || "").toUpperCase();
-      const optType = rawType === "CALL" ? "C" : rawType === "PUT" ? "P" : rawType;
+    allTickers.forEach(t => {
+      const strike = parseFloat(t.option_details?.strike || t.strike || 0);
+      const optType = (t.option_details?.option_type || t.option_type || "").toUpperCase();
       if (!strike || !optType) return;
 
       if (!strikesMap[strike]) strikesMap[strike] = { strike, call: {}, put: {} };
 
       const info = {
-        bid: parseFloat(t.best_bid_price ?? t.bid ?? t.bid_price ?? 0),
-        ask: parseFloat(t.best_ask_price ?? t.ask ?? t.ask_price ?? 0),
-        delta: parseFloat(t.greeks?.delta ?? t.delta ?? 0),
-        gamma: parseFloat(t.greeks?.gamma ?? t.gamma ?? 0),
-        vega: parseFloat(t.greeks?.vega ?? t.vega ?? 0),
-        theta: parseFloat(t.greeks?.theta ?? t.theta ?? 0),
-        iv: parseFloat(t.iv ?? t.implied_volatility ?? t.mark_iv ?? 0),
-        volume: parseFloat(t.stats?.volume_24h || t.volume_24h || 0),
-        open_interest: parseFloat(t.open_interest || 0),
+        bid: parseFloat(t.best_bid_price || 0),
+        ask: parseFloat(t.best_ask_price || 0),
+        delta: parseFloat(t.greeks?.delta ?? 0),
+        gamma: parseFloat(t.greeks?.gamma ?? 0),
+        vega: parseFloat(t.greeks?.vega ?? 0),
+        theta: parseFloat(t.greeks?.theta ?? 0),
+        iv: parseFloat(t.iv || t.implied_volatility || 0),
         mark_price: parseFloat(t.mark_price || 0),
+        open_interest: parseFloat(t.open_interest || 0),
       };
 
       if (optType === "C") strikesMap[strike].call = info;
@@ -621,28 +639,44 @@ app.post("/api/options/crypto", async (req, res) => {
     });
 
     const chain = Object.values(strikesMap).sort((a, b) => a.strike - b.strike);
-
-    const iv = allTickers[0]?.iv || allTickers[0]?.implied_volatility || allTickers[0]?.mark_iv || 0;
-    const spotPrice = parseFloat(
-      allTickers[0]?.index_price ??
-      allTickers[0]?.underlying_price ??
-      allTickers[0]?.mark_price ??
-      0
-    );
+    const avgIv = allTickers.reduce((s, t) => s + parseFloat(t.iv || 0), 0) / (allTickers.length || 1);
 
     res.json({
       expiry: targetExpiry,
       expiries: uniqueExpiries,
-      chain: chain.slice(0, 20),
-      market_metrics: {
-        iv: parseFloat(iv),
-        p_c_ratio: 0.85,
-        spot: Number.isFinite(spotPrice) ? spotPrice : 0
-      }
+      chain: chain.slice(0, 25),
+      market_metrics: { iv: avgIv, p_c_ratio: 0.85 }
     });
+
   } catch (error) {
-    console.error("Lyra API Error:", error);
-    res.status(502).json({ error: "Failed to fetch crypto options from Lyra" });
+    console.error("Derive API Error:", error);
+    res.status(502).json({ error: `Failed to fetch options: ${error.message}` });
+  }
+});
+
+// Replace /api/options/crypto/all-assets
+app.get("/api/options/crypto/all-assets", async (req, res) => {
+  const BASE = "https://api.derive.xyz";
+  try {
+    const fetch = await resolveFetch();
+    // Only ETH and BTC have options on Derive
+    const currencies = ["BTC", "ETH"];
+    // Verify they actually have instruments
+    const verified = [];
+    for (const currency of currencies) {
+      try {
+        const r = await fetch(`${BASE}/public/get_instruments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ currency, instrument_type: "option", expired: false })
+        });
+        const d = await r.json();
+        if ((d.result || []).length > 0) verified.push(currency);
+      } catch { verified.push(currency); }
+    }
+    res.json({ assets: verified.length > 0 ? verified : currencies });
+  } catch (error) {
+    res.status(502).json({ error: "Failed to fetch assets" });
   }
 });
 
@@ -674,29 +708,7 @@ app.get("/api/options/crypto/top-assets", async (req, res) => {
   }
 });
 
-app.get("/api/options/crypto/all-assets", async (req, res) => {
-  try {
-    const fetch = await resolveFetch();
-    const instRes = await fetch("https://api.lyra.finance/public/get_instruments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instrument_type: "option", expired: false })
-    });
-    const instData = await instRes.json();
-    const instruments = instData.result || [];
-    
-    // Extract unique base currencies with fallbacks for schema changes
-    const currencies = [...new Set(
-      instruments
-        .map((i) => i.base_currency || i.currency || i.base || i.underlying_asset)
-        .filter(Boolean)
-    )].sort();
-    
-    res.json({ assets: currencies });
-  } catch (error) {
-    res.status(502).json({ error: "Failed to fetch all assets from Lyra" });
-  }
-});
+
 
 // ---------------------------------------------------------------------------
 // Options Calculator Persistence

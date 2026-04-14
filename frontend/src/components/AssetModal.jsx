@@ -8,9 +8,16 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeInterval, setActiveInterval] = useState("1D");
-  const [quantity, setQuantity] = useState(1);
-  const [orderType, setOrderType] = useState("buy");
-  const [chartType, setChartType] = useState("line"); // 'line' or 'candlestick'
+  const [orderType, setOrderType] = useState(asset?._forceSell ? "sell" : "buy");
+
+  // Pre-fill quantity with full holding when opened from portfolio bin
+  const holding = portfolio.find(
+    p => p.symbol === asset?.symbol &&
+    (p.marketType || "spot") === (asset?.marketType || "spot")
+  );
+  const [quantity, setQuantity] = useState(
+    asset?._forceSell ? (holding?.quantity || 1) : 1
+  ); // 'line' or 'candlestick'
 
   const [performanceMap, setPerformanceMap] = useState({});
 

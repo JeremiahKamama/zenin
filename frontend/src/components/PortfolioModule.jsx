@@ -6,8 +6,9 @@ export function PortfolioModule({
   trades = [],
   calculatePortfolioValue,
   calculatePortfolioGain,
-  onRemove
-}) {
+  onRemove,
+  onSellAsset
+}){
   const [chartMode, setChartMode] = useState("equity");
   const [chartInterval, setChartInterval] = useState("1D");
   const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
@@ -262,7 +263,11 @@ export function PortfolioModule({
                             {positionGain >= 0 ? "+" : ""}${positionGain.toFixed(2)}
                           </div>
                         </div>
-                        <button className="portfolio-remove-button" onClick={() => onRemove(item.id)}>🗑️</button>
+                        <button
+                            className="portfolio-remove-button"
+                            title="Sell this position"
+                            onClick={() => onSellAsset ? onSellAsset(item) : onRemove(item.id)}
+                          >🗑️</button>
                       </div>
                     );
                   })}

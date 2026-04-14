@@ -151,11 +151,16 @@ export function OptionsModule() {
             </table>
           )}
       </div>
-      <OptionsCalculator spotPrice={
-        chain.length > 0 && chain[Math.floor(chain.length / 2)]?.strike
-          ? chain[Math.floor(chain.length / 2)].strike
-          : 50000
-      } />
+      <OptionsCalculator
+        spotPrice={
+          chain.length > 0 && chain[Math.floor(chain.length / 2)]?.strike
+            ? chain[Math.floor(chain.length / 2)].strike
+            : (activeAsset === "BTC" ? 80000 : 2000)
+        }
+        chainData={chain}
+        activeAsset={activeAsset}
+        activeExpiry={activeExpiry}
+      />
 
     </div>
   );

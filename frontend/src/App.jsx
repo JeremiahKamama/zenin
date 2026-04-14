@@ -611,6 +611,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
               calculatePortfolioValue={calculatePortfolioValue}
               calculatePortfolioGain={calculatePortfolioGain}
               onRemove={removeFromPortfolio}
+              onSellAsset={(asset) => {
+                setSelectedAsset({ ...asset, _forceSell: true });
+              }}
             />
           </div>
         )}
