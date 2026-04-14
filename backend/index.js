@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const safeSymbol = sanitizeSymbol(symbol);
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
 const { initializeDatabase, portfolio, watchlist, optionsCalculations } = require("./database");
@@ -9,13 +10,47 @@ const { initializeDatabase, portfolio, watchlist, optionsCalculations } = requir
 const app = express();
 
 // Security headers
-app.use(helmet());
+app.use(helmet.contentSecurityPolicy({
+  directives: {
+    defaultSrc: ["'self'"],
+    connectSrc: [
+      "'self'",
+      "https://api.binance.com",
+      "https://api.coingecko.com",
+      "https://api.derive.xyz",
+      "https://fapi.binance.com"
+    ],
+    scriptSrc: ["'self'"],
+    styleSrc: ["'self'", "'unsafe-inline'"],
+    imgSrc: ["'self'", "data:"],
+    frameSrc: ["'none'"],
+    objectSrc: ["'none'"],
+  }
+}));
+
+app.use(helmet.hsts({ maxAge: 31536000, includeSubDomains: true }));
+app.use(helmet.noSniff());
+app.use(helmet.frameguard({ action: "deny" }));
+
+function sanitizeSymbol(symbol) {
+  return symbol.replace(/[^a-zA-Z0-9.\-_:]/g, "").slice(0, 30);
+}
 
 // CORS — allow configured frontend origin (or all origins in dev)
 const allowedOrigins = process.env.FRONTEND_URL
   ? [process.env.FRONTEND_URL]
-  : true; // true = reflect all origins (dev mode)
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+  : ["http://localhost:5173", "http://localhost:3000"];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true
+}));
+
 
 // Rate limiting — 300 requests per 15 minutes per IP
 const limiter = rateLimit({
@@ -25,9 +60,52 @@ const limiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
 });
-app.use("/api", limiter);
+app.use(limiter);
+
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  message: { error: "Too many write requests." }
+});
+
 
 app.use(express.json());
+function validatePortfolioHolding(req, res, next) {
+  const { symbol, name, price, quantity, type, marketType, orderType } = req.body;
+  if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
+    return res.status(400).json({ error: "Invalid symbol" });
+  }
+  if (!name || typeof name !== "string" || name.length > 100) {
+    return res.status(400).json({ error: "Invalid name" });
+  }
+  if (typeof price !== "number" || price < 0 || !isFinite(price)) {
+    return res.status(400).json({ error: "Invalid price" });
+  }
+  if (typeof quantity !== "number" || !isFinite(quantity)) {
+    return res.status(400).json({ error: "Invalid quantity" });
+  }
+  if (!["stock", "crypto", "bond", "commodity", "etf"].includes((type || "").toLowerCase())) {
+    return res.status(400).json({ error: "Invalid type" });
+  }
+  if (!["buy", "sell"].includes(orderType)) {
+    return res.status(400).json({ error: "Invalid orderType" });
+  }
+  next();
+}
+
+function validateWatchlistAsset(req, res, next) {
+  const { symbol, name, type, marketType } = req.body;
+  if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
+    return res.status(400).json({ error: "Invalid symbol" });
+  }
+  if (!name || typeof name !== "string" || name.length > 100) {
+    return res.status(400).json({ error: "Invalid name" });
+  }
+  if (!type || typeof type !== "string" || type.length > 50) {
+    return res.status(400).json({ error: "Invalid type" });
+  }
+  next();
+}
 
 // Initialize database on start
 initializeDatabase();
@@ -420,8 +498,10 @@ app.get("/api/categories", (_req, res) => {
 });
 
 app.get("/api/history", async (req, res) => {
-  const { symbol, type, interval = "1D" } = req.query;
-  if (!symbol) return res.status(400).json({ error: "Symbol required" });
+  const { type, interval = "1D" } = req.query;
+  const symbol = sanitizeSymbol(req.query.symbol || "");
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+ // if (!symbol) return res.status(400).json({ error: "Symbol required" });
 
   try {
     let history = [];
@@ -780,7 +860,7 @@ app.get("/api/db/portfolio", (req, res) => {
   }
 });
 
-app.post("/api/db/portfolio", (req, res) => {
+app.post("/api/db/portfolio",writeLimiter, validatePortfolioHolding, (req, res) => {
   try {
     const holding = req.body;
     const result = portfolio.add(holding);
@@ -801,7 +881,7 @@ app.put("/api/db/portfolio/:id", (req, res) => {
   }
 });
 
-app.delete("/api/db/portfolio/:id", (req, res) => {
+app.delete("/api/db/portfolio/:id", writeLimiter, (req, res) => {
   try {
     const { id } = req.params;
     const result = portfolio.delete(id);
@@ -814,7 +894,8 @@ app.delete("/api/db/portfolio/:id", (req, res) => {
 // Get portfolio items by symbol and marketType
 app.get("/api/db/portfolio/symbol/:symbol", (req, res) => {
   try {
-    const { symbol } = req.params;
+    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+    if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
     const { marketType } = req.query;
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
@@ -838,7 +919,7 @@ app.get("/api/db/watchlist", (req, res) => {
   }
 });
 
-app.post("/api/db/watchlist", (req, res) => {
+app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, (req, res) => {
   try {
     const asset = req.body;
     const result = watchlist.add(asset);
@@ -848,9 +929,10 @@ app.post("/api/db/watchlist", (req, res) => {
   }
 });
 
-app.delete("/api/db/watchlist/:symbol", (req, res) => {
+app.delete("/api/db/watchlist/:symbol", writeLimiter,(req, res) => {
   try {
-    const { symbol } = req.params;
+    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+    if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
     const { marketType } = req.query;
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });

@@ -30,30 +30,80 @@ function App() {
   const priceCacheRef = useRef(new Map());
   const PRICE_CACHE_TTL_MS = 60000;
 
-  const [balance, setBalance] = useState(() => {
-    const saved = localStorage.getItem("zenin_balance");
-    return saved ? parseFloat(saved) : 10000;
+  // Replace the localStorage balance useState with:
+const [balance, setBalance] = useState(10000);
+
+useEffect(() => {
+  fetch(`${BACKEND_URL}/db/balance`)
+    .then(res => res.json())
+    .then(data => setBalance(data.balance || 10000))
+    .catch(console.error);
+}, []);
+
+const deposit = async (amount) => {
+  const amt = parseFloat(amount);
+  if (!amt || amt <= 0) return;
+  const res = await fetch(`${BACKEND_URL}/db/balance`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ amount: amt, type: "deposit" })
   });
+  const data = await res.json();
+  if (data.balance !== undefined) setBalance(data.balance);
+};
+
+const withdraw = async (amount) => {
+  const amt = parseFloat(amount);
+  if (!amt || amt <= 0) return;
+  const res = await fetch(`${BACKEND_URL}/db/balance`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ amount: amt, type: "withdraw" })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  if (data.balance !== undefined) setBalance(data.balance);
+};
+
+
+// Add to database.js schema in initializeDatabase()
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_balance (
+    id INTEGER PRIMARY KEY,
+    balance REAL NOT NULL DEFAULT 10000
+  );
+`);
+db.prepare(`INSERT OR IGNORE INTO user_balance (id, balance) VALUES (1, 10000)`).run();
+
+// Balance endpoints in index.js
+app.get("/api/db/balance", (req, res) => {
+  try {
+    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
+    res.json({ balance: row?.balance ?? 10000 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/db/balance", (req, res) => {
+  try {
+    const { amount, type } = req.body;
+    if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
+    if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
+    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
+    const current = row?.balance ?? 10000;
+    const newBalance = type === "deposit" ? current + amount : current - amount;
+    if (newBalance < 0) return res.status(400).json({ error: "Insufficient balance" });
+    db.prepare("UPDATE user_balance SET balance = ? WHERE id = 1").run(newBalance);
+    res.json({ balance: newBalance });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});  
 
   useEffect(() => {
     localStorage.setItem("zenin_balance", balance.toString());
   }, [balance]);
-
-  const deposit = (amount) => {
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) return;
-    setBalance(prev => prev + amt);
-  };
-
-  const withdraw = (amount) => {
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) return;
-    if (amt > balance) {
-      alert("Insufficient balance to withdraw that amount.");
-      return;
-    }
-    setBalance(prev => prev - amt);
-  };
 
   // Load portfolio from database on mount
   useEffect(() => {
@@ -71,10 +121,15 @@ function App() {
       .catch((err) => console.error("Failed to load watchlist:", err));
   }, []);
 
-  // Sync trades to localStorage (trades not in database yet)
-  useEffect(() => {
-    localStorage.setItem("zenin_trades", JSON.stringify(trades));
-  }, [trades]);
+
+  // In App.jsx, the trades useEffect currently stores full trade objects
+// At minimum, don't store price data in localStorage
+useEffect(() => {
+  const safeTrades = trades.map(({ id, date, asset, type, quantity, status }) => ({
+    id, date, asset, type, quantity, status
+  }));
+  localStorage.setItem("zenin_trades", JSON.stringify(safeTrades));
+}, [trades]);
 
   useEffect(() => {
     fetch(`${BACKEND_URL}/categories`)
