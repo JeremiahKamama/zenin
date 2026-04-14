@@ -59,6 +59,28 @@ export function OptionsModule() {
     return () => clearInterval(interval);
   }, [activeAsset, activeExpiry]);
 
+  useEffect(() => {
+  const ws = new WebSocket("wss://zenin-mx6w.onrender.com");
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: "subscribe",
+      currency: activeAsset,
+      expiry: activeExpiry
+    }));
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    if (msg.type === "greeks_update") {
+      setChain(msg.data);
+    }
+  };
+
+  return () => ws.close();
+}, [activeAsset, activeExpiry]);
+
   const formatDate = (ts) => {
     if (!ts) return "";
     return new Date(ts * 1000).toLocaleDateString(undefined, {

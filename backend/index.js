@@ -673,8 +673,65 @@ app.get("/api/watchlist", async (req, res) => {
   return res.json({ category: key, assets: enrichedAssets });
 });
 
+// ---------------------------------------------------------------------------
+// 🔥 LIVE GREEKS ENGINE (WebSocket helper)
+// ---------------------------------------------------------------------------
+
+const BASE = "https://api.derive.xyz";
+
+async function fetchGreeks(currency = "BTC", expiry = null) {
+  try {
+    const fetch = await resolveFetch();
+
+    const instRes = await fetch(`${BASE}/public/get_instruments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currency,
+        instrument_type: "option",
+        expired: false
+      })
+    });
+
+    const instData = await instRes.json();
+    let instruments = instData.result || [];
+
+    if (expiry) {
+      instruments = instruments.filter(
+        i => i.option_details?.expiry === expiry
+      );
+    }
+
+    const tickers = await Promise.all(
+      instruments.slice(0, 50).map(async (inst) => {
+        const r = await fetch(`${BASE}/public/get_ticker`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instrument_name: inst.instrument_name })
+        });
+        const d = await r.json();
+        return d.result;
+      })
+    );
+
+    return tickers.filter(Boolean).map(t => ({
+      strike: parseFloat(t.option_details?.strike || 0),
+      type: t.option_details?.option_type,
+      iv: parseFloat(t.iv || 0),
+      delta: parseFloat(t.greeks?.delta || 0),
+      gamma: parseFloat(t.greeks?.gamma || 0),
+      theta: parseFloat(t.greeks?.theta || 0),
+      vega: parseFloat(t.greeks?.vega || 0),
+      bid: parseFloat(t.best_bid_price || 0),
+      ask: parseFloat(t.best_ask_price || 0),
+    }));
+
+  } catch (e) {
+    console.error("Greeks fetch error:", e.message);
+    return [];
+  }
+}
 // Lyra (Derive) Crypto Options Integration
-// Replace the /api/options/crypto route
 app.post("/api/options/crypto", async (req, res) => {
   const { currency = "ETH", expiry } = req.body;
   const BASE = "https://api.derive.xyz";
@@ -971,6 +1028,40 @@ app.get("/api/db/watchlist/check/:symbol", (req, res) => {
 
 // ---------------------------------------------------------------------------
 const port = process.env.PORT || 4000;
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Portfolio manager backend listening on port ${port}`);
+//app.listen(port, '0.0.0.0', () => {
+ // console.log(`Portfolio manager backend listening on port ${port}`);
+//});
+
+const http = require("http");
+const WebSocket = require("ws");
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+let subscribers = new Map(); 
+// key: socket -> { currency, expiry }
+
+wss.on("connection", (ws) => {
+  console.log("WS client connected");
+
+  ws.on("message", (msg) => {
+    try {
+      const data = JSON.parse(msg);
+
+      // subscribe format:
+      // { type: "subscribe", currency: "BTC", expiry: 123456789 }
+      if (data.type === "subscribe") {
+        subscribers.set(ws, {
+          currency: data.currency || "BTC",
+          expiry: data.expiry || null
+        });
+      }
+    } catch (e) {
+      console.error("WS message error:", e.message);
+    }
+  });
+
+  ws.on("close", () => {
+    subscribers.delete(ws);
+  });
 });
