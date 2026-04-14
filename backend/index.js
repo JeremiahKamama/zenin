@@ -731,40 +731,55 @@ async function fetchGreeks(currency = "BTC", expiry = null) {
     return [];
   }
 }
+
+const axios = require("axios");
+const https = require("https");
+
+// Force IPv4 + keep-alive (fixes Render + TLS issues)
+const agent = new https.Agent({
+  keepAlive: true,
+  family: 4, // 🔥 FORCE IPv4
+  timeout: 10000
+});
+
+const deriveClient = axios.create({
+  baseURL: "https://api.derive.xyz",
+  httpsAgent: agent,
+  timeout: 10000
+});
+
+// Retry wrapper
+async function safePost(url, body, retries = 2) {
+  try {
+    const res = await deriveClient.post(url, body);
+    return res.data;
+  } catch (err) {
+    if (retries > 0) {
+      console.warn("Retrying Derive call:", url);
+      return safePost(url, body, retries - 1);
+    }
+    throw err;
+  }
+}
+
 // Lyra (Derive) Crypto Options Integration
 // ---------------------------------------------------------------------------
 // ✅ STABLE Derive Options Chain Endpoint (FIXED)
 // ---------------------------------------------------------------------------
 app.post("/api/options/crypto", async (req, res) => {
-  const { currency = "ETH", expiry } = req.body;
-  const BASE = "https://api.derive.xyz";
+  const { currency = "BTC", expiry } = req.body;
 
   try {
-    const fetch = await resolveFetch();
-
-    // -----------------------------
-    // 1. FETCH INSTRUMENTS
-    // -----------------------------
-    const instRes = await fetch(`${BASE}/public/get_instruments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currency,
-        instrument_type: "option",
-        expired: false
-      })
+    // 1. Instruments
+    const instData = await safePost("/public/get_instruments", {
+      currency,
+      instrument_type: "option",
+      expired: false
     });
 
-    if (!instRes.ok) {
-      throw new Error(`Instrument fetch failed: ${instRes.status}`);
-    }
+    const instruments = instData?.result || [];
 
-    const instData = await instRes.json();
-    const instruments = Array.isArray(instData?.result)
-      ? instData.result
-      : [];
-
-    if (instruments.length === 0) {
+    if (!instruments.length) {
       return res.json({
         chain: [],
         expiries: [],
@@ -772,14 +787,10 @@ app.post("/api/options/crypto", async (req, res) => {
       });
     }
 
-    // -----------------------------
-    // 2. EXTRACT EXPIRIES
-    // -----------------------------
+    // 2. Expiries
     const expiries = [
       ...new Set(
-        instruments
-          .map(i => i?.option_details?.expiry)
-          .filter(Boolean)
+        instruments.map(i => i?.option_details?.expiry).filter(Boolean)
       )
     ].sort((a, b) => a - b);
 
@@ -791,45 +802,29 @@ app.post("/api/options/crypto", async (req, res) => {
       i => i?.option_details?.expiry === targetExpiry
     );
 
-    // -----------------------------
-    // 3. SAFE BATCHED TICKER FETCH
-    // -----------------------------
-    const batchSize = 10; // 🔥 REDUCED (prevents rate-limit + crash)
+    // 3. Tickers (batched)
+    const batchSize = 8; // 🔥 smaller = more stable
     const allTickers = [];
 
     for (let i = 0; i < filtered.length; i += batchSize) {
       const batch = filtered.slice(i, i + batchSize);
 
       const results = await Promise.allSettled(
-        batch.map(async (inst) => {
-          try {
-            const r = await fetch(`${BASE}/public/get_ticker`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                instrument_name: inst.instrument_name
-              })
-            });
-
-            if (!r.ok) return null;
-
-            const d = await r.json();
-            return d?.result ?? null;
-
-          } catch {
-            return null;
-          }
-        })
+        batch.map(inst =>
+          safePost("/public/get_ticker", {
+            instrument_name: inst.instrument_name
+          })
+        )
       );
 
       results.forEach(r => {
-        if (r.status === "fulfilled" && r.value) {
-          allTickers.push(r.value);
+        if (r.status === "fulfilled" && r.value?.result) {
+          allTickers.push(r.value.result);
         }
       });
     }
 
-    if (allTickers.length === 0) {
+    if (!allTickers.length) {
       return res.json({
         chain: [],
         expiries,
@@ -837,9 +832,7 @@ app.post("/api/options/crypto", async (req, res) => {
       });
     }
 
-    // -----------------------------
-    // 4. BUILD OPTIONS CHAIN
-    // -----------------------------
+    // 4. Build chain
     const strikesMap = {};
 
     allTickers.forEach(t => {
@@ -870,28 +863,25 @@ app.post("/api/options/crypto", async (req, res) => {
       .sort((a, b) => a.strike - b.strike)
       .slice(0, 30);
 
-    // -----------------------------
-    // 5. MARKET METRICS
-    // -----------------------------
     const avgIv =
-      allTickers.reduce((sum, t) => sum + parseFloat(t?.iv || 0), 0) /
+      allTickers.reduce((s, t) => s + parseFloat(t?.iv || 0), 0) /
       (allTickers.length || 1);
 
-    return res.json({
+    res.json({
       expiry: targetExpiry,
       expiries,
       chain,
       market_metrics: {
         iv: avgIv || 0,
-        p_c_ratio: 0.85 // placeholder
+        p_c_ratio: 0.85
       }
     });
 
   } catch (error) {
-    console.error("Derive API Error:", error.message);
+    console.error("🔥 Derive HARD FAIL:", error.message);
 
-    return res.status(502).json({
-      error: `Failed to fetch options: ${error.message}`
+    res.status(502).json({
+      error: "Options provider unavailable (Derive API unreachable)"
     });
   }
 });
