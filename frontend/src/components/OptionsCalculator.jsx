@@ -47,20 +47,26 @@ function blackScholes(S, K, T, r, sigma, type) {
   return { price, delta, gamma, theta, vega };
 }
 
-export function OptionsCalculator({ spotPrice = 0, chainData = [], activeAsset = "BTC", activeExpiry = null }) {
-  const [symbol, setSymbol] = useState("BTC");
-  const [symbolSearch, setSymbolSearch] = useState("BTC");
-  const [symbolOptions] = useState(["BTC", "ETH"]);
+export function OptionsCalculator({   spotPrice = 0,
+  chainData = [],
+  activeAsset,
+  assets = [] }) {
+  const symbol = activeAsset;
+  const [symbolSearch, setSymbolSearch] = useState(activeAsset);
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
   const [legs, setLegs] = useState([{ ...EMPTY_LEG }]);
   const [activeStrategy, setActiveStrategy] = useState(null);
   const [savedCalculations, setSavedCalculations] = useState([]);
   const [saveMsg, setSaveMsg] = useState("");
 
-  const S = spotPrice || 50000;
+  const [manualSpot, setManualSpot] = useState("");
+  const effectiveSpot = manualSpot ? parseFloat(manualSpot) : (spotPrice || 50000);
+  const S = effectiveSpot;
   const r = 0.0425;
 
-  const filteredSymbols = symbolOptions.filter(s => s.toLowerCase().includes(symbolSearch.toLowerCase()));
+  const filteredSymbols = assets.filter(s =>
+  s.toLowerCase().includes(symbolSearch.toLowerCase())
+);
 
   // Auto-populate strike from chain data when available
   const getChainStrikes = () => {
@@ -94,7 +100,8 @@ export function OptionsCalculator({ spotPrice = 0, chainData = [], activeAsset =
   };
 
   const greeks = legs.map(leg => {
-    const K = parseFloat(leg.strike) || S;
+    const K = parseFloat(leg.strike);
+    if (!K) return null;
     const premium = parseFloat(leg.premium) || 0;
     const iv = (parseFloat(leg.iv) || 20) / 100;
     const expiry = leg.expiry ? (new Date(leg.expiry) - new Date()) / (1000 * 60 * 60 * 24 * 365) : 30 / 365;
@@ -237,13 +244,40 @@ export function OptionsCalculator({ spotPrice = 0, chainData = [], activeAsset =
             <div style={{ marginTop: "12px", padding: "10px", background: "rgba(56,189,248,0.06)", borderRadius: "8px", border: "1px solid rgba(56,189,248,0.15)" }}>
               <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>Spot Price</p>
               <p style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "#38bdf8" }}>${S.toLocaleString()}</p>
+              <input
+                  type="number"
+                  value={manualSpot}
+                  onChange={(e) => setManualSpot(e.target.value)}
+                  placeholder={spotPrice || "Enter spot price"}
+                  style={{
+                    width: "100%",
+                    padding: "6px",
+                    marginTop: "6px",
+                    background: "rgba(0,0,0,0.4)",
+                    color: "#fff",
+                    borderRadius: "6px"
+                  }}
+                />
             </div>
           </div>
 
           {/* Strategy Presets */}
           <div className="watchlist-panel glass" style={{ padding: "16px", flex: 1 }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: "280px", overflowY: "auto", paddingRight: "4px" }}>
+            <input
+                type="number"
+                value={manualSpot}
+                onChange={(e) => setManualSpot(e.target.value)}
+                placeholder={spotPrice || "Enter spot price"}
+                style={{
+                  width: "100%",
+                  padding: "6px",
+                  marginTop: "6px",
+                  background: "rgba(0,0,0,0.4)",
+                  color: "#fff",
+                  borderRadius: "6px"
+                }}
+              />
               {STRATEGIES.map(s => (
                 <button key={s.name} onClick={() => applyStrategy(s)} style={{
                   padding: "8px 12px", textAlign: "left", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px",
@@ -409,6 +443,6 @@ export function OptionsCalculator({ spotPrice = 0, chainData = [], activeAsset =
           width="100%"
         />
       </div>
-    </div>
-  );
+   // </div>
+  //);
 }

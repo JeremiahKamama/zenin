@@ -5,6 +5,7 @@ const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender
 export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
+  const [spotPrices, setSpotPrices] = useState({});
   const [activeExpiry, setActiveExpiry] = useState(null);
   const [allAssets, setAllAssets] = useState(["BTC", "ETH", "SOL"]);
   const [chain, setChain] = useState([]);
@@ -71,6 +72,11 @@ useEffect(() => {
   };
 
   fetchChain();
+
+  setSpotPrices(prev => ({
+  ...prev,
+  [activeAsset]: data.market_price || data.spot || 0
+}));
 
   // 🔥 Polling (safe)
   const interval = setInterval(fetchChain, 60000);
@@ -152,9 +158,10 @@ useEffect(() => {
           
           <div className="asset-dropdown-container">
             <select 
-              className="asset-select glass"
-              value={activeAsset}
-              onChange={(e) => setActiveAsset(e.target.value)}
+              onClick={() => {
+              setSymbolSearch(s);
+              setShowSymbolDropdown(false);
+            }}
             >
               {allAssets.map(asset => (
                 <option key={asset} value={asset}>{asset}</option>
@@ -213,11 +220,8 @@ useEffect(() => {
           )}
       </div>
       <OptionsCalculator
-        spotPrice={
-          chain.length > 0 && chain[Math.floor(chain.length / 2)]?.strike
-            ? chain[Math.floor(chain.length / 2)].strike
-            : (activeAsset === "BTC" ? 80000 : 2000)
-        }
+        spotPrice={spotPrices[activeAsset]}
+        assets={allAssets}
         chainData={chain}
         activeAsset={activeAsset}
         activeExpiry={activeExpiry}
