@@ -27,37 +27,69 @@ export function OptionsModule() {
     setActiveExpiry(null); // Reset expiry when asset changes
   }, [activeAsset]);
 
-  useEffect(() => {
-    if (!activeAsset) return;
+useEffect(() => {
+  let isMounted = true; // prevent state update after unmount
 
-    await fetch(`${BACKEND_URL}/options/crypto`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    currency: "BTC"
-  })
-})
-      .then(res => res.json())
-      .then(data => {
-        if (data.chain) {
-          setChain(data.chain);
-          setAvailableExpiries(data.expiries || []);
-          if (!activeExpiry && data.expiry) setActiveExpiry(data.expiry);
-          setMetrics({
-            iv: parseFloat(data.market_metrics.iv) || 0.42,
-            pcr: data.market_metrics.p_c_ratio || 0.85,
-            skew: "Volatile"
-          });
+  const fetchChain = async () => {
+    try {
+      setLoading(true);
+
+      const res = await fetch(`${BACKEND_URL}/options/crypto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currency: activeAsset || "BTC",
+          expiry: activeExpiry || null
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      if (!isMounted) return;
+
+      if (data && data.chain) {
+        setChain(data.chain);
+
+        setAvailableExpiries(Array.isArray(data.expiries) ? data.expiries : []);
+
+        // ✅ Prevent infinite re-renders
+        if (!activeExpiry && data.expiry) {
+          setActiveExpiry(data.expiry);
         }
-      })
-      .catch(err => console.error("Error fetching crypto options:", err))
-      .finally(() => setLoading(false));
-    };
 
-    fetchChain();
-    const interval = setInterval(fetchChain, 60000);
-    return () => clearInterval(interval);
-  }, [activeAsset, activeExpiry]);
+        setMetrics({
+          iv: parseFloat(data?.market_metrics?.iv) || 0.42,
+          pcr: data?.market_metrics?.p_c_ratio || 0.85,
+          skew: "Volatile"
+        });
+      } else {
+        console.warn("Invalid options response:", data);
+        setChain([]);
+      }
+
+    } catch (err) {
+      console.error("Error fetching crypto options:", err);
+      if (isMounted) setChain([]);
+    } finally {
+      if (isMounted) setLoading(false);
+    }
+  };
+
+  fetchChain();
+
+  // 🔥 Polling (safe)
+  const interval = setInterval(fetchChain, 60000);
+
+  return () => {
+    isMounted = false;
+    clearInterval(interval);
+  };
+
+}, [activeAsset, activeExpiry]);
 
   useEffect(() => {
   const ws = new WebSocket("wss://zenin-mx6w.onrender.com");
