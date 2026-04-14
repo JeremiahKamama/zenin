@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { OptionsCalculator } from "./OptionsCalculator";
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 export function OptionsModule() {
@@ -150,6 +151,12 @@ export function OptionsModule() {
             </table>
           )}
       </div>
+      <OptionsCalculator spotPrice={
+        chain.length > 0 && chain[Math.floor(chain.length / 2)]?.strike
+          ? chain[Math.floor(chain.length / 2)].strike
+          : 50000
+      } />
+
     </div>
   );
 }
