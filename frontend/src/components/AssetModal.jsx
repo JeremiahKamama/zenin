@@ -5,11 +5,18 @@ const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 
 export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, portfolio = [], balance = 0 }) {
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [activeInterval, setActiveInterval] = useState("1D");
-  const [orderType, setOrderType] = useState(() => asset?._forceSell ? "sell" : "buy");
-  const [quantity, setQuantity] = useState(() => {
+const [history, setHistory] = useState([]);
+const [loading, setLoading] = useState(true);
+const [activeInterval, setActiveInterval] = useState("1D");
+
+// ✅ ADD THIS (missing state causing crash)
+const [chartType, setChartType] = useState("line");
+
+const [orderType, setOrderType] = useState(() =>
+  asset?._forceSell ? "sell" : "buy"
+);
+
+const [quantity, setQuantity] = useState(() =>  {
     if (!asset?._forceSell) return 1;
     const holding = (portfolio || []).find(
       p => p.symbol === asset?.symbol &&
