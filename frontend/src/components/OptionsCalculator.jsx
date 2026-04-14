@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback,useMemo} from "react";
 import Chart from "react-apexcharts";
-import { useState, useEffect, useMemo } from "react";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
@@ -465,7 +464,7 @@ const effectiveSpot = useMemo(() => {
           </div>
         </div>
       </div>
-
+  );
       {/* P&L Diagram */}
       <div className="watchlist-panel glass" style={{ padding: "20px" }}>
         <><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
@@ -501,5 +500,4 @@ const effectiveSpot = useMemo(() => {
             width="100%"/>
       </div>
     </div>
-  );
 } 
