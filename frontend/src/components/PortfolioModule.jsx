@@ -266,7 +266,14 @@ export function PortfolioModule({
                         <button
                             className="portfolio-remove-button"
                             title="Sell this position"
-                            onClick={() => onSellAsset ? onSellAsset(item) : onRemove(item.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (typeof onSellAsset === "function") {
+                                onSellAsset(item);
+                              } else {
+                                onRemove(item.id);
+                              }
+                            }}
                           >🗑️</button>
                       </div>
                     );

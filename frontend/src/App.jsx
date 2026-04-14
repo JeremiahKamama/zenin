@@ -661,15 +661,22 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         {activeSection === "Portfolio" && (
           <div className="view-container">
             <PortfolioModule
-              portfolio={portfolio}
-              trades={trades}
-              calculatePortfolioValue={calculatePortfolioValue}
-              calculatePortfolioGain={calculatePortfolioGain}
-              onRemove={removeFromPortfolio}
-              onSellAsset={(asset) => {
-                setSelectedAsset({ ...asset, _forceSell: true });
-              }}
-            />
+                portfolio={portfolio}
+                trades={trades}
+                calculatePortfolioValue={calculatePortfolioValue}
+                calculatePortfolioGain={calculatePortfolioGain}
+                onRemove={removeFromPortfolio}
+                onSellAsset={(asset) => {
+                  const enriched = {
+                    ...asset,
+                    _forceSell: true,
+                    price: asset.price ?? 0,
+                    marketType: asset.marketType || "spot"
+                  };
+                  setSelectedAsset(enriched);
+                }}
+              />
+
           </div>
         )}
 

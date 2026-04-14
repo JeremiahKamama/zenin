@@ -29,29 +29,34 @@ export function OptionsModule() {
 
   useEffect(() => {
     if (!activeAsset) return;
-    setLoading(true);
-    fetch(`${BACKEND_URL}/options/crypto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ currency: activeAsset, expiry: activeExpiry })
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.chain) {
-        setChain(data.chain);
-        setAvailableExpiries(data.expiries || []);
-        if (!activeExpiry && data.expiry) {
-          setActiveExpiry(data.expiry);
+
+    const fetchChain = () => {
+      setLoading(true);
+      fetch(`${BACKEND_URL}/options/crypto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currency: activeAsset, expiry: activeExpiry })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.chain) {
+          setChain(data.chain);
+          setAvailableExpiries(data.expiries || []);
+          if (!activeExpiry && data.expiry) setActiveExpiry(data.expiry);
+          setMetrics({
+            iv: parseFloat(data.market_metrics.iv) || 0.42,
+            pcr: data.market_metrics.p_c_ratio || 0.85,
+            skew: "Volatile"
+          });
         }
-        setMetrics({
-          iv: parseFloat(data.market_metrics.iv) || 0.42,
-          pcr: data.market_metrics.p_c_ratio || 0.85,
-          skew: "Volatile"
-        });
-      }
-    })
-    .catch(err => console.error("Error fetching crypto options:", err))
-    .finally(() => setLoading(false));
+      })
+      .catch(err => console.error("Error fetching crypto options:", err))
+      .finally(() => setLoading(false));
+    };
+
+    fetchChain();
+    const interval = setInterval(fetchChain, 60000);
+    return () => clearInterval(interval);
   }, [activeAsset, activeExpiry]);
 
   const formatDate = (ts) => {
@@ -85,7 +90,7 @@ export function OptionsModule() {
       <div className="watchlist-panel glass">
         <div className="section-header">
           <div className="header-left">
-            <h2>{activeAsset} Option Chain</h2>
+            <h2>{activeAsset} Option Chain <span className="live-pill">Live</span></h2>
             <div className="asset-count">{chain.length} Strikes Available</div>
           </div>
           

@@ -144,6 +144,8 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   };
 
   if (!asset) return null;
+    const cleanAsset = { ...asset };
+    delete cleanAsset._forceSell;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -272,7 +274,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               </div>
             </div>
           </div>
-          <button className={`confirm-order-btn ${orderType}`} onClick={() => onConfirm(asset, quantity, orderType)} disabled={quantity <= 0}>
+          <button className={`confirm-order-btn ${orderType}`} onClick={() => onConfirm(cleanAsset, quantity, orderType)} disabled={quantity <= 0}>
             Confirm Order
           </button>
         </footer>
