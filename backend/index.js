@@ -682,153 +682,123 @@ app.post("/api/options/crypto", async (req, res) => {
   try {
     const fetch = await resolveFetch();
 
-    // 1. Get instruments for this currency
     const instRes = await fetch(`${BASE}/public/get_instruments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ currency, instrument_type: "option", expired: false })
+      body: JSON.stringify({
+        currency,
+        instrument_type: "option",
+        expired: false
+      })
     });
+
     const instData = await instRes.json();
-    const instruments = instData.result || [];
 
-    console.log(`[Options] ${instruments.length} instruments for ${currency}`);
-    if (instruments.length === 0) return res.json({ chain: [], expiries: [] });
+    // 🔥 HARD SAFETY CHECK
+    const instruments = Array.isArray(instData?.result)
+      ? instData.result
+      : [];
 
-    // 2. Discover expiries
-    const uniqueExpiries = [...new Set(
-      instruments.map(i => i.option_details?.expiry).filter(Boolean)
-    )].sort((a, b) => a - b);
+    if (instruments.length === 0) {
+      return res.json({
+        chain: [],
+        expiries: [],
+        market_metrics: { iv: 0, p_c_ratio: 0 }
+      });
+    }
 
-    const targetExpiry = expiry ? parseInt(expiry) : uniqueExpiries[0];
+    const expiries = instruments
+      .map(i => i?.option_details?.expiry)
+      .filter(Boolean);
+
+    const uniqueExpiries = [...new Set(expiries)].sort((a, b) => a - b);
+
+    const targetExpiry =
+      expiry ? parseInt(expiry) : uniqueExpiries[0];
+
     const filteredInstruments = instruments.filter(
-      i => i.option_details?.expiry === targetExpiry
+      i => i?.option_details?.expiry === targetExpiry
     );
 
-    console.log(`[Options] ${filteredInstruments.length} instruments for expiry ${targetExpiry}`);
-
-    // 3. Fetch tickers in parallel (batched to avoid rate limits)
     const batchSize = 20;
     const allTickers = [];
+
     for (let i = 0; i < filteredInstruments.length; i += batchSize) {
       const batch = filteredInstruments.slice(i, i + batchSize);
-      const results = await Promise.all(batch.map(async inst => {
-        try {
-          const r = await fetch(`${BASE}/public/get_ticker`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ instrument_name: inst.instrument_name })
-          });
-          const d = await r.json();
-          return d.result || null;
-        } catch {
-          return null;
-        }
-      }));
+
+      const results = await Promise.all(
+        batch.map(async (inst) => {
+          try {
+            const r = await fetch(`${BASE}/public/get_ticker`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                instrument_name: inst.instrument_name
+              })
+            });
+
+            const d = await r.json();
+            return d?.result ?? null;
+          } catch {
+            return null;
+          }
+        })
+      );
+
       allTickers.push(...results.filter(Boolean));
     }
 
-    console.log(`[Options] Got ${allTickers.length} tickers`);
-    if (allTickers.length > 0) {
-      console.log("[Options] Sample ticker keys:", Object.keys(allTickers[0]).join(", "));
-      console.log("[Options] Sample ticker:", JSON.stringify(allTickers[0]).slice(0, 400));
-    }
-
-    // 4. Group by strike
     const strikesMap = {};
+
     allTickers.forEach(t => {
-      const strike = parseFloat(t.option_details?.strike || t.strike || 0);
-      const optType = (t.option_details?.option_type || t.option_type || "").toUpperCase();
+      const strike = parseFloat(t?.option_details?.strike || t?.strike);
+      const optType = (t?.option_details?.option_type || t?.option_type || "").toUpperCase();
+
       if (!strike || !optType) return;
 
-      if (!strikesMap[strike]) strikesMap[strike] = { strike, call: {}, put: {} };
+      if (!strikesMap[strike]) {
+        strikesMap[strike] = { strike, call: {}, put: {} };
+      }
 
       const info = {
-        bid: parseFloat(t.best_bid_price || 0),
-        ask: parseFloat(t.best_ask_price || 0),
-        delta: parseFloat(t.greeks?.delta ?? 0),
-        gamma: parseFloat(t.greeks?.gamma ?? 0),
-        vega: parseFloat(t.greeks?.vega ?? 0),
-        theta: parseFloat(t.greeks?.theta ?? 0),
-        iv: parseFloat(t.iv || t.implied_volatility || 0),
-        mark_price: parseFloat(t.mark_price || 0),
-        open_interest: parseFloat(t.open_interest || 0),
+        bid: parseFloat(t?.best_bid_price || 0),
+        ask: parseFloat(t?.best_ask_price || 0),
+        delta: parseFloat(t?.greeks?.delta ?? 0),
+        gamma: parseFloat(t?.greeks?.gamma ?? 0),
+        vega: parseFloat(t?.greeks?.vega ?? 0),
+        theta: parseFloat(t?.greeks?.theta ?? 0),
+        iv: parseFloat(t?.iv || t?.implied_volatility || 0),
       };
 
       if (optType === "C") strikesMap[strike].call = info;
       else strikesMap[strike].put = info;
     });
 
-    const chain = Object.values(strikesMap).sort((a, b) => a.strike - b.strike);
-    const avgIv = allTickers.reduce((s, t) => s + parseFloat(t.iv || 0), 0) / (allTickers.length || 1);
+    const chain = Object.values(strikesMap).sort(
+      (a, b) => a.strike - b.strike
+    );
 
-    res.json({
-      expiry: targetExpiry,
+    const avgIv =
+      allTickers.reduce((s, t) => s + parseFloat(t?.iv || 0), 0) /
+      (allTickers.length || 1);
+
+    return res.json({
+      expiry: targetExpiry || null,
       expiries: uniqueExpiries,
       chain: chain.slice(0, 25),
-      market_metrics: { iv: avgIv, p_c_ratio: 0.85 }
+      market_metrics: {
+        iv: avgIv || 0,
+        p_c_ratio: 0.85
+      }
     });
 
   } catch (error) {
     console.error("Derive API Error:", error);
-    res.status(502).json({ error: `Failed to fetch options: ${error.message}` });
-  }
-});
-
-// Replace /api/options/crypto/all-assets
-app.get("/api/options/crypto/all-assets", async (req, res) => {
-  const BASE = "https://api.derive.xyz";
-  try {
-    const fetch = await resolveFetch();
-    // Only ETH and BTC have options on Derive
-    const currencies = ["BTC", "ETH"];
-    // Verify they actually have instruments
-    const verified = [];
-    for (const currency of currencies) {
-      try {
-        const r = await fetch(`${BASE}/public/get_instruments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ currency, instrument_type: "option", expired: false })
-        });
-        const d = await r.json();
-        if ((d.result || []).length > 0) verified.push(currency);
-      } catch { verified.push(currency); }
-    }
-    res.json({ assets: verified.length > 0 ? verified : currencies });
-  } catch (error) {
-    res.status(502).json({ error: "Failed to fetch assets" });
-  }
-});
-
-app.get("/api/options/crypto/top-assets", async (req, res) => {
-  try {
-    const fetch = await resolveFetch();
-    const response = await fetch("https://api.lyra.finance/public/get_tickers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instrument_type: "perp" })
+    return res.status(502).json({
+      error: `Failed to fetch options: ${error.message}`
     });
-    const data = await response.json();
-    const tickers = data.result || [];
-    
-    // Filter and aggregate by base currency
-    const markets = tickers
-      .map(t => ({
-        symbol: t.instrument_name.split("-")[0],
-        price: parseFloat(t.index_price),
-        volume: parseFloat(t.volume_24h),
-        change: parseFloat(t.price_change_24h || 0)
-      }))
-      .sort((a, b) => b.volume - a.volume)
-      .slice(0, 10);
-      
-    res.json({ assets: markets });
-  } catch (error) {
-    res.status(502).json({ error: "Failed to fetch top markets" });
   }
 });
-
-
 
 // ---------------------------------------------------------------------------
 // Options Calculator Persistence
