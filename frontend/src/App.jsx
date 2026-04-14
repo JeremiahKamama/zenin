@@ -17,7 +17,7 @@ function App() {
   const [portfolio, setPortfolio] = useState([]);
   const [watchlistAssets, setWatchlistAssets] = useState([]);
   const [trades, setTrades] = useState(() => {
-    const saved = localStorage.getItem("zenin_trades");
+  const saved = localStorage.getItem("zenin_trades");
     return saved ? JSON.parse(saved) : [];
   });
   const [error, setError] = useState(null);

@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
-const { initializeDatabase, portfolio, watchlist, optionsCalculations } = require("./database");
+const { initializeDatabase, portfolio, watchlist, optionsCalculations,db } = require("./database");
 
 const app = express();
 

@@ -38,7 +38,14 @@ function initializeDatabase() {
       UNIQUE(symbol, marketType)
     );
   `);
-
+// Add after the watchlist_assets table creation
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_balance (
+    id INTEGER PRIMARY KEY,
+    balance REAL NOT NULL DEFAULT 10000
+  );
+`);
+db.prepare(`INSERT OR IGNORE INTO user_balance (id, balance) VALUES (1, 10000)`).run();
   // Saved options calculations
   db.exec(`
     CREATE TABLE IF NOT EXISTS options_calculations (
