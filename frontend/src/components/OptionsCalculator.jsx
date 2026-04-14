@@ -176,7 +176,7 @@ export function OptionsCalculator({ spotPrice = 0, chainData = [], activeAsset =
   const saveCalculation = async () => {
     const calc = { symbol, legs, totals, timestamp: new Date().toISOString(), strategy: activeStrategy };
     try {
-      const res = await fetch(`${BACKEND_URL}/db/options-calc`, {
+      const res = await fetch(`${BACKEND_URL}/api/db/options-calculations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(calc)
