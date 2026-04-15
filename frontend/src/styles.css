@@ -37,6 +37,9 @@ button {
   flex-direction: column;
   gap: 32px;
   padding-top: 12px;
+  position: sticky;
+  top: 24px;
+  height: calc(100vh - 48px);
   transition: width 0.25s ease;
 }
 
@@ -91,6 +94,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .nav-btn {
@@ -381,6 +386,104 @@ button {
   border-radius: 8px;
   font-size: 0.84rem;
   font-weight: 700;
+}
+
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-status {
+  margin: 0;
+  font-size: 0.8rem;
+  border-radius: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.settings-status.success {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(22, 101, 52, 0.22);
+}
+
+.settings-status.error {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(127, 29, 29, 0.22);
+}
+
+.settings-status.info {
+  color: #7dd3fc;
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(3, 105, 161, 0.22);
+}
+
+.settings-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-chip {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 4px 9px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.settings-chip.success {
+  border-color: rgba(74, 222, 128, 0.4);
+  color: #86efac;
+  background: rgba(22, 101, 52, 0.25);
+}
+
+.settings-chip.muted {
+  opacity: 0.85;
+}
+
+.settings-passkey-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-passkey-item {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.58);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.settings-passkey-item span {
+  color: #94a3b8;
+  font-size: 0.77rem;
+}
+
+.settings-backup-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.settings-backup-grid code {
+  display: block;
+  text-align: center;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(2, 6, 23, 0.78);
+  color: #dbeafe;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  padding: 6px 4px;
 }
 
 .watchlist-add-overlay {
@@ -1078,6 +1181,9 @@ button {
   }
 
   .sidebar {
+    position: static;
+    top: auto;
+    height: auto;
     width: 100%;
     padding-bottom: 24px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.14);
@@ -3966,5 +4072,9 @@ button {
 @media (max-width: 360px) {
   .asset-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-backup-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

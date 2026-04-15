@@ -1026,10 +1026,13 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     return sections.includes(saved) ? saved : "Home";
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [userEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
+  const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
+    "profile-email": true,
+    "profile-password": true,
+    "profile-twofa": true,
     "general-display": true,
     "general-data": true,
     "accounts-connected": true,
@@ -1102,11 +1105,68 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     username: "",
     apiKey: ""
   });
-  const settingsCategories = ["General", "Accounts", "Layout", "Notification"];
+  const settingsCategories = ["Profile", "General", "Accounts", "Layout", "Notification"];
+  const AUTHENTICATOR_OPTIONS = ["Google Authenticator", "Authy", "Microsoft Authenticator", "1Password", "Bitwarden"];
+  const PASSKEY_OPTIONS = ["iCloud Keychain", "Google Password Manager", "1Password", "Dashlane", "Bitwarden"];
+  const [profileSecurity, setProfileSecurity] = useState(() => {
+    const raw = localStorage.getItem("zenin_profile_security");
+    const fallback = {
+      email: localStorage.getItem("zenin_email") || "user@zenin.app",
+      pendingEmail: "",
+      emailVerified: true,
+      passwordChangedAt: null,
+      twoFactorEnabled: false,
+      twoFactorMethod: null,
+      twoFactorProvider: null,
+      twoFactorTarget: "",
+      twoFactorEnabledAt: null,
+      backupCodes: [],
+      passkeys: []
+    };
+    if (!raw) return fallback;
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        ...fallback,
+        ...parsed,
+        passkeys: Array.isArray(parsed?.passkeys) ? parsed.passkeys : [],
+        backupCodes: Array.isArray(parsed?.backupCodes) ? parsed.backupCodes : []
+      };
+    } catch {
+      return fallback;
+    }
+  });
+  const [profileForms, setProfileForms] = useState({
+    newEmail: "",
+    emailPassword: "",
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+    twoFactorMethod: "authenticator",
+    authenticatorService: AUTHENTICATOR_OPTIONS[0],
+    twoFactorCode: "",
+    phoneNumber: "",
+    recoveryEmail: "",
+    passkeyName: "Primary Device",
+    passkeyProvider: PASSKEY_OPTIONS[0]
+  });
+  const [profileFeedback, setProfileFeedback] = useState({
+    email: null,
+    password: null,
+    twofa: null
+  });
 
   useEffect(() => {
     localStorage.setItem("zenin_preferences", JSON.stringify(preferences));
   }, [preferences]);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_email", userEmail);
+  }, [userEmail]);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_profile_security", JSON.stringify(profileSecurity));
+  }, [profileSecurity]);
 
   useEffect(() => {
     localStorage.setItem("zenin_connected_accounts", JSON.stringify(connectedAccounts));
@@ -1158,6 +1218,200 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       ...prev
     ]);
     setIsConnectWindowOpen(false);
+  };
+
+  const createBackupCodes = () =>
+    Array.from({ length: 8 }, () => Math.random().toString(36).slice(2, 6).toUpperCase());
+
+  const setProfileMessage = (section, type, text) => {
+    setProfileFeedback((prev) => ({ ...prev, [section]: { type, text } }));
+  };
+
+  const requestEmailChange = () => {
+    const nextEmail = profileForms.newEmail.trim().toLowerCase();
+    const password = profileForms.emailPassword.trim();
+    const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail);
+
+    if (!emailValid) {
+      setProfileMessage("email", "error", "Enter a valid email address.");
+      return;
+    }
+    if (password.length < 8) {
+      setProfileMessage("email", "error", "Current password must be at least 8 characters.");
+      return;
+    }
+    if (nextEmail === String(profileSecurity.email || "").toLowerCase()) {
+      setProfileMessage("email", "error", "New email must be different from current email.");
+      return;
+    }
+
+    setProfileSecurity((prev) => ({
+      ...prev,
+      pendingEmail: nextEmail,
+      emailVerified: false
+    }));
+    setProfileForms((prev) => ({ ...prev, newEmail: "", emailPassword: "" }));
+    setProfileMessage("email", "success", `Verification link sent to ${nextEmail}. Confirm it to apply the change.`);
+  };
+
+  const verifyPendingEmail = () => {
+    const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
+    if (!pendingEmail) {
+      setProfileMessage("email", "error", "No pending email change to verify.");
+      return;
+    }
+    setProfileSecurity((prev) => ({
+      ...prev,
+      email: pendingEmail,
+      pendingEmail: "",
+      emailVerified: true
+    }));
+    setUserEmail(pendingEmail);
+    setProfileMessage("email", "success", `Email updated to ${pendingEmail}.`);
+  };
+
+  const updatePassword = () => {
+    const currentPassword = profileForms.currentPassword.trim();
+    const newPassword = profileForms.newPassword.trim();
+    const confirmPassword = profileForms.confirmPassword.trim();
+
+    if (currentPassword.length < 8) {
+      setProfileMessage("password", "error", "Current password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword.length < 10) {
+      setProfileMessage("password", "error", "New password must be at least 10 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setProfileMessage("password", "error", "New password and confirmation do not match.");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setProfileMessage("password", "error", "Choose a password different from your current password.");
+      return;
+    }
+
+    setProfileSecurity((prev) => ({
+      ...prev,
+      passwordChangedAt: new Date().toISOString()
+    }));
+    setProfileForms((prev) => ({
+      ...prev,
+      currentPassword: "",
+      newPassword: "",
+      confirmPassword: ""
+    }));
+    setProfileMessage("password", "success", "Password updated successfully.");
+  };
+
+  const enableTwoFactor = () => {
+    const method = String(profileForms.twoFactorMethod || "authenticator");
+    const code = profileForms.twoFactorCode.trim();
+    if (!/^\d{6}$/.test(code)) {
+      setProfileMessage("twofa", "error", "Enter a valid 6-digit verification code.");
+      return;
+    }
+
+    if (method === "authenticator") {
+      setProfileSecurity((prev) => ({
+        ...prev,
+        twoFactorEnabled: true,
+        twoFactorMethod: "authenticator",
+        twoFactorProvider: profileForms.authenticatorService,
+        twoFactorTarget: "",
+        twoFactorEnabledAt: new Date().toISOString(),
+        backupCodes: prev.backupCodes.length ? prev.backupCodes : createBackupCodes()
+      }));
+      setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+      setProfileMessage("twofa", "success", `${profileForms.authenticatorService} 2FA enabled.`);
+      return;
+    }
+
+    if (method === "sms") {
+      const phoneNumber = profileForms.phoneNumber.trim();
+      if (phoneNumber.length < 8) {
+        setProfileMessage("twofa", "error", "Enter a valid phone number for SMS OTP.");
+        return;
+      }
+      setProfileSecurity((prev) => ({
+        ...prev,
+        twoFactorEnabled: true,
+        twoFactorMethod: "sms",
+        twoFactorProvider: "SMS OTP",
+        twoFactorTarget: phoneNumber,
+        twoFactorEnabledAt: new Date().toISOString(),
+        backupCodes: prev.backupCodes.length ? prev.backupCodes : createBackupCodes()
+      }));
+      setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+      setProfileMessage("twofa", "success", "SMS 2FA enabled.");
+      return;
+    }
+
+    const recoveryEmail = profileForms.recoveryEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recoveryEmail)) {
+      setProfileMessage("twofa", "error", "Enter a valid recovery email for email OTP.");
+      return;
+    }
+    setProfileSecurity((prev) => ({
+      ...prev,
+      twoFactorEnabled: true,
+      twoFactorMethod: "email",
+      twoFactorProvider: "Email OTP",
+      twoFactorTarget: recoveryEmail,
+      twoFactorEnabledAt: new Date().toISOString(),
+      backupCodes: prev.backupCodes.length ? prev.backupCodes : createBackupCodes()
+    }));
+    setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+    setProfileMessage("twofa", "success", "Email OTP 2FA enabled.");
+  };
+
+  const registerPasskey = () => {
+    const passkeyName = profileForms.passkeyName.trim();
+    if (passkeyName.length < 2) {
+      setProfileMessage("twofa", "error", "Passkey name must be at least 2 characters.");
+      return;
+    }
+    const newPasskey = {
+      id: Date.now(),
+      name: passkeyName,
+      provider: profileForms.passkeyProvider,
+      createdAt: new Date().toISOString()
+    };
+    setProfileSecurity((prev) => ({
+      ...prev,
+      twoFactorEnabled: true,
+      twoFactorMethod: "passkey",
+      twoFactorProvider: profileForms.passkeyProvider,
+      twoFactorTarget: passkeyName,
+      twoFactorEnabledAt: new Date().toISOString(),
+      passkeys: [newPasskey, ...(Array.isArray(prev.passkeys) ? prev.passkeys : [])],
+      backupCodes: prev.backupCodes.length ? prev.backupCodes : createBackupCodes()
+    }));
+    setProfileForms((prev) => ({ ...prev, passkeyName: "Primary Device" }));
+    setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
+  };
+
+  const regenerateBackupCodes = () => {
+    if (!profileSecurity.twoFactorEnabled) {
+      setProfileMessage("twofa", "error", "Enable 2FA before generating backup codes.");
+      return;
+    }
+    setProfileSecurity((prev) => ({ ...prev, backupCodes: createBackupCodes() }));
+    setProfileMessage("twofa", "success", "Backup codes regenerated.");
+  };
+
+  const disableTwoFactor = () => {
+    setProfileSecurity((prev) => ({
+      ...prev,
+      twoFactorEnabled: false,
+      twoFactorMethod: null,
+      twoFactorProvider: null,
+      twoFactorTarget: "",
+      twoFactorEnabledAt: null,
+      backupCodes: []
+    }));
+    setProfileMessage("twofa", "info", "2FA disabled for this workspace profile.");
   };
 
   const sectionIcon = (section) => {
@@ -1538,6 +1792,267 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
               </aside>
 
               <section className="settings-content">
+                {activeSettingsCategory === "Profile" && (
+                  <>
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-email")}>
+                        <span>Email Address</span>
+                        <span>{expandedSettingsPanels["profile-email"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["profile-email"] && (
+                        <div className="settings-panel-body">
+                          <p className="settings-meta">
+                            Current: <strong>{profileSecurity.email || userEmail}</strong>
+                          </p>
+                          {profileSecurity.pendingEmail ? (
+                            <p className="settings-warning">Pending verification: {profileSecurity.pendingEmail}</p>
+                          ) : null}
+                          <label className="settings-field">
+                            <span>New Email</span>
+                            <input
+                              type="email"
+                              value={profileForms.newEmail}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, newEmail: e.target.value }))}
+                              placeholder="name@example.com"
+                            />
+                          </label>
+                          <label className="settings-field">
+                            <span>Current Password</span>
+                            <input
+                              type="password"
+                              value={profileForms.emailPassword}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, emailPassword: e.target.value }))}
+                              placeholder="Enter current password"
+                            />
+                          </label>
+                          <div className="settings-inline-actions">
+                            <button className="settings-primary-btn" onClick={requestEmailChange}>Send Verification</button>
+                            <button
+                              className="settings-secondary-btn"
+                              onClick={verifyPendingEmail}
+                              disabled={!profileSecurity.pendingEmail}
+                            >
+                              Confirm Verification
+                            </button>
+                          </div>
+                          {profileFeedback.email?.text ? (
+                            <p className={`settings-status ${profileFeedback.email.type}`}>{profileFeedback.email.text}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-password")}>
+                        <span>Password</span>
+                        <span>{expandedSettingsPanels["profile-password"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["profile-password"] && (
+                        <div className="settings-panel-body">
+                          <label className="settings-field">
+                            <span>Current Password</span>
+                            <input
+                              type="password"
+                              value={profileForms.currentPassword}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, currentPassword: e.target.value }))}
+                              placeholder="Enter current password"
+                            />
+                          </label>
+                          <label className="settings-field">
+                            <span>New Password</span>
+                            <input
+                              type="password"
+                              value={profileForms.newPassword}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, newPassword: e.target.value }))}
+                              placeholder="Use at least 10 characters"
+                            />
+                          </label>
+                          <label className="settings-field">
+                            <span>Confirm New Password</span>
+                            <input
+                              type="password"
+                              value={profileForms.confirmPassword}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                              placeholder="Re-enter new password"
+                            />
+                          </label>
+                          <div className="settings-inline-actions">
+                            <button className="settings-primary-btn" onClick={updatePassword}>Update Password</button>
+                          </div>
+                          {profileSecurity.passwordChangedAt ? (
+                            <p className="settings-meta">
+                              Last changed: {new Date(profileSecurity.passwordChangedAt).toLocaleString()}
+                            </p>
+                          ) : null}
+                          {profileFeedback.password?.text ? (
+                            <p className={`settings-status ${profileFeedback.password.type}`}>{profileFeedback.password.text}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-twofa")}>
+                        <span>2FA & Passkeys</span>
+                        <span>{expandedSettingsPanels["profile-twofa"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["profile-twofa"] && (
+                        <div className="settings-panel-body">
+                          <div className="settings-chip-row">
+                            <span className={`settings-chip ${profileSecurity.twoFactorEnabled ? "success" : "muted"}`}>
+                              {profileSecurity.twoFactorEnabled ? "2FA Enabled" : "2FA Disabled"}
+                            </span>
+                            {profileSecurity.twoFactorMethod ? (
+                              <span className="settings-chip">{String(profileSecurity.twoFactorMethod).toUpperCase()}</span>
+                            ) : null}
+                            {profileSecurity.twoFactorProvider ? (
+                              <span className="settings-chip">{profileSecurity.twoFactorProvider}</span>
+                            ) : null}
+                          </div>
+
+                          <label className="settings-field">
+                            <span>Security Method</span>
+                            <select
+                              value={profileForms.twoFactorMethod}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorMethod: e.target.value }))}
+                            >
+                              <option value="authenticator">Authenticator App</option>
+                              <option value="passkey">Passkey</option>
+                              <option value="sms">SMS OTP</option>
+                              <option value="email">Email OTP</option>
+                            </select>
+                          </label>
+
+                          {profileForms.twoFactorMethod === "authenticator" ? (
+                            <>
+                              <label className="settings-field">
+                                <span>Authenticator Service</span>
+                                <select
+                                  value={profileForms.authenticatorService}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, authenticatorService: e.target.value }))}
+                                >
+                                  {AUTHENTICATOR_OPTIONS.map((service) => (
+                                    <option key={service} value={service}>{service}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <p className="settings-meta">Scan QR in your app, then enter the 6-digit code below.</p>
+                            </>
+                          ) : null}
+
+                          {profileForms.twoFactorMethod === "passkey" ? (
+                            <>
+                              <label className="settings-field">
+                                <span>Passkey Service</span>
+                                <select
+                                  value={profileForms.passkeyProvider}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyProvider: e.target.value }))}
+                                >
+                                  {PASSKEY_OPTIONS.map((provider) => (
+                                    <option key={provider} value={provider}>{provider}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="settings-field">
+                                <span>Passkey Name</span>
+                                <input
+                                  type="text"
+                                  value={profileForms.passkeyName}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyName: e.target.value }))}
+                                  placeholder="MacBook Pro / iPhone / YubiKey"
+                                />
+                              </label>
+                            </>
+                          ) : null}
+
+                          {profileForms.twoFactorMethod === "sms" ? (
+                            <label className="settings-field">
+                              <span>Phone Number</span>
+                              <input
+                                type="text"
+                                value={profileForms.phoneNumber}
+                                onChange={(e) => setProfileForms((prev) => ({ ...prev, phoneNumber: e.target.value }))}
+                                placeholder="+1 555 123 4567"
+                              />
+                            </label>
+                          ) : null}
+
+                          {profileForms.twoFactorMethod === "email" ? (
+                            <label className="settings-field">
+                              <span>Recovery Email</span>
+                              <input
+                                type="email"
+                                value={profileForms.recoveryEmail}
+                                onChange={(e) => setProfileForms((prev) => ({ ...prev, recoveryEmail: e.target.value }))}
+                                placeholder="security@example.com"
+                              />
+                            </label>
+                          ) : null}
+
+                          {profileForms.twoFactorMethod !== "passkey" ? (
+                            <label className="settings-field">
+                              <span>Verification Code</span>
+                              <input
+                                type="text"
+                                value={profileForms.twoFactorCode}
+                                onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                                placeholder="6-digit code"
+                              />
+                            </label>
+                          ) : null}
+
+                          <div className="settings-inline-actions">
+                            {profileForms.twoFactorMethod === "passkey" ? (
+                              <button className="settings-primary-btn" onClick={registerPasskey}>Register Passkey</button>
+                            ) : (
+                              <button className="settings-primary-btn" onClick={enableTwoFactor}>Enable 2FA</button>
+                            )}
+                            <button
+                              className="settings-secondary-btn"
+                              onClick={regenerateBackupCodes}
+                              disabled={!profileSecurity.twoFactorEnabled}
+                            >
+                              Regenerate Backup Codes
+                            </button>
+                            <button
+                              className="settings-secondary-btn"
+                              onClick={disableTwoFactor}
+                              disabled={!profileSecurity.twoFactorEnabled}
+                            >
+                              Disable 2FA
+                            </button>
+                          </div>
+
+                          {profileSecurity.passkeys?.length ? (
+                            <div className="settings-passkey-list">
+                              {profileSecurity.passkeys.map((passkey) => (
+                                <div key={passkey.id} className="settings-passkey-item">
+                                  <strong>{passkey.name}</strong>
+                                  <span>{passkey.provider}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          {profileSecurity.backupCodes?.length ? (
+                            <div className="settings-backup-grid">
+                              {profileSecurity.backupCodes.map((code) => (
+                                <code key={code}>{code}</code>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="settings-meta">Backup codes will appear once 2FA is enabled.</p>
+                          )}
+
+                          {profileFeedback.twofa?.text ? (
+                            <p className={`settings-status ${profileFeedback.twofa.type}`}>{profileFeedback.twofa.text}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
                 {activeSettingsCategory === "General" && (
                   <>
                     <div className="settings-panel">
