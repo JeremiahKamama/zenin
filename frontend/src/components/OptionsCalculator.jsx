@@ -231,17 +231,17 @@ const effectiveSpot = Number(spotPrice) > 0
   });
 
   return (
-    <div style={{ marginTop: "32px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "24px" }}>
-      <h2 style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 500, color: "var(--color-text-primary)" }}>
+    <div className="options-calculator" style={{ marginTop: "32px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "24px" }}>
+      <h2 className="options-calculator-title" style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 500, color: "var(--color-text-primary)" }}>
         Options Calculator
       </h2>
 
       {/* Top row: Symbol + Legs */}
-      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: "16px", marginBottom: "16px" }}>
+      <div className="options-calculator-layout" style={{ marginBottom: "16px" }}>
 
         {/* Symbol selector */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <div className="watchlist-panel glass" style={{ padding: "16px" }}>
+        <div className="options-calculator-side">
+          <div className="watchlist-panel glass options-calculator-symbol-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
             <div style={{ position: "relative" }}>
               <input
@@ -250,10 +250,12 @@ const effectiveSpot = Number(spotPrice) > 0
                 onFocus={() => setShowSymbolDropdown(true)}
                 onBlur={() => setTimeout(() => setShowSymbolDropdown(false), 150)}
                 placeholder="Search symbol..."
+                className="options-calculator-symbol-input"
                 style={{ width: "100%", padding: "8px 12px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "8px", color: "#f1f5f9", fontSize: "14px", outline: "none" }}
               />
               {showSymbolDropdown && filteredSymbols.length > 0 && (
                   <div
+                    className="options-calculator-symbol-dropdown"
                     style={{
                       position: "absolute",
                       top: "100%",
@@ -270,6 +272,7 @@ const effectiveSpot = Number(spotPrice) > 0
                   >
                     {filteredSymbols.map((s) => (
                       <div
+                        className="options-calculator-symbol-option"
                         key={s}
                         onClick={() => {
                           setSymbol(s);
@@ -299,17 +302,21 @@ const effectiveSpot = Number(spotPrice) > 0
                   </div>
                 )}
             </div>
-            <div style={{ marginTop: "12px", padding: "10px", background: "rgba(56,189,248,0.06)", borderRadius: "8px", border: "1px solid rgba(56,189,248,0.15)" }}>
-              <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>Spot Price</p>
-              <p style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "#38bdf8" }}>${S.toLocaleString()}</p>
+            <div className="options-calculator-spot-box" style={{ marginTop: "12px", padding: "10px", background: "rgba(56,189,248,0.06)", borderRadius: "8px", border: "1px solid rgba(56,189,248,0.15)" }}>
+              <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>Spot Price</p>
+              <p className="options-calculator-spot-value" style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "#38bdf8" }}>${S.toLocaleString()}</p>
             </div>
           </div>
 
           {/* Strategy Presets */}
-          <div className="watchlist-panel glass" style={{ padding: "16px", flex: 1 }}>
+          <div className="watchlist-panel glass options-calculator-strategy-panel" style={{ padding: "16px", flex: 1 }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
               {STRATEGIES.map(s => (
-                <button key={s.name} onClick={() => applyStrategy(s)} style={{
+                <button
+                  className={`options-calculator-strategy-btn ${activeStrategy === s.name ? "active" : ""}`}
+                  key={s.name}
+                  onClick={() => applyStrategy(s)}
+                  style={{
                   padding: "8px 12px", textAlign: "left", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px",
                   background: activeStrategy === s.name ? "rgba(56,189,248,0.12)" : "transparent",
                   color: activeStrategy === s.name ? "#38bdf8" : "#94a3b8",
@@ -326,18 +333,18 @@ const effectiveSpot = Number(spotPrice) > 0
 
 
         {/* Position Legs */}
-        <div className="watchlist-panel glass" style={{ padding: "16px" }}>
-          <><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+        <div className="watchlist-panel glass options-calculator-position-panel" style={{ padding: "16px" }}>
+          <><div className="options-calculator-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
             <p style={{ margin: 0, fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Position Legs</p>
-            <button onClick={addLeg} style={{
+            <button className="options-calculator-add-leg-btn" onClick={addLeg} style={{
               display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px",
               background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)",
               borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer"
             }}>
               <span style={{ fontSize: "16px", lineHeight: 1 }}>+</span> Add Leg
             </button>
-          </div><div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+          </div><div className="options-calculator-table-wrap" style={{ overflowX: "auto" }}>
+              <table className="options-calculator-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                     {["Strike", "Expiry", "Type", "Direction", "Qty", "Premium", "IV %", "BS Price", ""].map(h => (
@@ -408,7 +415,7 @@ const effectiveSpot = Number(spotPrice) > 0
             </div></>
 
           {/* Greeks Summary */}
-          <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
+          <div className="options-calculator-greeks-grid" style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
             {[
               { label: "Net P&L", value: `$${totals.pnl.toFixed(2)}`, color: isProfitColor(totals.pnl) },
               { label: "Delta", value: totals.delta.toFixed(4), color: totals.delta >= 0 ? "#38bdf8" : "#f59e0b" },
@@ -416,7 +423,7 @@ const effectiveSpot = Number(spotPrice) > 0
               { label: "Theta", value: totals.theta.toFixed(4), color: totals.theta >= 0 ? "#22c55e" : "#ef4444" },
               { label: "Vega", value: totals.vega.toFixed(4), color: "#a78bfa" },
             ].map(({ label, value, color }) => (
-              <div key={label} style={{ background: "rgba(0,0,0,0.3)", borderRadius: "8px", padding: "10px", textAlign: "center" }}>
+              <div className="options-calculator-greek-card" key={label} style={{ background: "rgba(0,0,0,0.3)", borderRadius: "8px", padding: "10px", textAlign: "center" }}>
                 <p style={{ margin: "0 0 4px", fontSize: "10px", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</p>
                 <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color }}>{value}</p>
               </div>
@@ -424,7 +431,7 @@ const effectiveSpot = Number(spotPrice) > 0
           </div>
 
           {/* Save button */}
-          <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
+          <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
             <button onClick={saveCalculation} style={{
               padding: "8px 18px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)",
               borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer"
@@ -433,13 +440,13 @@ const effectiveSpot = Number(spotPrice) > 0
           </div>
 
          {/* P&L Diagram */}
-      <div className="watchlist-panel glass" style={{ padding: "20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+      <div className="watchlist-panel glass options-calculator-pnl-panel" style={{ padding: "20px" }}>
+        <div className="options-calculator-pnl-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
             <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>
             <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>At expiration — underlying price vs profit/loss</p>
           </div>
-          <div style={{ display: "flex", gap: "20px" }}>
+          <div className="options-calculator-pnl-stats" style={{ display: "flex", gap: "20px" }}>
             <div style={{ textAlign: "center" }}>
               <p style={{ margin: "0 0 2px", fontSize: "10px", color: "#64748b" }}>MAX PROFIT</p>
               <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: maxProfit === Infinity ? "#22c55e" : isProfitColor(maxProfit) }}>

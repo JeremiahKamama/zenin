@@ -249,36 +249,38 @@ useEffect(() => {
           ) : chain.length === 0 ? (
             <div className="loading-state">No options data available for {activeAsset}.</div>
           ) : (
-            <table className="option-chain-table">
-              <thead>
-                <tr>
-                  <th>IV</th>
-                  <th>Delta</th>
-                  <th>Bid</th>
-                  <th>Ask</th>
-                  <th className="strike-col">Strike</th>
-                  <th>Bid</th>
-                  <th>Ask</th>
-                  <th>Delta</th>
-                  <th>Theta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {chain.map((row) => (
-                  <tr key={row.strike}>
-                    <td className="greek">{row.call?.iv ? ((row.call?.iv || 0) * 100).toFixed(1) + "%" : "-"}</td>
-                    <td className="greek">{row.call?.delta?.toFixed(3) || "-"}</td>
-                    <td className="bid-ask positive">{row.call?.bid > 0 ? `$${row.call.bid.toFixed(4)}` : "-"}</td>
-                    <td className="bid-ask positive">{row.call?.ask > 0 ? `$${row.call.ask.toFixed(4)}` : "-"}</td>
-                    <td className="strike-col">{row.strike.toLocaleString()}</td>
-                    <td className="bid-ask negative">{row.put?.bid > 0 ? `$${row.put.bid.toFixed(4)}` : "-"}</td>
-                    <td className="bid-ask negative">{row.put?.ask > 0 ? `$${row.put.ask.toFixed(4)}` : "-"}</td>
-                    <td className="greek">{row.put?.delta?.toFixed(3) || "-"}</td>
-                    <td className="greek">{row.put?.theta ? row.put.theta.toFixed(4) : "-"}</td>
+            <div className="table-scroll">
+              <table className="option-chain-table">
+                <thead>
+                  <tr>
+                    <th>IV</th>
+                    <th>Delta</th>
+                    <th>Bid</th>
+                    <th>Ask</th>
+                    <th className="strike-col">Strike</th>
+                    <th>Bid</th>
+                    <th>Ask</th>
+                    <th>Delta</th>
+                    <th>Theta</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {chain.map((row) => (
+                    <tr key={row.strike}>
+                      <td className="greek">{row.call?.iv ? ((row.call?.iv || 0) * 100).toFixed(1) + "%" : "-"}</td>
+                      <td className="greek">{row.call?.delta?.toFixed(3) || "-"}</td>
+                      <td className="bid-ask positive">{row.call?.bid > 0 ? `$${row.call.bid.toFixed(4)}` : "-"}</td>
+                      <td className="bid-ask positive">{row.call?.ask > 0 ? `$${row.call.ask.toFixed(4)}` : "-"}</td>
+                      <td className="strike-col">{row.strike.toLocaleString()}</td>
+                      <td className="bid-ask negative">{row.put?.bid > 0 ? `$${row.put.bid.toFixed(4)}` : "-"}</td>
+                      <td className="bid-ask negative">{row.put?.ask > 0 ? `$${row.put.ask.toFixed(4)}` : "-"}</td>
+                      <td className="greek">{row.put?.delta?.toFixed(3) || "-"}</td>
+                      <td className="greek">{row.put?.theta ? row.put.theta.toFixed(4) : "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           {optionsError && (
             <div className="loading-state" style={{ marginTop: "8px", color: "#f59e0b" }}>
@@ -287,7 +289,7 @@ useEffect(() => {
           )}
       </div>
 
-      <div className="watchlist-panel glass" style={{ marginTop: "16px", padding: "16px" }}>
+      <div className="watchlist-panel glass whale-trades-panel" style={{ marginTop: "16px", padding: "16px" }}>
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Whale Options Trades <span className="live-pill">Live</span></h2>
@@ -302,28 +304,30 @@ useEffect(() => {
         ) : pagedWhaleTrades.length === 0 ? (
           <div className="loading-state">No whale options trades available.</div>
         ) : (
-          <table className="option-chain-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Expiration</th>
-                <th>Reference Price</th>
-                <th>Strategy</th>
-                <th>Total Notional</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagedWhaleTrades.map((trade) => (
-                <tr key={trade.id}>
-                  <td className="greek">{trade.symbol}</td>
-                  <td className="greek">{trade.expiration || "—"}</td>
-                  <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>
-                  <td className="greek">{trade.strategy}</td>
-                  <td className="bid-ask positive">{formatDollar(trade.totalNotional)}</td>
+          <div className="table-scroll">
+            <table className="option-chain-table whale-trades-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Expiration</th>
+                  <th>Reference Price</th>
+                  <th>Strategy</th>
+                  <th>Total Notional</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {pagedWhaleTrades.map((trade) => (
+                  <tr key={trade.id}>
+                    <td className="greek">{trade.symbol}</td>
+                    <td className="greek">{trade.expiration || "—"}</td>
+                    <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>
+                    <td className="greek">{trade.strategy}</td>
+                    <td className="bid-ask positive">{formatDollar(trade.totalNotional)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {whaleTotalPages > 1 && (

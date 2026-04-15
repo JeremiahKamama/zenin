@@ -201,9 +201,9 @@ export function HomeModule({
 
         {/* Gainers & Losers */}
         <div className="watchlist-panel glass">
-          <div style={{ display: "flex", gap: "0" }}>
+          <div className="home-movers-split" style={{ display: "flex", gap: "0" }}>
             
-            <div style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
+            <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
                 <h2 className="home-subsection-title">Top Gainers</h2>
               </div>
@@ -222,7 +222,7 @@ export function HomeModule({
               </div>
             </div>
 
-            <div style={{ flex: 1, paddingLeft: "12px" }}>
+            <div className="home-movers-col home-movers-col-right" style={{ flex: 1, paddingLeft: "12px" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
                 <h2 className="home-subsection-title">Top Losers</h2>
               </div>

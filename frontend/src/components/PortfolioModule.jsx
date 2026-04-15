@@ -125,7 +125,7 @@ export function PortfolioModule({
   }, [portfolio, portfolioValue]);
 
   return (
-    <div style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
+    <div className="portfolio-module" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
         <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
                 <div className="metric-card glass">
                   <label>Account Value</label>
@@ -179,7 +179,7 @@ export function PortfolioModule({
                 </div>
               </div>
 
-      <div style={{ marginBottom: "16px" }}>
+      <div className="portfolio-chart-section" style={{ marginBottom: "16px" }}>
         <div className="section-header" style={{ marginBottom: "12px" }}>
           <h2>Performance Chart</h2>
         </div>
@@ -217,11 +217,11 @@ export function PortfolioModule({
         </div>
       </div>
 
-      <div style={{ marginBottom: "16px" }}>
+      <div className="portfolio-holdings-section" style={{ marginBottom: "16px" }}>
         <div className="section-header" style={{ marginBottom: "12px" }}>
           <h2>Holdings &amp; Performance Metrics</h2>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+        <div className="portfolio-holdings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
 
           <div className="watchlist-panel glass">
             <div className="section-header">
