@@ -14,6 +14,8 @@ export function PredictionMarketModule() {
   const [marketDetailsLoading, setMarketDetailsLoading] = useState(false);
   const [marketDetailsError, setMarketDetailsError] = useState("");
   const [activeCategory, setActiveCategory] = useState("geopolitics");
+  const [whaleMinSize, setWhaleMinSize] = useState(10000);
+  const [whaleSort, setWhaleSort] = useState({ key: "transactionSize", direction: "desc" });
 
   useEffect(() => {
     let isMounted = true;
@@ -107,19 +109,6 @@ export function PredictionMarketModule() {
     return byCondition;
   }, [predictionSnapshot]);
 
-  const predictionWhalePageSize = 10;
-  const predictionWhaleTotalPages = Math.max(1, Math.ceil(predictionWhaleTransactions.length / predictionWhalePageSize));
-  const pagedPredictionWhales = predictionWhaleTransactions.slice(
-    (predictionWhalePage - 1) * predictionWhalePageSize,
-    predictionWhalePage * predictionWhalePageSize
-  );
-
-  useEffect(() => {
-    if (predictionWhalePage > predictionWhaleTotalPages) {
-      setPredictionWhalePage(predictionWhaleTotalPages);
-    }
-  }, [predictionWhalePage, predictionWhaleTotalPages]);
-
   const formatDollar = (value) => {
     const n = Number(value || 0);
     if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
@@ -173,6 +162,57 @@ export function PredictionMarketModule() {
     const direction = side === "SELL" ? -1 : 1;
     return (markPrice - entryPrice) * shares * direction;
   };
+
+  const toggleWhaleSort = (key) => {
+    setWhaleSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === "desc" ? "asc" : "desc" };
+      }
+      return { key, direction: "desc" };
+    });
+  };
+
+  const whaleSortArrow = (key) => {
+    if (whaleSort.key !== key) return "";
+    return whaleSort.direction === "desc" ? " ↓" : " ↑";
+  };
+
+  const predictionWhaleRows = useMemo(() => {
+    return predictionWhaleTransactions.map((item) => ({
+      ...item,
+      _pnl: computeWhalePnl(item)
+    }));
+  }, [predictionWhaleTransactions, marketByConditionId]);
+
+  const filteredPredictionWhales = useMemo(() => {
+    const rows = predictionWhaleRows.filter((item) => Number(item?.transactionSize || 0) >= whaleMinSize);
+    const sorted = [...rows].sort((a, b) => {
+      const aVal = whaleSort.key === "pnl" ? Number(a?._pnl) : Number(a?.transactionSize);
+      const bVal = whaleSort.key === "pnl" ? Number(b?._pnl) : Number(b?.transactionSize);
+      const aNum = Number.isFinite(aVal) ? aVal : Number.NEGATIVE_INFINITY;
+      const bNum = Number.isFinite(bVal) ? bVal : Number.NEGATIVE_INFINITY;
+      if (aNum === bNum) return 0;
+      return whaleSort.direction === "asc" ? aNum - bNum : bNum - aNum;
+    });
+    return sorted;
+  }, [predictionWhaleRows, whaleMinSize, whaleSort]);
+
+  const predictionWhalePageSize = 10;
+  const predictionWhaleTotalPages = Math.max(1, Math.ceil(filteredPredictionWhales.length / predictionWhalePageSize));
+  const pagedPredictionWhales = filteredPredictionWhales.slice(
+    (predictionWhalePage - 1) * predictionWhalePageSize,
+    predictionWhalePage * predictionWhalePageSize
+  );
+
+  useEffect(() => {
+    if (predictionWhalePage > predictionWhaleTotalPages) {
+      setPredictionWhalePage(predictionWhaleTotalPages);
+    }
+  }, [predictionWhalePage, predictionWhaleTotalPages]);
+
+  useEffect(() => {
+    setPredictionWhalePage(1);
+  }, [whaleMinSize, whaleSort]);
 
   const formatDateLabel = (value) => {
     if (!value) return "—";
@@ -303,8 +343,20 @@ export function PredictionMarketModule() {
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Whale Transactions</h2>
-            <div className="asset-count">Large prediction-market flow above $10K</div>
+            <div className="asset-count">Large prediction-market flow · {filteredPredictionWhales.length} matches</div>
           </div>
+        </div>
+        <div className="category-tabs" style={{ marginBottom: "12px" }}>
+          {[10000, 50000, 100000].map((threshold) => (
+            <button
+              key={threshold}
+              type="button"
+              className={whaleMinSize === threshold ? "active" : ""}
+              onClick={() => setWhaleMinSize(threshold)}
+            >
+              {`>${formatDollar(threshold)}`}
+            </button>
+          ))}
         </div>
 
         {predictionLoading ? (
@@ -322,14 +374,18 @@ export function PredictionMarketModule() {
                   <th>Market</th>
                   <th>Type</th>
                   <th>Avg Price</th>
-                  <th>Transaction Size</th>
-                  <th>PnL</th>
+                  <th style={{ cursor: "pointer" }} onClick={() => toggleWhaleSort("transactionSize")}>
+                    Transaction Size{whaleSortArrow("transactionSize")}
+                  </th>
+                  <th style={{ cursor: "pointer" }} onClick={() => toggleWhaleSort("pnl")}>
+                    PnL{whaleSortArrow("pnl")}
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {pagedPredictionWhales.map((item) => (
                   (() => {
-                    const pnl = computeWhalePnl(item);
+                    const pnl = item._pnl;
                     return (
                       <tr key={item.id}>
                         <td className="greek">{getPredictionCategoryLabel(item.category)}</td>
