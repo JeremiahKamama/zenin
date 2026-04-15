@@ -75,9 +75,17 @@ const [balance, setBalance] = useState(10000);
 
 useEffect(() => {
   fetch(`${BACKEND_URL}/db/balance`)
-    .then(res => res.json())
-    .then(data => setBalance(data.balance || 10000))
-    .catch(console.error);
+    .then((res) => {
+      if (!res.ok) throw new Error(`Failed to load balance: ${res.status}`);
+      return res.json();
+    })
+    .then((data) => {
+      const loaded = Number(data?.balance);
+      setBalance(Number.isFinite(loaded) ? loaded : 10000);
+    })
+    .catch((err) => {
+      console.error(err);
+    });
 }, []);
 
   useEffect(() => {
@@ -427,13 +435,27 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       throw new Error(`Failed to ${orderType} asset: ${text}`);
     }
 
-    const nextBalance = orderType === "buy" ? balance - notional : balance + notional;
+    const balanceType = orderType === "buy" ? "withdraw" : "deposit";
+    let nextBalance = orderType === "buy" ? balance - notional : balance + notional;
+    try {
+      const balanceRes = await fetch(`${BACKEND_URL}/db/balance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: notional, type: balanceType })
+      });
+      if (!balanceRes.ok) {
+        const text = await balanceRes.text();
+        throw new Error(text || `HTTP ${balanceRes.status}`);
+      }
+      const balanceData = await balanceRes.json();
+      const persistedBalance = Number(balanceData?.balance);
+      if (Number.isFinite(persistedBalance)) {
+        nextBalance = persistedBalance;
+      }
+    } catch (balanceErr) {
+      console.error("Failed to persist balance via backend:", balanceErr);
+    }
     setBalance(nextBalance);
-    fetch(`${BACKEND_URL}/db/balance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ balance: nextBalance })
-    }).catch((err) => console.error("Failed to persist balance:", err));
 
     const mergeSources = [...assets, ...homeMarketMovers, asset];
     const priceMap = {};
@@ -984,7 +1006,12 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         )}
 
         {activeSection === "Journal" && (
-          <JournalModule trades={trades} portfolio={portfolio} />
+          <JournalModule
+            trades={trades}
+            portfolio={portfolio}
+            balance={balance}
+            accountEquity={(Number(balance) || 0) + calculatePortfolioValue()}
+          />
         )}
       </main>
 

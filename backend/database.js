@@ -1,273 +1,543 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { Pool } = require("pg");
+const { watchlistData } = require("./data");
+
 const QTY_EPSILON = 1e-8;
+const DEFAULT_BALANCE = 10000;
 
-// Create/open database
-const dbPath = path.join(__dirname, 'portfolio.db');
-const db = new Database(dbPath);
+function shouldUseSsl(connectionString) {
+  if (process.env.PGSSLMODE === "disable") return false;
+  if (!connectionString) return process.env.NODE_ENV === "production";
+  return !/localhost|127\.0\.0\.1/i.test(connectionString);
+}
 
-// Enable foreign keys
-db.pragma('foreign_keys = ON');
+function createPoolConfig() {
+  const connectionString = process.env.DATABASE_URL || null;
+  const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false;
 
-// Initialize schema
-function initializeDatabase() {
-  // Portfolio holdings table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS portfolio_holdings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      symbol TEXT NOT NULL,
-      name TEXT NOT NULL,
-      price REAL NOT NULL,
-      quantity REAL NOT NULL,
-      type TEXT NOT NULL,
-      marketType TEXT NOT NULL,
-      orderType TEXT NOT NULL,
-      date_added TEXT NOT NULL,
-      UNIQUE(symbol, marketType)
-    );
-  `);
+  if (connectionString) {
+    return {
+      connectionString,
+      ssl
+    };
+  }
 
-  // Watchlist assets table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS watchlist_assets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      symbol TEXT NOT NULL,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      marketType TEXT,
-      date_added TEXT NOT NULL,
-      UNIQUE(symbol, marketType)
-    );
-  `);
-// Add after the watchlist_assets table creation
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_balance (
-    id INTEGER PRIMARY KEY,
-    balance REAL NOT NULL DEFAULT 10000
-  );
-`);
-db.prepare(`INSERT OR IGNORE INTO user_balance (id, balance) VALUES (1, 10000)`).run();
-  // Saved options calculations
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS options_calculations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      symbol TEXT NOT NULL,
-      strategy TEXT NOT NULL,
-      net_pnl REAL NOT NULL,
-      delta REAL NOT NULL,
-      gamma REAL NOT NULL,
-      theta REAL NOT NULL,
-      vega REAL NOT NULL,
-      max_profit REAL,
-      max_loss REAL,
-      breakevens TEXT,
-      legs_json TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `);
+  return {
+    host: process.env.PGHOST || "127.0.0.1",
+    port: Number(process.env.PGPORT || 5432),
+    database: process.env.PGDATABASE || "zenin",
+    user: process.env.PGUSER || "postgres",
+    password: process.env.PGPASSWORD || "postgres",
+    ssl
+  };
+}
 
-  // Trade executions table (journal persistence)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS trade_executions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      client_id TEXT UNIQUE,
-      date TEXT NOT NULL,
-      executed_at TEXT,
-      asset TEXT NOT NULL,
-      name TEXT,
-      type TEXT NOT NULL,
-      side TEXT NOT NULL,
-      marketType TEXT NOT NULL,
-      status TEXT NOT NULL,
-      quantity REAL NOT NULL,
-      price REAL NOT NULL,
-      notional REAL NOT NULL,
-      balance_after REAL,
-      portfolio_value_after REAL,
-      account_equity_after REAL,
-      position_after REAL
-    );
-  `);
+const pool = new Pool(createPoolConfig());
 
-  console.log('Database initialized at:', dbPath);
+pool.on("error", (error) => {
+  console.error("Unexpected PostgreSQL pool error:", error.message);
+});
 
-  // Seed watchlist if empty
-  const watchlistCount = db.prepare('SELECT COUNT(*) AS count FROM watchlist_assets').get().count;
-  if (watchlistCount === 0) {
-    console.log('Seeding watchlist_assets from data.js...');
-    const { watchlistData } = require('./data');
-    const stmt = db.prepare(`
-      INSERT INTO watchlist_assets (symbol, name, type, marketType, date_added)
-      VALUES (?, ?, ?, ?, ?)
+function toIsoString(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
+
+function toDateString(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function mapPortfolioRow(row) {
+  return {
+    id: row.id,
+    symbol: row.symbol,
+    name: row.name,
+    price: toNumber(row.price),
+    quantity: toNumber(row.quantity),
+    type: row.type,
+    marketType: row.marketType || row.market_type || "spot",
+    orderType: row.orderType || row.order_type || "buy",
+    date_added: toIsoString(row.date_added)
+  };
+}
+
+function mapWatchlistRow(row) {
+  return {
+    id: row.id,
+    symbol: row.symbol,
+    name: row.name,
+    type: row.type,
+    marketType: row.marketType || row.market_type || "spot",
+    date_added: toIsoString(row.date_added)
+  };
+}
+
+function mapTradeRow(row) {
+  return {
+    id: row.id,
+    clientId: row.clientId || row.client_id || null,
+    client_id: row.clientId || row.client_id || null,
+    date: toDateString(row.date),
+    executedAt: toIsoString(row.executedAt || row.executed_at),
+    executed_at: toIsoString(row.executedAt || row.executed_at),
+    asset: row.asset,
+    name: row.name,
+    type: row.type,
+    side: row.side,
+    marketType: row.marketType || row.market_type || "spot",
+    market_type: row.marketType || row.market_type || "spot",
+    status: row.status,
+    quantity: toNumber(row.quantity),
+    price: toNumber(row.price),
+    notional: toNumber(row.notional),
+    balanceAfter: row.balanceAfter == null ? null : toNumber(row.balanceAfter),
+    balance_after: row.balanceAfter == null ? null : toNumber(row.balanceAfter),
+    portfolioValueAfter: row.portfolioValueAfter == null ? null : toNumber(row.portfolioValueAfter),
+    portfolio_value_after: row.portfolioValueAfter == null ? null : toNumber(row.portfolioValueAfter),
+    accountEquityAfter: row.accountEquityAfter == null ? null : toNumber(row.accountEquityAfter),
+    account_equity_after: row.accountEquityAfter == null ? null : toNumber(row.accountEquityAfter),
+    positionAfter: row.positionAfter == null ? null : toNumber(row.positionAfter),
+    position_after: row.positionAfter == null ? null : toNumber(row.positionAfter)
+  };
+}
+
+function normalizeMarketType(type, marketType) {
+  const cleanType = String(type || "").trim().toLowerCase();
+  if (marketType && String(marketType).trim()) {
+    return String(marketType).trim().toLowerCase();
+  }
+  return cleanType === "crypto" ? "spot" : "equity";
+}
+
+async function initializeDatabase() {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_holdings (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL,
+        price DOUBLE PRECISION NOT NULL,
+        quantity DOUBLE PRECISION NOT NULL,
+        type TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        order_type TEXT NOT NULL,
+        date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(symbol, market_type)
+      );
     `);
-    const date_added = new Date().toISOString();
 
-    db.transaction(() => {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS watchlist_assets (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(symbol, market_type)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_balance (
+        id INTEGER PRIMARY KEY,
+        balance DOUBLE PRECISION NOT NULL DEFAULT 10000
+      );
+    `);
+
+    await client.query(`
+      INSERT INTO user_balance (id, balance)
+      VALUES (1, $1)
+      ON CONFLICT (id) DO NOTHING;
+    `, [DEFAULT_BALANCE]);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS options_calculations (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        net_pnl DOUBLE PRECISION NOT NULL,
+        delta DOUBLE PRECISION NOT NULL,
+        gamma DOUBLE PRECISION NOT NULL,
+        theta DOUBLE PRECISION NOT NULL,
+        vega DOUBLE PRECISION NOT NULL,
+        max_profit DOUBLE PRECISION,
+        max_loss DOUBLE PRECISION,
+        breakevens TEXT,
+        legs_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trade_executions (
+        id SERIAL PRIMARY KEY,
+        client_id TEXT UNIQUE,
+        date DATE NOT NULL,
+        executed_at TIMESTAMPTZ,
+        asset TEXT NOT NULL,
+        name TEXT,
+        type TEXT NOT NULL,
+        side TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        quantity DOUBLE PRECISION NOT NULL,
+        price DOUBLE PRECISION NOT NULL,
+        notional DOUBLE PRECISION NOT NULL,
+        balance_after DOUBLE PRECISION,
+        portfolio_value_after DOUBLE PRECISION,
+        account_equity_after DOUBLE PRECISION,
+        position_after DOUBLE PRECISION
+      );
+    `);
+
+    const countResult = await client.query("SELECT COUNT(*)::int AS count FROM watchlist_assets");
+    const watchlistCount = Number(countResult.rows[0]?.count || 0);
+
+    if (watchlistCount === 0) {
+      const insertedAt = new Date().toISOString();
       for (const [category, assets] of Object.entries(watchlistData)) {
         for (const asset of assets) {
-          try {
-            // Include category into type if it's not defined, or preserve theme
-            const type = asset.type || asset.theme || category;
-            const marketType = asset.marketType || 'spot';
-            stmt.run(asset.symbol, asset.name, type, marketType, date_added);
-          } catch (err) {
-            // ignore unique constraints
-          }
+          const symbol = String(asset.symbol || "").trim().toUpperCase();
+          if (!symbol) continue;
+          const type = String(asset.type || asset.theme || category || "stock").trim().toLowerCase();
+          const marketType = normalizeMarketType(type, asset.marketType);
+
+          await client.query(`
+            INSERT INTO watchlist_assets (symbol, name, type, market_type, date_added)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (symbol, market_type) DO NOTHING;
+          `, [
+            symbol,
+            String(asset.name || symbol),
+            type,
+            marketType,
+            insertedAt
+          ]);
         }
       }
-    })();
-    console.log('Seeding complete.');
+    }
+
+    await client.query("COMMIT");
+    console.log("PostgreSQL database initialized.");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
-// Portfolio operations
-const portfolio = {
-  // Get all portfolio holdings
-  getAll: () => {
-    db.prepare('DELETE FROM portfolio_holdings WHERE ABS(quantity) <= ?').run(QTY_EPSILON);
-    return db.prepare('SELECT * FROM portfolio_holdings WHERE quantity > ? ORDER BY date_added DESC').all(QTY_EPSILON);
+const balance = {
+  get: async () => {
+    const result = await pool.query("SELECT balance FROM user_balance WHERE id = 1");
+    const current = result.rows[0]?.balance;
+    if (current == null) {
+      await pool.query(`
+        INSERT INTO user_balance (id, balance)
+        VALUES (1, $1)
+        ON CONFLICT (id) DO NOTHING;
+      `, [DEFAULT_BALANCE]);
+      return DEFAULT_BALANCE;
+    }
+    return toNumber(current, DEFAULT_BALANCE);
   },
 
-  // Add or update a holding.
-  // quantity should always be POSITIVE; orderType ("buy"/"sell") determines direction.
-  add: (holding) => {
-    const {
-      symbol, name, price, quantity, type, marketType, orderType, date_added
-    } = holding;
+  applyChange: async (amount, type) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query("SELECT balance FROM user_balance WHERE id = 1 FOR UPDATE");
 
-    const absQty = Math.abs(quantity);
-    const cleanSymbol = String(symbol || "").trim().toUpperCase();
-    const cleanType = String(type || "").trim().toLowerCase();
-    const cleanMarketType = String(
-      marketType || (cleanType === "crypto" ? "spot" : "equity")
-    ).trim().toLowerCase();
-    const cleanOrderType = String(orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
-    const cleanDate = date_added || new Date().toISOString();
-    const isSell = cleanOrderType === "sell";
-
-    const existing = db.prepare(
-      'SELECT * FROM portfolio_holdings WHERE symbol = ? AND marketType = ?'
-    ).get(cleanSymbol, cleanMarketType);
-
-    if (existing) {
-      const newQuantity = isSell
-        ? existing.quantity - absQty   // sell: reduce
-        : existing.quantity + absQty;  // buy:  accumulate
-
-      if (newQuantity <= QTY_EPSILON) {
-        // Position fully closed — remove the row
-        db.prepare('DELETE FROM portfolio_holdings WHERE id = ?').run(existing.id);
-        return { id: existing.id, symbol: cleanSymbol, marketType: cleanMarketType, quantity: 0, closed: true };
+      let currentBalance = result.rows[0]?.balance;
+      if (currentBalance == null) {
+        currentBalance = DEFAULT_BALANCE;
+        await client.query(`
+          INSERT INTO user_balance (id, balance)
+          VALUES (1, $1)
+          ON CONFLICT (id) DO NOTHING;
+        `, [DEFAULT_BALANCE]);
       }
 
-      db.prepare(`
-        UPDATE portfolio_holdings SET quantity = ?, price = ?, orderType = ?, date_added = ? WHERE id = ?
-      `).run(newQuantity, price, cleanOrderType, cleanDate, existing.id);
+      const current = toNumber(currentBalance, DEFAULT_BALANCE);
+      const next = type === "deposit" ? current + amount : current - amount;
+      if (next < 0) {
+        const err = new Error("Insufficient balance");
+        err.code = "INSUFFICIENT_BALANCE";
+        throw err;
+      }
 
-      return {
-        id: existing.id,
-        ...holding,
-        symbol: cleanSymbol,
-        type: cleanType,
-        marketType: cleanMarketType,
-        orderType: cleanOrderType,
-        date_added: cleanDate,
-        quantity: newQuantity
-      };
+      await client.query("UPDATE user_balance SET balance = $1 WHERE id = 1", [next]);
+      await client.query("COMMIT");
+      return next;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+};
 
-    } else {
-      // No existing position
+const portfolio = {
+  getAll: async () => {
+    await pool.query("DELETE FROM portfolio_holdings WHERE ABS(quantity) <= $1", [QTY_EPSILON]);
+    const result = await pool.query(`
+      SELECT
+        id,
+        symbol,
+        name,
+        price,
+        quantity,
+        type,
+        market_type AS "marketType",
+        order_type AS "orderType",
+        date_added
+      FROM portfolio_holdings
+      WHERE quantity > $1
+      ORDER BY date_added DESC;
+    `, [QTY_EPSILON]);
+    return result.rows.map(mapPortfolioRow);
+  },
+
+  add: async (holding) => {
+    const symbol = String(holding.symbol || "").trim().toUpperCase();
+    const type = String(holding.type || "").trim().toLowerCase();
+    const marketType = normalizeMarketType(type, holding.marketType);
+    const orderType = String(holding.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+    const quantity = Math.abs(toNumber(holding.quantity));
+    const price = toNumber(holding.price);
+    const dateAdded = holding.date_added || new Date().toISOString();
+    const name = String(holding.name || symbol || "Unknown");
+    const isSell = orderType === "sell";
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const existingResult = await client.query(`
+        SELECT
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          date_added
+        FROM portfolio_holdings
+        WHERE symbol = $1 AND market_type = $2
+        FOR UPDATE;
+      `, [symbol, marketType]);
+
+      const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
+
+      if (existing) {
+        const nextQuantity = isSell
+          ? existing.quantity - quantity
+          : existing.quantity + quantity;
+
+        if (nextQuantity <= QTY_EPSILON) {
+          await client.query("DELETE FROM portfolio_holdings WHERE id = $1", [existing.id]);
+          await client.query("COMMIT");
+          return {
+            id: existing.id,
+            symbol,
+            marketType,
+            quantity: 0,
+            closed: true
+          };
+        }
+
+        const updatedResult = await client.query(`
+          UPDATE portfolio_holdings
+          SET quantity = $1, price = $2, order_type = $3, date_added = $4, type = $5, name = $6
+          WHERE id = $7
+          RETURNING
+            id,
+            symbol,
+            name,
+            price,
+            quantity,
+            type,
+            market_type AS "marketType",
+            order_type AS "orderType",
+            date_added;
+        `, [nextQuantity, price, orderType, dateAdded, type, name, existing.id]);
+
+        await client.query("COMMIT");
+        return mapPortfolioRow(updatedResult.rows[0]);
+      }
+
       if (isSell) {
-        // Can't sell something you don't own
-        throw new Error(`No existing position for ${cleanSymbol} (${cleanMarketType}) to sell`);
+        throw new Error(`No existing position for ${symbol} (${marketType}) to sell`);
       }
 
-      const info = db.prepare(`
-        INSERT INTO portfolio_holdings (symbol, name, price, quantity, type, marketType, orderType, date_added)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(cleanSymbol, name, price, absQty, cleanType, cleanMarketType, cleanOrderType, cleanDate);
+      const insertedResult = await client.query(`
+        INSERT INTO portfolio_holdings (symbol, name, price, quantity, type, market_type, order_type, date_added)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          date_added;
+      `, [symbol, name, price, quantity, type, marketType, orderType, dateAdded]);
 
-      return {
-        id: info.lastInsertRowid,
-        ...holding,
-        symbol: cleanSymbol,
-        type: cleanType,
-        marketType: cleanMarketType,
-        orderType: cleanOrderType,
-        date_added: cleanDate,
-        quantity: absQty
-      };
+      await client.query("COMMIT");
+      return mapPortfolioRow(insertedResult.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
   },
 
-  // Update a holding
-  update: (id, holding) => {
-    const { price, quantity } = holding;
-    const stmt = db.prepare(`
-      UPDATE portfolio_holdings SET price = ?, quantity = ? WHERE id = ?
-    `);
-    stmt.run(price, quantity, id);
-    return { id, ...holding };
+  update: async (id, holding) => {
+    const price = toNumber(holding.price);
+    const quantity = toNumber(holding.quantity);
+    const result = await pool.query(`
+      UPDATE portfolio_holdings
+      SET price = $1, quantity = $2
+      WHERE id = $3
+      RETURNING
+        id,
+        symbol,
+        name,
+        price,
+        quantity,
+        type,
+        market_type AS "marketType",
+        order_type AS "orderType",
+        date_added;
+    `, [price, quantity, id]);
+
+    if (result.rows.length === 0) {
+      throw new Error("Holding not found");
+    }
+
+    return mapPortfolioRow(result.rows[0]);
   },
 
-  // Delete a holding
-  delete: (id) => {
-    const stmt = db.prepare('DELETE FROM portfolio_holdings WHERE id = ?');
-    stmt.run(id);
-    return { success: true, id };
+  delete: async (id) => {
+    await pool.query("DELETE FROM portfolio_holdings WHERE id = $1", [id]);
+    return { success: true, id: Number(id) };
   },
 
-  // Find by symbol and marketType
-  findBySymbol: (symbol, marketType) => {
+  findBySymbol: async (symbol, marketType) => {
     const cleanSymbol = String(symbol || "").trim().toUpperCase();
     const cleanMarketType = String(marketType || "").trim().toLowerCase();
-    return db.prepare(
-      'SELECT * FROM portfolio_holdings WHERE symbol = ? AND marketType = ?'
-    ).all(cleanSymbol, cleanMarketType);
+    const result = await pool.query(`
+      SELECT
+        id,
+        symbol,
+        name,
+        price,
+        quantity,
+        type,
+        market_type AS "marketType",
+        order_type AS "orderType",
+        date_added
+      FROM portfolio_holdings
+      WHERE symbol = $1 AND market_type = $2
+      ORDER BY date_added DESC;
+    `, [cleanSymbol, cleanMarketType]);
+    return result.rows.map(mapPortfolioRow);
   }
 };
 
 const tradeExecutions = {
-  getAll: (limit = 1000) => {
+  getAll: async (limit = 1000) => {
     const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 1000));
-    return db.prepare(`
-      SELECT *
+    const result = await pool.query(`
+      SELECT
+        id,
+        client_id AS "clientId",
+        date,
+        executed_at AS "executedAt",
+        asset,
+        name,
+        type,
+        side,
+        market_type AS "marketType",
+        status,
+        quantity,
+        price,
+        notional,
+        balance_after AS "balanceAfter",
+        portfolio_value_after AS "portfolioValueAfter",
+        account_equity_after AS "accountEquityAfter",
+        position_after AS "positionAfter"
       FROM trade_executions
-      ORDER BY datetime(COALESCE(executed_at, date)) DESC, id DESC
-      LIMIT ?
-    `).all(safeLimit);
+      ORDER BY COALESCE(executed_at, date::timestamptz) DESC, id DESC
+      LIMIT $1;
+    `, [safeLimit]);
+    return result.rows.map(mapTradeRow);
   },
 
-  add: (trade) => {
+  add: async (trade) => {
     const normalized = {
       client_id: trade.clientId || null,
-      date: trade.date || new Date().toISOString().split("T")[0],
+      date: toDateString(trade.date || new Date().toISOString()) || new Date().toISOString().slice(0, 10),
       executed_at: trade.executedAt || null,
       asset: String(trade.asset || "UNKNOWN").trim().toUpperCase(),
       name: String(trade.name || trade.asset || "UNKNOWN"),
       type: String(trade.type || "BUY").toUpperCase() === "SELL" ? "SELL" : "BUY",
       side: String(trade.side || "buy").toLowerCase() === "sell" ? "sell" : "buy",
-      marketType: String(trade.marketType || "spot").trim().toLowerCase(),
+      marketType: normalizeMarketType(trade.type || trade.marketType, trade.marketType || "spot"),
       status: String(trade.status || "Filled"),
-      quantity: Math.abs(Number(trade.quantity) || 0),
-      price: Number(trade.price) || 0,
-      notional: Math.abs(Number(trade.notional) || 0),
+      quantity: Math.abs(toNumber(trade.quantity)),
+      price: toNumber(trade.price),
+      notional: Math.abs(toNumber(trade.notional)),
       balance_after: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
       portfolio_value_after: Number.isFinite(Number(trade.portfolioValueAfter)) ? Number(trade.portfolioValueAfter) : null,
       account_equity_after: Number.isFinite(Number(trade.accountEquityAfter)) ? Number(trade.accountEquityAfter) : null,
       position_after: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null
     };
 
-    const stmt = db.prepare(`
-      INSERT INTO trade_executions (
-        client_id, date, executed_at, asset, name, type, side, marketType, status,
-        quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
     try {
-      const info = stmt.run(
+      const result = await pool.query(`
+        INSERT INTO trade_executions (
+          client_id, date, executed_at, asset, name, type, side, market_type, status,
+          quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING
+          id,
+          client_id AS "clientId",
+          date,
+          executed_at AS "executedAt",
+          asset,
+          name,
+          type,
+          side,
+          market_type AS "marketType",
+          status,
+          quantity,
+          price,
+          notional,
+          balance_after AS "balanceAfter",
+          portfolio_value_after AS "portfolioValueAfter",
+          account_equity_after AS "accountEquityAfter",
+          position_after AS "positionAfter";
+      `, [
         normalized.client_id,
         normalized.date,
         normalized.executed_at,
@@ -284,63 +554,103 @@ const tradeExecutions = {
         normalized.portfolio_value_after,
         normalized.account_equity_after,
         normalized.position_after
-      );
-      return { id: info.lastInsertRowid, ...normalized };
+      ]);
+
+      return mapTradeRow(result.rows[0]);
     } catch (error) {
-      if (String(error.message || "").includes("UNIQUE constraint failed: trade_executions.client_id") && normalized.client_id) {
-        return db.prepare('SELECT * FROM trade_executions WHERE client_id = ?').get(normalized.client_id);
+      if (error.code === "23505" && normalized.client_id) {
+        const existing = await pool.query(`
+          SELECT
+            id,
+            client_id AS "clientId",
+            date,
+            executed_at AS "executedAt",
+            asset,
+            name,
+            type,
+            side,
+            market_type AS "marketType",
+            status,
+            quantity,
+            price,
+            notional,
+            balance_after AS "balanceAfter",
+            portfolio_value_after AS "portfolioValueAfter",
+            account_equity_after AS "accountEquityAfter",
+            position_after AS "positionAfter"
+          FROM trade_executions
+          WHERE client_id = $1
+          LIMIT 1;
+        `, [normalized.client_id]);
+        if (existing.rows[0]) return mapTradeRow(existing.rows[0]);
       }
       throw error;
     }
   }
 };
 
-// Watchlist operations
 const watchlist = {
-  // Get all watchlist assets
-  getAll: () => {
-    return db.prepare('SELECT * FROM watchlist_assets ORDER BY date_added DESC').all();
-  },
-
-  // Add to watchlist
-  add: (asset) => {
-    const { symbol, name, type, marketType, date_added } = asset;
-    const stmt = db.prepare(`
-      INSERT INTO watchlist_assets (symbol, name, type, marketType, date_added)
-      VALUES (?, ?, ?, ?, ?)
+  getAll: async () => {
+    const result = await pool.query(`
+      SELECT
+        id,
+        symbol,
+        name,
+        type,
+        market_type AS "marketType",
+        date_added
+      FROM watchlist_assets
+      ORDER BY date_added DESC;
     `);
-    try {
-      const info = stmt.run(symbol, name, type, marketType, date_added);
-      return { id: info.lastInsertRowid, ...asset };
-    } catch (error) {
-      // If insert fails due to UNIQUE constraint, return existing
-      const existing = db.prepare(
-        'SELECT * FROM watchlist_assets WHERE symbol = ? AND marketType = ?'
-      ).get(symbol, marketType);
-      return existing;
-    }
+    return result.rows.map(mapWatchlistRow);
   },
 
-  // Remove from watchlist
-  delete: (symbol, marketType) => {
-    const stmt = db.prepare(
-      'DELETE FROM watchlist_assets WHERE symbol = ? AND marketType = ?'
+  add: async (asset) => {
+    const symbol = String(asset.symbol || "").trim().toUpperCase();
+    const type = String(asset.type || "stock").trim().toLowerCase();
+    const marketType = normalizeMarketType(type, asset.marketType);
+    const dateAdded = asset.date_added || new Date().toISOString();
+
+    const result = await pool.query(`
+      INSERT INTO watchlist_assets (symbol, name, type, market_type, date_added)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (symbol, market_type)
+      DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, date_added = EXCLUDED.date_added
+      RETURNING
+        id,
+        symbol,
+        name,
+        type,
+        market_type AS "marketType",
+        date_added;
+    `, [symbol, String(asset.name || symbol), type, marketType, dateAdded]);
+
+    return mapWatchlistRow(result.rows[0]);
+  },
+
+  delete: async (symbol, marketType) => {
+    const cleanSymbol = String(symbol || "").trim().toUpperCase();
+    const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
+    await pool.query("DELETE FROM watchlist_assets WHERE symbol = $1 AND market_type = $2", [
+      cleanSymbol,
+      cleanMarketType
+    ]);
+    return { success: true, symbol: cleanSymbol, marketType: cleanMarketType };
+  },
+
+  exists: async (symbol, marketType) => {
+    const cleanSymbol = String(symbol || "").trim().toUpperCase();
+    const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
+    const result = await pool.query(
+      "SELECT id FROM watchlist_assets WHERE symbol = $1 AND market_type = $2 LIMIT 1",
+      [cleanSymbol, cleanMarketType]
     );
-    stmt.run(symbol, marketType);
-    return { success: true, symbol, marketType };
-  },
-
-  // Check if asset is in watchlist
-  exists: (symbol, marketType) => {
-    const result = db.prepare(
-      'SELECT id FROM watchlist_assets WHERE symbol = ? AND marketType = ?'
-    ).get(symbol, marketType);
-    return !!result;
+    return result.rows.length > 0;
   }
 };
 
 const optionsCalculations = {
-  add: (payload) => {
+  add: async (payload) => {
     const {
       symbol,
       strategy = "Custom",
@@ -356,62 +666,81 @@ const optionsCalculations = {
       createdAt = new Date().toISOString()
     } = payload;
 
-    const stmt = db.prepare(`
+    const result = await pool.query(`
       INSERT INTO options_calculations (
         symbol, strategy, net_pnl, delta, gamma, theta, vega, max_profit, max_loss, breakevens, legs_json, created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const info = stmt.run(
-      symbol,
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *;
+    `, [
+      String(symbol || "").trim().toUpperCase(),
       strategy,
-      Number(netPnl) || 0,
-      Number(delta) || 0,
-      Number(gamma) || 0,
-      Number(theta) || 0,
-      Number(vega) || 0,
+      toNumber(netPnl),
+      toNumber(delta),
+      toNumber(gamma),
+      toNumber(theta),
+      toNumber(vega),
       Number.isFinite(Number(maxProfit)) ? Number(maxProfit) : null,
       Number.isFinite(Number(maxLoss)) ? Number(maxLoss) : null,
       JSON.stringify(Array.isArray(breakevens) ? breakevens : []),
       JSON.stringify(Array.isArray(legs) ? legs : []),
       createdAt
-    );
+    ]);
 
-    return { id: info.lastInsertRowid, ...payload, createdAt };
+    const row = result.rows[0];
+    return {
+      ...row,
+      created_at: toIsoString(row.created_at)
+    };
   },
 
-  getRecent: (limit = 20, symbol = null) => {
+  getRecent: async (limit = 20, symbol = null) => {
     const safeLimit = Math.max(1, Math.min(200, Number(limit) || 20));
     if (symbol) {
-      return db.prepare(`
+      const result = await pool.query(`
         SELECT * FROM options_calculations
-        WHERE symbol = ?
-        ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT ?
-      `).all(symbol, safeLimit);
+        WHERE symbol = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2;
+      `, [String(symbol).trim().toUpperCase(), safeLimit]);
+
+      return result.rows.map((row) => ({
+        ...row,
+        created_at: toIsoString(row.created_at)
+      }));
     }
-    return db.prepare(`
+
+    const result = await pool.query(`
       SELECT * FROM options_calculations
-      ORDER BY datetime(created_at) DESC, id DESC
-      LIMIT ?
-    `).all(safeLimit);
+      ORDER BY created_at DESC, id DESC
+      LIMIT $1;
+    `, [safeLimit]);
+
+    return result.rows.map((row) => ({
+      ...row,
+      created_at: toIsoString(row.created_at)
+    }));
   }
 };
 
-// Clear all data (for testing)
-function clearAllData() {
-  db.exec('DELETE FROM portfolio_holdings');
-  db.exec('DELETE FROM watchlist_assets');
-  db.exec('DELETE FROM trade_executions');
+async function clearAllData() {
+  await pool.query("DELETE FROM portfolio_holdings");
+  await pool.query("DELETE FROM watchlist_assets");
+  await pool.query("DELETE FROM trade_executions");
+}
+
+async function closeDatabase() {
+  await pool.end();
 }
 
 module.exports = {
-  db,
+  pool,
   initializeDatabase,
+  balance,
   portfolio,
   watchlist,
   optionsCalculations,
   tradeExecutions,
-  clearAllData
+  clearAllData,
+  closeDatabase
 };

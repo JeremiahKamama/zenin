@@ -1,5 +1,16 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
+
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+
+const MOVERS_HORIZONS = {
+  daily: { label: "Daily", interval: "1D" },
+  weekly: { label: "Weekly", interval: "1W" },
+  quarterly: { label: "Quarterly", interval: "3M" },
+  ytd: { label: "YTD", interval: "YTD" },
+  yearly: { label: "Yearly", interval: "1Y" }
+};
 
 export function HomeModule({
   portfolio,
@@ -12,18 +23,99 @@ export function HomeModule({
 }) {
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
+  const [moversHorizon, setMoversHorizon] = useState("daily");
+  const [moversHorizonChanges, setMoversHorizonChanges] = useState({});
+  const [moversLoading, setMoversLoading] = useState(false);
 
   const topPositions = [...portfolio]
     .sort((a, b) => ((b.price || 0) * (b.quantity || 0)) - ((a.price || 0) * (a.quantity || 0)))
     .slice(0, 8);
 
-  const moversUniverse = (marketMovers.length > 0 ? marketMovers : assets)
-    .filter((asset) => Number.isFinite(Number(asset?.price)) && Number.isFinite(Number(asset?.priceChangePercent)));
-  const gainers = [...moversUniverse]
-    .sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0))
+  const moversUniverse = useMemo(
+    () => (marketMovers.length > 0 ? marketMovers : assets)
+      .filter((asset) => Number.isFinite(Number(asset?.price))),
+    [marketMovers, assets]
+  );
+
+  const moversSymbols = useMemo(
+    () => [...new Set(moversUniverse.map((asset) => String(asset?.symbol || "").toUpperCase()).filter(Boolean))],
+    [moversUniverse]
+  );
+
+  const moversSymbolsKey = useMemo(() => moversSymbols.join("|"), [moversSymbols]);
+
+  useEffect(() => {
+    if (moversHorizon === "daily" || moversSymbols.length === 0) {
+      setMoversLoading(false);
+      setMoversHorizonChanges({});
+      return;
+    }
+
+    let canceled = false;
+    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    setMoversLoading(true);
+    setMoversHorizonChanges({});
+
+    const changes = {};
+    let cursor = 0;
+    const concurrency = Math.min(6, moversSymbols.length);
+
+    const worker = async () => {
+      while (!canceled && cursor < moversSymbols.length) {
+        const index = cursor;
+        cursor += 1;
+        const symbol = moversSymbols[index];
+        try {
+          const res = await fetch(
+            `${BACKEND_URL}/interval-performance?symbol=${encodeURIComponent(symbol)}&type=stock`
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+          const change = Number(data?.performance?.[intervalCode]);
+          if (Number.isFinite(change)) {
+            changes[symbol] = change;
+          }
+        } catch {
+          // ignore per-symbol failures
+        }
+      }
+    };
+
+    Promise.all(Array.from({ length: concurrency }, () => worker()))
+      .then(() => {
+        if (canceled) return;
+        setMoversHorizonChanges(changes);
+      })
+      .finally(() => {
+        if (!canceled) {
+          setMoversLoading(false);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [moversHorizon, moversSymbolsKey]);
+
+  const getMoverChange = (asset) => {
+    const symbol = String(asset?.symbol || "").toUpperCase();
+    if (moversHorizon === "daily") {
+      const daily = Number(asset?.priceChangePercent);
+      return Number.isFinite(daily) ? daily : null;
+    }
+    const value = Number(moversHorizonChanges[symbol]);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  const moversWithChange = moversUniverse
+    .map((asset) => ({ ...asset, __moverChange: getMoverChange(asset) }))
+    .filter((asset) => Number.isFinite(asset.__moverChange));
+
+  const gainers = [...moversWithChange]
+    .sort((a, b) => (b.__moverChange || 0) - (a.__moverChange || 0))
     .slice(0, 5);
-  const losers = [...moversUniverse]
-    .sort((a, b) => (a.priceChangePercent || 0) - (b.priceChangePercent || 0))
+  const losers = [...moversWithChange]
+    .sort((a, b) => (a.__moverChange || 0) - (b.__moverChange || 0))
     .slice(0, 5);
 
   const portfolioValue = calculatePortfolioValue();
@@ -204,12 +296,40 @@ export function HomeModule({
 
         {/* Gainers & Losers */}
         <div className="watchlist-panel glass">
+          <div className="section-header" style={{ marginBottom: "8px" }}>
+            <h2 className="home-subsection-title">Top Movers</h2>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              {moversLoading && moversHorizon !== "daily" ? (
+                <span className="asset-count">Loading {MOVERS_HORIZONS[moversHorizon]?.label}...</span>
+              ) : (
+                <span className="asset-count">{MOVERS_HORIZONS[moversHorizon]?.label}</span>
+              )}
+              <select
+                value={moversHorizon}
+                onChange={(e) => setMoversHorizon(e.target.value)}
+                style={{
+                  background: "rgba(15,23,42,0.7)",
+                  color: "var(--color-text-primary)",
+                  border: "0.5px solid rgba(148,163,184,0.35)",
+                  borderRadius: "6px",
+                  padding: "4px 8px",
+                  fontSize: "12px"
+                }}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="ytd">YTD</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </div>
+          </div>
           <div className="home-movers-split" style={{ display: "flex", gap: "0" }}>
             
             <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
                 <h2 className="home-subsection-title">Top Gainers</h2>
-                <div className="asset-count">1D across all themes</div>
+                <div className="asset-count">{MOVERS_HORIZONS[moversHorizon]?.label}</div>
               </div>
               <div className="home-asset-list">
                 {gainers.length > 0 ? gainers.map((asset) => (
@@ -219,7 +339,7 @@ export function HomeModule({
                     </div>
                     <div className="value-info">
                       <div className="price">{formatAssetPrice(asset)}</div>
-                      <div className="change positive">+{(asset.priceChangePercent || 0).toFixed(2)}%</div>
+                      <div className="change positive">+{(asset.__moverChange || 0).toFixed(2)}%</div>
                     </div>
                   </div>
                 )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
@@ -229,7 +349,7 @@ export function HomeModule({
             <div className="home-movers-col home-movers-col-right" style={{ flex: 1, paddingLeft: "12px" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
                 <h2 className="home-subsection-title">Top Losers</h2>
-                <div className="asset-count">1D across all themes</div>
+                <div className="asset-count">{MOVERS_HORIZONS[moversHorizon]?.label}</div>
               </div>
               <div className="home-asset-list">
                 {losers.length > 0 ? losers.map((asset) => (
@@ -239,7 +359,7 @@ export function HomeModule({
                     </div>
                     <div className="value-info">
                       <div className="price">{formatAssetPrice(asset)}</div>
-                      <div className="change negative">{(asset.priceChangePercent || 0).toFixed(2)}%</div>
+                      <div className="change negative">{(asset.__moverChange || 0).toFixed(2)}%</div>
                     </div>
                   </div>
                 )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}

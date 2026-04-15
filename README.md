@@ -1,6 +1,6 @@
 # Zenin
 
-A multi-asset portfolio and options dashboard with persistent local data, market search, charting, and options analytics.
+A multi-asset portfolio and options dashboard with persistent PostgreSQL-backed data, market search, charting, and options analytics.
 
 This README reflects the **current repository implementation** (frontend + backend code in this repo). If your deployed environment is older, some routes/features may be missing until redeployed.
 
@@ -38,7 +38,7 @@ It also includes a user settings mini-window (General, Accounts, Layout, Notific
 
 - Buy / sell flow through asset modal
 - Position quantity management
-- Persisted holdings in SQLite
+- Persisted holdings in PostgreSQL
 - Portfolio value / gain calculations
 - Chart breakdowns and summary metrics
 
@@ -47,7 +47,7 @@ It also includes a user settings mini-window (General, Accounts, Layout, Notific
 - Crypto options chain for BTC/ETH/SOL via backend options route
 - Expiry tabs and market metrics (IV / put-call ratio / skew)
 - Options calculator with multi-leg setup, strategy presets, Greeks, and P&L diagram
-- Save/load calculations (SQLite)
+- Save/load calculations (PostgreSQL)
 - Whale options trades card (table + pagination, 10 rows/page)
 - Periodic refresh for chain and whale trades
 - Optional WebSocket subscription if `VITE_WS_URL` is configured
@@ -108,7 +108,7 @@ The backend includes provider failover logic across configured endpoints and sta
 
 ## Persistence & Data Model
 
-SQLite database file: `backend/portfolio.db`
+Primary datastore: PostgreSQL (via `pg` in `backend/database.js`)
 
 Tables in use:
 
@@ -116,6 +116,7 @@ Tables in use:
 - `watchlist_assets`
 - `user_balance`
 - `options_calculations`
+- `trade_executions`
 
 Persisted entities include:
 
@@ -123,6 +124,7 @@ Persisted entities include:
 - Watchlist entries
 - User balance
 - Saved options calculations
+- Trade executions (journal)
 
 ## Backend Routes (Key)
 
@@ -173,6 +175,7 @@ Balance:
 
 - Node.js 18+
 - Python 3.9+
+- PostgreSQL 14+ (or managed Postgres with a connection URL)
 - npm
 
 ### Install
@@ -222,6 +225,11 @@ npm run dev
 - `PORT` (optional, default `4000`)
 - `FRONTEND_URL` (for CORS allowlist)
 - `DERIVE_API_URL` (optional options provider override)
+- `DATABASE_URL` (recommended, full Postgres connection string)
+- Or discrete Postgres vars: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+- Optional for local non-SSL Postgres: `PGSSLMODE=disable`
+
+On backend start, schema creation/seeding runs automatically in `initializeDatabase()`.
 
 ## Deployment Notes
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
 
-export function JournalModule({ trades = [], portfolio = [] }) {
+export function JournalModule({ trades = [], portfolio = [], balance = 0, accountEquity = null }) {
   const [reportPage, setReportPage] = useState(1);
   const [calendarCursor, setCalendarCursor] = useState(() => {
     const now = new Date();
@@ -300,6 +300,15 @@ export function JournalModule({ trades = [], portfolio = [] }) {
     };
   }, [trades, portfolio]);
 
+  const portfolioValue = useMemo(
+    () => (portfolio || []).reduce((total, item) => total + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0),
+    [portfolio]
+  );
+  const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
+  const totalAccountEquity = Number.isFinite(Number(accountEquity))
+    ? Number(accountEquity)
+    : availableBalance + portfolioValue;
+
   const winLossSeries = [
     Math.max(analytics.wins, 0),
     Math.max(analytics.losses, 0)
@@ -412,6 +421,14 @@ export function JournalModule({ trades = [], portfolio = [] }) {
           <label>Average Hold</label>
           <div className="value">{analytics.avgHoldDays.toFixed(1)}d</div>
         </div>
+        <div className="metric-card glass">
+          <label>Available Balance</label>
+          <div className="value">{formatValue(availableBalance, true)}</div>
+        </div>
+        <div className="metric-card glass">
+          <label>Total Account Equity</label>
+          <div className="value">{formatValue(totalAccountEquity, true)}</div>
+        </div>
         <div className="metric-card glass journal-winrate-card">
           <label>Win Rate</label>
           <div className="value">{analytics.winRate.toFixed(1)}%</div>
@@ -463,7 +480,13 @@ export function JournalModule({ trades = [], portfolio = [] }) {
                   <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
                   <div className="trade-details">
                     <div className="qty">× {Number(trade.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
-                    <div className="trade-meta">Cost {formatValue(Number(trade.notional) || 0, true)} · Pos {Number(trade.positionAfter || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+                    <div className="trade-meta">
+                      Cost {formatValue(Number(trade.notional) || 0, true)}
+                      {Number.isFinite(Number(trade.balanceAfter)) ? ` · Bal ${formatValue(Number(trade.balanceAfter), true)}` : ""}
+                      {Number.isFinite(Number(trade.accountEquityAfter)) ? ` · Eq ${formatValue(Number(trade.accountEquityAfter), true)}` : ""}
+                      {" · "}
+                      Pos {Number(trade.positionAfter || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                    </div>
                   </div>
                 </div>
               ))

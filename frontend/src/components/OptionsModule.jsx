@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
-const WS_URL = import.meta.env.VITE_WS_URL;
+const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 
 export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
@@ -91,8 +91,11 @@ useEffect(() => {
 
   fetchChain();
 
-  // 🔥 Polling (safe)
-  const interval = setInterval(fetchChain, 60000);
+  // Refresh chain every 3 minutes while user is on the Options section.
+  const interval = setInterval(() => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    fetchChain();
+  }, OPTIONS_CHAIN_REFRESH_MS);
 
   return () => {
     isMounted = false;
@@ -153,37 +156,15 @@ useEffect(() => {
     return `$${n.toFixed(2)}`;
   };
 
-useEffect(() => {
-  if (!WS_URL) return undefined;
-  const ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: "subscribe",
-      currency: activeAsset,
-      expiry: activeExpiry || null
-    }));
+  const formatGreek = (value, digits = 3) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(digits) : "-";
   };
 
-  ws.onmessage = (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-
-      if (msg.type === "greeks_update" && Array.isArray(msg.data)) {
-        setChain(msg.data);
-      }
-    } catch (e) {
-      console.error("WS parse error:", e);
-    }
+  const formatIv = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : "-";
   };
-
-  ws.onerror = (e) => {
-    console.error("WebSocket error:", e);
-  };
-
-  return () => ws.close();
-
-}, [activeAsset, activeExpiry]);
 
   const formatDate = (ts) => {
     if (!ts) return "";
@@ -267,15 +248,15 @@ useEffect(() => {
                 <tbody>
                   {chain.map((row) => (
                     <tr key={row.strike}>
-                      <td className="greek">{row.call?.iv ? ((row.call?.iv || 0) * 100).toFixed(1) + "%" : "-"}</td>
-                      <td className="greek">{row.call?.delta?.toFixed(3) || "-"}</td>
+                      <td className="greek">{formatIv(row.call?.iv)}</td>
+                      <td className="greek">{formatGreek(row.call?.delta, 3)}</td>
                       <td className="bid-ask positive">{row.call?.bid > 0 ? `$${row.call.bid.toFixed(4)}` : "-"}</td>
                       <td className="bid-ask positive">{row.call?.ask > 0 ? `$${row.call.ask.toFixed(4)}` : "-"}</td>
                       <td className="strike-col">{row.strike.toLocaleString()}</td>
                       <td className="bid-ask negative">{row.put?.bid > 0 ? `$${row.put.bid.toFixed(4)}` : "-"}</td>
                       <td className="bid-ask negative">{row.put?.ask > 0 ? `$${row.put.ask.toFixed(4)}` : "-"}</td>
-                      <td className="greek">{row.put?.delta?.toFixed(3) || "-"}</td>
-                      <td className="greek">{row.put?.theta ? row.put.theta.toFixed(4) : "-"}</td>
+                      <td className="greek">{formatGreek(row.put?.delta, 3)}</td>
+                      <td className="greek">{formatGreek(row.put?.theta, 4)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
-const { initializeDatabase, portfolio, watchlist, optionsCalculations, tradeExecutions, db } = require("./database");
+const { initializeDatabase, portfolio, watchlist, optionsCalculations, tradeExecutions, balance } = require("./database");
 
 const app = express();
 
@@ -105,9 +105,6 @@ function validateWatchlistAsset(req, res, next) {
   }
   next();
 }
-
-// Initialize database on start
-initializeDatabase();
 
 // ---------------------------------------------------------------------------
 // Symbol → Yahoo Finance ticker normalisation
@@ -313,7 +310,7 @@ let cryptoMarketCache = {
 async function fetchCryptoMarketData() {
   const fetch = await resolveFetch();
 
-  const allDbAssets = watchlist.getAll();
+  const allDbAssets = await watchlist.getAll();
   const combinedAssets = allDbAssets
     .filter((a) => {
       const dbType = (a.type || "").toLowerCase();
@@ -566,42 +563,29 @@ function searchYahooFinance(query, type = "tradfi") {
 // USER BALANCE ENDPOINTS
 // ---------------------------------------------------------------------------
 
-app.get("/api/db/balance", (req, res) => {
+app.get("/api/db/balance", async (_req, res) => {
   try {
-    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
-    res.json({ balance: row?.balance ?? 10000 });
+    const current = await balance.get();
+    res.json({ balance: current });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Add to database.js schema in initializeDatabase()
-
-// Balance endpoints in index.js
-app.get("/api/db/balance", (req, res) => {
-  try {
-    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
-    res.json({ balance: row?.balance ?? 10000 });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/db/balance", (req, res) => {
+app.post("/api/db/balance", async (req, res) => {
   try {
     const { amount, type } = req.body;
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
     if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
-    const row = db.prepare("SELECT balance FROM user_balance WHERE id = 1").get();
-    const current = row?.balance ?? 10000;
-    const newBalance = type === "deposit" ? current + amount : current - amount;
-    if (newBalance < 0) return res.status(400).json({ error: "Insufficient balance" });
-    db.prepare("UPDATE user_balance SET balance = ? WHERE id = 1").run(newBalance);
+    const newBalance = await balance.applyChange(amount, type);
     res.json({ balance: newBalance });
   } catch (err) {
+    if (err.code === "INSUFFICIENT_BALANCE") {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
     res.status(500).json({ error: err.message });
   }
-});  
+});
 
 // History
 // ---------------------------------------------------------------------------
@@ -919,7 +903,7 @@ app.get("/api/watchlist", async (req, res) => {
 
   const baseAssets = watchlistData[key] || [];
 
-  const allDbAssets = watchlist.getAll();
+  const allDbAssets = await watchlist.getAll();
   const customAssets = allDbAssets.filter(dbAsset => {
     if (baseAssets.some(a => a.symbol === dbAsset.symbol)) return false;
     const dbType = (dbAsset.type || "").toLowerCase();
@@ -1066,8 +1050,17 @@ function parseExpiration(instrumentName = "") {
 
 function parseOptionType(instrumentName = "") {
   const parts = String(instrumentName).split("-");
-  const side = parts[parts.length - 1];
-  return side === "C" ? "call" : side === "P" ? "put" : null;
+  const side = String(parts[parts.length - 1] || "").trim().toUpperCase();
+  if (side === "C" || side === "CALL") return "call";
+  if (side === "P" || side === "PUT") return "put";
+  return null;
+}
+
+function normalizeOptionType(rawType, instrumentName = "") {
+  const clean = String(rawType || "").trim().toUpperCase();
+  if (clean === "C" || clean === "CALL") return "call";
+  if (clean === "P" || clean === "PUT") return "put";
+  return parseOptionType(instrumentName);
 }
 
 function deriveStrategy(direction, optionType) {
@@ -1077,13 +1070,26 @@ function deriveStrategy(direction, optionType) {
 }
 
 function computeTradeNotionalUsd(trade = {}) {
-  const amount = Number(trade.amount || trade.contracts || trade.size || 0);
-  const optionPrice = Number(trade.price || trade.mark_price || 0);
-  const refPrice = Number(trade.index_price || trade.underlying_price || trade.mark_price || 0);
+  const amount = Number(trade.amount || trade.contracts || trade.size || trade.quantity || 0);
+  const optionPrice = Number(trade.price || trade.mark_price || trade.trade_price || 0);
+  const refPrice = Number(trade.index_price || trade.underlying_price || trade.underlying_index || trade.mark_price || 0);
 
-  if (amount <= 0 || refPrice <= 0) return 0;
-  if (optionPrice > 0) return amount * optionPrice * refPrice;
-  return amount * refPrice;
+  if (amount <= 0) return 0;
+  if (optionPrice > 0 && refPrice > 0) return amount * optionPrice * refPrice;
+  if (optionPrice > 0) return amount * optionPrice;
+  if (refPrice > 0) return amount * refPrice;
+  return 0;
+}
+
+function extractTradesFromPayload(payload) {
+  const result = payload?.result;
+  if (Array.isArray(result?.trades)) return result.trades;
+  if (Array.isArray(result?.data)) return result.data;
+  if (Array.isArray(result?.last_trades)) return result.last_trades;
+  if (Array.isArray(result?.items)) return result.items;
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(payload?.trades)) return payload.trades;
+  return [];
 }
 
 // Retry wrapper
@@ -1181,7 +1187,10 @@ app.post("/api/options/crypto", async (req, res) => {
 
     allTickers.forEach(t => {
       const strike = parseFloat(t?.option_details?.strike);
-      const type = t?.option_details?.option_type;
+      const type = normalizeOptionType(
+        t?.option_details?.option_type || t?.option_type,
+        t?.instrument_name
+      );
 
       if (!strike || !type) return;
 
@@ -1199,8 +1208,8 @@ app.post("/api/options/crypto", async (req, res) => {
         iv: parseFloat(t?.iv || 0),
       };
 
-      if (type === "C") strikesMap[strike].call = data;
-      else if (type === "P") strikesMap[strike].put = data;
+      if (type === "call") strikesMap[strike].call = data;
+      else if (type === "put") strikesMap[strike].put = data;
     });
 
     const chain = Object.values(strikesMap)
@@ -1211,10 +1220,16 @@ app.post("/api/options/crypto", async (req, res) => {
       allTickers.reduce((s, t) => s + parseFloat(t?.iv || 0), 0) /
       (allTickers.length || 1);
 
+    const referenceTicker = allTickers.find(Boolean) || null;
+    const spot =
+      Number(referenceTicker?.index_price || referenceTicker?.underlying_price || referenceTicker?.underlying_index || 0) || null;
+
     const payload = {
       expiry: targetExpiry,
       expiries,
       chain,
+      spot,
+      market_price: spot,
       market_metrics: {
         iv: avgIv || 0,
         p_c_ratio: 0.85
@@ -1260,23 +1275,23 @@ app.get("/api/options/whale-trades", async (_req, res) => {
     );
 
     const merged = [];
+    const debugRawTradeCounts = Object.fromEntries(WHALE_CURRENCIES.map((currency) => [currency, 0]));
     settled.forEach((result, idx) => {
       const currency = WHALE_CURRENCIES[idx];
       if (result.status !== "fulfilled") return;
       const payload = result.value;
-      const trades = Array.isArray(payload?.result?.trades)
-        ? payload.result.trades
-        : Array.isArray(payload?.result)
-          ? payload.result
-          : [];
+      const trades = extractTradesFromPayload(payload);
+      debugRawTradeCounts[currency] = trades.length;
 
       trades.forEach((trade) => {
         const instrument = String(trade.instrument_name || "");
         const symbol = instrument.split("-")[0] || currency;
         const expiration = parseExpiration(instrument);
-        const referencePrice = Number(trade.index_price || trade.underlying_price || 0);
+        const referencePrice = Number(
+          trade.index_price || trade.underlying_price || trade.underlying_index || trade.mark_price || 0
+        );
         const direction = String(trade.direction || "buy").toLowerCase() === "sell" ? "sell" : "buy";
-        const optionType = parseOptionType(instrument);
+        const optionType = normalizeOptionType(trade.option_type, instrument);
         const strategy = deriveStrategy(direction, optionType);
         const totalNotional = computeTradeNotionalUsd(trade);
 
@@ -1292,7 +1307,7 @@ app.get("/api/options/whale-trades", async (_req, res) => {
       });
     });
 
-    const whaleFiltered = merged.filter((t) => t.totalNotional >= MIN_WHALE_NOTIONAL_USD);
+    const whaleFiltered = merged.filter((t) => Number.isFinite(t.totalNotional) && t.totalNotional >= MIN_WHALE_NOTIONAL_USD);
     const source = whaleFiltered.length > 0 ? whaleFiltered : merged
       .sort((a, b) => b.totalNotional - a.totalNotional)
       .slice(0, 80);
@@ -1301,9 +1316,12 @@ app.get("/api/options/whale-trades", async (_req, res) => {
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, 100);
 
+    console.info("Whale trades raw counts by currency:", debugRawTradeCounts);
+
     res.json({
       updatedAt: new Date().toISOString(),
       minNotionalUsd: MIN_WHALE_NOTIONAL_USD,
+      debug_raw_trade_counts: debugRawTradeCounts,
       trades
     });
   } catch (error) {
@@ -1315,10 +1333,10 @@ app.get("/api/options/whale-trades", async (_req, res) => {
 // ---------------------------------------------------------------------------
 // Options Calculator Persistence
 // ---------------------------------------------------------------------------
-app.get("/api/db/options-calculations", (req, res) => {
+app.get("/api/db/options-calculations", async (req, res) => {
   try {
     const { limit = 20, symbol } = req.query;
-    const records = optionsCalculations.getRecent(limit, symbol || null).map((row) => ({
+    const records = (await optionsCalculations.getRecent(limit, symbol || null)).map((row) => ({
       ...row,
       breakevens: (() => {
         try { return JSON.parse(row.breakevens || "[]"); } catch { return []; }
@@ -1333,13 +1351,13 @@ app.get("/api/db/options-calculations", (req, res) => {
   }
 });
 
-app.post("/api/db/options-calculations", (req, res) => {
+app.post("/api/db/options-calculations", async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.symbol) {
       return res.status(400).json({ error: "symbol is required" });
     }
-    const record = optionsCalculations.add(payload);
+    const record = await optionsCalculations.add(payload);
     res.status(201).json(record);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1373,40 +1391,40 @@ app.get("/api/crypto-market", async (req, res) => {
 // ---------------------------------------------------------------------------
 // Portfolio Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/portfolio", (req, res) => {
+app.get("/api/db/portfolio", async (req, res) => {
   try {
-    const holdings = portfolio.getAll();
+    const holdings = await portfolio.getAll();
     res.json({ holdings });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/api/db/portfolio",writeLimiter, validatePortfolioHolding, (req, res) => {
+app.post("/api/db/portfolio",writeLimiter, validatePortfolioHolding, async (req, res) => {
   try {
     const holding = req.body;
-    const result = portfolio.add(holding);
+    const result = await portfolio.add(holding);
     res.status(201).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.put("/api/db/portfolio/:id", (req, res) => {
+app.put("/api/db/portfolio/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const holding = req.body;
-    const result = portfolio.update(id, holding);
+    const result = await portfolio.update(id, holding);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete("/api/db/portfolio/:id", writeLimiter, (req, res) => {
+app.delete("/api/db/portfolio/:id", writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = portfolio.delete(id);
+    const result = await portfolio.delete(id);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1414,7 +1432,7 @@ app.delete("/api/db/portfolio/:id", writeLimiter, (req, res) => {
 });
 
 // Get portfolio items by symbol and marketType
-app.get("/api/db/portfolio/symbol/:symbol", (req, res) => {
+app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20).toUpperCase();
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -1422,7 +1440,7 @@ app.get("/api/db/portfolio/symbol/:symbol", (req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const holdings = portfolio.findBySymbol(symbol, marketType);
+    const holdings = await portfolio.findBySymbol(symbol, marketType);
     res.json({ holdings });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1432,16 +1450,16 @@ app.get("/api/db/portfolio/symbol/:symbol", (req, res) => {
 // ---------------------------------------------------------------------------
 // Trade execution endpoints (Journal persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/trades", (req, res) => {
+app.get("/api/db/trades", async (req, res) => {
   try {
-    const trades = tradeExecutions.getAll(req.query.limit);
+    const trades = await tradeExecutions.getAll(req.query.limit);
     res.json({ trades });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/api/db/trades", writeLimiter, (req, res) => {
+app.post("/api/db/trades", writeLimiter, async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.asset) {
@@ -1453,7 +1471,7 @@ app.post("/api/db/trades", writeLimiter, (req, res) => {
     if (!Number.isFinite(Number(payload.price)) || Number(payload.price) < 0) {
       return res.status(400).json({ error: "price must be a non-negative number" });
     }
-    const saved = tradeExecutions.add(payload);
+    const saved = await tradeExecutions.add(payload);
     res.status(201).json(saved);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1463,26 +1481,26 @@ app.post("/api/db/trades", writeLimiter, (req, res) => {
 // ---------------------------------------------------------------------------
 // Watchlist Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/watchlist", (req, res) => {
+app.get("/api/db/watchlist", async (req, res) => {
   try {
-    const assets = watchlist.getAll();
+    const assets = await watchlist.getAll();
     res.json({ assets });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, (req, res) => {
+app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, async (req, res) => {
   try {
     const asset = req.body;
-    const result = watchlist.add(asset);
+    const result = await watchlist.add(asset);
     res.status(201).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete("/api/db/watchlist/:symbol", writeLimiter,(req, res) => {
+app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -1490,7 +1508,7 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter,(req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const result = watchlist.delete(symbol, marketType);
+    const result = await watchlist.delete(symbol, marketType);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1498,14 +1516,14 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter,(req, res) => {
 });
 
 // Check if asset is in watchlist
-app.get("/api/db/watchlist/check/:symbol", (req, res) => {
+app.get("/api/db/watchlist/check/:symbol", async (req, res) => {
   try {
     const { symbol } = req.params;
     const { marketType } = req.query;
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const exists = watchlist.exists(symbol, marketType);
+    const exists = await watchlist.exists(symbol, marketType);
     res.json({ exists });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1552,6 +1570,16 @@ wss.on("connection", (ws) => {
   });
 });
 
-server.listen(port, "0.0.0.0", () => {
-  console.log(`Portfolio manager backend listening on port ${port}`);
-});
+async function startServer() {
+  try {
+    await initializeDatabase();
+    server.listen(port, "0.0.0.0", () => {
+      console.log(`Portfolio manager backend listening on port ${port}`);
+    });
+  } catch (error) {
+    console.error("Failed to initialize PostgreSQL database:", error.message);
+    process.exit(1);
+  }
+}
+
+startServer();
