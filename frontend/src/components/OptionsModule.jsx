@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com";
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const WS_URL = import.meta.env.VITE_WS_URL;
 
 export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
@@ -37,7 +39,8 @@ useEffect(() => {
       });
 
       if (!res.ok) {
-        throw new Error(`HTTP error: ${res.status}`);
+        const errorText = await res.text();
+        throw new Error(`HTTP error: ${res.status} ${errorText}`);
       }
 
       const data = await res.json();
@@ -52,6 +55,10 @@ useEffect(() => {
         }
 
         setChain(data.chain);
+        setSpotPrices(prev => ({
+          ...prev,
+          [activeAsset]: data.market_price || data.spot || 0
+        }));
 
         setMetrics({
           iv: parseFloat(data?.market_metrics?.iv) || 0.42,
@@ -73,11 +80,6 @@ useEffect(() => {
 
   fetchChain();
 
-  setSpotPrices(prev => ({
-  ...prev,
-  [activeAsset]: data.market_price || data.spot || 0
-}));
-
   // 🔥 Polling (safe)
   const interval = setInterval(fetchChain, 60000);
 
@@ -89,15 +91,14 @@ useEffect(() => {
 }, [activeAsset, activeExpiry]);
 
 useEffect(() => {
-  const expiryToUse = activeExpiry;
-
-  const ws = new WebSocket("wss://zenin-mx6w.onrender.com");
+  if (!WS_URL) return undefined;
+  const ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({
       type: "subscribe",
       currency: activeAsset,
-      expiry: activeExpiry
+      expiry: activeExpiry || null
     }));
   };
 
@@ -158,10 +159,8 @@ useEffect(() => {
           
           <div className="asset-dropdown-container">
             <select 
-              onClick={() => {
-              setSymbolSearch(s);
-              setShowSymbolDropdown(false);
-            }}
+              value={activeAsset}
+              onChange={(e) => setActiveAsset(e.target.value)}
             >
               {allAssets.map(asset => (
                 <option key={asset} value={asset}>{asset}</option>
