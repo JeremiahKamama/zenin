@@ -6,6 +6,7 @@ import { AssetModal } from "./components/AssetModal";
 import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
+import { PredictionMarketModule } from "./components/PredictionMarketModule";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
@@ -659,7 +660,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     }
   };
 
-  const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
+  const sections = ["Home", "Portfolio", "Watchlist", "Options", "Predictions", "Journal"];
   const [activeSection, setActiveSection] = useState(() => {
     const saved = localStorage.getItem("zenin_active_section");
     return sections.includes(saved) ? saved : "Home";
@@ -824,6 +825,14 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       return (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M4 18h5V6H4zM15 18h5V10h-5z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+    if (section === "Predictions") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 17l5-5 4 3 7-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M4 4v13h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     }
@@ -1004,6 +1013,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
         {activeSection === "Options" && (
           <OptionsModule />
+        )}
+
+        {activeSection === "Predictions" && (
+          <PredictionMarketModule />
         )}
 
         {activeSection === "Journal" && (

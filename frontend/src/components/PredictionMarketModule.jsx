@@ -1,0 +1,351 @@
+import { useEffect, useState } from "react";
+
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const PREDICTION_REFRESH_MS = 21600000; // 6 hours
+
+export function PredictionMarketModule() {
+  const [predictionSnapshot, setPredictionSnapshot] = useState(null);
+  const [predictionLoading, setPredictionLoading] = useState(false);
+  const [predictionError, setPredictionError] = useState("");
+  const [predictionWhalePage, setPredictionWhalePage] = useState(1);
+  const [selectedPredictionMarket, setSelectedPredictionMarket] = useState(null);
+  const [marketDetails, setMarketDetails] = useState(null);
+  const [marketDetailsLoading, setMarketDetailsLoading] = useState(false);
+  const [marketDetailsError, setMarketDetailsError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchPredictionSnapshot = async () => {
+      if (!isMounted) return;
+      setPredictionLoading(true);
+      setPredictionError("");
+      try {
+        const res = await fetch(`${BACKEND_URL}/prediction/snapshot`);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+        const data = await res.json();
+        if (!isMounted) return;
+        setPredictionSnapshot(data || null);
+        setPredictionWhalePage(1);
+      } catch {
+        if (!isMounted) return;
+        setPredictionError("Unable to load prediction markets.");
+      } finally {
+        if (isMounted) setPredictionLoading(false);
+      }
+    };
+
+    fetchPredictionSnapshot();
+    const interval = setInterval(fetchPredictionSnapshot, PREDICTION_REFRESH_MS);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!selectedPredictionMarket?.id) {
+      setMarketDetails(null);
+      setMarketDetailsError("");
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const fetchDetails = async () => {
+      if (!isMounted) return;
+      setMarketDetailsLoading(true);
+      setMarketDetailsError("");
+      try {
+        const res = await fetch(`${BACKEND_URL}/prediction/market-details/${encodeURIComponent(selectedPredictionMarket.id)}`);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+        const data = await res.json();
+        if (!isMounted) return;
+        setMarketDetails(data || null);
+      } catch {
+        if (!isMounted) return;
+        setMarketDetailsError("Unable to load market holder and position details.");
+      } finally {
+        if (isMounted) setMarketDetailsLoading(false);
+      }
+    };
+
+    fetchDetails();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedPredictionMarket]);
+
+  const predictionCategories = ["geopolitics", "crypto", "fintech", "tech", "finance"];
+  const predictionMarketsByCategory = predictionSnapshot?.categories || {};
+  const predictionWhaleTransactions = Array.isArray(predictionSnapshot?.whaleTransactions)
+    ? predictionSnapshot.whaleTransactions
+    : [];
+
+  const predictionWhalePageSize = 10;
+  const predictionWhaleTotalPages = Math.max(1, Math.ceil(predictionWhaleTransactions.length / predictionWhalePageSize));
+  const pagedPredictionWhales = predictionWhaleTransactions.slice(
+    (predictionWhalePage - 1) * predictionWhalePageSize,
+    predictionWhalePage * predictionWhalePageSize
+  );
+
+  useEffect(() => {
+    if (predictionWhalePage > predictionWhaleTotalPages) {
+      setPredictionWhalePage(predictionWhaleTotalPages);
+    }
+  }, [predictionWhalePage, predictionWhaleTotalPages]);
+
+  const formatDollar = (value) => {
+    const n = Number(value || 0);
+    if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+    if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+    if (n >= 1e3) return `$${(n / 1e3).toFixed(2)}K`;
+    return `$${n.toFixed(2)}`;
+  };
+
+  const formatPercent = (value, digits = 2) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}%`;
+  };
+
+  const formatDateLabel = (value) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+
+  const getPredictionCategoryLabel = (category) => {
+    if (!category) return "Other";
+    if (category === "fintech") return "Fintech";
+    return category.charAt(0).toUpperCase() + category.slice(1);
+  };
+
+  return (
+    <div className="view-container prediction-terminal">
+      <div className="watchlist-panel glass prediction-market-panel" style={{ padding: "16px" }}>
+        <div className="section-header" style={{ marginBottom: "10px" }}>
+          <div className="header-left">
+            <h2>Prediction Markets</h2>
+            <div className="asset-count">Highest volume markets per category · refreshes every 6 hours</div>
+          </div>
+          <div className="asset-count">
+            {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
+          </div>
+        </div>
+
+        {predictionLoading ? (
+          <div className="loading-state">Loading prediction markets...</div>
+        ) : predictionError ? (
+          <div className="loading-state">{predictionError}</div>
+        ) : (
+          <div className="prediction-grid">
+            {predictionCategories.map((category) => {
+              const markets = Array.isArray(predictionMarketsByCategory?.[category])
+                ? predictionMarketsByCategory[category]
+                : [];
+              return (
+                <div key={category} className="prediction-category-card">
+                  <h3>{getPredictionCategoryLabel(category)}</h3>
+                  {markets.length === 0 ? (
+                    <p className="prediction-empty">No markets available.</p>
+                  ) : (
+                    <div className="prediction-market-list">
+                      {markets.slice(0, 5).map((market) => (
+                        <button
+                          key={market.id}
+                          type="button"
+                          className="prediction-market-row"
+                          onClick={() => setSelectedPredictionMarket(market)}
+                        >
+                          <div className="prediction-market-title">{market.question}</div>
+                          <div className="prediction-market-meta">
+                            <span>{formatDollar(market.volume)} volume</span>
+                            <span>Ends {formatDateLabel(market.endDate)}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="watchlist-panel glass prediction-whale-panel" style={{ padding: "16px" }}>
+        <div className="section-header" style={{ marginBottom: "10px" }}>
+          <div className="header-left">
+            <h2>Whale Transactions</h2>
+            <div className="asset-count">Large prediction-market flow above $10K</div>
+          </div>
+        </div>
+
+        {predictionLoading ? (
+          <div className="loading-state">Loading whale transactions...</div>
+        ) : predictionError ? (
+          <div className="loading-state">{predictionError}</div>
+        ) : pagedPredictionWhales.length === 0 ? (
+          <div className="loading-state">No whale transactions available.</div>
+        ) : (
+          <div className="table-scroll">
+            <table className="option-chain-table whale-trades-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Market</th>
+                  <th>Transaction Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedPredictionWhales.map((item) => (
+                  <tr key={item.id}>
+                    <td className="greek">{getPredictionCategoryLabel(item.category)}</td>
+                    <td className="greek">{item.market}</td>
+                    <td className="bid-ask positive">{formatDollar(item.transactionSize)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {predictionWhaleTotalPages > 1 && (
+          <div className="pagination-controls" style={{ marginTop: "10px" }}>
+            <button
+              className="pagination-button"
+              disabled={predictionWhalePage === 1}
+              onClick={() => setPredictionWhalePage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </button>
+            <div className="pagination-label">
+              Page {predictionWhalePage} of {predictionWhaleTotalPages}
+            </div>
+            <button
+              className="pagination-button"
+              disabled={predictionWhalePage === predictionWhaleTotalPages}
+              onClick={() => setPredictionWhalePage((p) => Math.min(predictionWhaleTotalPages, p + 1))}
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
+
+      {selectedPredictionMarket && (
+        <div className="prediction-modal-overlay" onClick={() => setSelectedPredictionMarket(null)}>
+          <div className="prediction-modal-window" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header" style={{ marginBottom: "12px" }}>
+              <div className="header-left">
+                <h2>{selectedPredictionMarket.question}</h2>
+                <div className="asset-count">Top holders and positions</div>
+              </div>
+              <button className="close-btn" onClick={() => setSelectedPredictionMarket(null)}>&times;</button>
+            </div>
+
+            {marketDetailsLoading ? (
+              <div className="loading-state">Loading market details...</div>
+            ) : marketDetailsError ? (
+              <div className="loading-state">{marketDetailsError}</div>
+            ) : (
+              <div className="prediction-modal-body">
+                {!marketDetails?.holderDataAvailable && (
+                  <p className="prediction-note">{marketDetails?.holderDataNote || "Holder data unavailable."}</p>
+                )}
+                <p className="prediction-note">Average entry shown per row. PnL is mark-to-entry.</p>
+
+                <div className="prediction-columns">
+                  <div className="prediction-column">
+                    <h4>Top Holders - Yes</h4>
+                    {Array.isArray(marketDetails?.holders?.yes) && marketDetails.holders.yes.length > 0 ? (
+                      marketDetails.holders.yes.slice(0, 5).map((row, idx) => (
+                        <div key={`hy-${idx}`} className="prediction-holder-row">
+                          <span>{row.label || row.holder || "Wallet"}</span>
+                          <span>{formatDollar(row.sizeUsd || 0)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="prediction-empty">No public holder data.</div>
+                    )}
+                  </div>
+
+                  <div className="prediction-column">
+                    <h4>Top Holders - No</h4>
+                    {Array.isArray(marketDetails?.holders?.no) && marketDetails.holders.no.length > 0 ? (
+                      marketDetails.holders.no.slice(0, 5).map((row, idx) => (
+                        <div key={`hn-${idx}`} className="prediction-holder-row">
+                          <span>{row.label || row.holder || "Wallet"}</span>
+                          <span>{formatDollar(row.sizeUsd || 0)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="prediction-empty">No public holder data.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="prediction-columns" style={{ marginTop: "10px" }}>
+                  <div className="prediction-column">
+                    <h4>Positions - Yes</h4>
+                    {Array.isArray(marketDetails?.positions?.yes) && marketDetails.positions.yes.length > 0 ? (
+                      marketDetails.positions.yes.slice(0, 5).map((row) => (
+                        <div key={row.id} className="prediction-position-row">
+                          <div>
+                            <div>{row.label}</div>
+                            <small>Avg Entry: {Number(row.avgEntry || 0).toFixed(3)}</small>
+                          </div>
+                          <div>
+                            <div>{formatDollar(row.sizeUsd || 0)}</div>
+                            <small className={Number(row.pnlPct) >= 0 ? "positive" : "negative"}>
+                              {formatPercent(row.pnlPct || 0)}
+                            </small>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="prediction-empty">No position data.</div>
+                    )}
+                  </div>
+
+                  <div className="prediction-column">
+                    <h4>Positions - No</h4>
+                    {Array.isArray(marketDetails?.positions?.no) && marketDetails.positions.no.length > 0 ? (
+                      marketDetails.positions.no.slice(0, 5).map((row) => (
+                        <div key={row.id} className="prediction-position-row">
+                          <div>
+                            <div>{row.label}</div>
+                            <small>Avg Entry: {Number(row.avgEntry || 0).toFixed(3)}</small>
+                          </div>
+                          <div>
+                            <div>{formatDollar(row.sizeUsd || 0)}</div>
+                            <small className={Number(row.pnlPct) >= 0 ? "positive" : "negative"}>
+                              {formatPercent(row.pnlPct || 0)}
+                            </small>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="prediction-empty">No position data.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

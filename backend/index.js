@@ -1042,6 +1042,11 @@ const optionsChainCache = new Map();
 
 const WHALE_CURRENCIES = ["BTC", "ETH", "SOL", "HYPE"];
 const MIN_WHALE_NOTIONAL_USD = 100000;
+const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
+const DATA_API_BASE_URL = "https://data-api.polymarket.com";
+const PREDICTION_REFRESH_MS = 6 * 60 * 60 * 1000; // 6 hours
+const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "fintech", "tech", "finance"];
+const predictionSnapshotCache = new Map();
 
 function firstFiniteNumber(...values) {
   for (const value of values) {
@@ -1049,6 +1054,224 @@ function firstFiniteNumber(...values) {
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function safeJsonParse(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function extractYesNoPrices(market) {
+  const outcomes = Array.isArray(market?.outcomes)
+    ? market.outcomes
+    : safeJsonParse(market?.outcomes, []);
+  const outcomePrices = Array.isArray(market?.outcomePrices)
+    ? market.outcomePrices
+    : safeJsonParse(market?.outcomePrices, []);
+
+  let yesPrice = toFiniteNumber(outcomePrices[0], 0);
+  let noPrice = toFiniteNumber(outcomePrices[1], 0);
+
+  const normalizedOutcomes = outcomes.map((outcome) => String(outcome || "").trim().toLowerCase());
+  const yesIdx = normalizedOutcomes.findIndex((name) => name === "yes");
+  const noIdx = normalizedOutcomes.findIndex((name) => name === "no");
+
+  if (yesIdx >= 0) yesPrice = toFiniteNumber(outcomePrices[yesIdx], yesPrice);
+  if (noIdx >= 0) noPrice = toFiniteNumber(outcomePrices[noIdx], noPrice);
+
+  return { yesPrice, noPrice };
+}
+
+function normalizePredictionMarket(raw = {}) {
+  const event = Array.isArray(raw.events) && raw.events.length > 0 ? raw.events[0] : null;
+  const volume = toFiniteNumber(raw.volumeNum ?? raw.volume, 0);
+  const volume24h = toFiniteNumber(raw.volume24hr ?? raw.volume24hrClob, 0);
+  const liquidity = toFiniteNumber(raw.liquidityNum ?? raw.liquidity, 0);
+  const { yesPrice, noPrice } = extractYesNoPrices(raw);
+  return {
+    id: String(raw.id || ""),
+    conditionId: String(raw.conditionId || ""),
+    slug: String(raw.slug || ""),
+    question: String(raw.question || raw.title || ""),
+    eventTitle: String(event?.title || ""),
+    eventCategory: String(event?.category || ""),
+    eventTags: Array.isArray(event?.tags) ? event.tags.map((tag) => String(tag?.name || tag || "").toLowerCase()) : [],
+    endDate: raw.endDate || null,
+    image: raw.image || raw.icon || event?.image || null,
+    volume,
+    volume24h,
+    liquidity,
+    yesPrice,
+    noPrice,
+    oneWeekPriceChange: toFiniteNumber(raw.oneWeekPriceChange, 0),
+    oneMonthPriceChange: toFiniteNumber(raw.oneMonthPriceChange, 0),
+    updatedAt: raw.updatedAt || null
+  };
+}
+
+function classifyPredictionCategory(market) {
+  const haystack = [
+    market.question,
+    market.eventTitle,
+    market.eventCategory,
+    ...(market.eventTags || [])
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const matchesAny = (keywords) => keywords.some((keyword) => haystack.includes(keyword));
+  if (matchesAny(["geopolitic", "war", "ceasefire", "election", "government", "president", "middle east", "ukraine", "russia", "china", "iran", "israel"])) {
+    return "geopolitics";
+  }
+  if (matchesAny(["crypto", "bitcoin", "ethereum", "solana", "xrp", "bnb", "dogecoin", "hype", "defi", "token"])) {
+    return "crypto";
+  }
+  if (matchesAny(["fintech", "payments", "paypal", "block", "stripe", "visa", "mastercard", "neobank"])) {
+    return "fintech";
+  }
+  if (matchesAny(["tech", "ai", "apple", "microsoft", "google", "meta", "tesla", "nvidia", "openai", "amazon"])) {
+    return "tech";
+  }
+  if (matchesAny(["finance", "economy", "fed", "interest rate", "inflation", "stocks", "equity", "earnings", "gdp", "recession", "s&p", "nasdaq", "dow"])) {
+    return "finance";
+  }
+  return null;
+}
+
+async function fetchGammaJson(path) {
+  const fetch = await resolveFetch();
+  const response = await fetch(`${GAMMA_BASE_URL}${path}`);
+  if (!response.ok) {
+    throw new Error(`Gamma request failed: ${path} (${response.status})`);
+  }
+  return response.json();
+}
+
+async function fetchDataApiJson(path, params = {}) {
+  const fetch = await resolveFetch();
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item != null) query.append(key, String(item));
+      });
+      return;
+    }
+    query.append(key, String(value));
+  });
+  const qs = query.toString();
+  const url = `${DATA_API_BASE_URL}${path}${qs ? `?${qs}` : ""}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Data API request failed: ${path} (${response.status}) ${text}`);
+  }
+  return response.json();
+}
+
+function walletLabel(holder = {}) {
+  const name = String(holder?.name || "").trim();
+  if (name) return name;
+  const pseudonym = String(holder?.pseudonym || "").trim();
+  if (pseudonym) return pseudonym;
+  const wallet = String(holder?.proxyWallet || "");
+  if (!wallet) return "Unknown";
+  return `${wallet.slice(0, 6)}...${wallet.slice(-4)}`;
+}
+
+async function loadPredictionSnapshot() {
+  const cached = predictionSnapshotCache.get("snapshot");
+  if (cached && Date.now() - cached.cachedAt < PREDICTION_REFRESH_MS) {
+    return cached.payload;
+  }
+
+  let rawMarkets = [];
+  try {
+    rawMarkets = await fetchGammaJson("/markets?active=true&closed=false&archived=false&limit=800");
+  } catch {
+    rawMarkets = await fetchGammaJson("/markets?limit=800");
+  }
+  const normalized = (Array.isArray(rawMarkets) ? rawMarkets : [])
+    .map(normalizePredictionMarket)
+    .filter((market) => market.id && market.question);
+
+  const categories = Object.fromEntries(PREDICTION_CATEGORIES.map((category) => [category, []]));
+  normalized
+    .map((market) => ({ ...market, predictionCategory: classifyPredictionCategory(market) }))
+    .filter((market) => market.predictionCategory)
+    .sort((a, b) => b.volume - a.volume)
+    .forEach((market) => {
+      const bucket = categories[market.predictionCategory];
+      if (bucket && bucket.length < 5) bucket.push(market);
+    });
+
+  const categoryMarkets = Object.values(categories).flatMap((items) => items);
+  const categoryByConditionId = new Map();
+  const marketByConditionId = new Map();
+  categoryMarkets.forEach((market) => {
+    if (!market.conditionId) return;
+    categoryByConditionId.set(market.conditionId, classifyPredictionCategory(market) || "other");
+    marketByConditionId.set(market.conditionId, market);
+  });
+
+  const conditionIds = [...marketByConditionId.keys()];
+  const tradeSettled = await Promise.allSettled(
+    conditionIds.map((conditionId) =>
+      fetchDataApiJson("/trades", { market: conditionId, limit: 120 })
+    )
+  );
+
+  const whaleTransactions = [];
+  tradeSettled.forEach((result, idx) => {
+    if (result.status !== "fulfilled") return;
+    const conditionId = conditionIds[idx];
+    const marketMeta = marketByConditionId.get(conditionId);
+    const category = categoryByConditionId.get(conditionId) || "other";
+    const trades = Array.isArray(result.value) ? result.value : [];
+    trades.forEach((trade) => {
+      const size = toFiniteNumber(trade?.size, 0);
+      const price = toFiniteNumber(trade?.price, 0);
+      const notional = size * price;
+      if (!Number.isFinite(notional) || notional < 10000) return;
+      whaleTransactions.push({
+        id: `${trade?.transactionHash || "tx"}-${trade?.asset || conditionId}-${trade?.timestamp || 0}`,
+        marketId: marketMeta?.id || null,
+        conditionId,
+        market: trade?.title || marketMeta?.question || "Unknown market",
+        category,
+        transactionSize: notional,
+        price,
+        shares: size,
+        side: String(trade?.side || "").toUpperCase(),
+        outcome: trade?.outcome || "",
+        timestamp: Number(trade?.timestamp || 0),
+        txHash: trade?.transactionHash || ""
+      });
+    });
+  });
+
+  whaleTransactions.sort((a, b) => b.timestamp - a.timestamp);
+
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    refreshIntervalMs: PREDICTION_REFRESH_MS,
+    categories,
+    whaleTransactions
+  };
+  predictionSnapshotCache.set("snapshot", {
+    payload,
+    cachedAt: Date.now()
+  });
+  return payload;
 }
 
 function parseExpiration(instrumentName = "") {
@@ -1409,6 +1632,149 @@ app.get("/api/options/whale-trades", async (req, res) => {
   } catch (error) {
     console.error("Whale options fetch failed:", error.message);
     res.status(502).json({ error: "Failed to fetch whale options trades" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Prediction Markets (Polymarket Gamma API)
+// ---------------------------------------------------------------------------
+app.get("/api/prediction/snapshot", async (_req, res) => {
+  try {
+    const snapshot = await loadPredictionSnapshot();
+    res.json(snapshot);
+  } catch (error) {
+    console.error("Prediction snapshot failed:", error.message);
+    res.status(502).json({ error: "Failed to fetch prediction markets snapshot" });
+  }
+});
+
+app.get("/api/prediction/market-details/:marketId", async (req, res) => {
+  const { marketId } = req.params;
+  if (!marketId) {
+    return res.status(400).json({ error: "marketId is required" });
+  }
+
+  try {
+    const market = await fetchGammaJson(`/markets/${encodeURIComponent(marketId)}`);
+    const normalized = normalizePredictionMarket(market);
+    const conditionId = normalized.conditionId;
+    if (!conditionId) {
+      return res.status(404).json({ error: "Market conditionId not found" });
+    }
+
+    const holderPayload = await fetchDataApiJson("/holders", {
+      market: conditionId,
+      limit: 60
+    });
+    const holderBuckets = Array.isArray(holderPayload) ? holderPayload : [];
+    const flatHolders = holderBuckets.flatMap((bucket) => (Array.isArray(bucket?.holders) ? bucket.holders : []));
+
+    const sideFromHolder = (holder) => {
+      const outcomeIndex = Number(holder?.outcomeIndex);
+      const outcome = String(holder?.outcome || "").toLowerCase();
+      if (outcome === "yes" || outcomeIndex === 0) return "yes";
+      if (outcome === "no" || outcomeIndex === 1) return "no";
+      return null;
+    };
+
+    const holderRanked = { yes: [], no: [] };
+    flatHolders.forEach((holder) => {
+      const side = sideFromHolder(holder);
+      if (!side) return;
+      holderRanked[side].push(holder);
+    });
+    holderRanked.yes.sort((a, b) => toFiniteNumber(b?.amount, 0) - toFiniteNumber(a?.amount, 0));
+    holderRanked.no.sort((a, b) => toFiniteNumber(b?.amount, 0) - toFiniteNumber(a?.amount, 0));
+
+    const targetHolders = [...holderRanked.yes.slice(0, 5), ...holderRanked.no.slice(0, 5)];
+    const uniqueWallets = [...new Set(targetHolders.map((h) => String(h?.proxyWallet || "")).filter(Boolean))];
+
+    const positionsSettled = await Promise.allSettled(
+      uniqueWallets.map((wallet) =>
+        fetchDataApiJson("/positions", {
+          user: wallet,
+          market: conditionId,
+          sizeThreshold: 0
+        })
+      )
+    );
+
+    const positionsByWallet = new Map();
+    positionsSettled.forEach((result, idx) => {
+      const wallet = uniqueWallets[idx];
+      if (result.status !== "fulfilled") return;
+      const rows = Array.isArray(result.value) ? result.value : [];
+      positionsByWallet.set(wallet, rows);
+    });
+
+    const normalizePosition = (row = {}, holder = null) => {
+      const currentValue = toFiniteNumber(row.currentValue, toFiniteNumber(row.size, 0) * toFiniteNumber(row.curPrice, 0));
+      return {
+        id: `${row.proxyWallet || holder?.proxyWallet || "wallet"}-${row.asset || holder?.asset || "asset"}`,
+        holder: String(row.proxyWallet || holder?.proxyWallet || ""),
+        label: walletLabel({ ...holder, proxyWallet: row.proxyWallet || holder?.proxyWallet }),
+        sizeUsd: currentValue,
+        shares: toFiniteNumber(row.size, toFiniteNumber(holder?.amount, 0)),
+        avgEntry: toFiniteNumber(row.avgPrice, 0),
+        markPrice: toFiniteNumber(row.curPrice, 0),
+        pnlPct: toFiniteNumber(row.percentPnl, 0),
+        pnlUsd: toFiniteNumber(row.cashPnl, 0),
+        outcome: String(row.outcome || ""),
+        outcomeIndex: Number.isFinite(Number(row.outcomeIndex)) ? Number(row.outcomeIndex) : Number(holder?.outcomeIndex ?? -1)
+      };
+    };
+
+    const positionBuckets = { yes: [], no: [] };
+    targetHolders.forEach((holder) => {
+      const wallet = String(holder?.proxyWallet || "");
+      if (!wallet) return;
+      const rows = positionsByWallet.get(wallet) || [];
+      const side = sideFromHolder(holder);
+      const candidate = rows.find((row) => {
+        const idx = Number(row?.outcomeIndex);
+        if (side === "yes") return idx === 0 || String(row?.outcome || "").toLowerCase() === "yes";
+        if (side === "no") return idx === 1 || String(row?.outcome || "").toLowerCase() === "no";
+        return false;
+      });
+      if (!candidate) return;
+      positionBuckets[side].push(normalizePosition(candidate, holder));
+    });
+
+    positionBuckets.yes.sort((a, b) => b.sizeUsd - a.sizeUsd);
+    positionBuckets.no.sort((a, b) => b.sizeUsd - a.sizeUsd);
+
+    const holderOut = {
+      yes: positionBuckets.yes.slice(0, 5).map((row) => ({
+        holder: row.holder,
+        label: row.label,
+        sizeUsd: row.sizeUsd,
+        shares: row.shares
+      })),
+      no: positionBuckets.no.slice(0, 5).map((row) => ({
+        holder: row.holder,
+        label: row.label,
+        sizeUsd: row.sizeUsd,
+        shares: row.shares
+      }))
+    };
+
+    const details = {
+      market: normalized,
+      holderDataAvailable: holderOut.yes.length > 0 || holderOut.no.length > 0,
+      holderDataNote: holderOut.yes.length > 0 || holderOut.no.length > 0
+        ? ""
+        : "No holder data returned for this market at the moment.",
+      holders: holderOut,
+      positions: {
+        yes: positionBuckets.yes.slice(0, 5),
+        no: positionBuckets.no.slice(0, 5)
+      }
+    };
+
+    res.json(details);
+  } catch (error) {
+    console.error("Prediction market details failed:", error.message);
+    res.status(502).json({ error: "Failed to fetch prediction market details" });
   }
 });
 
