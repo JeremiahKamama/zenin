@@ -119,6 +119,12 @@ export function PredictionMarketModule() {
     return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}%`;
   };
 
+  const formatAvgPrice = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    return `$${n.toFixed(3)}`;
+  };
+
   const formatDateLabel = (value) => {
     if (!value) return "—";
     const date = new Date(value);
@@ -266,6 +272,7 @@ export function PredictionMarketModule() {
                   <th>Category</th>
                   <th>Market</th>
                   <th>Type</th>
+                  <th>Avg Price</th>
                   <th>Transaction Size</th>
                 </tr>
               </thead>
@@ -275,6 +282,7 @@ export function PredictionMarketModule() {
                     <td className="greek">{getPredictionCategoryLabel(item.category)}</td>
                     <td className="greek">{item.market}</td>
                     <td className="greek">{formatWhaleType(item)}</td>
+                    <td className="greek">{formatAvgPrice(item.price)}</td>
                     <td className="bid-ask positive">{formatDollar(item.transactionSize)}</td>
                   </tr>
                 ))}
@@ -328,79 +336,85 @@ export function PredictionMarketModule() {
                 )}
                 <p className="prediction-note">Average entry shown per row. PnL is mark-to-entry.</p>
 
-                <div className="prediction-columns">
-                  <div className="prediction-column">
-                    <h4>Top Holders - Yes</h4>
-                    {Array.isArray(marketDetails?.holders?.yes) && marketDetails.holders.yes.length > 0 ? (
-                      marketDetails.holders.yes.slice(0, 5).map((row, idx) => (
-                        <div key={`hy-${idx}`} className="prediction-holder-row">
-                          <span>{row.label || row.holder || "Wallet"}</span>
-                          <span>{formatDollar(row.sizeUsd || 0)}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="prediction-empty">No public holder data.</div>
-                    )}
-                  </div>
+                <div className="prediction-split-card">
+                  <h4>Top Holders</h4>
+                  <div className="prediction-split-grid">
+                    <div className="prediction-split-pane">
+                      <h5>Yes</h5>
+                      {Array.isArray(marketDetails?.holders?.yes) && marketDetails.holders.yes.length > 0 ? (
+                        marketDetails.holders.yes.slice(0, 5).map((row, idx) => (
+                          <div key={`hy-${idx}`} className="prediction-holder-row">
+                            <span>{row.label || row.holder || "Wallet"}</span>
+                            <span>{formatDollar(row.sizeUsd || 0)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="prediction-empty">No public holder data.</div>
+                      )}
+                    </div>
 
-                  <div className="prediction-column">
-                    <h4>Top Holders - No</h4>
-                    {Array.isArray(marketDetails?.holders?.no) && marketDetails.holders.no.length > 0 ? (
-                      marketDetails.holders.no.slice(0, 5).map((row, idx) => (
-                        <div key={`hn-${idx}`} className="prediction-holder-row">
-                          <span>{row.label || row.holder || "Wallet"}</span>
-                          <span>{formatDollar(row.sizeUsd || 0)}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="prediction-empty">No public holder data.</div>
-                    )}
+                    <div className="prediction-split-pane">
+                      <h5>No</h5>
+                      {Array.isArray(marketDetails?.holders?.no) && marketDetails.holders.no.length > 0 ? (
+                        marketDetails.holders.no.slice(0, 5).map((row, idx) => (
+                          <div key={`hn-${idx}`} className="prediction-holder-row">
+                            <span>{row.label || row.holder || "Wallet"}</span>
+                            <span>{formatDollar(row.sizeUsd || 0)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="prediction-empty">No public holder data.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <div className="prediction-columns" style={{ marginTop: "10px" }}>
-                  <div className="prediction-column">
-                    <h4>Positions - Yes</h4>
-                    {Array.isArray(marketDetails?.positions?.yes) && marketDetails.positions.yes.length > 0 ? (
-                      marketDetails.positions.yes.slice(0, 5).map((row) => (
-                        <div key={row.id} className="prediction-position-row">
-                          <div>
-                            <div>{row.label}</div>
-                            <small>Avg Entry: {Number(row.avgEntry || 0).toFixed(3)}</small>
+                <div className="prediction-split-card">
+                  <h4>Positions</h4>
+                  <div className="prediction-split-grid">
+                    <div className="prediction-split-pane">
+                      <h5>Yes</h5>
+                      {Array.isArray(marketDetails?.positions?.yes) && marketDetails.positions.yes.length > 0 ? (
+                        marketDetails.positions.yes.slice(0, 5).map((row) => (
+                          <div key={row.id} className="prediction-position-row">
+                            <div>
+                              <div>{row.label}</div>
+                              <small>Avg Entry: {Number(row.avgEntry || 0).toFixed(3)}</small>
+                            </div>
+                            <div>
+                              <div>{formatDollar(row.sizeUsd || 0)}</div>
+                              <small className={Number(row.pnlPct) >= 0 ? "positive" : "negative"}>
+                                {formatPercent(row.pnlPct || 0)}
+                              </small>
+                            </div>
                           </div>
-                          <div>
-                            <div>{formatDollar(row.sizeUsd || 0)}</div>
-                            <small className={Number(row.pnlPct) >= 0 ? "positive" : "negative"}>
-                              {formatPercent(row.pnlPct || 0)}
-                            </small>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="prediction-empty">No position data.</div>
-                    )}
-                  </div>
+                        ))
+                      ) : (
+                        <div className="prediction-empty">No position data.</div>
+                      )}
+                    </div>
 
-                  <div className="prediction-column">
-                    <h4>Positions - No</h4>
-                    {Array.isArray(marketDetails?.positions?.no) && marketDetails.positions.no.length > 0 ? (
-                      marketDetails.positions.no.slice(0, 5).map((row) => (
-                        <div key={row.id} className="prediction-position-row">
-                          <div>
-                            <div>{row.label}</div>
-                            <small>Avg Entry: {Number(row.avgEntry || 0).toFixed(3)}</small>
+                    <div className="prediction-split-pane">
+                      <h5>No</h5>
+                      {Array.isArray(marketDetails?.positions?.no) && marketDetails.positions.no.length > 0 ? (
+                        marketDetails.positions.no.slice(0, 5).map((row) => (
+                          <div key={row.id} className="prediction-position-row">
+                            <div>
+                              <div>{row.label}</div>
+                              <small>Avg Entry: {Number(row.avgEntry || 0).toFixed(3)}</small>
+                            </div>
+                            <div>
+                              <div>{formatDollar(row.sizeUsd || 0)}</div>
+                              <small className={Number(row.pnlPct) >= 0 ? "positive" : "negative"}>
+                                {formatPercent(row.pnlPct || 0)}
+                              </small>
+                            </div>
                           </div>
-                          <div>
-                            <div>{formatDollar(row.sizeUsd || 0)}</div>
-                            <small className={Number(row.pnlPct) >= 0 ? "positive" : "negative"}>
-                              {formatPercent(row.pnlPct || 0)}
-                            </small>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="prediction-empty">No position data.</div>
-                    )}
+                        ))
+                      ) : (
+                        <div className="prediction-empty">No position data.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

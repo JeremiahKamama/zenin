@@ -2176,6 +2176,43 @@ button {
   letter-spacing: 0.04em;
 }
 
+.prediction-split-card {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.45);
+  min-width: 0;
+}
+
+.prediction-split-card h4 {
+  margin: 0 0 8px;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.prediction-split-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.prediction-split-pane {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.prediction-split-pane h5 {
+  margin: 0 0 6px;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .prediction-holder-row,
 .prediction-position-row {
   display: flex;
@@ -2196,6 +2233,12 @@ button {
 .prediction-position-row small {
   color: #94a3b8;
   font-size: 0.72rem;
+}
+
+@media (max-width: 640px) {
+  .prediction-split-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .strike-col {
