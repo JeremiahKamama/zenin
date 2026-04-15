@@ -2192,6 +2192,16 @@ button {
   letter-spacing: 0.04em;
 }
 
+.prediction-combined-card {
+  display: grid;
+  gap: 12px;
+}
+
+.prediction-split-section + .prediction-split-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  padding-top: 12px;
+}
+
 .prediction-split-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
