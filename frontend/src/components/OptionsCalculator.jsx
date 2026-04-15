@@ -55,6 +55,7 @@ useEffect(() => {
   setSymbol(activeAsset);
   setSymbolSearch(activeAsset);
 }, [activeAsset]);
+  const [symbol, setSymbol] = useState(activeAsset);
   const [symbolSearch, setSymbolSearch] = useState(activeAsset);
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
   const [legs, setLegs] = useState([{ ...EMPTY_LEG }]);
@@ -64,8 +65,6 @@ useEffect(() => {
   const filteredChainData = chainData.filter(
   row => row.symbol === symbol
 );
-
-
   const DEFAULT_SPOTS = {
   BTC: 80000,
   ETH: 4000,
@@ -463,9 +462,8 @@ const effectiveSpot = useMemo(() => {
             {saveMsg && <span style={{ fontSize: "12px", color: "#22c55e" }}>{saveMsg}</span>}
           </div>
         </div>
-      </div>
-  );
-         
+
+         {/* P&L Diagram */}
       <div className="watchlist-panel glass" style={{ padding: "20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
@@ -500,4 +498,5 @@ const effectiveSpot = useMemo(() => {
             height={280}
             width="100%"/>
         </div>
-  
+      </div>
+  );
