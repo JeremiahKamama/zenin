@@ -1,7 +1,82 @@
 #!/usr/bin/env python3
 import sys
 import json
+from datetime import datetime, date
 import yfinance as yf
+
+def _normalize_date_str(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            parsed = _normalize_date_str(item)
+            if parsed:
+                return parsed
+        return None
+
+    try:
+        if hasattr(value, "to_pydatetime"):
+            value = value.to_pydatetime()
+    except Exception:
+        pass
+
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+
+    # Common yfinance formats: "2026-05-01 00:00:00", "2026-05-01"
+    if len(text) >= 10:
+        candidate = text[:10].replace("/", "-")
+        try:
+            datetime.fromisoformat(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    return None
+
+def _extract_next_earnings(calendar):
+    candidates = []
+    try:
+        if isinstance(calendar, dict):
+            earnings_date = calendar.get("Earnings Date")
+            if isinstance(earnings_date, dict):
+                candidates.extend(list(earnings_date.values()))
+            else:
+                candidates.append(earnings_date)
+        elif hasattr(calendar, "to_dict"):
+            cal_dict = calendar.to_dict()
+            if isinstance(cal_dict, dict):
+                earnings_date = cal_dict.get("Earnings Date")
+                if isinstance(earnings_date, dict):
+                    candidates.extend(list(earnings_date.values()))
+                else:
+                    candidates.append(earnings_date)
+    except Exception:
+        pass
+
+    today = date.today()
+    parsed_dates = []
+    for raw in candidates:
+        normalized = _normalize_date_str(raw)
+        if not normalized:
+            continue
+        try:
+            parsed = datetime.fromisoformat(normalized).date()
+            if parsed >= today:
+                parsed_dates.append(parsed)
+        except Exception:
+            continue
+
+    if not parsed_dates:
+        return None
+    return min(parsed_dates).isoformat()
 
 def fetch_earnings(symbol: str) -> dict:
     try:
@@ -44,18 +119,8 @@ def fetch_earnings(symbol: str) -> dict:
             except Exception:
                 pass
 
-        # Next earnings date
-        next_earnings = None
-        try:
-            if calendar is not None:
-                if isinstance(calendar, dict):
-                    dates = calendar.get("Earnings Date", [])
-                    if isinstance(dates, list) and dates:
-                        next_earnings = str(dates[0])
-                    elif dates:
-                        next_earnings = str(dates)
-        except Exception:
-            pass
+        # Next upcoming earnings date (future-only)
+        next_earnings = _extract_next_earnings(calendar)
 
         # Analyst recommendations summary
         recommend = info.get("recommendationKey", "")
@@ -85,6 +150,22 @@ if __name__ == "__main__":
     try:
         raw = sys.stdin.read().strip()
         data = json.loads(raw)
+        symbols = data.get("symbols")
+        if isinstance(symbols, list):
+            items = []
+            for sym in symbols:
+                safe_sym = str(sym or "").strip()
+                if not safe_sym:
+                    continue
+                result = fetch_earnings(safe_sym)
+                items.append({
+                    "symbol": safe_sym,
+                    "nextEarnings": result.get("nextEarnings"),
+                    "error": result.get("error")
+                })
+            print(json.dumps({"items": items}))
+            sys.exit(0)
+
         symbol = data.get("symbol", "")
         if not symbol:
             print(json.dumps({"error": "No symbol provided"}))

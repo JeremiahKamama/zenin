@@ -9,7 +9,6 @@ export function HomeModule({
   calculatePortfolioGain,
   balance = 0
 }) {
-  const [paymentAction, setPaymentAction] = useState(null); // deposit | withdraw | null
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
 
@@ -94,21 +93,6 @@ export function HomeModule({
   };
 
   const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
-  const PAYMENT_METHODS = ["PayPal", "Mpesa", "Bank Transfer"];
-
-  const openPaymentModal = (action) => {
-    setPaymentAction(action);
-  };
-
-  const closePaymentModal = () => {
-    setPaymentAction(null);
-  };
-
-  const handlePaymentMethodSelect = (method) => {
-    if (!paymentAction) return;
-    alert(`${paymentAction === "deposit" ? "Deposit" : "Withdraw"} via ${method} selected.`);
-    closePaymentModal();
-  };
 
   return (
     <div className="view-container home-dashboard">
@@ -130,20 +114,6 @@ export function HomeModule({
         <div className="metric-card glass">
           <label>Available Balance</label>
           <div className="value">${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div className="balance-action-row">
-            <button
-              className="balance-action-btn deposit"
-              onClick={() => openPaymentModal("deposit")}
-            >
-              Deposit
-            </button>
-            <button
-              className="balance-action-btn withdraw"
-              onClick={() => openPaymentModal("withdraw")}
-            >
-              Withdraw
-            </button>
-          </div>
         </div>
       </div>
 
@@ -274,27 +244,6 @@ export function HomeModule({
           </div>
         </div>
       </div>
-
-      {paymentAction && (
-        <div className="payment-method-overlay" onClick={closePaymentModal}>
-          <div className="payment-method-modal glass" onClick={(e) => e.stopPropagation()}>
-            <h3>{paymentAction === "deposit" ? "Choose Deposit Method" : "Choose Withdrawal Method"}</h3>
-            <p>Select how you want to proceed.</p>
-            <div className="payment-method-list">
-              {PAYMENT_METHODS.map((method) => (
-                <button
-                  key={method}
-                  className="payment-method-btn"
-                  onClick={() => handlePaymentMethodSelect(method)}
-                >
-                  {method}
-                </button>
-              ))}
-            </div>
-            <button className="payment-cancel-btn" onClick={closePaymentModal}>Cancel</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

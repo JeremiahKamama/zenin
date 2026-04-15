@@ -653,6 +653,83 @@ app.get("/api/earnings", async (req, res) => {
   });
 });
 
+app.get("/api/earnings-calendar", async (req, res) => {
+  const rawSymbols = String(req.query.symbols || "");
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 5);
+
+  const symbols = [...new Set(
+    rawSymbols
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => s.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20))
+  )].slice(0, limit);
+
+  if (!symbols.length) {
+    return res.status(400).json({ error: "symbols required" });
+  }
+
+  const { toYF } = buildSymbolMaps(symbols);
+  const yfSymbols = symbols.map((s) => toYF[s]);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (statusCode, payload) => {
+      if (settled) return;
+      settled = true;
+      res.status(statusCode).json(payload);
+      resolve();
+    };
+
+    const child = spawn("python3", ["fetch_earnings.py"], { cwd: __dirname });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+    child.on("close", (code) => {
+      if (stderr) console.error("Earnings calendar stderr:", stderr);
+      if (code !== 0) {
+        return finish(502, { error: "Failed to fetch earnings calendar" });
+      }
+
+      try {
+        const parsed = JSON.parse(stdout);
+        const items = Array.isArray(parsed?.items) ? parsed.items : [];
+        const byYfSymbol = new Map(items.map((item) => [item.symbol, item]));
+
+        const normalizedItems = symbols.map((originalSymbol) => {
+          const yfSymbol = toYF[originalSymbol];
+          const result = byYfSymbol.get(yfSymbol);
+          return {
+            symbol: originalSymbol,
+            nextEarnings: result?.nextEarnings || null,
+            source: "Yahoo Finance"
+          };
+        });
+
+        finish(200, { items: normalizedItems });
+      } catch {
+        finish(502, { error: "Failed to parse earnings calendar data" });
+      }
+    });
+
+    child.on("error", (err) => {
+      console.error("Failed to start earnings calendar process:", err);
+      finish(502, { error: err.message });
+    });
+
+    child.stdin.write(JSON.stringify({ symbols: yfSymbols }));
+    child.stdin.end();
+
+    setTimeout(() => {
+      child.kill();
+      finish(504, { error: "Earnings calendar fetch timed out" });
+    }, 20000);
+  });
+});
+
 app.get("/api/watchlist", async (req, res) => {
   const { category } = req.query;
 

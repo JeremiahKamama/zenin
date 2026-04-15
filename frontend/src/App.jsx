@@ -40,31 +40,6 @@ useEffect(() => {
     .catch(console.error);
 }, []);
 
-const deposit = async (amount) => {
-  const amt = parseFloat(amount);
-  if (!amt || amt <= 0) return;
-  const res = await fetch(`${BACKEND_URL}/db/balance`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount: amt, type: "deposit" })
-  });
-  const data = await res.json();
-  if (data.balance !== undefined) setBalance(data.balance);
-};
-
-const withdraw = async (amount) => {
-  const amt = parseFloat(amount);
-  if (!amt || amt <= 0) return;
-  const res = await fetch(`${BACKEND_URL}/db/balance`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount: amt, type: "withdraw" })
-  });
-  const data = await res.json();
-  if (data.error) { alert(data.error); return; }
-  if (data.balance !== undefined) setBalance(data.balance);
-};
-
   useEffect(() => {
     localStorage.setItem("zenin_balance", balance.toString());
   }, [balance]);
@@ -532,8 +507,6 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             calculatePortfolioValue={calculatePortfolioValue}
             calculatePortfolioGain={calculatePortfolioGain}
             balance={balance}
-            onDeposit={deposit}
-            onWithdraw={withdraw}
           />
         )}
         {activeSection === "Watchlist" && (

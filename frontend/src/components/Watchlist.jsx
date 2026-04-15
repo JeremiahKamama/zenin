@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+
 const STOCK_THEMES = [
   "AI",
   "Defense",
@@ -29,9 +31,17 @@ export function Watchlist({
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
+  const [earningsPage, setEarningsPage] = useState(1);
+  const [earningsItems, setEarningsItems] = useState([]);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [earningsError, setEarningsError] = useState("");
 
   useEffect(() => {
     setCurrentPage(1);
+  }, [activeCategory, activeTheme]);
+
+  useEffect(() => {
+    setEarningsPage(1);
   }, [activeCategory, activeTheme]);
 
   // Derive the displayed assets based on active theme (stocks only)
@@ -50,10 +60,70 @@ export function Watchlist({
 );
 const pageSymbols = pagedAssets.map((a) => a.symbol).join(",");
 
+  const earningsAssets = activeCategory === "stocks" ? displayedAssets : [];
+  const earningsPerPage = 5;
+  const earningsTotalPages = Math.max(1, Math.ceil(earningsAssets.length / earningsPerPage));
+  const earningsSymbols = earningsAssets
+    .slice((earningsPage - 1) * earningsPerPage, earningsPage * earningsPerPage)
+    .map((a) => a.symbol);
+
 useEffect(() => {
   onPageChange?.(currentPage, pageSymbols ? pageSymbols.split(",") : []);
 }, [currentPage, activeTheme, activeCategory, pageSymbols]);
 
+  useEffect(() => {
+    if (activeCategory !== "stocks") return;
+    if (!earningsSymbols.length) {
+      setEarningsItems([]);
+      setEarningsError("");
+      return;
+    }
+
+    let isMounted = true;
+    const controller = new AbortController();
+
+    const fetchEarningsCalendar = async () => {
+      setEarningsLoading(true);
+      setEarningsError("");
+      try {
+        const params = new URLSearchParams({
+          symbols: earningsSymbols.join(","),
+          limit: String(earningsPerPage)
+        });
+        const res = await fetch(`${BACKEND_URL}/earnings-calendar?${params.toString()}`, {
+          signal: controller.signal
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+        const data = await res.json();
+        if (!isMounted) return;
+        setEarningsItems(Array.isArray(data?.items) ? data.items : []);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        if (!isMounted) return;
+        setEarningsItems([]);
+        setEarningsError("Unable to load earnings calendar.");
+      } finally {
+        if (isMounted) setEarningsLoading(false);
+      }
+    };
+
+    fetchEarningsCalendar();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [activeCategory, earningsPage, earningsSymbols.join(","), earningsPerPage]);
+
+  const formatEarningsDate = (value) => {
+    if (!value) return "No upcoming date";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "No upcoming date";
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
 
   return (
     <section className="watchlist-panel">
@@ -102,6 +172,65 @@ useEffect(() => {
               {theme}
             </button>
           ))}
+        </div>
+      )}
+
+      {activeCategory === "stocks" && (
+        <div className="watchlist-panel glass" style={{ marginBottom: "12px", padding: "12px 14px" }}>
+          <div className="section-header" style={{ marginBottom: "8px" }}>
+            <h2 style={{ margin: 0, fontSize: "14px" }}>Earnings</h2>
+            <div className="asset-count">Yahoo Finance</div>
+          </div>
+          {earningsLoading ? (
+            <div className="loading-state">Loading earnings calendar...</div>
+          ) : earningsError ? (
+            <div className="loading-state">{earningsError}</div>
+          ) : earningsItems.length === 0 ? (
+            <div className="loading-state">No stock earnings found.</div>
+          ) : (
+            <div style={{ display: "grid", gap: "8px" }}>
+              {earningsItems.map((item) => (
+                <div
+                  key={item.symbol}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(15,23,42,0.35)"
+                  }}
+                >
+                  <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{item.symbol}</strong>
+                  <span style={{ fontSize: "12px", color: "#94a3b8" }}>
+                    {formatEarningsDate(item.nextEarnings)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {earningsTotalPages > 1 && (
+            <div className="pagination-controls" style={{ marginTop: "10px", paddingTop: 0 }}>
+              <button
+                className="pagination-button"
+                disabled={earningsPage === 1}
+                onClick={() => setEarningsPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <div className="pagination-label">
+                Page {earningsPage} of {earningsTotalPages}
+              </div>
+              <button
+                className="pagination-button"
+                disabled={earningsPage === earningsTotalPages}
+                onClick={() => setEarningsPage((p) => Math.min(earningsTotalPages, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
 
