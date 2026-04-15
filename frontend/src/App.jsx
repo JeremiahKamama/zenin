@@ -94,6 +94,7 @@ function App() {
   const [tradeToast, setTradeToast] = useState(null);
   const searchSectionRef = useRef(null);
   const priceCacheRef = useRef(new Map());
+  const portfolioRef = useRef([]);
   const PRICE_CACHE_TTL_MS = 60000;
 
   const stockThemes = useMemo(() => {
@@ -481,6 +482,79 @@ useEffect(() => {
     if (asset?.marketType) return String(asset.marketType).trim().toLowerCase();
     return normalizeAssetType(asset) === "crypto" ? "spot" : "equity";
   };
+  const isCryptoHolding = (holding) => {
+    const type = String(holding?.type || "").toLowerCase();
+    const marketType = String(holding?.marketType || "").toLowerCase();
+    return type === "crypto" || type === "stablecoin" || type === "exchange token" || marketType === "spot";
+  };
+
+  const holdingEntryPriceByKey = useMemo(() => {
+    const positions = new Map();
+    const orderedTrades = [...(Array.isArray(trades) ? trades : [])].sort((a, b) => {
+      const aTs = new Date(a?.executedAt || a?.date || 0).getTime();
+      const bTs = new Date(b?.executedAt || b?.date || 0).getTime();
+      return aTs - bTs;
+    });
+
+    orderedTrades.forEach((trade) => {
+      const symbol = normalizeSymbolKey(trade?.asset);
+      const marketType = String(trade?.marketType || "spot").trim().toLowerCase();
+      const key = `${symbol}::${marketType}`;
+      const row = positions.get(key) || { qty: 0, cost: 0 };
+      const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+      const qty = Math.abs(Number(trade?.quantity) || 0);
+      const price = Number(trade?.price) || 0;
+      if (qty <= 0 || price < 0) return;
+
+      if (side === "buy") {
+        row.qty += qty;
+        row.cost += qty * price;
+      } else {
+        const closeQty = Math.min(row.qty, qty);
+        const avgCost = row.qty > 0 ? row.cost / row.qty : 0;
+        row.qty -= closeQty;
+        row.cost -= closeQty * avgCost;
+        if (row.qty <= 1e-8) {
+          row.qty = 0;
+          row.cost = 0;
+        }
+      }
+
+      positions.set(key, row);
+    });
+
+    const entryByKey = new Map();
+    positions.forEach((row, key) => {
+      if (row.qty > 1e-8 && row.cost > 0) {
+        entryByKey.set(key, row.cost / row.qty);
+      }
+    });
+    return entryByKey;
+  }, [trades]);
+
+  const portfolioWithEntry = useMemo(() => {
+    return portfolio.map((holding) => {
+      const key = `${normalizeSymbolKey(holding.symbol)}::${String(holding.marketType || "spot").toLowerCase()}`;
+      const computedEntry = holdingEntryPriceByKey.get(key);
+      const fallbackEntry = Number(holding?.entryPrice);
+      return {
+        ...holding,
+        entryPrice: Number.isFinite(fallbackEntry)
+          ? fallbackEntry
+          : (Number.isFinite(computedEntry) ? computedEntry : Number(holding?.price) || 0)
+      };
+    });
+  }, [portfolio, holdingEntryPriceByKey]);
+  const portfolioRefreshKey = useMemo(
+    () => portfolio.map((holding) =>
+      `${normalizeSymbolKey(holding.symbol)}::${String(holding.marketType || "spot").toLowerCase()}::${Number(holding.quantity) || 0}`
+    ).join("|"),
+    [portfolio]
+  );
+
+  useEffect(() => {
+    portfolioRef.current = portfolio;
+  }, [portfolio]);
 
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const normalizedQuantity = Math.max(0, quantity);
@@ -679,22 +753,98 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   };
 
   const calculatePortfolioValue = () => {
-    return portfolio.reduce((total, item) => {
+    return portfolioWithEntry.reduce((total, item) => {
       const itemValue = (item.price || 0) * (item.quantity || 0);
       return total + itemValue;
     }, 0);
   };
 
   const calculatePortfolioGain = () => {
-    return portfolio.reduce((total, item) => {
+    return portfolioWithEntry.reduce((total, item) => {
       const itemValue = (item.price || 0) * (item.quantity || 0);
-      const prevPrice = item.price && item.priceChangePercent
-        ? item.price / (1 + item.priceChangePercent / 100)
-        : item.price;
-      const prevValue = (prevPrice || 0) * (item.quantity || 0);
-      return total + (itemValue - prevValue);
+      const entryPrice = Number(item.entryPrice);
+      const costBasis = Number.isFinite(entryPrice) ? entryPrice : Number(item.price) || 0;
+      const costValue = costBasis * (item.quantity || 0);
+      return total + (itemValue - costValue);
     }, 0);
   };
+
+  useEffect(() => {
+    if (!portfolioRef.current.length) return;
+    let canceled = false;
+
+    const chunk = (rows, size = 40) => {
+      const out = [];
+      for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+      return out;
+    };
+
+    const fetchQuotes = async (type, symbols) => {
+      const prices = {};
+      const batches = chunk(symbols);
+      for (const batch of batches) {
+        if (!batch.length) continue;
+        try {
+          const res = await fetch(
+            `${BACKEND_URL}/prices?type=${encodeURIComponent(type)}&symbols=${encodeURIComponent(batch.join(","))}`
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+          const quoteMap = data?.prices && typeof data.prices === "object" ? data.prices : {};
+          Object.assign(prices, quoteMap);
+        } catch {
+          // keep previous prices on quote fetch failures
+        }
+      }
+      return prices;
+    };
+
+    const refreshHoldingsPrices = async () => {
+      const symbolsByType = { tradfi: new Set(), crypto: new Set() };
+      portfolioRef.current.forEach((holding) => {
+        const symbol = normalizeSymbolKey(holding.symbol);
+        if (!symbol) return;
+        if (isCryptoHolding(holding)) symbolsByType.crypto.add(symbol);
+        else symbolsByType.tradfi.add(symbol);
+      });
+
+      const [tradfiQuotes, cryptoQuotes] = await Promise.all([
+        fetchQuotes("tradfi", [...symbolsByType.tradfi]),
+        fetchQuotes("crypto", [...symbolsByType.crypto])
+      ]);
+
+      if (canceled) return;
+      const combined = new Map();
+      Object.entries({ ...tradfiQuotes, ...cryptoQuotes }).forEach(([symbol, quote]) => {
+        const price = Number(quote?.price);
+        const priceChangePercent = Number(quote?.priceChangePercent);
+        if (!Number.isFinite(price) && !Number.isFinite(priceChangePercent)) return;
+        combined.set(symbol, {
+          price: Number.isFinite(price) ? price : null,
+          priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+        });
+      });
+
+      if (!combined.size) return;
+      setPortfolio((prev) => prev.map((holding) => {
+        const symbol = normalizeSymbolKey(holding.symbol);
+        const quote = combined.get(symbol);
+        if (!quote) return holding;
+        return {
+          ...holding,
+          price: quote.price ?? holding.price,
+          priceChangePercent: quote.priceChangePercent ?? holding.priceChangePercent
+        };
+      }));
+    };
+
+    refreshHoldingsPrices();
+    const intervalId = setInterval(refreshHoldingsPrices, 5 * 60 * 1000);
+    return () => {
+      canceled = true;
+      clearInterval(intervalId);
+    };
+  }, [portfolioRefreshKey]);
 
   // ── Watchlist helpers ─────────────────────────────────────────────────
   const isInWatchlist = (symbol, marketType) => {
@@ -1101,7 +1251,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       <main className="main-content">
         {activeSection === "Home" && (
           <HomeModule
-            portfolio={portfolio}
+            portfolio={portfolioWithEntry}
+            trades={trades}
             assets={assets}
             marketMovers={homeMarketMovers}
             watchlistAssets={watchlistAssets}
@@ -1207,7 +1358,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         {activeSection === "Portfolio" && (
           <div className="view-container">
             <PortfolioModule
-                portfolio={portfolio}
+                portfolio={portfolioWithEntry}
                 trades={trades}
                 calculatePortfolioValue={calculatePortfolioValue}
                 calculatePortfolioGain={calculatePortfolioGain}
@@ -1245,7 +1396,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         {activeSection === "Journal" && (
           <JournalModule
             trades={trades}
-            portfolio={portfolio}
+            portfolio={portfolioWithEntry}
             balance={balance}
             accountEquity={(Number(balance) || 0) + calculatePortfolioValue()}
           />
@@ -1259,7 +1410,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           onConfirm={addToPortfolio}
           isInWatchlist={isInWatchlist}
           onToggleStar={toggleWatchlistStar}
-          portfolio={portfolio}
+          portfolio={portfolioWithEntry}
           balance={balance}
         />
       )}

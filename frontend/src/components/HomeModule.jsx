@@ -14,6 +14,7 @@ const MOVERS_HORIZONS = {
 
 export function HomeModule({
   portfolio,
+  trades = [],
   assets,
   marketMovers = [],
   watchlistAssets = [],
@@ -173,8 +174,43 @@ export function HomeModule({
     .slice(0, 5);
 
   const portfolioValue = calculatePortfolioValue();
-  const totalAccountEquity = portfolioValue + (Number(balance) || 0);
   const initialBalance = 10000;
+  const tradeTimeline = useMemo(() => {
+    return (Array.isArray(trades) ? trades : [])
+      .map((trade, idx) => {
+        const timestamp = new Date(trade?.executedAt || trade?.date || 0).getTime();
+        if (!Number.isFinite(timestamp)) return null;
+        const accountEquityAfter = Number(trade?.accountEquityAfter ?? trade?.account_equity_after);
+        const balanceAfter = Number(trade?.balanceAfter ?? trade?.balance_after);
+        const portfolioValueAfter = Number(trade?.portfolioValueAfter ?? trade?.portfolio_value_after);
+        const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+        const notional = Number(trade?.notional);
+        const fallbackNotional = Number(trade?.price) * Math.abs(Number(trade?.quantity));
+        return {
+          id: trade?.id ?? `trade-${idx}`,
+          t: timestamp,
+          side,
+          notional: Number.isFinite(notional) ? Math.abs(notional) : (Number.isFinite(fallbackNotional) ? Math.abs(fallbackNotional) : 0),
+          equity: Number.isFinite(accountEquityAfter)
+            ? accountEquityAfter
+            : Number.isFinite(balanceAfter) && Number.isFinite(portfolioValueAfter)
+              ? balanceAfter + portfolioValueAfter
+              : null,
+          balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.t - b.t);
+  }, [trades]);
+  const inferredCashBalance = useMemo(() => {
+    const latestWithBalance = [...tradeTimeline].reverse().find((trade) => Number.isFinite(trade.balanceAfter));
+    if (latestWithBalance) return latestWithBalance.balanceAfter;
+    return tradeTimeline.reduce((cash, trade) => {
+      if (!Number.isFinite(trade.notional)) return cash;
+      return trade.side === "sell" ? cash + trade.notional : cash - trade.notional;
+    }, initialBalance);
+  }, [tradeTimeline]);
+  const totalAccountEquity = inferredCashBalance + portfolioValue;
   const isTreasuryAsset = (asset) => {
     const symbol = (asset?.symbol || "").toUpperCase();
     return asset?.market === "Treasury" || /^USTY?\d+Y$/.test(symbol);
@@ -186,29 +222,55 @@ export function HomeModule({
     return `$${value.toFixed(2)}`;
   };
 
-  // Simulated chart data based on mode and interval
-  const generateChartData = () => {
-    const points = { "1D": 24, "1W": 7, "3M": 90, "1Y": 52, "YTD": 52, "5Y": 60, "MAX": 120 }[chartInterval] || 24;
+  const chartData = useMemo(() => {
+    const pointCountMap = { "1D": 24, "1W": 7, "3M": 90, "1Y": 52, "YTD": 52, "5Y": 60, "MAX": 120 };
+    const points = pointCountMap[chartInterval] || 24;
     const now = Date.now();
-    const msMap = { "1D": 3600000, "1W": 86400000, "3M": 86400000, "1Y": 604800000, "YTD": 604800000, "5Y": 2592000000, "MAX": 2592000000 };
-    const step = msMap[chartInterval] || 3600000;
+    const start = (() => {
+      if (chartInterval === "1D") return now - 24 * 60 * 60 * 1000;
+      if (chartInterval === "1W") return now - 7 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "YTD") {
+        const d = new Date(now);
+        return new Date(d.getFullYear(), 0, 1).getTime();
+      }
+      if (chartInterval === "5Y") return now - 5 * 365 * 24 * 60 * 60 * 1000;
+      const firstTradeTs = tradeTimeline[0]?.t;
+      return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 30 * 24 * 60 * 60 * 1000;
+    })();
+
+    const inRangeTrades = tradeTimeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
+    const beforeRangeTrade = [...tradeTimeline]
+      .reverse()
+      .find((trade) => trade.t < start && Number.isFinite(trade.equity));
+    const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
+
+    const anchors = [
+      { t: start, equity: startEquity },
+      ...inRangeTrades.map((trade) => ({ t: trade.t, equity: trade.equity })),
+      { t: now, equity: totalAccountEquity }
+    ].sort((a, b) => a.t - b.t);
+
+    let anchorIdx = 0;
+    const step = points > 1 ? (now - start) / (points - 1) : 0;
+
+    const toSeriesValue = (equity) => {
+      if (chartMode === "equity") return equity;
+      if (chartMode === "percentage") return ((equity - initialBalance) / initialBalance) * 100;
+      return equity - initialBalance;
+    };
 
     return Array.from({ length: points }, (_, i) => {
-      const t = now - (points - i) * step;
-      const progress = i / points;
-      const noise = (Math.random() - 0.48) * 0.02;
-      const trend = progress * 0.15;
-      const val = portfolioValue * (0.85 + trend + noise);
-
-      if (chartMode === "equity") return [t, parseFloat(val.toFixed(2))];
-      if (chartMode === "percentage") return [t, parseFloat(((val - initialBalance) / initialBalance * 100).toFixed(2))];
-      if (chartMode === "pnl") return [t, parseFloat((val - initialBalance).toFixed(2))];
-      return [t, val];
+      const t = start + step * i;
+      while (anchorIdx + 1 < anchors.length && anchors[anchorIdx + 1].t <= t) {
+        anchorIdx += 1;
+      }
+      const equity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
+      return [Math.round(t), Number(toSeriesValue(equity).toFixed(2))];
     });
-  };
-
-  const chartData = generateChartData();
-  const isProfitable = portfolioValue >= initialBalance;
+  }, [chartInterval, chartMode, tradeTimeline, totalAccountEquity]);
+  const isProfitable = totalAccountEquity >= initialBalance;
 
   const chartColor = chartMode === "pnl"
     ? (isProfitable ? "#22c55e" : "#ef4444")

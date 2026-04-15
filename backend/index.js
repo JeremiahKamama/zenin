@@ -435,6 +435,100 @@ async function fetchCryptoMarketData() {
   }
 }
 
+async function fetchCryptoQuotesBySymbols(symbols = []) {
+  const normalizedSymbols = [...new Set(
+    (Array.isArray(symbols) ? symbols : [])
+      .map((symbol) => String(symbol || "").trim().toUpperCase())
+      .filter(Boolean)
+  )];
+  if (!normalizedSymbols.length) return {};
+
+  const fetch = await resolveFetch();
+  let hyperMids = {};
+  let perpCtxMap = new Map();
+  let spotCtxMap = new Map();
+
+  try {
+    const [midsRes, perpCtxRes, spotCtxRes] = await Promise.allSettled([
+      postHyperliquidInfo({ type: "allMids" }),
+      postHyperliquidInfo({ type: "metaAndAssetCtxs" }),
+      postHyperliquidInfo({ type: "spotMetaAndAssetCtxs" })
+    ]);
+
+    if (midsRes.status === "fulfilled" && midsRes.value && typeof midsRes.value === "object") {
+      hyperMids = midsRes.value;
+    }
+
+    if (perpCtxRes.status === "fulfilled" && Array.isArray(perpCtxRes.value)) {
+      const [meta, contexts] = perpCtxRes.value;
+      const universe = Array.isArray(meta?.universe) ? meta.universe : [];
+      const ctxs = Array.isArray(contexts) ? contexts : [];
+      universe.forEach((u, idx) => {
+        const key = String(u?.name || "").toUpperCase();
+        if (key && ctxs[idx]) perpCtxMap.set(key, ctxs[idx]);
+      });
+    }
+
+    if (spotCtxRes.status === "fulfilled" && Array.isArray(spotCtxRes.value)) {
+      const [meta, contexts] = spotCtxRes.value;
+      const tokens = Array.isArray(meta?.tokens) ? meta.tokens : [];
+      const universe = Array.isArray(meta?.universe) ? meta.universe : [];
+      const ctxs = Array.isArray(contexts) ? contexts : [];
+      const tokenByIndex = new Map(tokens.map((t) => [t.index, t]));
+      universe.forEach((pair, idx) => {
+        const baseTokenIndex = Array.isArray(pair?.tokens) ? pair.tokens[0] : null;
+        const baseToken = tokenByIndex.get(baseTokenIndex);
+        const key = String(baseToken?.name || "").toUpperCase();
+        if (key && ctxs[idx]) spotCtxMap.set(key, ctxs[idx]);
+      });
+    }
+  } catch {
+    // fallback to CoinGecko below
+  }
+
+  const quotes = {};
+  const missingSymbols = [];
+  normalizedSymbols.forEach((symbol) => {
+    const midsValue = Number(hyperMids[symbol]);
+    const perpCtx = perpCtxMap.get(symbol);
+    const spotCtx = spotCtxMap.get(symbol);
+    const markPx = Number(perpCtx?.markPx ?? spotCtx?.midPx);
+    const prevDayPx = Number(perpCtx?.prevDayPx ?? spotCtx?.prevDayPx);
+    const price = Number.isFinite(midsValue) ? midsValue : (Number.isFinite(markPx) ? markPx : null);
+    const priceChangePercent = computePercentChange(price, prevDayPx);
+    quotes[symbol] = {
+      price: Number.isFinite(price) ? price : null,
+      priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+    };
+    if (!Number.isFinite(price)) {
+      missingSymbols.push(symbol);
+    }
+  });
+
+  if (missingSymbols.length > 0) {
+    try {
+      const ids = missingSymbols.map(getCoinGeckoIdForSymbol).join(",");
+      const cgUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
+      const cgRes = await fetch(cgUrl);
+      const cgData = cgRes.ok ? await cgRes.json() : {};
+      missingSymbols.forEach((symbol) => {
+        const id = getCoinGeckoIdForSymbol(symbol);
+        const info = cgData[id] || {};
+        if (Number.isFinite(Number(info.usd))) {
+          quotes[symbol].price = Number(info.usd);
+        }
+        if (Number.isFinite(Number(info.usd_24h_change))) {
+          quotes[symbol].priceChangePercent = Number(info.usd_24h_change);
+        }
+      });
+    } catch {
+      // ignore CoinGecko failures
+    }
+  }
+
+  return quotes;
+}
+
 // ---------------------------------------------------------------------------
 // yfinance bridge
 // ---------------------------------------------------------------------------
@@ -1041,6 +1135,32 @@ app.get("/api/watchlist", async (req, res) => {
   return res.json({ category: key, assets: enrichedAssets });
 });
 
+app.get("/api/prices", async (req, res) => {
+  const rawSymbols = String(req.query.symbols || "");
+  const type = String(req.query.type || "tradfi").trim().toLowerCase();
+  const symbols = [...new Set(
+    rawSymbols
+      .split(",")
+      .map((symbol) => String(symbol || "").trim().toUpperCase())
+      .filter(Boolean)
+  )].slice(0, 200);
+
+  if (!symbols.length) {
+    return res.status(400).json({ error: "symbols query is required" });
+  }
+
+  try {
+    if (type === "crypto") {
+      const prices = await fetchCryptoQuotesBySymbols(symbols);
+      return res.json({ type: "crypto", prices });
+    }
+    const prices = await fetchYFinancePrices(symbols);
+    return res.json({ type: "tradfi", prices });
+  } catch (error) {
+    return res.status(502).json({ error: error.message || "Failed to fetch prices" });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 🔥 LIVE GREEKS ENGINE (WebSocket helper)
 // ---------------------------------------------------------------------------
@@ -1152,6 +1272,7 @@ const PREDICTION_CATEGORY_TAGS = {
   finance: "finance"
 };
 const PREDICTION_EVENTS_FETCH_LIMIT = 160;
+const POLYMARKET_WEB_BASE_URL = "https://polymarket.com";
 const EODHD_API_TOKEN = String(
   process.env.EODHD_API_TOKEN ||
   process.env.EODHD_API_KEY ||
@@ -1335,10 +1456,11 @@ function normalizePredictionMarket(raw = {}, sourceRank = 0) {
   const trendingPct = toFiniteNumber(raw.oneWeekPriceChange, 0);
   const recentMetric = volume24h > 0 ? volume24h : toFiniteNumber(raw.volume1mo ?? raw.volume1moClob, 0);
   const trendMetric = Math.abs(trendingPct);
+  const sourcePriority = Math.max(0, 200 - Number(sourceRank || 0));
   const polymarketRankScore =
     (raw?.featured ? 2_000_000_000 : 0) +
     (raw?.new ? 1_000_000_000 : 0) +
-    (Math.max(0, 1000 - Number(sourceRank || 0)) * 5_000_000) +
+    (sourcePriority * 2_000) +
     (recentMetric * 0.3) +
     (trendMetric * 15_000) +
     (volume * 0.15) +
@@ -1395,6 +1517,100 @@ async function fetchPredictionEventsByTag(tagSlug, limit = PREDICTION_EVENTS_FET
   );
 }
 
+async function fetchCategoryEventsFromPolymarketPage(category) {
+  const fetch = await resolveFetch();
+  const slug = String(category || "").trim().toLowerCase();
+  if (!slug) return [];
+  const response = await fetch(`${POLYMARKET_WEB_BASE_URL}/${encodeURIComponent(slug)}`);
+  if (!response.ok) return [];
+  const html = await response.text();
+  const scriptStart = html.indexOf('<script id="__NEXT_DATA__"');
+  if (scriptStart < 0) return [];
+  const open = html.indexOf(">", scriptStart);
+  const close = html.indexOf("</script>", open);
+  if (open < 0 || close < 0) return [];
+  let payload = null;
+  try {
+    payload = JSON.parse(html.slice(open + 1, close));
+  } catch {
+    return [];
+  }
+  const queries = payload?.props?.pageProps?.dehydratedState?.queries;
+  if (!Array.isArray(queries)) return [];
+  let categoryQuery = queries.find(
+    (q) => Array.isArray(q?.queryKey) && String(q.queryKey[0] || "") === `${slug}-markets`
+  );
+
+  if (!categoryQuery) {
+    categoryQuery = queries.find((q) =>
+      Array.isArray(q?.queryKey) &&
+      String(q.queryKey[0] || "") === "events" &&
+      String(q.queryKey[1] || "") === "homepageFilters" &&
+      String(q.queryKey[5] || "").toLowerCase() === slug
+    );
+  }
+
+  const data = categoryQuery?.state?.data;
+  const page0 = Array.isArray(data?.pages) ? data.pages[0] : null;
+  const events = Array.isArray(page0?.events)
+    ? page0.events
+    : (Array.isArray(data?.events) ? data.events : (Array.isArray(data) ? data : []));
+  return events;
+}
+
+function selectTopMarketsByPageOrder(markets, limit = 5) {
+  const max = Math.max(1, Number(limit) || 5);
+  const selected = [];
+  const seenConditions = new Set();
+  const seenEvents = new Set();
+
+  const pushMarket = (market, eventScoped = false) => {
+    const conditionKey = String(market?.conditionId || market?.id || "");
+    if (!conditionKey || seenConditions.has(conditionKey)) return false;
+    const eventKey = String(market?.eventId || market?.eventSlug || "");
+    if (eventScoped && eventKey && seenEvents.has(eventKey)) return false;
+    selected.push(market);
+    seenConditions.add(conditionKey);
+    if (eventKey) seenEvents.add(eventKey);
+    return true;
+  };
+
+  // First pass: one market per event, preserving page order.
+  for (const market of markets) {
+    if (selected.length >= max) break;
+    pushMarket(market, true);
+  }
+
+  // Second pass: fill remaining slots with next markets in order.
+  for (const market of markets) {
+    if (selected.length >= max) break;
+    pushMarket(market, false);
+  }
+
+  return selected.slice(0, max);
+}
+
+function eventTagsToSlugs(event) {
+  return (Array.isArray(event?.tags) ? event.tags : [])
+    .map((tag) => String(tag?.slug || tag?.label || tag?.name || tag || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isEventAllowedForCategory(event, category) {
+  const tag = String(PREDICTION_CATEGORY_TAGS[category] || category || "").toLowerCase();
+  const slugs = eventTagsToSlugs(event);
+  if (!slugs.includes(tag)) return false;
+
+  // Reduce cross-category bleed in finance without dropping core finance markets.
+  if (category === "finance") {
+    const sportsIndicators = new Set([
+      "sports", "nba", "nfl", "mlb", "nhl", "soccer", "tennis", "golf", "ufc", "mma", "boxing"
+    ]);
+    if (slugs.some((s) => sportsIndicators.has(s))) return false;
+  }
+  return true;
+}
+
 async function fetchDataApiJson(path, params = {}) {
   const fetch = await resolveFetch();
   const query = new URLSearchParams();
@@ -1441,9 +1657,31 @@ async function loadPredictionSnapshot() {
     const tagSlug = PREDICTION_CATEGORY_TAGS[category] || category;
     let events = [];
     try {
-      events = await fetchPredictionEventsByTag(tagSlug, PREDICTION_EVENTS_FETCH_LIMIT);
+      const pageEvents = await fetchCategoryEventsFromPolymarketPage(category);
+      const filteredPageEvents = (Array.isArray(pageEvents) ? pageEvents : []).filter((event) =>
+        isEventAllowedForCategory(event, category)
+      );
+      if (filteredPageEvents.length > 0) {
+        events = filteredPageEvents;
+      } else {
+        const taggedEvents = await fetchPredictionEventsByTag(tagSlug, PREDICTION_EVENTS_FETCH_LIMIT);
+        events = (Array.isArray(taggedEvents) ? taggedEvents : []).filter((event) =>
+          isEventAllowedForCategory(event, category)
+        );
+      }
     } catch {
       events = [];
+    }
+
+    if (!events.length) {
+      try {
+        const taggedEvents = await fetchPredictionEventsByTag(tagSlug, PREDICTION_EVENTS_FETCH_LIMIT);
+        events = (Array.isArray(taggedEvents) ? taggedEvents : []).filter((event) =>
+          isEventAllowedForCategory(event, category)
+        );
+      } catch {
+        events = [];
+      }
     }
 
     const candidateMarkets = [];
@@ -1455,7 +1693,7 @@ async function loadPredictionSnapshot() {
             ...market,
             events: [event]
           },
-          eventIndex * 1000 + marketIndex
+          eventIndex * 20 + marketIndex
         );
         if (!normalized.id || !normalized.question) return;
         if (!normalized.conditionId) return;
@@ -1466,29 +1704,17 @@ async function loadPredictionSnapshot() {
       });
     });
 
-    const dedupedByCondition = new Map();
+    const dedupedInOrder = [];
+    const seenConditions = new Set();
     candidateMarkets.forEach((market) => {
       const key = String(market.conditionId || market.id);
-      if (!key) return;
-      const existing = dedupedByCondition.get(key);
-      if (!existing || market.polymarketRankScore > existing.polymarketRankScore) {
-        dedupedByCondition.set(key, market);
-      }
+      if (!key || seenConditions.has(key)) return;
+      seenConditions.add(key);
+      dedupedInOrder.push(market);
     });
 
-    const ranked = [...dedupedByCondition.values()]
-      .sort((a, b) => {
-        if (b.polymarketRankScore !== a.polymarketRankScore) return b.polymarketRankScore - a.polymarketRankScore;
-        if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
-        if (b.volume24h !== a.volume24h) return b.volume24h - a.volume24h;
-        if (Math.abs(b.oneWeekPriceChange) !== Math.abs(a.oneWeekPriceChange)) {
-          return Math.abs(b.oneWeekPriceChange) - Math.abs(a.oneWeekPriceChange);
-        }
-        return b.volume - a.volume;
-      });
-
-    categories[category] = ranked.slice(0, 5);
-    allCategorizedMarkets.push(...ranked);
+    categories[category] = selectTopMarketsByPageOrder(dedupedInOrder, 5);
+    allCategorizedMarkets.push(...dedupedInOrder);
   }
 
   const whaleCandidateMarkets = PREDICTION_CATEGORIES.flatMap((category) =>

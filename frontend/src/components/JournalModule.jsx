@@ -17,6 +17,12 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
   const [selectedSymbols, setSelectedSymbols] = useState([]);
   const [livePriceBySymbol, setLivePriceBySymbol] = useState({});
   const [lastReportPriceRefreshAt, setLastReportPriceRefreshAt] = useState(null);
+  const [nowTs, setNowTs] = useState(Date.now());
+
+  useEffect(() => {
+    const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
+    return () => clearInterval(intervalId);
+  }, []);
 
   const reportSymbols = useMemo(() => {
     const symbols = new Set();
@@ -175,6 +181,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
     const lotsByAsset = new Map();
     const realized = [];
+    let totalHoldDurationQty = 0;
+    let totalHoldDurationQtyDays = 0;
     let totalVolume = 0;
 
     for (const trade of sortedTrades) {
@@ -204,7 +212,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
           const matchedQty = Math.min(remaining, lot.qty);
           const pnl = (price - lot.price) * matchedQty;
           const holdDays = lot.date && dateObj
-            ? Math.max(0, Math.round((dateObj.getTime() - lot.date.getTime()) / dayMs))
+            ? Math.max(0, (dateObj.getTime() - lot.date.getTime()) / dayMs)
             : 0;
 
           const normalizedCloseDate = /^\d{4}-\d{2}-\d{2}$/.test(trade.date || "")
@@ -215,9 +223,12 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
             asset,
             pnl,
             holdDays,
+            qty: matchedQty,
             volume: price * matchedQty,
             closeDate: normalizedCloseDate
           });
+          totalHoldDurationQty += matchedQty;
+          totalHoldDurationQtyDays += holdDays * matchedQty;
 
           lot.qty -= matchedQty;
           remaining -= matchedQty;
@@ -233,8 +244,17 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
     const decisiveTrades = wins.length + losses.length;
     const totalRealizedTrades = decisiveTrades + breakevens.length;
     const realizedGainLoss = realized.reduce((acc, r) => acc + r.pnl, 0);
-    const avgHoldDays = realized.length
-      ? realized.reduce((acc, r) => acc + r.holdDays, 0) / realized.length
+    for (const lots of lotsByAsset.values()) {
+      for (const lot of lots) {
+        const lotQty = Math.max(0, safeNum(lot.qty));
+        if (lotQty <= eps) continue;
+        const holdDays = lot.date ? Math.max(0, (nowTs - lot.date.getTime()) / dayMs) : 0;
+        totalHoldDurationQty += lotQty;
+        totalHoldDurationQtyDays += holdDays * lotQty;
+      }
+    }
+    const avgHoldDays = totalHoldDurationQty > eps
+      ? totalHoldDurationQtyDays / totalHoldDurationQty
       : 0;
 
     const tradeDates = [...new Set(
@@ -299,7 +319,9 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
         tradedNotional: 0,
         buyQty: 0,
         sellQty: 0,
-        netQtyFromTrades: 0
+        netQtyFromTrades: 0,
+        holdDurationQty: 0,
+        holdDurationQtyDays: 0
       };
       row.executionCount += 1;
       const notional = Math.abs(safeNum(trade.notional) || (price * qty));
@@ -332,15 +354,46 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
         tradedNotional: 0,
         buyQty: 0,
         sellQty: 0,
-        netQtyFromTrades: 0
+        netQtyFromTrades: 0,
+        holdDurationQty: 0,
+        holdDurationQtyDays: 0
       };
       row.realizedCount += 1;
       row.totalHoldDays += r.holdDays;
+      row.holdDurationQty += Math.max(0, safeNum(r.qty));
+      row.holdDurationQtyDays += r.holdDays * Math.max(0, safeNum(r.qty));
       row.totalGain += r.pnl;
       if (r.pnl > eps) row.wins += 1;
       else if (r.pnl < -eps) row.losses += 1;
       else row.breakevens += 1;
       symbolStats.set(key, row);
+    }
+
+    for (const [symbol, lots] of lotsByAsset.entries()) {
+      const row = symbolStats.get(symbol) || {
+        symbol,
+        executionCount: 0,
+        realizedCount: 0,
+        wins: 0,
+        losses: 0,
+        breakevens: 0,
+        totalHoldDays: 0,
+        totalGain: 0,
+        tradedNotional: 0,
+        buyQty: 0,
+        sellQty: 0,
+        netQtyFromTrades: 0,
+        holdDurationQty: 0,
+        holdDurationQtyDays: 0
+      };
+      for (const lot of lots) {
+        const lotQty = Math.max(0, safeNum(lot.qty));
+        if (lotQty <= eps) continue;
+        const holdDays = lot.date ? Math.max(0, (nowTs - lot.date.getTime()) / dayMs) : 0;
+        row.holdDurationQty += lotQty;
+        row.holdDurationQtyDays += holdDays * lotQty;
+      }
+      symbolStats.set(symbol, row);
     }
 
     const portfolioPositionMap = new Map();
@@ -373,7 +426,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       .map((row) => {
         const decisive = row.wins + row.losses;
         const winRate = decisive ? (row.wins / decisive) * 100 : 0;
-        const avgDuration = row.realizedCount ? row.totalHoldDays / row.realizedCount : 0;
+        const avgDuration = row.holdDurationQty > eps ? (row.holdDurationQtyDays / row.holdDurationQty) : 0;
         const openLots = lotsByAsset.get(row.symbol) || [];
         const openQty = openLots.reduce((sum, lot) => sum + safeNum(lot.qty), 0);
         const openCost = openLots.reduce((sum, lot) => sum + (safeNum(lot.qty) * safeNum(lot.price)), 0);
@@ -447,7 +500,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       tradedAssetsReport,
       realizedTrades: realized
     };
-  }, [trades, portfolio, livePriceBySymbol]);
+  }, [trades, portfolio, livePriceBySymbol, nowTs]);
 
   const portfolioValue = useMemo(
     () => (portfolio || []).reduce((total, item) => total + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0),

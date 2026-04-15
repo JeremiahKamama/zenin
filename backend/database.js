@@ -73,6 +73,8 @@ function mapPortfolioRow(row) {
     name: row.name,
     price: toNumber(row.price),
     quantity: toNumber(row.quantity),
+    entryPrice: row.entryPrice == null ? null : toNumber(row.entryPrice),
+    openedAt: toIsoString(row.openedAt || row.opened_at),
     type: row.type,
     marketType: row.marketType || row.market_type || "spot",
     orderType: row.orderType || row.order_type || "buy",
@@ -141,12 +143,24 @@ async function initializeDatabase() {
         name TEXT NOT NULL,
         price DOUBLE PRECISION NOT NULL,
         quantity DOUBLE PRECISION NOT NULL,
+        entry_price DOUBLE PRECISION,
+        opened_at TIMESTAMPTZ,
         type TEXT NOT NULL,
         market_type TEXT NOT NULL,
         order_type TEXT NOT NULL,
         date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(symbol, market_type)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
+      ADD COLUMN IF NOT EXISTS entry_price DOUBLE PRECISION;
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
+      ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ;
     `);
 
     await client.query(`
@@ -241,6 +255,79 @@ async function initializeDatabase() {
       }
     }
 
+    const staleHoldings = await client.query(`
+      SELECT
+        id,
+        symbol,
+        market_type AS "marketType",
+        quantity,
+        price,
+        date_added
+      FROM portfolio_holdings
+      WHERE quantity > $1 AND (entry_price IS NULL OR opened_at IS NULL);
+    `, [QTY_EPSILON]);
+
+    for (const row of staleHoldings.rows) {
+      const symbol = String(row.symbol || "").trim().toUpperCase();
+      const marketType = String(row.marketType || "spot").trim().toLowerCase();
+      const fallbackEntry = toNumber(row.price);
+      const fallbackOpenedAt = row.date_added || new Date().toISOString();
+
+      const tradesResult = await client.query(`
+        SELECT
+          side,
+          quantity,
+          price,
+          COALESCE(executed_at, date::timestamptz) AS ts
+        FROM trade_executions
+        WHERE asset = $1 AND market_type = $2
+        ORDER BY COALESCE(executed_at, date::timestamptz) ASC, id ASC;
+      `, [symbol, marketType]);
+
+      let qty = 0;
+      let cost = 0;
+      let openedAt = null;
+
+      tradesResult.rows.forEach((trade) => {
+        const side = String(trade.side || "").toLowerCase() === "sell" ? "sell" : "buy";
+        const tradeQty = Math.abs(toNumber(trade.quantity));
+        const tradePrice = toNumber(trade.price);
+        const ts = trade.ts || null;
+        if (tradeQty <= QTY_EPSILON) return;
+
+        if (side === "buy") {
+          if (qty <= QTY_EPSILON) {
+            openedAt = ts || openedAt || fallbackOpenedAt;
+          }
+          qty += tradeQty;
+          cost += tradeQty * tradePrice;
+          return;
+        }
+
+        const closeQty = Math.min(qty, tradeQty);
+        const avgCost = qty > QTY_EPSILON ? cost / qty : 0;
+        qty -= closeQty;
+        cost -= closeQty * avgCost;
+        if (qty <= QTY_EPSILON) {
+          qty = 0;
+          cost = 0;
+          openedAt = null;
+        }
+      });
+
+      const inferredEntry = qty > QTY_EPSILON ? cost / qty : fallbackEntry;
+      const finalEntry = Number.isFinite(inferredEntry) ? inferredEntry : fallbackEntry;
+      const finalOpenedAt = openedAt || fallbackOpenedAt;
+
+      await client.query(`
+        UPDATE portfolio_holdings
+        SET
+          entry_price = COALESCE(entry_price, $1),
+          opened_at = COALESCE(opened_at, $2)
+        WHERE id = $3;
+      `, [finalEntry, finalOpenedAt, row.id]);
+    }
+
     await client.query("COMMIT");
     console.log("PostgreSQL database initialized.");
   } catch (error) {
@@ -312,6 +399,8 @@ const portfolio = {
         name,
         price,
         quantity,
+        entry_price AS "entryPrice",
+        opened_at AS "openedAt",
         type,
         market_type AS "marketType",
         order_type AS "orderType",
@@ -345,6 +434,8 @@ const portfolio = {
           name,
           price,
           quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
           type,
           market_type AS "marketType",
           order_type AS "orderType",
@@ -373,21 +464,31 @@ const portfolio = {
           };
         }
 
+        const existingEntry = Number.isFinite(Number(existing.entryPrice))
+          ? Number(existing.entryPrice)
+          : Number(existing.price);
+        const nextEntryPrice = isSell
+          ? existingEntry
+          : ((existingEntry * existing.quantity) + (price * quantity)) / Math.max(nextQuantity, QTY_EPSILON);
+        const nextOpenedAt = existing.openedAt || dateAdded;
+
         const updatedResult = await client.query(`
           UPDATE portfolio_holdings
-          SET quantity = $1, price = $2, order_type = $3, date_added = $4, type = $5, name = $6
-          WHERE id = $7
+          SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8
+          WHERE id = $9
           RETURNING
             id,
             symbol,
             name,
             price,
             quantity,
+            entry_price AS "entryPrice",
+            opened_at AS "openedAt",
             type,
             market_type AS "marketType",
             order_type AS "orderType",
             date_added;
-        `, [nextQuantity, price, orderType, dateAdded, type, name, existing.id]);
+        `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, existing.id]);
 
         await client.query("COMMIT");
         return mapPortfolioRow(updatedResult.rows[0]);
@@ -398,19 +499,21 @@ const portfolio = {
       }
 
       const insertedResult = await client.query(`
-        INSERT INTO portfolio_holdings (symbol, name, price, quantity, type, market_type, order_type, date_added)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO portfolio_holdings (symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, date_added)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING
           id,
           symbol,
           name,
           price,
           quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
           type,
           market_type AS "marketType",
           order_type AS "orderType",
           date_added;
-      `, [symbol, name, price, quantity, type, marketType, orderType, dateAdded]);
+      `, [symbol, name, price, quantity, price, dateAdded, type, marketType, orderType, dateAdded]);
 
       await client.query("COMMIT");
       return mapPortfolioRow(insertedResult.rows[0]);
@@ -435,6 +538,8 @@ const portfolio = {
         name,
         price,
         quantity,
+        entry_price AS "entryPrice",
+        opened_at AS "openedAt",
         type,
         market_type AS "marketType",
         order_type AS "orderType",
@@ -463,6 +568,8 @@ const portfolio = {
         name,
         price,
         quantity,
+        entry_price AS "entryPrice",
+        opened_at AS "openedAt",
         type,
         market_type AS "marketType",
         order_type AS "orderType",

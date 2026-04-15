@@ -379,10 +379,9 @@ export function PortfolioModule({
                 <div className="portfolio-list">
                   {portfolio.map((item) => {
                     const positionValue = (item.price || 0) * (item.quantity || 0);
-                    const prevPrice = item.price && item.priceChangePercent
-                      ? item.price / (1 + item.priceChangePercent / 100)
-                      : item.price;
-                    const positionGain = (item.price || 0) * (item.quantity || 0) - (prevPrice || 0) * (item.quantity || 0);
+                    const entryPrice = Number(item.entryPrice);
+                    const basisPrice = Number.isFinite(entryPrice) ? entryPrice : Number(item.price) || 0;
+                    const positionGain = (item.price || 0) * (item.quantity || 0) - basisPrice * (item.quantity || 0);
                     const gainPercent = item.priceChangePercent || 0;
                     return (
                       <div
