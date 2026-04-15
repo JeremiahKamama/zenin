@@ -334,7 +334,7 @@ export function PortfolioModule({
         </div>
         <div className="watchlist-panel glass">
           <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
-            {[["equity", "Equity Curve (Account Value)"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
+            {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
               <button key={mode} onClick={() => setChartMode(mode)} style={{
                 padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
                 background: chartMode === mode ? "rgba(56,189,248,0.15)" : "transparent",
@@ -345,7 +345,7 @@ export function PortfolioModule({
           </div>
           <Chart
             options={chartOptions}
-            series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve (Account Value)", data: chartData }]}
+            series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", data: chartData }]}
             type="area" height={200} width="100%"
           />
           <div style={{ display: "flex", gap: "6px", marginTop: "8px", justifyContent: "center", flexWrap: "wrap" }}>

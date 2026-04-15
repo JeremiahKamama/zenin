@@ -272,7 +272,7 @@ export function HomeModule({
         <div className="section-header" style={{ marginBottom: "8px" }}>
           <h2>Portfolio Performance</h2>
           <div style={{ display: "flex", gap: "6px" }}>
-            {[["equity", "Equity Curve (Account Value)"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
+            {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
               <button
                 key={mode}
                 onClick={() => setChartMode(mode)}
@@ -286,15 +286,9 @@ export function HomeModule({
             ))}
           </div>
         </div>
-        {chartMode === "equity" && (
-          <div style={{ marginBottom: "8px", fontSize: "12px", color: "var(--color-text-secondary)" }}>
-            Equity curve shows account value over time: starting balance plus cumulative gains and losses.
-          </div>
-        )}
-
         <Chart
           options={chartOptions}
-          series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve (Account Value)", data: chartData }]}
+          series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", data: chartData }]}
           type="area"
           height={220}
           width="100%"
@@ -338,7 +332,7 @@ export function HomeModule({
                           ? `${Number(asset.price || 0).toFixed(2)}%`
                           : `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                       </div>
-                      <div className="qty">{asset.quantity} Units</div>
+                      <div className="qty">{asset.quantity}</div>
                     </div>
                   </div>
                 );

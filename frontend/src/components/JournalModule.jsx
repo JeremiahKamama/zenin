@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
 
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
+
 export function JournalModule({ trades = [], portfolio = [], balance = 0, accountEquity = null }) {
   const [reportPage, setReportPage] = useState(1);
   const [calendarCursor, setCalendarCursor] = useState(() => {
@@ -11,10 +15,101 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
   const [symbolsButtonLabel, setSymbolsButtonLabel] = useState("All Symbols");
   const [calendarSearch, setCalendarSearch] = useState("");
   const [selectedSymbols, setSelectedSymbols] = useState([]);
+  const [livePriceBySymbol, setLivePriceBySymbol] = useState({});
+  const [lastReportPriceRefreshAt, setLastReportPriceRefreshAt] = useState(null);
+
+  const reportSymbols = useMemo(() => {
+    const symbols = new Set();
+    (Array.isArray(trades) ? trades : []).forEach((trade) => {
+      const symbol = String(trade?.asset || "").trim().toUpperCase();
+      if (symbol) symbols.add(symbol);
+    });
+    (Array.isArray(portfolio) ? portfolio : []).forEach((holding) => {
+      const symbol = String(holding?.symbol || "").trim().toUpperCase();
+      if (symbol) symbols.add(symbol);
+    });
+    return [...symbols];
+  }, [trades, portfolio]);
 
   useEffect(() => {
     setReportPage(1);
   }, [trades]);
+
+  useEffect(() => {
+    if (reportSymbols.length === 0) {
+      setLivePriceBySymbol({});
+      setLastReportPriceRefreshAt(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const enrichWithCategoryPrices = async (symbols, category, target) => {
+      try {
+        const res = await fetch(
+          `${BACKEND_URL}/watchlist?category=${encodeURIComponent(category)}&symbols=${encodeURIComponent(symbols.join(","))}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const assets = Array.isArray(data?.assets) ? data.assets : [];
+        assets.forEach((asset) => {
+          const symbol = String(asset?.symbol || "").trim().toUpperCase();
+          const price = Number(asset?.price);
+          if (!symbol || !Number.isFinite(price)) return;
+          target[symbol] = price;
+        });
+      } catch {
+        // keep best-effort behavior
+      }
+    };
+
+    const enrichWithSearchPrice = async (symbol, type, target) => {
+      try {
+        const res = await fetch(
+          `${BACKEND_URL}/search?q=${encodeURIComponent(symbol)}&type=${encodeURIComponent(type)}`
+        );
+        if (!res.ok) return false;
+        const data = await res.json();
+        const results = Array.isArray(data?.results) ? data.results : [];
+        const exact = results.find((item) => String(item?.symbol || "").trim().toUpperCase() === symbol) || results[0];
+        const price = Number(exact?.price);
+        if (!Number.isFinite(price)) return false;
+        target[symbol] = price;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const refreshReportPrices = async () => {
+      const next = {};
+      const symbols = [...reportSymbols];
+
+      await enrichWithCategoryPrices(symbols, "stocks", next);
+      await enrichWithCategoryPrices(symbols, "bonds", next);
+      await enrichWithCategoryPrices(symbols, "commodities", next);
+      await enrichWithCategoryPrices(symbols, "metals", next);
+      await enrichWithCategoryPrices(symbols, "crypto", next);
+
+      const unresolved = symbols.filter((symbol) => !Number.isFinite(next[symbol]));
+      for (const symbol of unresolved) {
+        const foundTradfi = await enrichWithSearchPrice(symbol, "tradfi", next);
+        if (foundTradfi) continue;
+        await enrichWithSearchPrice(symbol, "crypto", next);
+      }
+
+      if (isCancelled) return;
+      setLivePriceBySymbol((prev) => ({ ...prev, ...next }));
+      setLastReportPriceRefreshAt(Date.now());
+    };
+
+    refreshReportPrices();
+    const intervalId = setInterval(refreshReportPrices, TRADE_REPORT_REFRESH_MS);
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [reportSymbols]);
 
   const executionRows = useMemo(() => {
     const normalizeSymbol = (value) => String(value || "UNKNOWN").trim().toUpperCase();
@@ -254,12 +349,50 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       portfolioPositionMap.set(symbol, (portfolioPositionMap.get(symbol) || 0) + safeNum(holding.quantity));
     }
 
+    const lastBuyPriceBySymbol = new Map();
+    for (const trade of sortedTrades) {
+      const type = (trade.type || "").toUpperCase();
+      if (type !== "BUY") continue;
+      const symbol = normalizeSymbol(trade.asset);
+      const price = safeNum(trade.price);
+      if (price > 0) {
+        lastBuyPriceBySymbol.set(symbol, price);
+      }
+    }
+
+    const portfolioPriceMap = new Map();
+    for (const holding of portfolio || []) {
+      const symbol = normalizeSymbol(holding.symbol);
+      const price = safeNum(holding.price);
+      if (price > 0) {
+        portfolioPriceMap.set(symbol, price);
+      }
+    }
+
     const tradedAssetsReport = [...symbolStats.values()]
       .map((row) => {
         const decisive = row.wins + row.losses;
         const winRate = decisive ? (row.wins / decisive) * 100 : 0;
         const avgDuration = row.realizedCount ? row.totalHoldDays / row.realizedCount : 0;
-        const avgGain = row.realizedCount ? row.totalGain / row.realizedCount : 0;
+        const openLots = lotsByAsset.get(row.symbol) || [];
+        const openQty = openLots.reduce((sum, lot) => sum + safeNum(lot.qty), 0);
+        const openCost = openLots.reduce((sum, lot) => sum + (safeNum(lot.qty) * safeNum(lot.price)), 0);
+        const avgPurchasePrice = openQty > eps
+          ? openCost / openQty
+          : (lastBuyPriceBySymbol.get(row.symbol) || 0);
+        const currentPrice =
+          safeNum(livePriceBySymbol[row.symbol]) ||
+          portfolioPriceMap.get(row.symbol) ||
+          0;
+        const priceMove = (avgPurchasePrice > 0 && currentPrice > 0)
+          ? (currentPrice - avgPurchasePrice)
+          : 0;
+        const currentPosition = portfolioPositionMap.has(row.symbol)
+          ? portfolioPositionMap.get(row.symbol)
+          : row.netQtyFromTrades;
+        const totalGain = currentPosition > eps ? priceMove * currentPosition : 0;
+        const avgGain = priceMove;
+
         return {
           symbol: row.symbol,
           tradeCount: row.executionCount,
@@ -270,7 +403,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
           winRate,
           tradeDuration: avgDuration,
           avgGain,
-          totalGain: row.totalGain
+          totalGain
         };
       })
       .sort((a, b) => {
@@ -314,7 +447,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       tradedAssetsReport,
       realizedTrades: realized
     };
-  }, [trades, portfolio]);
+  }, [trades, portfolio, livePriceBySymbol]);
 
   const portfolioValue = useMemo(
     () => (portfolio || []).reduce((total, item) => total + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0),
@@ -512,8 +645,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
           <div className="value">{formatValue(totalAccountEquity, true)}</div>
         </div>
         <div className="metric-card glass journal-winrate-card">
-          <label>Breakeven</label>
-          <div className="value">{analytics.breakevenRate.toFixed(1)}%</div>
+          <label>Win Rate</label>
+          <div className="value">{analytics.winRate.toFixed(1)}%</div>
           <div className="journal-winrate-body">
             <div className="journal-winrate-chart">
               <Chart
@@ -562,7 +695,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
                   <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
                   <div className="trade-details">
                     <div className="trade-meta">
-                      {trade.type === "BUY" ? "Cost" : "Proceeds"} {formatValue(Number(trade.notional) || 0, true)}
+                      {trade.type === "BUY" ? "" : "Proceeds "}{formatValue(Number(trade.notional) || 0, true)}
                     </div>
                   </div>
                 </div>
@@ -653,7 +786,10 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       <div className="watchlist-panel glass">
         <div className="section-header">
           <h2>Traded Assets Report</h2>
-          <div className="asset-count">{analytics.tradedAssetsReport.length} Assets</div>
+          <div className="asset-count">
+            {analytics.tradedAssetsReport.length} Assets
+            {lastReportPriceRefreshAt ? ` · Prices refreshed ${new Date(lastReportPriceRefreshAt).toLocaleString()}` : ""}
+          </div>
         </div>
         {analytics.tradedAssetsReport.length === 0 ? (
           <div className="empty-state" style={{ padding: "24px", color: "#64748b" }}>
