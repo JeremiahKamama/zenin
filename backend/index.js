@@ -1520,3 +1520,7 @@ wss.on("connection", (ws) => {
     subscribers.delete(ws);
   });
 });
+
+server.listen(port, "0.0.0.0", () => {
+  console.log(`Portfolio manager backend listening on port ${port}`);
+});
