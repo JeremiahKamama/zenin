@@ -877,6 +877,83 @@ app.get("/api/earnings-calendar", async (req, res) => {
   });
 });
 
+app.get("/api/macro-indicators", async (req, res) => {
+  const country = String(req.query.country || "USA").trim().toUpperCase();
+  if (!G7_COUNTRIES[country]) {
+    return res.status(400).json({ error: "country must be one of USA,CAN,GBR,FRA,DEU,ITA,JPN" });
+  }
+
+  if (!EODHD_API_TOKEN) {
+    return res.status(503).json({ error: "Macro indicators are not configured. Set EODHD_API_TOKEN on the backend." });
+  }
+
+  const cacheKey = `macro:${country}`;
+  const now = Date.now();
+  const cached = macroIndicatorsCache.get(cacheKey);
+  if (cached?.payload && now - cached.cachedAt < MACRO_CACHE_TTL_MS) {
+    return res.json(cached.payload);
+  }
+
+  try {
+    const fetch = await resolveFetch();
+    const base = `https://eodhd.com/api/macro-indicator/${encodeURIComponent(country)}`;
+    const requests = MACRO_INDICATOR_CONFIG.map((indicator) => {
+      const params = new URLSearchParams({
+        indicator: indicator.key,
+        api_token: EODHD_API_TOKEN,
+        fmt: "json"
+      });
+      const url = `${base}?${params.toString()}`;
+      return fetch(url).then(async (r) => {
+        if (!r.ok) {
+          const text = await r.text();
+          throw new Error(`HTTP ${r.status} ${text.slice(0, 120)}`);
+        }
+        return r.json();
+      });
+    });
+
+    const settled = await Promise.allSettled(requests);
+    const metrics = settled.map((result, idx) => {
+      const config = MACRO_INDICATOR_CONFIG[idx];
+      if (result.status === "fulfilled") {
+        return buildMacroMetric(result.value, config);
+      }
+      return {
+        key: config.key,
+        label: config.label,
+        unit: config.unit,
+        previous: null,
+        current: null,
+        expectation: null,
+        asOf: null
+      };
+    });
+
+    const payload = {
+      country,
+      countryName: G7_COUNTRIES[country],
+      source: "EODHD Macro Indicators API",
+      updatedAt: new Date().toISOString(),
+      countries: Object.entries(G7_COUNTRIES).map(([code, name]) => ({ code, name })),
+      metrics
+    };
+
+    macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
+    res.json(payload);
+  } catch (error) {
+    console.error("Macro indicators fetch failed:", error.message);
+    if (cached?.payload) {
+      return res.json({
+        ...cached.payload,
+        stale: true,
+        stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000)
+      });
+    }
+    res.status(502).json({ error: "Failed to fetch macro indicators" });
+  }
+});
+
 app.get("/api/watchlist", async (req, res) => {
   const { category } = req.query;
 
@@ -1047,6 +1124,28 @@ const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 const PREDICTION_REFRESH_MS = 6 * 60 * 60 * 1000; // 6 hours
 const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "fintech", "tech", "finance"];
 const predictionSnapshotCache = new Map();
+const EODHD_API_TOKEN = String(process.env.EODHD_API_TOKEN || "").trim();
+const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const macroIndicatorsCache = new Map();
+
+const G7_COUNTRIES = {
+  USA: "United States",
+  CAN: "Canada",
+  GBR: "United Kingdom",
+  FRA: "France",
+  DEU: "Germany",
+  ITA: "Italy",
+  JPN: "Japan"
+};
+
+const MACRO_INDICATOR_CONFIG = [
+  { key: "consumer_price_index", label: "CPI", unit: "Index" },
+  { key: "inflation_consumer_prices_annual", label: "Inflation Rate", unit: "%" },
+  { key: "gdp_growth_annual", label: "GDP Growth Rate", unit: "%" },
+  { key: "real_interest_rate", label: "Real Interest Rate", unit: "%" },
+  { key: "unemployment_total_percent", label: "Unemployment Rate", unit: "%" },
+  { key: "inflation_gdp_deflator_annual", label: "Inflation Rate (GDP Deflator)", unit: "%" }
+];
 
 function firstFiniteNumber(...values) {
   for (const value of values) {
@@ -1055,6 +1154,38 @@ function firstFiniteNumber(...values) {
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function normalizeMacroSeries(payload) {
+  const rows = Array.isArray(payload) ? payload : [];
+  return rows
+    .map((row) => {
+      const date = row?.date || row?.Date || row?.period || row?.Period || null;
+      const value = firstFiniteNumber(row?.value, row?.Value, row?.close, row?.Close, row?.price, row?.Price);
+      const ts = date ? new Date(date).getTime() : NaN;
+      if (!Number.isFinite(value) || !Number.isFinite(ts)) return null;
+      return { date, value: Number(value), ts };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.ts - a.ts);
+}
+
+function buildMacroMetric(payload, config) {
+  const points = normalizeMacroSeries(payload);
+  const current = points[0]?.value ?? null;
+  const previous = points[1]?.value ?? null;
+  const expectation = Number.isFinite(current) && Number.isFinite(previous)
+    ? current + (current - previous)
+    : null;
+  return {
+    key: config.key,
+    label: config.label,
+    unit: config.unit,
+    previous,
+    current,
+    expectation,
+    asOf: points[0]?.date || null
+  };
 }
 
 function safeJsonParse(value, fallback) {

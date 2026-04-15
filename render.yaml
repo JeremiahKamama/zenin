@@ -20,6 +20,8 @@ services:
         fromDatabase:
           name: portv1-db
           property: connectionString
+      - key: EODHD_API_TOKEN
+        sync: false
 
   # ── Frontend (React / Vite static site) ───────────────────────────────────
   - type: web

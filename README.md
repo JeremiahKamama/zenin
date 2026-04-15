@@ -225,11 +225,17 @@ npm run dev
 - `PORT` (optional, default `4000`)
 - `FRONTEND_URL` (for CORS allowlist)
 - `DERIVE_API_URL` (optional options provider override)
+- `EODHD_API_TOKEN` (required for Bonds → Indicators macro data)
 - `DATABASE_URL` (recommended, full Postgres connection string)
 - Or discrete Postgres vars: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
 - Optional for local non-SSL Postgres: `PGSSLMODE=disable`
 
 On backend start, schema creation/seeding runs automatically in `initializeDatabase()`.
+
+Security note:
+- Keep API tokens only in backend environment variables.
+- Never place secrets in frontend `VITE_*` variables.
+- `.env` files are git-ignored; use `backend/.env.example` as a template.
 
 ## Deployment Notes
 

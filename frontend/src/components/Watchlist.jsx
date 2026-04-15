@@ -16,6 +16,17 @@ const STOCK_THEMES = [
   "Transportation",
 ];
 
+const BOND_THEMES = ["Bonds", "Indicators"];
+const G7_COUNTRIES = [
+  { code: "USA", name: "United States" },
+  { code: "CAN", name: "Canada" },
+  { code: "GBR", name: "United Kingdom" },
+  { code: "FRA", name: "France" },
+  { code: "DEU", name: "Germany" },
+  { code: "ITA", name: "Italy" },
+  { code: "JPN", name: "Japan" }
+];
+
 export function Watchlist({
   categories,
   activeCategory,
@@ -29,16 +40,36 @@ export function Watchlist({
   onToggleStar,
   onPageChange,
 }) {
+  const formatMacroValue = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  };
+
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
   const [earningsPage, setEarningsPage] = useState(1);
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsError, setEarningsError] = useState("");
+  const [bondsTheme, setBondsTheme] = useState("Bonds");
+  const [indicatorCountry, setIndicatorCountry] = useState("USA");
+  const [macroSnapshot, setMacroSnapshot] = useState(null);
+  const [macroLoading, setMacroLoading] = useState(false);
+  const [macroError, setMacroError] = useState("");
 
   useEffect(() => {
     setCurrentPage(1);
   }, [activeCategory, activeTheme]);
+
+  useEffect(() => {
+    if (activeCategory !== "bonds") {
+      setBondsTheme("Bonds");
+      setIndicatorCountry("USA");
+      setMacroSnapshot(null);
+      setMacroError("");
+    }
+  }, [activeCategory]);
 
   useEffect(() => {
     setEarningsPage(1);
@@ -70,6 +101,42 @@ const pageSymbols = pagedAssets.map((a) => a.symbol).join(",");
 useEffect(() => {
   onPageChange?.(currentPage, pageSymbols ? pageSymbols.split(",") : []);
 }, [currentPage, activeTheme, activeCategory, pageSymbols]);
+
+  useEffect(() => {
+    if (activeCategory !== "bonds" || bondsTheme !== "Indicators") return;
+
+    let isMounted = true;
+    const controller = new AbortController();
+    const fetchMacro = async () => {
+      setMacroLoading(true);
+      setMacroError("");
+      try {
+        const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
+          signal: controller.signal
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+        const data = await res.json();
+        if (!isMounted) return;
+        setMacroSnapshot(data || null);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        if (!isMounted) return;
+        setMacroSnapshot(null);
+        setMacroError("Unable to load macro indicators.");
+      } finally {
+        if (isMounted) setMacroLoading(false);
+      }
+    };
+
+    fetchMacro();
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [activeCategory, bondsTheme, indicatorCountry]);
 
   useEffect(() => {
     if (activeCategory !== "stocks") return;
@@ -173,9 +240,79 @@ useEffect(() => {
           ))}
         </div>
       )}
+      {activeCategory === "bonds" && (
+        <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "10px" }}>
+          {BOND_THEMES.map((theme) => (
+            <button
+              key={theme}
+              className={`theme-pill ${bondsTheme === theme ? "active" : ""}`}
+              onClick={() => setBondsTheme(theme)}
+            >
+              {theme}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="loading-state">Loading market data...</div>
+      ) : activeCategory === "bonds" && bondsTheme === "Indicators" ? (
+        <div>
+          <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "12px" }}>
+            {G7_COUNTRIES.map((country) => (
+              <button
+                key={country.code}
+                className={`theme-pill ${indicatorCountry === country.code ? "active" : ""}`}
+                onClick={() => setIndicatorCountry(country.code)}
+              >
+                {country.name}
+              </button>
+            ))}
+          </div>
+          {macroLoading ? (
+            <div className="loading-state">Loading macro indicators...</div>
+          ) : macroError ? (
+            <div className="loading-state">{macroError}</div>
+          ) : !Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0 ? (
+            <div className="loading-state">No macro indicators available.</div>
+          ) : (
+            <div style={{ display: "grid", gap: "10px" }}>
+              {macroSnapshot.metrics.map((metric) => (
+                <div
+                  key={metric.key}
+                  style={{
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                    background: "rgba(15,23,42,0.4)"
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                    <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{metric.label}</strong>
+                    <span style={{ fontSize: "11px", color: "#64748b" }}>{metric.unit || "Value"}</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "8px" }}>
+                    <div>
+                      <div style={{ fontSize: "10px", color: "#64748b", textTransform: "uppercase" }}>Previous</div>
+                      <div style={{ fontSize: "13px", color: "#94a3b8" }}>{formatMacroValue(metric.previous)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "10px", color: "#64748b", textTransform: "uppercase" }}>Current</div>
+                      <div style={{ fontSize: "13px", color: "#e2e8f0" }}>{formatMacroValue(metric.current)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "10px", color: "#64748b", textTransform: "uppercase" }}>Expectations</div>
+                      <div style={{ fontSize: "13px", color: "#38bdf8" }}>{formatMacroValue(metric.expectation)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div style={{ fontSize: "11px", color: "#64748b" }}>
+                Source: {macroSnapshot?.source || "EODHD"}{macroSnapshot?.updatedAt ? ` · Updated ${new Date(macroSnapshot.updatedAt).toLocaleString()}` : ""}
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <>
           {/* Show theme heading when a specific theme is selected */}
