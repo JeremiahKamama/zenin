@@ -86,7 +86,7 @@ export function PredictionMarketModule() {
     };
   }, [selectedPredictionMarket]);
 
-  const predictionCategories = ["geopolitics", "crypto", "fintech", "tech", "finance"];
+  const predictionCategories = ["geopolitics", "crypto", "fintech", "politics", "finance"];
   const predictionMarketsByCategory = predictionSnapshot?.categories || {};
   const predictionWhaleTransactions = Array.isArray(predictionSnapshot?.whaleTransactions)
     ? predictionSnapshot.whaleTransactions
@@ -140,6 +140,23 @@ export function PredictionMarketModule() {
     const n = Number(price);
     if (!Number.isFinite(n)) return "—";
     return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+  };
+
+  const formatWhaleType = (item) => {
+    const side = String(item?.side || "").toUpperCase();
+    const arrow = side === "SELL" ? "▼" : "▲";
+    const outcomeIndex = Number(item?.outcomeIndex);
+    let typeLabel = "";
+    if (Number.isFinite(outcomeIndex)) {
+      typeLabel = outcomeIndex === 0 ? "Yes" : outcomeIndex === 1 ? "No" : "";
+    }
+    if (!typeLabel) {
+      const rawOutcome = String(item?.outcome || "").trim().toLowerCase();
+      if (rawOutcome === "yes") typeLabel = "Yes";
+      else if (rawOutcome === "no") typeLabel = "No";
+      else typeLabel = String(item?.outcome || "—");
+    }
+    return `${arrow} ${typeLabel}`;
   };
 
   const toProbabilityPct = (price) => {
@@ -249,6 +266,7 @@ export function PredictionMarketModule() {
                 <tr>
                   <th>Category</th>
                   <th>Market</th>
+                  <th>Type</th>
                   <th>Transaction Size</th>
                 </tr>
               </thead>
@@ -257,6 +275,7 @@ export function PredictionMarketModule() {
                   <tr key={item.id}>
                     <td className="greek">{getPredictionCategoryLabel(item.category)}</td>
                     <td className="greek">{item.market}</td>
+                    <td className="greek">{formatWhaleType(item)}</td>
                     <td className="bid-ask positive">{formatDollar(item.transactionSize)}</td>
                   </tr>
                 ))}

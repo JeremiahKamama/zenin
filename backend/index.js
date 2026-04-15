@@ -897,38 +897,44 @@ app.get("/api/macro-indicators", async (req, res) => {
   try {
     const fetch = await resolveFetch();
     const base = `https://eodhd.com/api/macro-indicator/${encodeURIComponent(country)}`;
-    const requests = MACRO_INDICATOR_CONFIG.map((indicator) => {
-      const params = new URLSearchParams({
-        indicator: indicator.key,
-        api_token: EODHD_API_TOKEN,
-        fmt: "json"
-      });
-      const url = `${base}?${params.toString()}`;
-      return fetch(url).then(async (r) => {
-        if (!r.ok) {
-          const text = await r.text();
-          throw new Error(`HTTP ${r.status} ${text.slice(0, 120)}`);
-        }
-        return r.json();
-      });
+    const defaultParams = new URLSearchParams({
+      api_token: EODHD_API_TOKEN,
+      fmt: "json"
     });
 
-    const settled = await Promise.allSettled(requests);
-    const metrics = settled.map((result, idx) => {
-      const config = MACRO_INDICATOR_CONFIG[idx];
-      if (result.status === "fulfilled") {
-        return buildMacroMetric(result.value, config);
-      }
-      return {
-        key: config.key,
-        label: config.label,
-        unit: config.unit,
-        previous: null,
-        current: null,
-        expectation: null,
-        asOf: null
-      };
+    // Prefer one bulk request (more reliable and far cheaper than multiple indicator calls).
+    const bulkUrl = `${base}?${defaultParams.toString()}`;
+    const bulkRes = await fetch(bulkUrl);
+    const bulkText = await bulkRes.text();
+    if (!bulkRes.ok) {
+      throw new Error(`HTTP ${bulkRes.status} ${bulkText.slice(0, 200)}`);
+    }
+
+    let bulkData = null;
+    try {
+      bulkData = JSON.parse(bulkText);
+    } catch {
+      bulkData = null;
+    }
+
+    const rawServiceMessage = typeof bulkData === "string"
+      ? bulkData
+      : (typeof bulkText === "string" ? bulkText : "");
+    if (/Only EOD data allowed/i.test(rawServiceMessage)) {
+      throw new Error("EODHD token does not include macro indicators on the current plan.");
+    }
+
+    const groupedByIndicator = groupMacroPayloadByIndicator(bulkData);
+
+    const metrics = MACRO_INDICATOR_CONFIG.map((config) => {
+      const rows = getMacroRowsForConfig(groupedByIndicator, config);
+      return buildMacroMetric(rows, config);
     });
+
+    const missingKeys = metrics.filter((m) => m.current == null).map((m) => m.key);
+    if (missingKeys.length === metrics.length) {
+      throw new Error("No usable macro indicator values returned by EODHD for this country/token.");
+    }
 
     const payload = {
       country,
@@ -936,7 +942,11 @@ app.get("/api/macro-indicators", async (req, res) => {
       source: "EODHD Macro Indicators API",
       updatedAt: new Date().toISOString(),
       countries: Object.entries(G7_COUNTRIES).map(([code, name]) => ({ code, name })),
-      metrics
+      metrics,
+      diagnostics: {
+        missingIndicatorKeys: missingKeys,
+        groupedIndicatorCount: groupedByIndicator.size
+      }
     };
 
     macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
@@ -1132,7 +1142,7 @@ const MIN_WHALE_NOTIONAL_USD = 100000;
 const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 const PREDICTION_REFRESH_MS = 6 * 60 * 60 * 1000; // 6 hours
-const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "fintech", "tech", "finance"];
+const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "fintech", "politics", "finance"];
 const predictionSnapshotCache = new Map();
 const EODHD_API_TOKEN = String(
   process.env.EODHD_API_TOKEN ||
@@ -1154,12 +1164,12 @@ const G7_COUNTRIES = {
 };
 
 const MACRO_INDICATOR_CONFIG = [
-  { key: "consumer_price_index", label: "CPI", unit: "Index" },
-  { key: "inflation_consumer_prices_annual", label: "Inflation Rate", unit: "%" },
-  { key: "gdp_growth_annual", label: "GDP Growth Rate", unit: "%" },
-  { key: "real_interest_rate", label: "Real Interest Rate", unit: "%" },
-  { key: "unemployment_total_percent", label: "Unemployment Rate", unit: "%" },
-  { key: "inflation_gdp_deflator_annual", label: "Inflation Rate (GDP Deflator)", unit: "%" }
+  { key: "consumer_price_index", label: "CPI", unit: "Index", aliases: ["cpi"] },
+  { key: "inflation_consumer_prices_annual", label: "Inflation Rate", unit: "%", aliases: ["inflation_rate"] },
+  { key: "gdp_growth_annual", label: "GDP Growth Rate", unit: "%", aliases: ["gdp_growth_rate"] },
+  { key: "real_interest_rate", label: "Real Interest Rate", unit: "%", aliases: ["real_interest_rates"] },
+  { key: "unemployment_total_percent", label: "Unemployment Rate", unit: "%", aliases: ["unemployment_rate"] },
+  { key: "inflation_gdp_deflator_annual", label: "Inflation Rate (GDP Deflator)", unit: "%", aliases: ["gdp_deflator_inflation_rate"] }
 ];
 
 function firstFiniteNumber(...values) {
@@ -1201,6 +1211,61 @@ function buildMacroMetric(payload, config) {
     expectation,
     asOf: points[0]?.date || null
   };
+}
+
+function normalizeIndicatorKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function groupMacroPayloadByIndicator(payload) {
+  const grouped = new Map();
+  const pushRows = (key, rows) => {
+    const normalized = normalizeIndicatorKey(key);
+    if (!normalized || !Array.isArray(rows) || rows.length === 0) return;
+    const current = grouped.get(normalized) || [];
+    grouped.set(normalized, current.concat(rows));
+  };
+
+  if (Array.isArray(payload)) {
+    payload.forEach((row) => {
+      const key = normalizeIndicatorKey(row?.indicator || row?.Indicator || row?.name || row?.Name);
+      if (!key) return;
+      pushRows(key, [row]);
+    });
+    return grouped;
+  }
+
+  if (!payload || typeof payload !== "object") return grouped;
+
+  Object.entries(payload).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      pushRows(key, value);
+      return;
+    }
+    if (value && typeof value === "object" && Array.isArray(value?.data)) {
+      pushRows(key, value.data);
+    }
+  });
+
+  return grouped;
+}
+
+function getMacroRowsForConfig(groupedByIndicator, config) {
+  const candidates = [config.key, ...(Array.isArray(config.aliases) ? config.aliases : [])]
+    .map(normalizeIndicatorKey)
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    if (groupedByIndicator.has(candidate)) {
+      return groupedByIndicator.get(candidate) || [];
+    }
+  }
+  return [];
 }
 
 function safeJsonParse(value, fallback) {
@@ -1303,7 +1368,7 @@ function classifyPredictionCategory(market) {
     .toLowerCase();
 
   const matchesAny = (keywords) => keywords.some((keyword) => haystack.includes(keyword));
-  if (matchesAny(["geopolitic", "war", "ceasefire", "election", "government", "president", "middle east", "ukraine", "russia", "china", "iran", "israel"])) {
+  if (matchesAny(["geopolitic", "war", "ceasefire", "middle east", "ukraine", "russia", "china", "iran", "israel", "taiwan", "nato"])) {
     return "geopolitics";
   }
   if (matchesAny(["crypto", "bitcoin", "ethereum", "solana", "xrp", "bnb", "dogecoin", "hype", "defi", "token"])) {
@@ -1312,8 +1377,8 @@ function classifyPredictionCategory(market) {
   if (matchesAny(["fintech", "payments", "paypal", "block", "stripe", "visa", "mastercard", "neobank"])) {
     return "fintech";
   }
-  if (matchesAny(["tech", "ai", "apple", "microsoft", "google", "meta", "tesla", "nvidia", "openai", "amazon"])) {
-    return "tech";
+  if (matchesAny(["politic", "election", "government", "president", "congress", "senate", "parliament", "prime minister", "campaign", "polls", "vote", "voter"])) {
+    return "politics";
   }
   if (matchesAny(["finance", "economy", "fed", "interest rate", "inflation", "stocks", "equity", "earnings", "gdp", "recession", "s&p", "nasdaq", "dow"])) {
     return "finance";
@@ -1454,6 +1519,7 @@ async function loadPredictionSnapshot() {
         shares: size,
         side: String(trade?.side || "").toUpperCase(),
         outcome: trade?.outcome || "",
+        outcomeIndex: Number.isFinite(Number(trade?.outcomeIndex)) ? Number(trade.outcomeIndex) : null,
         timestamp: Number(trade?.timestamp || 0),
         txHash: trade?.transactionHash || ""
       });

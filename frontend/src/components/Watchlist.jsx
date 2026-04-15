@@ -2,20 +2,6 @@ import { useEffect, useState } from "react";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
-const STOCK_THEMES = [
-  "AI",
-  "Defense",
-  "Energy",
-  "ETFs",
-  "Gaming",
-  "Hardware",
-  "Metals",
-  "Pharmco",
-  "Robotics",
-  "Space",
-  "Transportation",
-];
-
 const G7_COUNTRIES = [
   { code: "USA", name: "United States" },
   { code: "CAN", name: "Canada" },
@@ -26,15 +12,31 @@ const G7_COUNTRIES = [
   { code: "JPN", name: "Japan" }
 ];
 
+const DEFAULT_STOCK_THEMES = [
+  "AI",
+  "Defense",
+  "Energy",
+  "ETFs",
+  "Gaming",
+  "Hardware",
+  "Metals",
+  "Pharmco",
+  "Robotics",
+  "Space",
+  "Transportation"
+];
+
 export function Watchlist({
   categories,
   activeCategory,
   onCategorySelect,
   assets,
+  watchlistAssets = [],
   onAdd,
   loading,
   activeTheme,
   onThemeSelect,
+  stockThemes = [],
   isInWatchlist,
   onToggleStar,
   onPageChange,
@@ -63,6 +65,40 @@ export function Watchlist({
   const [macroLoading, setMacroLoading] = useState(false);
   const [macroError, setMacroError] = useState("");
 
+  const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
+  const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
+
+  const mergedStockThemes = (() => {
+    const seen = new Set();
+    return [...DEFAULT_STOCK_THEMES, ...(Array.isArray(stockThemes) ? stockThemes : [])]
+      .map((theme) => String(theme || "").trim())
+      .filter((theme) => {
+        if (!theme) return false;
+        const key = theme.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  })();
+
+  const orderMap = new Map(
+    (Array.isArray(watchlistAssets) ? watchlistAssets : []).map((entry, index) => [
+      `${normalizeSymbol(entry.symbol)}::${normalizeMarketType(entry.marketType)}`,
+      index
+    ])
+  );
+
+  const getWatchlistOrder = (asset) => {
+    const exactKey = `${normalizeSymbol(asset.symbol)}::${normalizeMarketType(asset.marketType)}`;
+    if (orderMap.has(exactKey)) return orderMap.get(exactKey);
+    const symbol = normalizeSymbol(asset.symbol);
+    let fallback = Number.MAX_SAFE_INTEGER;
+    orderMap.forEach((idx, key) => {
+      if (key.startsWith(`${symbol}::`)) fallback = Math.min(fallback, idx);
+    });
+    return fallback;
+  };
+
   useEffect(() => {
     setCurrentPage(1);
   }, [activeCategory, activeTheme]);
@@ -79,13 +115,18 @@ export function Watchlist({
     setEarningsPage(1);
   }, [activeCategory, activeTheme]);
 
-  // Derive the displayed assets based on active theme (stocks only)
+  // Show only assets currently in user's watchlist for the selected category.
+  const starredAssets = assets
+    .filter((asset) => isInWatchlist(asset.symbol, asset.marketType))
+    .sort((a, b) => getWatchlistOrder(a) - getWatchlistOrder(b));
+
+  // Derive displayed assets based on selected stock theme after watchlist filter.
   const displayedAssets =
     activeCategory === "stocks" && activeTheme && activeTheme !== "All"
-      ? assets.filter(
-        (a) => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase()
-      )
-      : assets;
+      ? starredAssets.filter(
+          (a) => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase()
+        )
+      : starredAssets;
 
   const itemsPerPage = 10;
   const totalPages = Math.max(1, Math.ceil(displayedAssets.length / itemsPerPage));
@@ -240,7 +281,7 @@ useEffect(() => {
       </header>
       {activeCategory === "stocks" && (
         <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "10px" }}>
-          {STOCK_THEMES.map((theme) => (
+          {mergedStockThemes.map((theme) => (
             <button
               key={theme}
               className={`theme-pill ${activeTheme === theme ? "active" : ""}`}

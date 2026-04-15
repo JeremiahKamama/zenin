@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { Watchlist } from "./components/Watchlist";
 import { PortfolioModule } from "./components/PortfolioModule";
@@ -9,6 +9,19 @@ import { HomeModule } from "./components/HomeModule";
 import { PredictionMarketModule } from "./components/PredictionMarketModule";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const DEFAULT_STOCK_THEMES = [
+  "AI",
+  "Defense",
+  "Energy",
+  "ETFs",
+  "Gaming",
+  "Hardware",
+  "Metals",
+  "Pharmco",
+  "Robotics",
+  "Space",
+  "Transportation"
+];
 
 const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
@@ -67,9 +80,32 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchType, setSearchType] = useState(null); // null, "tradfi" or "crypto"
+  const [customStockThemes, setCustomStockThemes] = useState(() => {
+    try {
+      const raw = localStorage.getItem("zenin_custom_stock_themes");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [watchlistPrompt, setWatchlistPrompt] = useState(null);
   const [selectedAsset, setSelectedAsset] = useState(null);
   const priceCacheRef = useRef(new Map());
   const PRICE_CACHE_TTL_MS = 60000;
+
+  const stockThemes = useMemo(() => {
+    const seen = new Set();
+    return [...DEFAULT_STOCK_THEMES, ...customStockThemes]
+      .map((theme) => String(theme || "").trim())
+      .filter((theme) => {
+        if (!theme) return false;
+        const key = theme.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [customStockThemes]);
 
   // Replace the localStorage balance useState with:
 const [balance, setBalance] = useState(10000);
@@ -92,6 +128,10 @@ useEffect(() => {
   useEffect(() => {
     localStorage.setItem("zenin_balance", balance.toString());
   }, [balance]);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_custom_stock_themes", JSON.stringify(customStockThemes));
+  }, [customStockThemes]);
 
   // Load portfolio from database on mount
   useEffect(() => {
@@ -373,6 +413,39 @@ useEffect(() => {
     return "stock";
   };
 
+  const formatThemeLabel = (value) =>
+    String(value || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(" ");
+
+  const tradfiCategoryOptions = useMemo(() => {
+    const blocked = new Set(["crypto", "indicators"]);
+    const fromBackend = (Array.isArray(categories) ? categories : [])
+      .map((category) => String(category || "").trim().toLowerCase())
+      .filter((category) => category && !blocked.has(category));
+    if (fromBackend.length > 0) return fromBackend;
+    return ["stocks", "bonds", "commodities"];
+  }, [categories]);
+
+  const openWatchlistPrompt = (asset) => {
+    const defaultCategory = tradfiCategoryOptions.includes("stocks")
+      ? "stocks"
+      : tradfiCategoryOptions[0] || "stocks";
+    const defaultTheme = stockThemes.includes(activeTheme) ? activeTheme : stockThemes[0] || "";
+    setWatchlistPrompt({
+      asset,
+      category: defaultCategory,
+      theme: defaultTheme,
+      customTheme: "",
+      error: "",
+      submitting: false
+    });
+  };
+
   const normalizeSymbolKey = (symbol) => String(symbol || "").trim().toUpperCase();
   const resolveMarketType = (asset) => {
     if (asset?.marketType) return String(asset.marketType).trim().toLowerCase();
@@ -608,10 +681,18 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       symbol: normalizeSymbolKey(asset.symbol),
       name: asset.name,
       type: normalizeAssetType(asset),
+      category: String(asset.category || "").trim().toLowerCase() || null,
+      theme: String(asset.theme || "").trim() || null,
       marketType: mt,
       date_added: new Date().toISOString(),
     };
-    setWatchlistAssets((prev) => [...prev, payload]);
+    const sameEntry = (entry) =>
+      normalizeSymbolKey(entry.symbol) === payload.symbol &&
+      (String(entry.marketType || "").trim().toLowerCase() || "spot") === mt;
+    setWatchlistAssets((prev) => {
+      const next = prev.filter((entry) => !sameEntry(entry));
+      return [...next, payload];
+    });
     try {
       const res = await fetch(`${BACKEND_URL}/db/watchlist`, {
         method: "POST",
@@ -620,13 +701,19 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       });
       if (!res.ok) throw new Error("Failed to add to watchlist");
       const saved = await res.json();
-      setWatchlistAssets((prev) =>
-        prev.map((a) =>
-          a.symbol === saved.symbol &&
-            (a.marketType || "spot") === (saved.marketType || "spot")
-            ? saved : a
-        )
-      );
+      const savedSymbol = normalizeSymbolKey(saved?.symbol || payload.symbol);
+      const savedMt = String(saved?.marketType || mt).trim().toLowerCase() || "spot";
+      setWatchlistAssets((prev) => {
+        const next = prev.filter(
+          (entry) =>
+            !(
+              normalizeSymbolKey(entry.symbol) === savedSymbol &&
+              (String(entry.marketType || "").trim().toLowerCase() || "spot") === savedMt
+            )
+        );
+        return [...next, { ...payload, ...saved }];
+      });
+      return true;
     } catch (err) {
       console.error("addToWatchlist failed:", err);
       setWatchlistAssets((prev) =>
@@ -634,28 +721,23 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           (a) => !(a.symbol === payload.symbol && (a.marketType || "spot") === mt)
         )
       );
+      return false;
     }
   };
 
   const removeFromWatchlist = async (symbol, marketType) => {
     const mt = String(marketType || "").trim().toLowerCase() || "spot";
     const normalizedSymbol = normalizeSymbolKey(symbol);
-    setWatchlistAssets((prev) =>
-      prev.filter(
-        (a) => !(normalizeSymbolKey(a.symbol) === normalizedSymbol && (String(a.marketType || "").trim().toLowerCase() || "spot") === mt)
-      )
-    );
     try {
       const res = await fetch(
         `${BACKEND_URL}/db/watchlist/${encodeURIComponent(normalizedSymbol)}?marketType=${encodeURIComponent(mt)}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error("Failed to remove from watchlist");
+      return true;
     } catch (err) {
       console.error("removeFromWatchlist failed:", err);
-      fetch(`${BACKEND_URL}/db/watchlist`)
-        .then((r) => r.json())
-        .then((data) => setWatchlistAssets(data.assets || []));
+      return false;
     }
   };
 
@@ -669,16 +751,78 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const marketType = String(asset.marketType || existing?.marketType || resolveMarketType(asset) || "spot").toLowerCase();
     if (existingEntries.length > 0 || isInWatchlist(asset.symbol, marketType)) {
       const uniqueMarketTypes = [...new Set(existingEntries.map((entry) => String(entry.marketType || "spot").toLowerCase()))];
-      // Remove all saved entries for this symbol to avoid marketType mismatch leftovers.
       const typesToRemove = uniqueMarketTypes.length > 0 ? uniqueMarketTypes : [marketType];
+      const removedEntries = watchlistAssets.filter(
+        (entry) => normalizeSymbolKey(entry.symbol) === normalizedSymbol
+      );
       setWatchlistAssets((prev) =>
         prev.filter((entry) => normalizeSymbolKey(entry.symbol) !== normalizedSymbol)
       );
-      await Promise.all(
+      const outcomes = await Promise.all(
         typesToRemove.map((mt) => removeFromWatchlist(asset.symbol, mt))
       );
+      const failed = outcomes.some((ok) => !ok);
+      if (failed) {
+        setWatchlistAssets((prev) => {
+          const dedupe = new Set(prev.map((entry) => `${normalizeSymbolKey(entry.symbol)}::${String(entry.marketType || "spot").toLowerCase()}`));
+          const restored = removedEntries.filter((entry) => {
+            const key = `${normalizeSymbolKey(entry.symbol)}::${String(entry.marketType || "spot").toLowerCase()}`;
+            return !dedupe.has(key);
+          });
+          return [...prev, ...restored];
+        });
+      }
     } else {
+      if (searchType === "tradfi") {
+        openWatchlistPrompt(asset);
+        return;
+      }
       addToWatchlist({ ...asset, marketType });
+    }
+  };
+
+  const submitWatchlistPrompt = async () => {
+    if (!watchlistPrompt?.asset) return;
+
+    const selectedCategory = String(watchlistPrompt.category || "").trim().toLowerCase();
+    const selectedThemeFromList = String(watchlistPrompt.theme || "").trim();
+    const selectedCustomTheme = formatThemeLabel(watchlistPrompt.customTheme);
+    const selectedTheme = selectedCustomTheme || selectedThemeFromList;
+
+    if (!selectedCategory) {
+      setWatchlistPrompt((prev) => ({ ...prev, error: "Choose a category before adding this asset." }));
+      return;
+    }
+    if (!selectedTheme) {
+      setWatchlistPrompt((prev) => ({ ...prev, error: "Choose a theme or type a new one." }));
+      return;
+    }
+    if (selectedTheme.length < 2) {
+      setWatchlistPrompt((prev) => ({ ...prev, error: "Theme name must be at least 2 characters long." }));
+      return;
+    }
+
+    setWatchlistPrompt((prev) => ({ ...prev, submitting: true, error: "" }));
+
+    try {
+      if (!stockThemes.some((theme) => theme.toLowerCase() === selectedTheme.toLowerCase())) {
+        setCustomStockThemes((prev) => [...prev, selectedTheme]);
+      }
+      const assetForWatchlist = {
+        ...watchlistPrompt.asset,
+        category: selectedCategory,
+        theme: selectedTheme,
+        type: "stock",
+        marketType: "equity"
+      };
+      const added = await addToWatchlist(assetForWatchlist);
+      if (!added) {
+        setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
+        return;
+      }
+      setWatchlistPrompt(null);
+    } catch {
+      setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
     }
   };
 
@@ -999,10 +1143,12 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                 activeCategory={activeCategory}
                 onCategorySelect={handleCategorySelect}
                 assets={assets}
+                watchlistAssets={watchlistAssets}
                 onAdd={setSelectedAsset}
                 loading={loading}
                 activeTheme={activeTheme}
                 onThemeSelect={setActiveTheme}
+                stockThemes={stockThemes}
                 isInWatchlist={isInWatchlist}
                 onToggleStar={toggleWatchlistStar}
                 onPageChange={handlePageChange}
@@ -1061,6 +1207,79 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           portfolio={portfolio}
           balance={balance}
         />
+      )}
+
+      {watchlistPrompt?.asset && (
+        <div className="watchlist-add-overlay" onClick={() => setWatchlistPrompt(null)}>
+          <div className="watchlist-add-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="watchlist-add-header">
+              <h3>Add {watchlistPrompt.asset.symbol} to Watchlist</h3>
+              <button className="close-btn" onClick={() => setWatchlistPrompt(null)}>&times;</button>
+            </div>
+            <div className="watchlist-add-body">
+              <label className="settings-field">
+                <span>Category</span>
+                <select
+                  value={watchlistPrompt.category}
+                  onChange={(e) =>
+                    setWatchlistPrompt((prev) => ({ ...prev, category: e.target.value, error: "" }))
+                  }
+                >
+                  {tradfiCategoryOptions.map((category) => (
+                    <option key={category} value={category}>
+                      {category.charAt(0).toUpperCase() + category.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="settings-field">
+                <span>Theme</span>
+                <select
+                  value={watchlistPrompt.theme}
+                  onChange={(e) =>
+                    setWatchlistPrompt((prev) => ({ ...prev, theme: e.target.value, customTheme: "", error: "" }))
+                  }
+                >
+                  <option value="">Select a theme</option>
+                  {stockThemes.map((theme) => (
+                    <option key={theme} value={theme}>{theme}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="settings-field">
+                <span>Or create a new theme</span>
+                <input
+                  type="text"
+                  placeholder="Type a new theme name"
+                  value={watchlistPrompt.customTheme}
+                  onChange={(e) =>
+                    setWatchlistPrompt((prev) => ({ ...prev, customTheme: e.target.value, error: "" }))
+                  }
+                />
+              </label>
+
+              {watchlistPrompt.error ? (
+                <p className="watchlist-add-error">{watchlistPrompt.error}</p>
+              ) : (
+                <p className="watchlist-add-help">
+                  Pick an existing theme or create a new one. New themes will appear in the Stocks filters.
+                </p>
+              )}
+            </div>
+            <div className="watchlist-add-actions">
+              <button className="settings-secondary-btn" onClick={() => setWatchlistPrompt(null)}>Cancel</button>
+              <button
+                className="settings-primary-btn"
+                onClick={submitWatchlistPrompt}
+                disabled={watchlistPrompt.submitting}
+              >
+                {watchlistPrompt.submitting ? "Adding..." : "Add to Watchlist"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {isSettingsOpen && (

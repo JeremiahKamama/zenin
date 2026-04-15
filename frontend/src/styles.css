@@ -373,6 +373,77 @@ button {
   cursor: not-allowed;
 }
 
+.settings-secondary-btn {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5e1;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.watchlist-add-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(2, 6, 23, 0.68);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.watchlist-add-modal {
+  width: min(440px, 96vw);
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #020617;
+  box-shadow: 0 20px 48px rgba(2, 6, 23, 0.6);
+  overflow: hidden;
+}
+
+.watchlist-add-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  padding: 12px 14px;
+}
+
+.watchlist-add-header h3 {
+  margin: 0;
+  font-size: 0.96rem;
+  color: #f8fafc;
+}
+
+.watchlist-add-body {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.watchlist-add-help {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.watchlist-add-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #f87171;
+}
+
+.watchlist-add-actions {
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  padding: 12px 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .connected-accounts-list {
   display: grid;
   gap: 8px;
@@ -1895,9 +1966,9 @@ button {
 }
 
 .prediction-prob-gauge {
-  width: 126px;
-  min-width: 126px;
-  height: 82px;
+  width: 101px;
+  min-width: 101px;
+  height: 66px;
   position: relative;
   display: flex;
   align-items: center;
@@ -1908,15 +1979,15 @@ button {
 .prediction-gauge-svg {
   position: absolute;
   top: 0;
-  left: 3px;
-  width: 120px;
-  height: 72px;
+  left: 2px;
+  width: 96px;
+  height: 58px;
 }
 
 .prediction-gauge-track {
   fill: none;
   stroke: #334155;
-  stroke-width: 10;
+  stroke-width: 8;
   stroke-linecap: round;
   opacity: 0.95;
 }
@@ -1924,21 +1995,21 @@ button {
 .prediction-gauge-fill {
   fill: none;
   stroke: #4ade80;
-  stroke-width: 10;
+  stroke-width: 8;
   stroke-linecap: round;
 }
 
 .prediction-gauge-value {
-  margin-top: 18px;
-  font-size: 1.8rem;
+  margin-top: 14px;
+  font-size: 1.44rem;
   font-weight: 700;
   color: #f8fafc;
   line-height: 1;
 }
 
 .prediction-gauge-label {
-  margin-top: 4px;
-  font-size: 1.1rem;
+  margin-top: 3px;
+  font-size: 0.88rem;
   color: #94a3b8;
   font-weight: 500;
 }
