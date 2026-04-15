@@ -117,6 +117,16 @@ useEffect(() => {
   const addLeg = () => setLegs(prev => [...prev, { ...EMPTY_LEG }]);
   const removeLeg = (i) => setLegs(prev => prev.filter((_, idx) => idx !== i));
   const updateLeg = (i, field, value) => setLegs(prev => prev.map((leg, idx) => idx === i ? { ...leg, [field]: value } : leg));
+  const refreshLeg = (i) => {
+    const leg = legs[i];
+    if (!leg) return;
+    const strike = leg.strike;
+    if (!strike) return;
+    const iv = getChainIV(strike, leg.type);
+    const premium = getChainPremium(strike, leg.type);
+    if (iv) updateLeg(i, "iv", iv);
+    if (premium) updateLeg(i, "premium", premium);
+  };
 
   const applyStrategy = (strategy) => {
     setActiveStrategy(strategy.name);
@@ -349,92 +359,85 @@ useEffect(() => {
             </button>
           </div>
 
-          <div className="options-calculator-table-wrap" style={{ overflowX: "auto" }}>
-            <table className="options-calculator-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                  {["Strike", "Expiry", "Call / Put", "Long/Short", "Qty", "Premium", "IV%"].map(h => (
-                    <th key={h} style={{ padding: "6px 8px", color: "#64748b", fontSize: "11px", fontWeight: 600, textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                  <th style={{ padding: "6px 8px" }} />
-                </tr>
-              </thead>
-              <tbody>
-                {legs.map((leg, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    <td style={{ padding: "6px 4px" }}>
-                      <select
-                        value={leg.strike}
-                        onChange={e => {
-                          const strike = e.target.value;
-                          updateLeg(i, "strike", strike);
-                          const iv = getChainIV(strike, leg.type);
-                          const premium = getChainPremium(strike, leg.type);
-                          if (iv) updateLeg(i, "iv", iv);
-                          if (premium) updateLeg(i, "premium", premium);
-                        }}
-                        style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none", maxWidth: "90px" }}
-                      >
-                        <option value="">Strike</option>
-                        {getChainStrikes().map(s => (
-                          <option key={s} value={s}>{s.toLocaleString()}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <input
-                        type="date"
-                        value={leg.expiry}
-                        onChange={e => updateLeg(i, "expiry", e.target.value)}
-                        style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
-                      />
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <div style={{ display: "flex", gap: "2px" }}>
-                        <button onClick={() => updateLeg(i, "type", "call")} style={btnStyle(leg.type === "call")}>Call</button>
-                        <button onClick={() => updateLeg(i, "type", "put")} style={btnStyle(leg.type === "put")}>Put</button>
-                      </div>
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <div style={{ display: "flex", gap: "2px" }}>
-                        <button onClick={() => updateLeg(i, "direction", "long")} style={btnStyle(leg.direction === "long")}>Long</button>
-                        <button onClick={() => updateLeg(i, "direction", "short")} style={btnStyle(leg.direction === "short")}>Short</button>
-                      </div>
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <input
-                        type="number"
-                        value={leg.qty}
-                        onChange={e => updateLeg(i, "qty", e.target.value)}
-                        min="1"
-                        style={{ width: "50px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
-                      />
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <input
-                        type="number"
-                        value={leg.premium}
-                        onChange={e => updateLeg(i, "premium", e.target.value)}
-                        placeholder="0.00"
-                        style={{ width: "70px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
-                      />
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <input
-                        type="number"
-                        value={leg.iv}
-                        onChange={e => updateLeg(i, "iv", e.target.value)}
-                        placeholder="20"
-                        style={{ width: "55px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
-                      />
-                    </td>
-                    <td style={{ padding: "6px 4px" }}>
-                      <button onClick={() => removeLeg(i)} style={{ background: "rgba(239,68,68,0.1)", border: "none", color: "#ef4444", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontSize: "12px" }}>✕</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="options-calculator-legs-grid">
+            {legs.map((leg, i) => (
+              <div key={i} className="options-leg-card">
+                <div className="options-leg-cell options-leg-title">Leg {i + 1}</div>
+                <div className="options-leg-cell options-leg-actions">
+                  <button className="options-leg-action-btn" onClick={() => refreshLeg(i)}>Refresh</button>
+                  <button className="options-leg-action-btn danger" onClick={() => removeLeg(i)}>Remove</button>
+                </div>
+
+                <div className="options-leg-cell">
+                  <select
+                    value={leg.strike}
+                    onChange={e => {
+                      const strike = e.target.value;
+                      updateLeg(i, "strike", strike);
+                      const iv = getChainIV(strike, leg.type);
+                      const premium = getChainPremium(strike, leg.type);
+                      if (iv) updateLeg(i, "iv", iv);
+                      if (premium) updateLeg(i, "premium", premium);
+                    }}
+                    className="options-leg-input"
+                  >
+                    <option value="">Amount</option>
+                    {getChainStrikes().map(s => (
+                      <option key={s} value={s}>{s.toLocaleString()}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="options-leg-cell">
+                  <input
+                    type="date"
+                    value={leg.expiry}
+                    onChange={e => updateLeg(i, "expiry", e.target.value)}
+                    className="options-leg-input"
+                  />
+                </div>
+
+                <div className="options-leg-cell">
+                  <div className="options-leg-toggle-row">
+                    <button onClick={() => updateLeg(i, "type", "call")} style={btnStyle(leg.type === "call")}>Call</button>
+                    <button onClick={() => updateLeg(i, "type", "put")} style={btnStyle(leg.type === "put")}>Put</button>
+                  </div>
+                </div>
+                <div className="options-leg-cell">
+                  <div className="options-leg-toggle-row">
+                    <button onClick={() => updateLeg(i, "direction", "long")} style={btnStyle(leg.direction === "long")}>Long</button>
+                    <button onClick={() => updateLeg(i, "direction", "short")} style={btnStyle(leg.direction === "short")}>Short</button>
+                  </div>
+                </div>
+
+                <div className="options-leg-cell">
+                  <div className="options-leg-mini-label">QTY Premium IV%</div>
+                  <div className="options-leg-mini-row">
+                    <input
+                      type="number"
+                      value={leg.qty}
+                      onChange={e => updateLeg(i, "qty", e.target.value)}
+                      min="1"
+                      className="options-leg-mini-input"
+                    />
+                    <input
+                      type="number"
+                      value={leg.premium}
+                      onChange={e => updateLeg(i, "premium", e.target.value)}
+                      placeholder="Premium"
+                      className="options-leg-mini-input"
+                    />
+                    <input
+                      type="number"
+                      value={leg.iv}
+                      onChange={e => updateLeg(i, "iv", e.target.value)}
+                      placeholder="IV%"
+                      className="options-leg-mini-input"
+                    />
+                  </div>
+                </div>
+                <div className="options-leg-cell options-leg-empty" />
+              </div>
+            ))}
           </div>
 
           <div className="options-calculator-greeks-grid" style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
