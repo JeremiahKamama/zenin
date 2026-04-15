@@ -1029,20 +1029,29 @@ const agent = new https.Agent({
   timeout: 10000
 });
 
-const DERIVE_BASE_URLS = [
-  process.env.DERIVE_API_URL,
+const DERIVE_BASE_URLS = [...new Set([
   "https://api.lyra.finance",
+  process.env.DERIVE_API_URL,
   "https://api.derive.xyz"
-].filter(Boolean);
+].filter(Boolean))];
 
-const deriveClients = DERIVE_BASE_URLS.map((baseURL) => ({
-  baseURL,
-  client: axios.create({
+const deriveClients = DERIVE_BASE_URLS.flatMap((baseURL) => ([
+  {
     baseURL,
-    httpsAgent: agent,
-    timeout: 10000
-  })
-}));
+    client: axios.create({
+      baseURL,
+      httpsAgent: agent,
+      timeout: 10000
+    })
+  },
+  {
+    baseURL,
+    client: axios.create({
+      baseURL,
+      timeout: 10000
+    })
+  }
+]));
 
 // Keep a small in-memory cache to serve stale data when Derive is temporarily unavailable.
 const optionsChainCache = new Map();
@@ -1078,7 +1087,7 @@ function computeTradeNotionalUsd(trade = {}) {
 }
 
 // Retry wrapper
-async function safePost(url, body, retries = 2) {
+async function safePost(url, body, retries = 1) {
   let lastError = null;
 
   for (const { baseURL, client } of deriveClients) {
@@ -1088,14 +1097,12 @@ async function safePost(url, body, retries = 2) {
         return res.data;
       } catch (err) {
         lastError = err;
-        if (attempt < retries) {
-          console.warn(`Retrying Derive call (${baseURL}):`, url);
-        }
+        if (attempt < retries) console.warn(`Retrying options call (${baseURL}):`, url);
       }
     }
   }
 
-  throw lastError || new Error("All Derive/Lyra endpoints failed");
+  throw lastError || new Error("All options-provider endpoints failed");
 }
 
 // Lyra (Derive) Crypto Options Integration

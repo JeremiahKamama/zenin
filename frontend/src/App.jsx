@@ -641,7 +641,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           title="Open settings"
         >
           <div className="user-icon">
-            {userEmail.charAt(0).toUpperCase()}
+            👤
           </div>
           <span className="sidebar-footer-email" title={userEmail}>
             {userEmail}
