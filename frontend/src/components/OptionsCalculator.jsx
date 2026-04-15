@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback,useMemo} from "react";
+import { useState, useEffect, useMemo } from "react";
 import Chart from "react-apexcharts";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -111,10 +111,6 @@ const effectiveSpot = useMemo(() => {
   const side = type === "call" ? row.call : row.put;
   return side?.mark_price ? side.mark_price.toFixed(4) : "";
 };
-    if (!row) return "";
-    const side = type === "call" ? row.call : row.put;
-    return side?.mark_price ? side.mark_price.toFixed(4) : "";
-  };
   
   const addLeg = () => setLegs(prev => [...prev, { ...EMPTY_LEG }]);
   const removeLeg = (i) => setLegs(prev => prev.filter((_, idx) => idx !== i));
@@ -500,3 +496,4 @@ const effectiveSpot = useMemo(() => {
       </div>
   </div>
   );
+}
