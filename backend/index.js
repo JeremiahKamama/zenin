@@ -192,13 +192,116 @@ async function resolveFetch() {
   return globalThis.fetch || (await import("node-fetch")).default;
 }
 
-async function fetchBinanceTicker(endpointBase, symbol) {
+async function postHyperliquidInfo(body) {
   const fetch = await resolveFetch();
-  const response = await fetch(`${endpointBase}?symbol=${symbol}`);
+  const response = await fetch("https://api.hyperliquid.xyz/info", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
   if (!response.ok) {
-    throw new Error(`Binance lookup failed for ${symbol}: ${response.statusText}`);
+    throw new Error(`Hyperliquid info failed: ${response.status} ${response.statusText}`);
   }
   return response.json();
+}
+
+async function searchCoinGeckoCrypto(query) {
+  const fetch = await resolveFetch();
+  const response = await fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`);
+  if (!response.ok) return [];
+  const payload = await response.json();
+  const coins = Array.isArray(payload?.coins) ? payload.coins : [];
+  return coins.slice(0, 25).map((coin) => ({
+    symbol: String(coin.symbol || "").toUpperCase(),
+    name: coin.name || coin.id || "Unknown",
+    type: "crypto",
+    exchange: "CoinGecko",
+    marketType: "spot"
+  }));
+}
+
+function computePercentChange(current, previous) {
+  const curr = Number(current);
+  const prev = Number(previous);
+  if (!Number.isFinite(curr) || !Number.isFinite(prev) || prev === 0) return null;
+  return ((curr - prev) / prev) * 100;
+}
+
+function getCoinGeckoIdForSymbol(symbol) {
+  const coinMap = {
+    BTC: "bitcoin", ETH: "ethereum", BNB: "binancecoin",
+    XRP: "ripple", ADA: "cardano", SOL: "solana",
+    DOGE: "dogecoin", DOT: "polkadot", USDT: "tether", USDC: "usd-coin",
+    HYPE: "hyperliquid"
+  };
+  return coinMap[symbol] || String(symbol || "").toLowerCase();
+}
+
+async function fetchHyperliquidSearchResults(query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return [];
+
+  const [allMidsRaw, spotMetaRaw] = await Promise.allSettled([
+    postHyperliquidInfo({ type: "allMids" }),
+    postHyperliquidInfo({ type: "spotMeta" })
+  ]);
+
+  const mids = allMidsRaw.status === "fulfilled" && allMidsRaw.value && typeof allMidsRaw.value === "object"
+    ? allMidsRaw.value
+    : {};
+
+  const resultsMap = new Map();
+
+  // Perp/all mids symbols (e.g. BTC, ETH, HYPE)
+  Object.keys(mids).forEach((coin) => {
+    if (!coin || coin.startsWith("@")) return;
+    const symbol = coin.toUpperCase();
+    const price = Number(mids[coin]);
+    const record = {
+      symbol,
+      name: `${symbol} (Hyperliquid)`,
+      type: "crypto",
+      exchange: "Hyperliquid",
+      marketType: "spot",
+      price: Number.isFinite(price) ? price : null
+    };
+    resultsMap.set(symbol, record);
+  });
+
+  // Spot universe mapping from token index -> symbol
+  if (spotMetaRaw.status === "fulfilled" && spotMetaRaw.value && typeof spotMetaRaw.value === "object") {
+    const tokens = Array.isArray(spotMetaRaw.value.tokens) ? spotMetaRaw.value.tokens : [];
+    const universe = Array.isArray(spotMetaRaw.value.universe) ? spotMetaRaw.value.universe : [];
+    const tokenByIndex = new Map(tokens.map((t) => [t.index, t]));
+
+    universe.forEach((pair) => {
+      const tokenIndexes = Array.isArray(pair.tokens) ? pair.tokens : [];
+      const baseToken = tokenByIndex.get(tokenIndexes[0]);
+      if (!baseToken?.name) return;
+      const symbol = String(baseToken.name).toUpperCase();
+      const midsKey = pair.name && mids[pair.name] != null ? pair.name : `@${pair.index}`;
+      const mid = Number(mids[midsKey]);
+      if (!resultsMap.has(symbol)) {
+        resultsMap.set(symbol, {
+          symbol,
+          name: `${symbol}/USDC`,
+          type: "crypto",
+          exchange: "Hyperliquid",
+          marketType: "spot",
+          price: Number.isFinite(mid) ? mid : null
+        });
+      } else if (Number.isFinite(mid) && resultsMap.get(symbol).price == null) {
+        resultsMap.get(symbol).price = mid;
+      }
+    });
+  }
+
+  return [...resultsMap.values()]
+    .filter((row) =>
+      row.symbol.toLowerCase().includes(needle) ||
+      String(row.name || "").toLowerCase().includes(needle)
+    )
+    .slice(0, 25);
 }
 
 const CRYPTO_CACHE_TTL_MS = 60000;
@@ -210,12 +313,6 @@ let cryptoMarketCache = {
 async function fetchCryptoMarketData() {
   const fetch = await resolveFetch();
 
-  const coinMap = {
-    BTC: "bitcoin", ETH: "ethereum", BNB: "binancecoin",
-    XRP: "ripple", ADA: "cardano", SOL: "solana",
-    DOGE: "dogecoin", DOT: "polkadot", USDT: "tether", USDC: "usd-coin"
-  };
-
   const allDbAssets = watchlist.getAll();
   const combinedAssets = allDbAssets
     .filter((a) => {
@@ -224,11 +321,7 @@ async function fetchCryptoMarketData() {
     })
     .map((asset) => ({ ...asset, type: asset.type || "crypto" }));
 
-  const ids = combinedAssets
-    .map((a) => coinMap[a.symbol] || a.symbol.toLowerCase())
-    .join(",");
-
-  if (!ids) {
+  if (combinedAssets.length === 0) {
     return [];
   }
 
@@ -247,20 +340,84 @@ async function fetchCryptoMarketData() {
   }
 
   try {
-    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
-    const response = await fetch(url);
-    const data = await response.json();
+    let hyperMids = {};
+    let perpCtxMap = new Map();
+    let spotCtxMap = new Map();
 
-    const enriched = combinedAssets.map(asset => {
-      const id = coinMap[asset.symbol] || asset.symbol.toLowerCase();
-      const info = data[id];
+    const [midsRes, perpCtxRes, spotCtxRes] = await Promise.allSettled([
+      postHyperliquidInfo({ type: "allMids" }),
+      postHyperliquidInfo({ type: "metaAndAssetCtxs" }),
+      postHyperliquidInfo({ type: "spotMetaAndAssetCtxs" })
+    ]);
+
+    if (midsRes.status === "fulfilled" && midsRes.value && typeof midsRes.value === "object") {
+      hyperMids = midsRes.value;
+    }
+
+    if (perpCtxRes.status === "fulfilled" && Array.isArray(perpCtxRes.value)) {
+      const [meta, contexts] = perpCtxRes.value;
+      const universe = Array.isArray(meta?.universe) ? meta.universe : [];
+      const ctxs = Array.isArray(contexts) ? contexts : [];
+      universe.forEach((u, idx) => {
+        const key = String(u?.name || "").toUpperCase();
+        if (key && ctxs[idx]) perpCtxMap.set(key, ctxs[idx]);
+      });
+    }
+
+    if (spotCtxRes.status === "fulfilled" && Array.isArray(spotCtxRes.value)) {
+      const [meta, contexts] = spotCtxRes.value;
+      const tokens = Array.isArray(meta?.tokens) ? meta.tokens : [];
+      const universe = Array.isArray(meta?.universe) ? meta.universe : [];
+      const ctxs = Array.isArray(contexts) ? contexts : [];
+      const tokenByIndex = new Map(tokens.map((t) => [t.index, t]));
+
+      universe.forEach((pair, idx) => {
+        const baseTokenIndex = Array.isArray(pair?.tokens) ? pair.tokens[0] : null;
+        const baseToken = tokenByIndex.get(baseTokenIndex);
+        const symbol = String(baseToken?.name || "").toUpperCase();
+        if (symbol && ctxs[idx]) spotCtxMap.set(symbol, ctxs[idx]);
+      });
+    }
+
+    const missingSymbols = [];
+    const partial = combinedAssets.map((asset) => {
+      const symbol = String(asset.symbol || "").toUpperCase();
+      const midsValue = Number(hyperMids[symbol]);
+      const perpCtx = perpCtxMap.get(symbol);
+      const spotCtx = spotCtxMap.get(symbol);
+      const markPx = Number(perpCtx?.markPx ?? spotCtx?.midPx);
+      const prevDayPx = Number(perpCtx?.prevDayPx ?? spotCtx?.prevDayPx);
+      const price = Number.isFinite(midsValue) ? midsValue : (Number.isFinite(markPx) ? markPx : null);
+      const priceChangePercent = computePercentChange(price, prevDayPx);
+
+      if (price == null) missingSymbols.push(symbol);
+
       return {
         ...asset,
-        price: info?.usd ?? null,
-        priceChangePercent: info?.usd_24h_change ?? null,
+        price,
+        priceChangePercent,
         volume: null
       };
     });
+
+    const uniqueMissing = [...new Set(missingSymbols)];
+    if (uniqueMissing.length > 0) {
+      const ids = uniqueMissing.map(getCoinGeckoIdForSymbol).join(",");
+      const cgUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
+      const cgRes = await fetch(cgUrl);
+      const cgData = cgRes.ok ? await cgRes.json() : {};
+
+      partial.forEach((row) => {
+        if (row.price != null) return;
+        const id = getCoinGeckoIdForSymbol(row.symbol);
+        const info = cgData[id];
+        row.price = info?.usd ?? null;
+        row.priceChangePercent = info?.usd_24h_change ?? null;
+      });
+    }
+
+    const enriched = partial;
+
     cryptoMarketCache = {
       ts: Date.now(),
       assets: enriched.map((asset) => ({
@@ -599,7 +756,13 @@ app.get("/api/search", async (req, res) => {
     return res.status(400).json({ error: "q parameter required" });
   }
   try {
-    const results = await searchYahooFinance(q, type);
+    let results = [];
+    if (String(type).toLowerCase() === "crypto") {
+      const hyperResults = await fetchHyperliquidSearchResults(q);
+      results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
+    } else {
+      results = await searchYahooFinance(q, type);
+    }
     res.json({ results });
   } catch (error) {
     res.status(502).json({ error: error.message });
@@ -866,11 +1029,20 @@ const agent = new https.Agent({
   timeout: 10000
 });
 
-const deriveClient = axios.create({
-  baseURL: "https://api.derive.xyz",
-  httpsAgent: agent,
-  timeout: 10000
-});
+const DERIVE_BASE_URLS = [
+  process.env.DERIVE_API_URL,
+  "https://api.lyra.finance",
+  "https://api.derive.xyz"
+].filter(Boolean);
+
+const deriveClients = DERIVE_BASE_URLS.map((baseURL) => ({
+  baseURL,
+  client: axios.create({
+    baseURL,
+    httpsAgent: agent,
+    timeout: 10000
+  })
+}));
 
 // Keep a small in-memory cache to serve stale data when Derive is temporarily unavailable.
 const optionsChainCache = new Map();
@@ -907,16 +1079,23 @@ function computeTradeNotionalUsd(trade = {}) {
 
 // Retry wrapper
 async function safePost(url, body, retries = 2) {
-  try {
-    const res = await deriveClient.post(url, body);
-    return res.data;
-  } catch (err) {
-    if (retries > 0) {
-      console.warn("Retrying Derive call:", url);
-      return safePost(url, body, retries - 1);
+  let lastError = null;
+
+  for (const { baseURL, client } of deriveClients) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const res = await client.post(url, body);
+        return res.data;
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries) {
+          console.warn(`Retrying Derive call (${baseURL}):`, url);
+        }
+      }
     }
-    throw err;
   }
+
+  throw lastError || new Error("All Derive/Lyra endpoints failed");
 }
 
 // Lyra (Derive) Crypto Options Integration

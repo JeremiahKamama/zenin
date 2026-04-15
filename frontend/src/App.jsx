@@ -428,7 +428,11 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     }
   };
 
-  const [activeSection, setActiveSection] = useState("Home");
+  const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
+  const [activeSection, setActiveSection] = useState(() => {
+    const saved = localStorage.getItem("zenin_active_section");
+    return sections.includes(saved) ? saved : "Home";
+  });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [userEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -506,7 +510,6 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     username: "",
     apiKey: ""
   });
-  const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
   const settingsCategories = ["General", "Accounts", "Layout", "Notification"];
 
   useEffect(() => {
@@ -516,6 +519,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   useEffect(() => {
     localStorage.setItem("zenin_connected_accounts", JSON.stringify(connectedAccounts));
   }, [connectedAccounts]);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_active_section", activeSection);
+  }, [activeSection]);
 
   const toggleSettingsPanel = (panelKey) => {
     setExpandedSettingsPanels((prev) => ({ ...prev, [panelKey]: !prev[panelKey] }));
