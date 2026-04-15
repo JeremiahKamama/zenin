@@ -3612,10 +3612,10 @@ button {
 }
 
 .options-leg-title {
-  font-size: 36px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   color: #9ca3af;
-  line-height: 1;
+  line-height: 1.2;
 }
 
 .options-leg-header-actions {
@@ -3628,7 +3628,7 @@ button {
   border: none;
   background: transparent;
   color: #9ca3af;
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   padding: 0;
@@ -3653,12 +3653,12 @@ button {
 
 .options-leg-input {
   width: 100%;
-  padding: 12px 14px;
+  padding: 10px 12px;
   background: rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 10px;
   color: #f1f5f9;
-  font-size: 16px;
+  font-size: 14px;
   outline: none;
 }
 
@@ -3669,12 +3669,12 @@ button {
 
 .options-leg-segment-btn {
   flex: 1;
-  padding: 10px 12px;
+  padding: 9px 11px;
   background: rgba(15, 23, 42, 0.7);
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 10px;
   color: #e5e7eb;
-  font-size: 16px;
+  font-size: 14px;
   cursor: pointer;
 }
 
@@ -3694,7 +3694,7 @@ button {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   color: #9ca3af;
-  font-size: 14px;
+  font-size: 12px;
   padding: 0 2px;
 }
 
