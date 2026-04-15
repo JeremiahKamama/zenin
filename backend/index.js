@@ -834,12 +834,31 @@ app.get("/api/search", async (req, res) => {
     return res.status(400).json({ error: "q parameter required" });
   }
   try {
+    const normalizedType = String(type || "tradfi").trim().toLowerCase();
     let results = [];
-    if (String(type).toLowerCase() === "crypto") {
+    if (normalizedType === "crypto") {
       const hyperResults = await fetchHyperliquidSearchResults(q);
       results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
+    } else if (normalizedType === "indicator" || normalizedType === "indicators") {
+      const needle = String(q || "").trim().toLowerCase();
+      const indicatorAssets = Array.isArray(watchlistData?.indicators) ? watchlistData.indicators : [];
+      results = indicatorAssets
+        .filter((asset) => {
+          const symbol = String(asset?.symbol || "").toLowerCase();
+          const name = String(asset?.name || "").toLowerCase();
+          return symbol.includes(needle) || name.includes(needle);
+        })
+        .slice(0, 20)
+        .map((asset) => ({
+          symbol: asset.symbol,
+          name: asset.name,
+          type: "indicator",
+          category: "indicators",
+          marketType: "macro",
+          market: asset.market || "Macro"
+        }));
     } else {
-      results = await searchYahooFinance(q, type);
+      results = await searchYahooFinance(q, normalizedType);
     }
     res.json({ results });
   } catch (error) {
@@ -1035,7 +1054,6 @@ app.get("/api/macro-indicators", async (req, res) => {
       countryName: G7_COUNTRIES[country],
       source: "EODHD Macro Indicators API",
       updatedAt: new Date().toISOString(),
-      countries: Object.entries(G7_COUNTRIES).map(([code, name]) => ({ code, name })),
       metrics,
       diagnostics: {
         missingIndicatorKeys: missingKeys,

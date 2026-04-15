@@ -25,6 +25,7 @@ const DEFAULT_STOCK_THEMES = [
   "Space",
   "Transportation"
 ];
+const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export function Watchlist({
   categories,
@@ -64,6 +65,7 @@ export function Watchlist({
   const [macroSnapshot, setMacroSnapshot] = useState(null);
   const [macroLoading, setMacroLoading] = useState(false);
   const [macroError, setMacroError] = useState("");
+  const [macroByCountry, setMacroByCountry] = useState({});
 
   const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
   const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
@@ -152,8 +154,22 @@ useEffect(() => {
 
     let isMounted = true;
     const controller = new AbortController();
+    const now = Date.now();
+    const cachedEntry = macroByCountry[indicatorCountry];
+    if (cachedEntry?.data) {
+      setMacroSnapshot(cachedEntry.data);
+      setMacroError("");
+      if (now - Number(cachedEntry.cachedAt || 0) < MACRO_CLIENT_CACHE_TTL_MS) {
+        setMacroLoading(false);
+        return () => {
+          isMounted = false;
+          controller.abort();
+        };
+      }
+    }
+
     const fetchMacro = async () => {
-      setMacroLoading(true);
+      setMacroLoading(!cachedEntry?.data);
       setMacroError("");
       try {
         const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
@@ -173,10 +189,17 @@ useEffect(() => {
         const data = await res.json();
         if (!isMounted) return;
         setMacroSnapshot(data || null);
+        setMacroByCountry((prev) => ({
+          ...prev,
+          [indicatorCountry]: {
+            data: data || null,
+            cachedAt: Date.now()
+          }
+        }));
       } catch (err) {
         if (err.name === "AbortError") return;
         if (!isMounted) return;
-        setMacroSnapshot(null);
+        if (!cachedEntry?.data) setMacroSnapshot(null);
         setMacroError(err?.message || "Unable to load macro indicators.");
       } finally {
         if (isMounted) setMacroLoading(false);
@@ -188,7 +211,7 @@ useEffect(() => {
       isMounted = false;
       controller.abort();
     };
-  }, [activeCategory, indicatorCountry]);
+  }, [activeCategory, indicatorCountry, macroByCountry]);
 
   useEffect(() => {
     if (activeCategory !== "stocks") return;

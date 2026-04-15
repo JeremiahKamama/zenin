@@ -79,7 +79,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchType, setSearchType] = useState(null); // null, "tradfi" or "crypto"
+  const [searchType, setSearchType] = useState(null); // null, "tradfi", "crypto", or "indicator"
   const [customStockThemes, setCustomStockThemes] = useState(() => {
     try {
       const raw = localStorage.getItem("zenin_custom_stock_themes");
@@ -436,6 +436,7 @@ useEffect(() => {
     const raw = String(asset?.type || "").toLowerCase();
     if (["stock", "stocks", "equity"].includes(raw)) return "stock";
     if (raw === "crypto") return "crypto";
+    if (raw === "indicator" || String(asset?.category || "").toLowerCase() === "indicators") return "indicator";
     if (raw === "bond") return "bond";
     if (["commodity", "commodities", "metal", "metals"].includes(raw)) return "commodity";
     if (["etf", "etfs"].includes(raw)) return "etf";
@@ -480,6 +481,7 @@ useEffect(() => {
   const normalizeSymbolKey = (symbol) => String(symbol || "").trim().toUpperCase();
   const resolveMarketType = (asset) => {
     if (asset?.marketType) return String(asset.marketType).trim().toLowerCase();
+    if (normalizeAssetType(asset) === "indicator") return "macro";
     return normalizeAssetType(asset) === "crypto" ? "spot" : "equity";
   };
   const isCryptoHolding = (holding) => {
@@ -1269,7 +1271,17 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                 <input
                   type="text"
                   className="search-input"
-                  placeholder={searchType ? `Search ${searchType === "tradfi" ? "stocks" : "crypto"} by symbol or name...` : "Select class and search assets..."}
+                  placeholder={
+                    searchType
+                      ? `Search ${
+                        searchType === "tradfi"
+                          ? "stocks"
+                          : searchType === "indicator"
+                            ? "indicators"
+                            : "crypto"
+                      } by symbol or name...`
+                      : "Select class and search assets..."
+                  }
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -1278,13 +1290,19 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                     className={`search-type-button ${searchType === "tradfi" ? "active" : ""}`}
                     onClick={() => setSearchType("tradfi")}
                   >
-                    TradFi
+                    Stocks
                   </button>
                   <button
                     className={`search-type-button ${searchType === "crypto" ? "active" : ""}`}
                     onClick={() => setSearchType("crypto")}
                   >
                     Crypto
+                  </button>
+                  <button
+                    className={`search-type-button ${searchType === "indicator" ? "active" : ""}`}
+                    onClick={() => setSearchType("indicator")}
+                  >
+                    Indicator
                   </button>
                 </div>
               </div>
