@@ -139,6 +139,15 @@ button {
   align-items: center;
 }
 
+.sidebar.collapsed .sidebar-footer {
+  justify-content: center;
+  padding: 10px 8px;
+}
+
+.sidebar.collapsed .sidebar-footer-email {
+  display: none;
+}
+
 .sidebar.collapsed .nav-btn {
   width: 46px;
   height: 46px;

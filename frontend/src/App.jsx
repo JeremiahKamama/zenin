@@ -340,7 +340,29 @@ useEffect(() => {
     });
   };
 
+  const prunePriceCache = () => {
+    const now = Date.now();
+    const hardTtlMs = 20 * 60 * 1000;
+    const entries = [...priceCacheRef.current.entries()];
+    entries.forEach(([symbol, row]) => {
+      if (!row?.ts || now - row.ts > hardTtlMs) {
+        priceCacheRef.current.delete(symbol);
+      }
+    });
+
+    const maxEntries = 2000;
+    if (priceCacheRef.current.size > maxEntries) {
+      const oldestFirst = [...priceCacheRef.current.entries()]
+        .sort((a, b) => Number(a[1]?.ts || 0) - Number(b[1]?.ts || 0));
+      const removeCount = priceCacheRef.current.size - maxEntries;
+      for (let i = 0; i < removeCount; i += 1) {
+        priceCacheRef.current.delete(oldestFirst[i][0]);
+      }
+    }
+  };
+
   const refreshSymbolsForCategory = async (category, symbols = []) => {
+    prunePriceCache();
     if (!symbols.length || category === "crypto") return;
     const now = Date.now();
     const uncachedSymbols = symbols.filter((symbol) => {
@@ -599,124 +621,38 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const executionDate = executionTimestamp.split("T")[0];
 
   try {
-    const holding = {
+    const tradePayload = {
       ...normalizedAsset,
       type: normalizeAssetType(normalizedAsset),
-      quantity: actualQuantity,
+      quantity: normalizedQuantity,
       orderType,
-      date_added: new Date().toISOString()
+      date_added: new Date().toISOString(),
+      executedAt: executionTimestamp,
+      date: executionDate,
+      clientId: `${normalizedSymbol}-${normalizedMarketType}-${Date.now()}`
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/portfolio`, {
+    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(holding)
+      body: JSON.stringify(tradePayload)
     });
 
     if (!response.ok) {
       const text = await response.text();
       throw new Error(`Failed to ${orderType} asset: ${text}`);
     }
+    const data = await response.json();
+    const persistedBalance = Number(data?.balance);
+    setBalance(Number.isFinite(persistedBalance) ? persistedBalance : balance);
 
-    const balanceType = orderType === "buy" ? "withdraw" : "deposit";
-    let nextBalance = orderType === "buy" ? balance - notional : balance + notional;
-    try {
-      const balanceRes = await fetch(`${BACKEND_URL}/db/balance`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: notional, type: balanceType })
-      });
-      if (!balanceRes.ok) {
-        const text = await balanceRes.text();
-        throw new Error(text || `HTTP ${balanceRes.status}`);
-      }
-      const balanceData = await balanceRes.json();
-      const persistedBalance = Number(balanceData?.balance);
-      if (Number.isFinite(persistedBalance)) {
-        nextBalance = persistedBalance;
-      }
-    } catch (balanceErr) {
-      console.error("Failed to persist balance via backend:", balanceErr);
+    const returnedHoldings = Array.isArray(data?.holdings) ? data.holdings : [];
+    setPortfolio(returnedHoldings);
+
+    const savedTrade = data?.trade ? normalizeTradeRecord(data.trade, 0) : null;
+    if (savedTrade) {
+      setTrades((prev) => [savedTrade, ...prev]);
     }
-    setBalance(nextBalance);
-
-    const mergeSources = [...assets, ...homeMarketMovers, asset];
-    const priceMap = {};
-    mergeSources.forEach((a) => {
-      if (!a?.symbol) return;
-      if (!priceMap[a.symbol]) {
-        priceMap[a.symbol] = { price: a.price, priceChangePercent: a.priceChangePercent };
-      }
-    });
-
-    let latestHoldings = null;
-    try {
-      const portfolioRes = await fetch(`${BACKEND_URL}/db/portfolio`);
-      const data = await portfolioRes.json();
-      latestHoldings = (data.holdings || []).map((h) => ({
-        ...h,
-        price: priceMap[h.symbol]?.price ?? h.price ?? tradePrice,
-        priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? normalizedAsset.priceChangePercent
-      }));
-      setPortfolio(latestHoldings);
-    } catch (portfolioErr) {
-      console.error("Failed to refresh portfolio after trade:", portfolioErr);
-    }
-
-    const fallbackPortfolioValue = calculatePortfolioValue() + (orderType === "buy" ? notional : -notional);
-    const portfolioValueAfter = latestHoldings
-      ? latestHoldings.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0)
-      : Math.max(0, fallbackPortfolioValue);
-    const symbolHolding = latestHoldings?.find(
-      (item) =>
-        normalizeSymbolKey(item.symbol) === normalizedSymbol &&
-        String(item.marketType || "spot").toLowerCase() === normalizedMarketType
-    );
-    const positionAfterRaw = Number(symbolHolding?.quantity);
-    const clientId = `${normalizedSymbol}-${normalizedMarketType}-${Date.now()}`;
-
-    const newTrade = {
-      id: Date.now(),
-      clientId,
-      date: executionDate,
-      executedAt: executionTimestamp,
-      asset: normalizedSymbol,
-      name: normalizedAsset.name || normalizedSymbol,
-      type: orderType.toUpperCase(),
-      side: orderType,
-      marketType: normalizedMarketType,
-      price: tradePrice,
-      quantity: normalizedQuantity,
-      notional,
-      status: "Filled",
-      balanceAfter: nextBalance,
-      portfolioValueAfter,
-      accountEquityAfter: nextBalance + portfolioValueAfter,
-      positionAfter: Number.isFinite(positionAfterRaw) ? positionAfterRaw : (orderType === "sell" ? 0 : null)
-    };
-
-    setTrades((prev) => [newTrade, ...prev]);
-    fetch(`${BACKEND_URL}/db/trades`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(newTrade)
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || `HTTP ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((savedTrade) => {
-        const normalizedSaved = normalizeTradeRecord(savedTrade, 0);
-        setTrades((prev) =>
-          prev.map((t) => (t.clientId === normalizedSaved.clientId ? normalizedSaved : t))
-        );
-      })
-      .catch((tradeErr) => {
-        console.error("Failed to persist trade to backend:", tradeErr);
-      });
 
   } catch (err) {
     console.error(`Failed to ${orderType} asset:`, err);
@@ -1165,7 +1101,26 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   }, [userEmail]);
 
   useEffect(() => {
-    localStorage.setItem("zenin_profile_security", JSON.stringify(profileSecurity));
+    const sanitized = {
+      email: profileSecurity?.email || userEmail,
+      pendingEmail: profileSecurity?.pendingEmail || "",
+      emailVerified: !!profileSecurity?.emailVerified,
+      passwordChangedAt: profileSecurity?.passwordChangedAt || null,
+      twoFactorEnabled: !!profileSecurity?.twoFactorEnabled,
+      twoFactorMethod: profileSecurity?.twoFactorMethod || null,
+      twoFactorProvider: profileSecurity?.twoFactorProvider || null,
+      twoFactorEnabledAt: profileSecurity?.twoFactorEnabledAt || null,
+      passkeys: Array.isArray(profileSecurity?.passkeys)
+        ? profileSecurity.passkeys.map((p) => ({
+          id: p.id,
+          name: p.name,
+          provider: p.provider,
+          createdAt: p.createdAt
+        }))
+        : [],
+      backupCodes: []
+    };
+    localStorage.setItem("zenin_profile_security", JSON.stringify(sanitized));
   }, [profileSecurity]);
 
   useEffect(() => {

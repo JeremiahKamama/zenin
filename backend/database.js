@@ -18,7 +18,8 @@ function createPoolConfig() {
     process.env.POSTGRES_PRISMA_URL ||
     null
   );
-  const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false;
+  const rejectUnauthorized = String(process.env.PGSSL_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
+  const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized } : false;
 
   if (connectionString) {
     return {
@@ -708,6 +709,193 @@ const tradeExecutions = {
   }
 };
 
+const trading = {
+  executeTrade: async (payload) => {
+    const symbol = String(payload.symbol || "").trim().toUpperCase();
+    const name = String(payload.name || symbol || "UNKNOWN");
+    const type = String(payload.type || "stock").trim().toLowerCase();
+    const marketType = normalizeMarketType(type, payload.marketType);
+    const orderType = String(payload.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+    const quantity = Math.abs(toNumber(payload.quantity));
+    const price = toNumber(payload.price);
+    const notional = Number((price * quantity).toFixed(8));
+    const dateAdded = payload.date_added || new Date().toISOString();
+    const executionTimestamp = payload.executedAt || new Date().toISOString();
+    const executionDate = toDateString(payload.date || executionTimestamp) || new Date().toISOString().slice(0, 10);
+    const clientId = payload.clientId || null;
+
+    if (!symbol) throw new Error("Invalid symbol");
+    if (!Number.isFinite(quantity) || quantity <= QTY_EPSILON) throw new Error("Invalid quantity");
+    if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const balanceRow = await client.query("SELECT balance FROM user_balance WHERE id = 1 FOR UPDATE");
+      let currentBalance = balanceRow.rows[0]?.balance;
+      if (currentBalance == null) {
+        currentBalance = DEFAULT_BALANCE;
+        await client.query(`
+          INSERT INTO user_balance (id, balance)
+          VALUES (1, $1)
+          ON CONFLICT (id) DO NOTHING;
+        `, [DEFAULT_BALANCE]);
+      }
+      const current = toNumber(currentBalance, DEFAULT_BALANCE);
+      const nextBalance = orderType === "buy" ? current - notional : current + notional;
+      if (nextBalance < 0) {
+        const err = new Error("Insufficient balance");
+        err.code = "INSUFFICIENT_BALANCE";
+        throw err;
+      }
+
+      const existingResult = await client.query(`
+        SELECT
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          date_added
+        FROM portfolio_holdings
+        WHERE symbol = $1 AND market_type = $2
+        FOR UPDATE;
+      `, [symbol, marketType]);
+
+      const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
+      let positionAfter = 0;
+
+      if (existing) {
+        if (orderType === "sell" && quantity > existing.quantity + QTY_EPSILON) {
+          const err = new Error(`You can only sell up to ${existing.quantity} ${symbol}.`);
+          err.code = "INSUFFICIENT_POSITION";
+          throw err;
+        }
+
+        const nextQuantity = orderType === "sell"
+          ? existing.quantity - quantity
+          : existing.quantity + quantity;
+
+        if (nextQuantity <= QTY_EPSILON) {
+          await client.query("DELETE FROM portfolio_holdings WHERE id = $1", [existing.id]);
+          positionAfter = 0;
+        } else {
+          const existingEntry = Number.isFinite(Number(existing.entryPrice))
+            ? Number(existing.entryPrice)
+            : Number(existing.price);
+          const nextEntryPrice = orderType === "sell"
+            ? existingEntry
+            : ((existingEntry * existing.quantity) + (price * quantity)) / Math.max(nextQuantity, QTY_EPSILON);
+          const nextOpenedAt = existing.openedAt || executionTimestamp || dateAdded;
+
+          const updated = await client.query(`
+            UPDATE portfolio_holdings
+            SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8
+            WHERE id = $9
+            RETURNING quantity;
+          `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, existing.id]);
+          positionAfter = toNumber(updated.rows[0]?.quantity, 0);
+        }
+      } else {
+        if (orderType === "sell") {
+          const err = new Error(`No existing position for ${symbol} (${marketType}) to sell`);
+          err.code = "NO_POSITION";
+          throw err;
+        }
+        const inserted = await client.query(`
+          INSERT INTO portfolio_holdings (symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, date_added)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING quantity;
+        `, [symbol, name, price, quantity, price, executionTimestamp, type, marketType, orderType, dateAdded]);
+        positionAfter = toNumber(inserted.rows[0]?.quantity, 0);
+      }
+
+      await client.query("UPDATE user_balance SET balance = $1 WHERE id = 1", [nextBalance]);
+
+      const holdingsResult = await client.query(`
+        SELECT
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          date_added
+        FROM portfolio_holdings
+        WHERE quantity > $1
+        ORDER BY date_added DESC;
+      `, [QTY_EPSILON]);
+      const holdings = holdingsResult.rows.map(mapPortfolioRow);
+      const portfolioValueAfter = holdings.reduce((total, h) => total + (toNumber(h.price) * toNumber(h.quantity)), 0);
+
+      const tradeResult = await client.query(`
+        INSERT INTO trade_executions (
+          client_id, date, executed_at, asset, name, type, side, market_type, status,
+          quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING
+          id,
+          client_id AS "clientId",
+          date,
+          executed_at AS "executedAt",
+          asset,
+          name,
+          type,
+          side,
+          market_type AS "marketType",
+          status,
+          quantity,
+          price,
+          notional,
+          balance_after AS "balanceAfter",
+          portfolio_value_after AS "portfolioValueAfter",
+          account_equity_after AS "accountEquityAfter",
+          position_after AS "positionAfter";
+      `, [
+        clientId,
+        executionDate,
+        executionTimestamp,
+        symbol,
+        name,
+        orderType === "sell" ? "SELL" : "BUY",
+        orderType,
+        marketType,
+        "Filled",
+        quantity,
+        price,
+        Math.abs(notional),
+        nextBalance,
+        portfolioValueAfter,
+        nextBalance + portfolioValueAfter,
+        positionAfter
+      ]);
+
+      await client.query("COMMIT");
+      return {
+        balance: nextBalance,
+        holdings,
+        trade: mapTradeRow(tradeResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+};
+
 const watchlist = {
   getAll: async () => {
     const result = await pool.query(`
@@ -860,6 +1048,7 @@ module.exports = {
   watchlist,
   optionsCalculations,
   tradeExecutions,
+  trading,
   clearAllData,
   closeDatabase
 };

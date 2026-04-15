@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
-const { initializeDatabase, portfolio, watchlist, optionsCalculations, tradeExecutions, balance } = require("./database");
+const { initializeDatabase, portfolio, watchlist, optionsCalculations, tradeExecutions, balance, trading } = require("./database");
 
 const app = express();
 
@@ -68,7 +68,13 @@ const writeLimiter = rateLimit({
 });
 
 
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
+
+function handleServerError(res, context, error) {
+  console.error(`${context}:`, error?.message || error);
+  return res.status(500).json({ error: "Internal server error" });
+}
+
 function validatePortfolioHolding(req, res, next) {
   const { symbol, name, price, quantity, type, marketType, orderType } = req.body;
   if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
@@ -92,6 +98,17 @@ function validatePortfolioHolding(req, res, next) {
   next();
 }
 
+function validatePortfolioUpdate(req, res, next) {
+  const { price, quantity } = req.body || {};
+  if (!Number.isFinite(Number(price)) || Number(price) < 0) {
+    return res.status(400).json({ error: "Invalid price" });
+  }
+  if (!Number.isFinite(Number(quantity))) {
+    return res.status(400).json({ error: "Invalid quantity" });
+  }
+  next();
+}
+
 function validateWatchlistAsset(req, res, next) {
   const { symbol, name, type, marketType } = req.body;
   if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
@@ -102,6 +119,30 @@ function validateWatchlistAsset(req, res, next) {
   }
   if (!type || typeof type !== "string" || type.length > 50) {
     return res.status(400).json({ error: "Invalid type" });
+  }
+  next();
+}
+
+function validateOptionsCalculation(req, res, next) {
+  const payload = req.body || {};
+  if (!payload.symbol || typeof payload.symbol !== "string" || payload.symbol.trim().length > 20) {
+    return res.status(400).json({ error: "Invalid symbol" });
+  }
+  const legs = Array.isArray(payload.legs) ? payload.legs : [];
+  const breakevens = Array.isArray(payload.breakevens) ? payload.breakevens : [];
+  if (legs.length > 30) {
+    return res.status(400).json({ error: "Too many legs" });
+  }
+  if (breakevens.length > 30) {
+    return res.status(400).json({ error: "Too many breakevens" });
+  }
+  const approxSize = JSON.stringify({
+    ...payload,
+    legs,
+    breakevens
+  }).length;
+  if (approxSize > 50000) {
+    return res.status(400).json({ error: "Payload too large" });
   }
   next();
 }
@@ -662,11 +703,11 @@ app.get("/api/db/balance", async (_req, res) => {
     const current = await balance.get();
     res.json({ balance: current });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleServerError(res, "Balance read failed", err);
   }
 });
 
-app.post("/api/db/balance", async (req, res) => {
+app.post("/api/db/balance", writeLimiter, async (req, res) => {
   try {
     const { amount, type } = req.body;
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
@@ -677,7 +718,7 @@ app.post("/api/db/balance", async (req, res) => {
     if (err.code === "INSUFFICIENT_BALANCE") {
       return res.status(400).json({ error: "Insufficient balance" });
     }
-    res.status(500).json({ error: err.message });
+    handleServerError(res, "Balance update failed", err);
   }
 });
 
@@ -996,15 +1037,50 @@ app.get("/api/macro-indicators", async (req, res) => {
     return res.status(400).json({ error: "country must be one of USA,CAN,GBR,FRA,DEU,ITA,JPN" });
   }
 
-  if (!EODHD_API_TOKEN) {
-    return res.status(503).json({ error: "Macro indicators are not configured. Set EODHD_API_TOKEN on the backend." });
-  }
-
   const cacheKey = `macro:${country}`;
   const now = Date.now();
   const cached = macroIndicatorsCache.get(cacheKey);
   if (cached?.payload && now - cached.cachedAt < MACRO_CACHE_TTL_MS) {
     return res.json(cached.payload);
+  }
+
+  const buildFallbackPayload = (reason) => ({
+    country,
+    countryName: G7_COUNTRIES[country],
+    source: "Macro data temporarily unavailable",
+    updatedAt: new Date().toISOString(),
+    stale: true,
+    unavailable: true,
+    metrics: MACRO_INDICATOR_CONFIG.map((config) => ({
+      key: config.key,
+      label: config.label,
+      unit: config.unit || "",
+      current: null,
+      previous: null,
+      expectation: null,
+      change: null,
+      changePercent: null,
+      asOf: null
+    })),
+    diagnostics: {
+      reason: String(reason || "upstream_unavailable")
+    }
+  });
+
+  if (!EODHD_API_TOKEN) {
+    if (cached?.payload) {
+      return res.json({
+        ...cached.payload,
+        stale: true,
+        unavailable: true,
+        stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000),
+        diagnostics: {
+          ...(cached.payload?.diagnostics || {}),
+          reason: "missing_eodhd_token"
+        }
+      });
+    }
+    return res.json(buildFallbackPayload("missing_eodhd_token"));
   }
 
   try {
@@ -1069,10 +1145,11 @@ app.get("/api/macro-indicators", async (req, res) => {
       return res.json({
         ...cached.payload,
         stale: true,
+        unavailable: true,
         stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000)
       });
     }
-    res.status(502).json({ error: "Failed to fetch macro indicators" });
+    res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
   }
 });
 
@@ -2342,20 +2419,17 @@ app.get("/api/db/options-calculations", async (req, res) => {
     }));
     res.json({ calculations: records });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Options calculations read failed", error);
   }
 });
 
-app.post("/api/db/options-calculations", async (req, res) => {
+app.post("/api/db/options-calculations", writeLimiter, validateOptionsCalculation, async (req, res) => {
   try {
     const payload = req.body || {};
-    if (!payload.symbol) {
-      return res.status(400).json({ error: "symbol is required" });
-    }
     const record = await optionsCalculations.add(payload);
     res.status(201).json(record);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Options calculation write failed", error);
   }
 });
 
@@ -2391,7 +2465,7 @@ app.get("/api/db/portfolio", async (req, res) => {
     const holdings = await portfolio.getAll();
     res.json({ holdings });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Portfolio read failed", error);
   }
 });
 
@@ -2401,18 +2475,19 @@ app.post("/api/db/portfolio",writeLimiter, validatePortfolioHolding, async (req,
     const result = await portfolio.add(holding);
     res.status(201).json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Portfolio write failed", error);
   }
 });
 
-app.put("/api/db/portfolio/:id", async (req, res) => {
+app.put("/api/db/portfolio/:id", writeLimiter, validatePortfolioUpdate, async (req, res) => {
   try {
     const { id } = req.params;
+    if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: "Invalid id" });
     const holding = req.body;
     const result = await portfolio.update(id, holding);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Portfolio update failed", error);
   }
 });
 
@@ -2422,7 +2497,7 @@ app.delete("/api/db/portfolio/:id", writeLimiter, async (req, res) => {
     const result = await portfolio.delete(id);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Portfolio delete failed", error);
   }
 });
 
@@ -2438,7 +2513,7 @@ app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
     const holdings = await portfolio.findBySymbol(symbol, marketType);
     res.json({ holdings });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Portfolio symbol lookup failed", error);
   }
 });
 
@@ -2450,7 +2525,7 @@ app.get("/api/db/trades", async (req, res) => {
     const trades = await tradeExecutions.getAll(req.query.limit);
     res.json({ trades });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Trades read failed", error);
   }
 });
 
@@ -2469,7 +2544,7 @@ app.post("/api/db/trades", writeLimiter, async (req, res) => {
     const saved = await tradeExecutions.add(payload);
     res.status(201).json(saved);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Trade write failed", error);
   }
 });
 
@@ -2481,7 +2556,7 @@ app.get("/api/db/watchlist", async (req, res) => {
     const assets = await watchlist.getAll();
     res.json({ assets });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Watchlist read failed", error);
   }
 });
 
@@ -2491,7 +2566,7 @@ app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, async (req, 
     const result = await watchlist.add(asset);
     res.status(201).json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Watchlist write failed", error);
   }
 });
 
@@ -2506,7 +2581,7 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
     const result = await watchlist.delete(symbol, marketType);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Watchlist delete failed", error);
   }
 });
 
@@ -2521,7 +2596,26 @@ app.get("/api/db/watchlist/check/:symbol", async (req, res) => {
     const exists = await watchlist.exists(symbol, marketType);
     res.json({ exists });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleServerError(res, "Watchlist exists check failed", error);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Atomic trade execution (portfolio + balance + trade journal)
+// ---------------------------------------------------------------------------
+app.post("/api/db/execute-trade", writeLimiter, validatePortfolioHolding, async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const result = await trading.executeTrade(payload);
+    res.status(201).json(result);
+  } catch (error) {
+    if (error?.code === "INSUFFICIENT_BALANCE") {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+    if (error?.code === "INSUFFICIENT_POSITION" || error?.code === "NO_POSITION") {
+      return res.status(400).json({ error: error.message });
+    }
+    handleServerError(res, "Atomic trade execution failed", error);
   }
 });
 
@@ -2542,10 +2636,18 @@ let subscribers = new Map();
 
 wss.on("connection", (ws) => {
   console.log("WS client connected");
+  ws.isAlive = true;
+  ws.lastSeen = Date.now();
+
+  ws.on("pong", () => {
+    ws.isAlive = true;
+    ws.lastSeen = Date.now();
+  });
 
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
+      ws.lastSeen = Date.now();
 
       // subscribe format:
       // { type: "subscribe", currency: "BTC", expiry: 123456789 }
@@ -2563,7 +2665,27 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     subscribers.delete(ws);
   });
+
+  ws.on("error", () => {
+    subscribers.delete(ws);
+  });
 });
+
+const WS_PING_INTERVAL_MS = 30000;
+const WS_IDLE_TIMEOUT_MS = 90000;
+setInterval(() => {
+  const now = Date.now();
+  wss.clients.forEach((ws) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (ws.isAlive === false || now - Number(ws.lastSeen || 0) > WS_IDLE_TIMEOUT_MS) {
+      subscribers.delete(ws);
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  });
+}, WS_PING_INTERVAL_MS);
 
 async function startServer() {
   try {

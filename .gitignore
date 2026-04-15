@@ -8,3 +8,7 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
+# Local runtime artifacts
+backend/*.db
+backend/*.sqlite
+backend/*.log
