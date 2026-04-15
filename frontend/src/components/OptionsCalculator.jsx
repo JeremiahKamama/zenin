@@ -141,13 +141,16 @@ const effectiveSpot = useMemo(() => {
     };
   });
 
-  const totals = greeks.reduce((acc, g) => ({
-    delta: acc.delta + g.delta,
-    gamma: acc.gamma + g.gamma,
-    theta: acc.theta + g.theta,
-    vega: acc.vega + g.vega,
-    pnl: acc.pnl + g.pnl,
-  }), { delta: 0, gamma: 0, theta: 0, vega: 0, pnl: 0 });
+  const totals = greeks.reduce((acc, g) => {
+    if (!g) return acc;
+    return {
+      delta: acc.delta + g.delta,
+      gamma: acc.gamma + g.gamma,
+      theta: acc.theta + g.theta,
+      vega: acc.vega + g.vega,
+      pnl: acc.pnl + g.pnl,
+    };
+  }, { delta: 0, gamma: 0, theta: 0, vega: 0, pnl: 0 });
 
   // P&L diagram data
   const pnlData = (() => {
