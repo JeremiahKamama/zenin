@@ -71,7 +71,7 @@ useEffect(() => {
   ETH: 4000,
   SOL: 150,
 };
-  const [manualSpot, setManualSpot] = useState("");
+const [manualSpot, setManualSpot] = useState("");
 const effectiveSpot = useMemo(() => {
   if (manualSpot) return parseFloat(manualSpot);
   if (spotPrice && spotPrice > 0) return spotPrice;
@@ -464,7 +464,7 @@ const effectiveSpot = useMemo(() => {
           </div>
         </div>
       </div>
-  );
+
       {/* P&L Diagram */}
       <div className="watchlist-panel glass" style={{ padding: "20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
@@ -499,7 +499,5 @@ const effectiveSpot = useMemo(() => {
             type="area"
             height={280}
             width="100%"/>
-        </div>  
-
-
-
+        </div>
+  );
