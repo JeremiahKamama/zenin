@@ -431,7 +431,132 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const [activeSection, setActiveSection] = useState("Home");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [userEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
+  const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
+    "general-display": true,
+    "general-data": true,
+    "accounts-connected": true,
+    "layout-presets": true,
+    "notifications-channels": true
+  });
+  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const [preferences, setPreferences] = useState(() => {
+    const raw = localStorage.getItem("zenin_preferences");
+    if (!raw) {
+      return {
+        timezoneMode: "browser",
+        timezone: browserTimezone,
+        refreshFrequency: "60s",
+        hideValues: false,
+        hidePortfolioPnl: false,
+        layoutPreset: "default",
+        notifyEmail: true,
+        notifyBrowser: true,
+        notifyPriceAlerts: true,
+        notifyOrderEvents: true,
+        notifyNews: false
+      };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        timezoneMode: parsed.timezoneMode || "browser",
+        timezone: parsed.timezone || browserTimezone,
+        refreshFrequency: parsed.refreshFrequency || "60s",
+        hideValues: !!parsed.hideValues,
+        hidePortfolioPnl: !!parsed.hidePortfolioPnl,
+        layoutPreset: parsed.layoutPreset || "default",
+        notifyEmail: parsed.notifyEmail !== false,
+        notifyBrowser: parsed.notifyBrowser !== false,
+        notifyPriceAlerts: parsed.notifyPriceAlerts !== false,
+        notifyOrderEvents: parsed.notifyOrderEvents !== false,
+        notifyNews: !!parsed.notifyNews
+      };
+    } catch {
+      return {
+        timezoneMode: "browser",
+        timezone: browserTimezone,
+        refreshFrequency: "60s",
+        hideValues: false,
+        hidePortfolioPnl: false,
+        layoutPreset: "default",
+        notifyEmail: true,
+        notifyBrowser: true,
+        notifyPriceAlerts: true,
+        notifyOrderEvents: true,
+        notifyNews: false
+      };
+    }
+  });
+  const [connectedAccounts, setConnectedAccounts] = useState(() => {
+    const raw = localStorage.getItem("zenin_connected_accounts");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isConnectWindowOpen, setIsConnectWindowOpen] = useState(false);
+  const [accountForm, setAccountForm] = useState({
+    venueType: "cex",
+    provider: "Binance",
+    username: "",
+    apiKey: ""
+  });
   const sections = ["Home", "Portfolio", "Watchlist", "Options", "Journal"];
+  const settingsCategories = ["General", "Accounts", "Layout", "Notification"];
+
+  useEffect(() => {
+    localStorage.setItem("zenin_preferences", JSON.stringify(preferences));
+  }, [preferences]);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_connected_accounts", JSON.stringify(connectedAccounts));
+  }, [connectedAccounts]);
+
+  const toggleSettingsPanel = (panelKey) => {
+    setExpandedSettingsPanels((prev) => ({ ...prev, [panelKey]: !prev[panelKey] }));
+  };
+
+  const CEX_OPTIONS = ["Binance", "Bybit", "Kraken", "OKX", "Coinbase Advanced"];
+  const DEX_OPTIONS = ["Hyperliquid", "dYdX", "Aevo", "Lyra", "Derive"];
+  const BROKER_OPTIONS = ["Interactive Brokers", "Alpaca", "Tradier", "Schwab", "Robinhood"];
+
+  const venueOptions = accountForm.venueType === "cex"
+    ? CEX_OPTIONS
+    : accountForm.venueType === "dex"
+      ? DEX_OPTIONS
+      : BROKER_OPTIONS;
+
+  const openConnectWindow = () => {
+    setAccountForm({
+      venueType: "cex",
+      provider: CEX_OPTIONS[0],
+      username: "",
+      apiKey: ""
+    });
+    setIsConnectWindowOpen(true);
+  };
+
+  const connectAccount = () => {
+    if (!accountForm.username.trim() || !accountForm.apiKey.trim()) return;
+    const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
+    setConnectedAccounts((prev) => [
+      {
+        id: Date.now(),
+        venueType: accountForm.venueType,
+        provider: accountForm.provider,
+        username: accountForm.username.trim(),
+        apiKeyMasked: masked,
+        connectedAt: new Date().toISOString()
+      },
+      ...prev
+    ]);
+    setIsConnectWindowOpen(false);
+  };
 
   const sectionIcon = (section) => {
     if (section === "Home") {
@@ -503,14 +628,18 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           ))}
         </nav>
 
-        <div className="sidebar-footer">
+        <button
+          className="sidebar-footer settings-launcher"
+          onClick={() => setIsSettingsOpen(true)}
+          title="Open settings"
+        >
           <div className="user-icon">
             {userEmail.charAt(0).toUpperCase()}
           </div>
           <span className="sidebar-footer-email" title={userEmail}>
             {userEmail}
           </span>
-        </div>
+        </button>
 
       </aside>
 
@@ -652,6 +781,289 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           portfolio={portfolio}
           balance={balance}
         />
+      )}
+
+      {isSettingsOpen && (
+        <div className="settings-overlay" onClick={() => setIsSettingsOpen(false)}>
+          <div className="settings-window" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-window-header">
+              <h2>Workspace Settings</h2>
+              <button className="close-btn" onClick={() => setIsSettingsOpen(false)}>&times;</button>
+            </div>
+
+            <div className="settings-window-body">
+              <aside className="settings-categories">
+                {settingsCategories.map((category) => (
+                  <button
+                    key={category}
+                    className={`settings-category-btn ${activeSettingsCategory === category ? "active" : ""}`}
+                    onClick={() => setActiveSettingsCategory(category)}
+                  >
+                    {category}
+                  </button>
+                ))}
+              </aside>
+
+              <section className="settings-content">
+                {activeSettingsCategory === "General" && (
+                  <>
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("general-display")}>
+                        <span>Display Preferences</span>
+                        <span>{expandedSettingsPanels["general-display"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["general-display"] && (
+                        <div className="settings-panel-body">
+                          <label className="settings-toggle-row">
+                            <span>Hide account values</span>
+                            <input
+                              type="checkbox"
+                              checked={preferences.hideValues}
+                              onChange={(e) => setPreferences((prev) => ({ ...prev, hideValues: e.target.checked }))}
+                            />
+                          </label>
+                          <label className="settings-toggle-row">
+                            <span>Hide portfolio PnL</span>
+                            <input
+                              type="checkbox"
+                              checked={preferences.hidePortfolioPnl}
+                              onChange={(e) => setPreferences((prev) => ({ ...prev, hidePortfolioPnl: e.target.checked }))}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("general-data")}>
+                        <span>Data & Time</span>
+                        <span>{expandedSettingsPanels["general-data"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["general-data"] && (
+                        <div className="settings-panel-body">
+                          <label className="settings-field">
+                            <span>Timezone</span>
+                            <select
+                              value={preferences.timezoneMode}
+                              onChange={(e) => {
+                                const mode = e.target.value;
+                                setPreferences((prev) => ({
+                                  ...prev,
+                                  timezoneMode: mode,
+                                  timezone: mode === "browser" ? browserTimezone : prev.timezone
+                                }));
+                              }}
+                            >
+                              <option value="browser">Browser Default ({browserTimezone})</option>
+                              <option value="utc">UTC</option>
+                              <option value="ny">America/New_York</option>
+                              <option value="london">Europe/London</option>
+                            </select>
+                          </label>
+                          <label className="settings-field">
+                            <span>Asset refresh frequency</span>
+                            <select
+                              value={preferences.refreshFrequency}
+                              onChange={(e) => setPreferences((prev) => ({ ...prev, refreshFrequency: e.target.value }))}
+                            >
+                              <option value="30s">30 seconds</option>
+                              <option value="60s">60 seconds</option>
+                              <option value="120s">2 minutes</option>
+                              <option value="300s">5 minutes</option>
+                            </select>
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {activeSettingsCategory === "Accounts" && (
+                  <>
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("accounts-connected")}>
+                        <span>Connected Accounts</span>
+                        <span>{expandedSettingsPanels["accounts-connected"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["accounts-connected"] && (
+                        <div className="settings-panel-body">
+                          {connectedAccounts.length === 0 ? (
+                            <p className="settings-meta">No connected CEX, DEX, or brokerage accounts yet.</p>
+                          ) : (
+                            <div className="connected-accounts-list">
+                              {connectedAccounts.map((acc) => (
+                                <div key={acc.id} className="connected-account-item">
+                                  <div>
+                                    <strong>{acc.provider}</strong>
+                                    <p>{acc.username} • {acc.venueType.toUpperCase()}</p>
+                                  </div>
+                                  <span>{acc.apiKeyMasked}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <button className="settings-primary-btn" onClick={openConnectWindow}>
+                            Add Account
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {activeSettingsCategory === "Layout" && (
+                  <div className="settings-panel">
+                    <button className="settings-panel-header" onClick={() => toggleSettingsPanel("layout-presets")}>
+                      <span>Layout Presets</span>
+                      <span>{expandedSettingsPanels["layout-presets"] ? "−" : "+"}</span>
+                    </button>
+                    {expandedSettingsPanels["layout-presets"] && (
+                      <div className="settings-panel-body">
+                        <label className="settings-field">
+                          <span>Choose layout style</span>
+                          <select
+                            value={preferences.layoutPreset}
+                            onChange={(e) => setPreferences((prev) => ({ ...prev, layoutPreset: e.target.value }))}
+                          >
+                            <option value="default">Default</option>
+                            <option value="compact">Compact</option>
+                            <option value="expanded">Expanded</option>
+                            <option value="focus">Focus Mode</option>
+                          </select>
+                        </label>
+                        <p className="settings-meta">Layout preferences are saved to this browser profile.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeSettingsCategory === "Notification" && (
+                  <div className="settings-panel">
+                    <button className="settings-panel-header" onClick={() => toggleSettingsPanel("notifications-channels")}>
+                      <span>Notification Channels</span>
+                      <span>{expandedSettingsPanels["notifications-channels"] ? "−" : "+"}</span>
+                    </button>
+                    {expandedSettingsPanels["notifications-channels"] && (
+                      <div className="settings-panel-body">
+                        <label className="settings-toggle-row">
+                          <span>Email notifications</span>
+                          <input
+                            type="checkbox"
+                            checked={preferences.notifyEmail}
+                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyEmail: e.target.checked }))}
+                          />
+                        </label>
+                        <label className="settings-toggle-row">
+                          <span>Browser notifications</span>
+                          <input
+                            type="checkbox"
+                            checked={preferences.notifyBrowser}
+                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyBrowser: e.target.checked }))}
+                          />
+                        </label>
+                        <label className="settings-toggle-row">
+                          <span>Price alerts</span>
+                          <input
+                            type="checkbox"
+                            checked={preferences.notifyPriceAlerts}
+                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyPriceAlerts: e.target.checked }))}
+                          />
+                        </label>
+                        <label className="settings-toggle-row">
+                          <span>Order updates</span>
+                          <input
+                            type="checkbox"
+                            checked={preferences.notifyOrderEvents}
+                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyOrderEvents: e.target.checked }))}
+                          />
+                        </label>
+                        <label className="settings-toggle-row">
+                          <span>Market news digests</span>
+                          <input
+                            type="checkbox"
+                            checked={preferences.notifyNews}
+                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyNews: e.target.checked }))}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            {isConnectWindowOpen && (
+              <div className="connect-account-overlay" onClick={() => setIsConnectWindowOpen(false)}>
+                <div className="connect-account-window" onClick={(e) => e.stopPropagation()}>
+                  <div className="settings-window-header">
+                    <h2>Connect Account</h2>
+                    <button className="close-btn" onClick={() => setIsConnectWindowOpen(false)}>&times;</button>
+                  </div>
+                  <div className="connect-account-body">
+                    <p className="settings-warning">
+                      Use read-only API keys only. Trading or withdrawal permissions are not supported.
+                    </p>
+                    <label className="settings-field">
+                      <span>Account type</span>
+                      <select
+                        value={accountForm.venueType}
+                        onChange={(e) => {
+                          const nextType = e.target.value;
+                          const nextProvider = nextType === "cex"
+                            ? CEX_OPTIONS[0]
+                            : nextType === "dex"
+                              ? DEX_OPTIONS[0]
+                              : BROKER_OPTIONS[0];
+                          setAccountForm((prev) => ({ ...prev, venueType: nextType, provider: nextProvider }));
+                        }}
+                      >
+                        <option value="cex">Crypto Exchange (CEX)</option>
+                        <option value="dex">Decentralized Exchange (DEX)</option>
+                        <option value="broker">Stock Brokerage</option>
+                      </select>
+                    </label>
+                    <label className="settings-field">
+                      <span>Provider</span>
+                      <select
+                        value={accountForm.provider}
+                        onChange={(e) => setAccountForm((prev) => ({ ...prev, provider: e.target.value }))}
+                      >
+                        {venueOptions.map((venue) => (
+                          <option key={venue} value={venue}>{venue}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="settings-field">
+                      <span>User Name</span>
+                      <input
+                        type="text"
+                        value={accountForm.username}
+                        onChange={(e) => setAccountForm((prev) => ({ ...prev, username: e.target.value }))}
+                        placeholder="Enter account username"
+                      />
+                    </label>
+                    <label className="settings-field">
+                      <span>API Key / ID</span>
+                      <input
+                        type="password"
+                        value={accountForm.apiKey}
+                        onChange={(e) => setAccountForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                        placeholder="Enter read-only API key or account ID"
+                      />
+                    </label>
+                    <button
+                      className="settings-primary-btn"
+                      onClick={connectAccount}
+                      disabled={!accountForm.username.trim() || !accountForm.apiKey.trim()}
+                    >
+                      Connect
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
