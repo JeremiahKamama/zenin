@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -16,6 +16,7 @@ export function HomeModule({
   portfolio,
   assets,
   marketMovers = [],
+  watchlistAssets = [],
   onSelectAsset,
   calculatePortfolioValue,
   calculatePortfolioGain,
@@ -24,57 +25,103 @@ export function HomeModule({
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
   const [moversHorizon, setMoversHorizon] = useState("daily");
-  const [moversHorizonChanges, setMoversHorizonChanges] = useState({});
+  const [moversPerformanceByKey, setMoversPerformanceByKey] = useState({});
   const [moversLoading, setMoversLoading] = useState(false);
+  const moversPerfCacheRef = useRef(new Map());
 
   const topPositions = [...portfolio]
     .sort((a, b) => ((b.price || 0) * (b.quantity || 0)) - ((a.price || 0) * (a.quantity || 0)))
     .slice(0, 8);
 
-  const moversUniverse = useMemo(
-    () => (marketMovers.length > 0 ? marketMovers : assets)
-      .filter((asset) => Number.isFinite(Number(asset?.price))),
-    [marketMovers, assets]
-  );
+  const resolveMoverType = (asset) => {
+    const type = String(asset?.type || "").toLowerCase();
+    const marketType = String(asset?.marketType || "").toLowerCase();
+    if (
+      type === "crypto" ||
+      type === "stablecoin" ||
+      type === "exchange token" ||
+      marketType === "spot"
+    ) {
+      return "crypto";
+    }
+    return "tradfi";
+  };
 
-  const moversSymbols = useMemo(
-    () => [...new Set(moversUniverse.map((asset) => String(asset?.symbol || "").toUpperCase()).filter(Boolean))],
+  const moversUniverse = useMemo(() => {
+    const source = watchlistAssets.length > 0
+      ? watchlistAssets
+      : (marketMovers.length > 0 ? marketMovers : assets);
+
+    const priceMap = new Map();
+    [...marketMovers, ...assets].forEach((asset) => {
+      const symbol = String(asset?.symbol || "").toUpperCase();
+      if (!symbol || priceMap.has(symbol)) return;
+      priceMap.set(symbol, {
+        price: Number.isFinite(Number(asset?.price)) ? Number(asset.price) : null,
+        name: asset?.name || symbol
+      });
+    });
+
+    const deduped = new Map();
+    source.forEach((asset) => {
+      const symbol = String(asset?.symbol || "").toUpperCase();
+      if (!symbol || deduped.has(symbol)) return;
+      const priced = priceMap.get(symbol);
+      deduped.set(symbol, {
+        ...asset,
+        symbol,
+        name: asset?.name || priced?.name || symbol,
+        price: Number.isFinite(Number(asset?.price))
+          ? Number(asset.price)
+          : (Number.isFinite(Number(priced?.price)) ? Number(priced.price) : null),
+        __moverType: resolveMoverType(asset)
+      });
+    });
+
+    return [...deduped.values()];
+  }, [watchlistAssets, marketMovers, assets]);
+
+  const moversUniverseKey = useMemo(
+    () => moversUniverse.map((a) => `${a.symbol}:${a.__moverType}`).join("|"),
     [moversUniverse]
   );
 
-  const moversSymbolsKey = useMemo(() => moversSymbols.join("|"), [moversSymbols]);
-
   useEffect(() => {
-    if (moversHorizon === "daily" || moversSymbols.length === 0) {
+    if (moversUniverse.length === 0) {
       setMoversLoading(false);
-      setMoversHorizonChanges({});
+      setMoversPerformanceByKey({});
       return;
     }
 
     let canceled = false;
-    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
     setMoversLoading(true);
-    setMoversHorizonChanges({});
-
-    const changes = {};
+    const nextByKey = {};
     let cursor = 0;
-    const concurrency = Math.min(6, moversSymbols.length);
+    const concurrency = Math.min(6, moversUniverse.length);
 
     const worker = async () => {
-      while (!canceled && cursor < moversSymbols.length) {
+      while (!canceled && cursor < moversUniverse.length) {
         const index = cursor;
         cursor += 1;
-        const symbol = moversSymbols[index];
+        const asset = moversUniverse[index];
+        const symbol = asset.symbol;
+        const moverType = asset.__moverType === "crypto" ? "crypto" : "tradfi";
+        const key = `${symbol}:${moverType}`;
+        if (moversPerfCacheRef.current.has(key)) {
+          nextByKey[key] = moversPerfCacheRef.current.get(key);
+          continue;
+        }
+
         try {
           const res = await fetch(
-            `${BACKEND_URL}/interval-performance?symbol=${encodeURIComponent(symbol)}&type=stock`
+            `${BACKEND_URL}/interval-performance?symbol=${encodeURIComponent(symbol)}&type=${encodeURIComponent(moverType)}`
           );
           if (!res.ok) continue;
           const data = await res.json();
-          const change = Number(data?.performance?.[intervalCode]);
-          if (Number.isFinite(change)) {
-            changes[symbol] = change;
-          }
+          const perf = data?.performance && typeof data.performance === "object" ? data.performance : null;
+          if (!perf) continue;
+          moversPerfCacheRef.current.set(key, perf);
+          nextByKey[key] = perf;
         } catch {
           // ignore per-symbol failures
         }
@@ -84,7 +131,14 @@ export function HomeModule({
     Promise.all(Array.from({ length: concurrency }, () => worker()))
       .then(() => {
         if (canceled) return;
-        setMoversHorizonChanges(changes);
+        const hydrated = {};
+        moversUniverse.forEach((asset) => {
+          const moverType = asset.__moverType === "crypto" ? "crypto" : "tradfi";
+          const key = `${asset.symbol}:${moverType}`;
+          const perf = nextByKey[key] || moversPerfCacheRef.current.get(key);
+          if (perf) hydrated[key] = perf;
+        });
+        setMoversPerformanceByKey(hydrated);
       })
       .finally(() => {
         if (!canceled) {
@@ -95,15 +149,15 @@ export function HomeModule({
     return () => {
       canceled = true;
     };
-  }, [moversHorizon, moversSymbolsKey]);
+  }, [moversUniverseKey]);
 
   const getMoverChange = (asset) => {
     const symbol = String(asset?.symbol || "").toUpperCase();
-    if (moversHorizon === "daily") {
-      const daily = Number(asset?.priceChangePercent);
-      return Number.isFinite(daily) ? daily : null;
-    }
-    const value = Number(moversHorizonChanges[symbol]);
+    const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
+    const key = `${symbol}:${moverType}`;
+    const perf = moversPerformanceByKey[key];
+    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    const value = Number(perf?.[intervalCode]);
     return Number.isFinite(value) ? value : null;
   };
 
@@ -126,7 +180,8 @@ export function HomeModule({
     return asset?.market === "Treasury" || /^USTY?\d+Y$/.test(symbol);
   };
   const formatAssetPrice = (asset) => {
-    const value = Number(asset?.price || 0);
+    const value = Number(asset?.price);
+    if (!Number.isFinite(value)) return "—";
     if (isTreasuryAsset(asset)) return `${value.toFixed(2)}%`;
     return `$${value.toFixed(2)}`;
   };
@@ -299,11 +354,7 @@ export function HomeModule({
           <div className="section-header" style={{ marginBottom: "8px" }}>
             <h2 className="home-subsection-title">Top Movers</h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              {moversLoading && moversHorizon !== "daily" ? (
-                <span className="asset-count">Loading {MOVERS_HORIZONS[moversHorizon]?.label}...</span>
-              ) : (
-                <span className="asset-count">{MOVERS_HORIZONS[moversHorizon]?.label}</span>
-              )}
+              {moversLoading ? <span className="asset-count">Loading...</span> : null}
               <select
                 value={moversHorizon}
                 onChange={(e) => setMoversHorizon(e.target.value)}
@@ -328,8 +379,7 @@ export function HomeModule({
             
             <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
-                <h2 className="home-subsection-title">Top Gainers</h2>
-                <div className="asset-count">{MOVERS_HORIZONS[moversHorizon]?.label}</div>
+                <h2 className="home-subsection-title">Gainers</h2>
               </div>
               <div className="home-asset-list">
                 {gainers.length > 0 ? gainers.map((asset) => (
@@ -348,8 +398,7 @@ export function HomeModule({
 
             <div className="home-movers-col home-movers-col-right" style={{ flex: 1, paddingLeft: "12px" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
-                <h2 className="home-subsection-title">Top Losers</h2>
-                <div className="asset-count">{MOVERS_HORIZONS[moversHorizon]?.label}</div>
+                <h2 className="home-subsection-title">Losers</h2>
               </div>
               <div className="home-asset-list">
                 {losers.length > 0 ? losers.map((asset) => (

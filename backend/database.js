@@ -11,7 +11,13 @@ function shouldUseSsl(connectionString) {
 }
 
 function createPoolConfig() {
-  const connectionString = process.env.DATABASE_URL || null;
+  const connectionString = (
+    process.env.DATABASE_URL ||
+    process.env.RENDER_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    null
+  );
   const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false;
 
   if (connectionString) {
@@ -19,6 +25,12 @@ function createPoolConfig() {
       connectionString,
       ssl
     };
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Missing PostgreSQL connection string. Set DATABASE_URL (or RENDER_DATABASE_URL/POSTGRES_URL) in production."
+    );
   }
 
   return {

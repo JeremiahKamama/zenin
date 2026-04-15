@@ -887,6 +887,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             portfolio={portfolio}
             assets={assets}
             marketMovers={homeMarketMovers}
+            watchlistAssets={watchlistAssets}
             onSelectAsset={setSelectedAsset}
             calculatePortfolioValue={calculatePortfolioValue}
             calculatePortfolioGain={calculatePortfolioGain}
