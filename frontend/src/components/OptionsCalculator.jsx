@@ -464,8 +464,8 @@ const effectiveSpot = useMemo(() => {
           </div>
         </div>
       </div>
-
-      {/* P&L Diagram */}
+  );
+         
       <div className="watchlist-panel glass" style={{ padding: "20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
@@ -500,4 +500,4 @@ const effectiveSpot = useMemo(() => {
             height={280}
             width="100%"/>
         </div>
-  );
+  
