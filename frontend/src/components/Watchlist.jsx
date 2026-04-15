@@ -127,84 +127,6 @@ useEffect(() => {
 
   return (
     <>
-      {activeCategory === "stocks" && (
-        <section className="watchlist-panel glass" style={{ marginBottom: "12px" }}>
-          <header className="section-header" style={{ marginBottom: "10px" }}>
-            <h2 style={{ margin: 0, fontSize: "14px" }}>Themes</h2>
-          </header>
-          <div className="theme-tabs">
-            {STOCK_THEMES.map((theme) => (
-              <button
-                key={theme}
-                className={`theme-pill ${activeTheme === theme ? "active" : ""}`}
-                onClick={() => onThemeSelect(theme)}
-              >
-                {theme}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {activeCategory === "stocks" && (
-        <section className="watchlist-panel glass" style={{ marginBottom: "12px", padding: "12px 14px" }}>
-          <div className="section-header" style={{ marginBottom: "8px" }}>
-            <h2 style={{ margin: 0, fontSize: "14px" }}>Earnings</h2>
-            <div className="asset-count">Yahoo Finance</div>
-          </div>
-          {earningsLoading ? (
-            <div className="loading-state">Loading earnings calendar...</div>
-          ) : earningsError ? (
-            <div className="loading-state">{earningsError}</div>
-          ) : earningsItems.length === 0 ? (
-            <div className="loading-state">No stock earnings found.</div>
-          ) : (
-            <div style={{ display: "grid", gap: "8px" }}>
-              {earningsItems.map((item) => (
-                <div
-                  key={item.symbol}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "8px 10px",
-                    borderRadius: "8px",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    background: "rgba(15,23,42,0.35)"
-                  }}
-                >
-                  <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{item.symbol}</strong>
-                  <span style={{ fontSize: "12px", color: "#94a3b8" }}>
-                    {formatEarningsDate(item.nextEarnings)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {earningsTotalPages > 1 && (
-            <div className="pagination-controls" style={{ marginTop: "10px", paddingTop: 0 }}>
-              <button
-                className="pagination-button"
-                disabled={earningsPage === 1}
-                onClick={() => setEarningsPage((p) => Math.max(1, p - 1))}
-              >
-                Previous
-              </button>
-              <div className="pagination-label">
-                Page {earningsPage} of {earningsTotalPages}
-              </div>
-              <button
-                className="pagination-button"
-                disabled={earningsPage === earningsTotalPages}
-                onClick={() => setEarningsPage((p) => Math.min(earningsTotalPages, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </section>
-      )}
-
       <section className="watchlist-panel">
       <header className="watchlist-header">
         {/* Category tabs */}
@@ -238,6 +160,19 @@ useEffect(() => {
           </button>
         </div>
       </header>
+      {activeCategory === "stocks" && (
+        <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "10px" }}>
+          {STOCK_THEMES.map((theme) => (
+            <button
+              key={theme}
+              className={`theme-pill ${activeTheme === theme ? "active" : ""}`}
+              onClick={() => onThemeSelect(theme)}
+            >
+              {theme}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="loading-state">Loading market data...</div>
@@ -341,6 +276,65 @@ useEffect(() => {
         </>
       )}
       </section>
+
+      {activeCategory === "stocks" && (
+        <section className="watchlist-panel glass" style={{ marginTop: "12px", padding: "12px 14px" }}>
+          <div className="section-header" style={{ marginBottom: "8px" }}>
+            <h2 style={{ margin: 0, fontSize: "14px" }}>Earnings</h2>
+            <div className="asset-count">Yahoo Finance</div>
+          </div>
+          {earningsLoading ? (
+            <div className="loading-state">Loading earnings calendar...</div>
+          ) : earningsError ? (
+            <div className="loading-state">{earningsError}</div>
+          ) : earningsItems.length === 0 ? (
+            <div className="loading-state">No stock earnings found.</div>
+          ) : (
+            <div style={{ display: "grid", gap: "8px" }}>
+              {earningsItems.map((item) => (
+                <div
+                  key={item.symbol}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(15,23,42,0.35)"
+                  }}
+                >
+                  <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{item.symbol}</strong>
+                  <span style={{ fontSize: "12px", color: "#94a3b8" }}>
+                    {formatEarningsDate(item.nextEarnings)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {earningsTotalPages > 1 && (
+            <div className="pagination-controls" style={{ marginTop: "10px", paddingTop: 0 }}>
+              <button
+                className="pagination-button"
+                disabled={earningsPage === 1}
+                onClick={() => setEarningsPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <div className="pagination-label">
+                Page {earningsPage} of {earningsTotalPages}
+              </div>
+              <button
+                className="pagination-button"
+                disabled={earningsPage === earningsTotalPages}
+                onClick={() => setEarningsPage((p) => Math.min(earningsTotalPages, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </section>
+      )}
     </>
 
   );

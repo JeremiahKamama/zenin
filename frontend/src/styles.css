@@ -1866,12 +1866,36 @@ button {
 
 .trade-item {
   display: grid;
-  grid-template-columns: 80px 1fr 100px 100px;
+  grid-template-columns: 96px 1fr 80px 100px minmax(170px, 1fr);
+  gap: 10px;
   padding: 14px;
   border-radius: 12px;
   background: rgba(148, 163, 184, 0.03);
   align-items: center;
   border: 1px solid rgba(148, 163, 184, 0.05);
+}
+
+.trade-asset {
+  color: #f1f5f9;
+}
+
+.trade-side {
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.trade-price {
+  text-align: right;
+}
+
+.trade-details {
+  text-align: right;
+}
+
+.trade-meta {
+  color: #94a3b8;
+  font-size: 0.74rem;
+  margin-top: 2px;
 }
 
 .notes-editor textarea {
@@ -2842,9 +2866,23 @@ button {
   }
 
   .trade-item {
-    grid-template-columns: 65px 1fr 70px;
+    grid-template-columns: 88px 1fr 70px;
     font-size: 0.8rem;
     padding: 10px;
+    gap: 6px;
+  }
+
+  .trade-price {
+    text-align: left;
+  }
+
+  .trade-details {
+    text-align: left;
+    grid-column: 1 / -1;
+  }
+
+  .trade-meta {
+    font-size: 0.7rem;
   }
 
   .search-controls {

@@ -4,6 +4,7 @@ import Chart from "react-apexcharts";
 export function HomeModule({
   portfolio,
   assets,
+  marketMovers = [],
   onSelectAsset,
   calculatePortfolioValue,
   calculatePortfolioGain,
@@ -16,15 +17,17 @@ export function HomeModule({
     .sort((a, b) => ((b.price || 0) * (b.quantity || 0)) - ((a.price || 0) * (a.quantity || 0)))
     .slice(0, 8);
 
-  const allWatchlistAssets = assets.filter(a => a.price != null && a.priceChangePercent != null);
-  const gainers = [...allWatchlistAssets]
+  const moversUniverse = (marketMovers.length > 0 ? marketMovers : assets)
+    .filter((asset) => Number.isFinite(Number(asset?.price)) && Number.isFinite(Number(asset?.priceChangePercent)));
+  const gainers = [...moversUniverse]
     .sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0))
     .slice(0, 5);
-  const losers = [...allWatchlistAssets]
+  const losers = [...moversUniverse]
     .sort((a, b) => (a.priceChangePercent || 0) - (b.priceChangePercent || 0))
     .slice(0, 5);
 
   const portfolioValue = calculatePortfolioValue();
+  const totalAccountEquity = portfolioValue + (Number(balance) || 0);
   const initialBalance = 10000;
   const isTreasuryAsset = (asset) => {
     const symbol = (asset?.symbol || "").toUpperCase();
@@ -99,7 +102,7 @@ export function HomeModule({
       <div className="portfolio-analytics-row">
         <div className="metric-card glass">
           <label>Total Account Equity</label>
-          <div className="value">${portfolioValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className="value">${totalAccountEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
           <div className={`change ${calculatePortfolioGain() >= 0 ? "positive" : "negative"}`}>
             {calculatePortfolioGain() >= 0 ? "▲" : "▼"} ${Math.abs(calculatePortfolioGain()).toFixed(2)} Today
           </div>
@@ -206,6 +209,7 @@ export function HomeModule({
             <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
                 <h2 className="home-subsection-title">Top Gainers</h2>
+                <div className="asset-count">1D across all themes</div>
               </div>
               <div className="home-asset-list">
                 {gainers.length > 0 ? gainers.map((asset) => (
@@ -225,6 +229,7 @@ export function HomeModule({
             <div className="home-movers-col home-movers-col-right" style={{ flex: 1, paddingLeft: "12px" }}>
               <div className="section-header" style={{ padding: "0 0 8px" }}>
                 <h2 className="home-subsection-title">Top Losers</h2>
+                <div className="asset-count">1D across all themes</div>
               </div>
               <div className="home-asset-list">
                 {losers.length > 0 ? losers.map((asset) => (

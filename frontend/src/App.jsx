@@ -17,9 +17,47 @@ function App() {
   const [portfolio, setPortfolio] = useState([]);
   const [watchlistAssets, setWatchlistAssets] = useState([]);
   const [trades, setTrades] = useState(() => {
-  const saved = localStorage.getItem("zenin_trades");
-    return saved ? JSON.parse(saved) : [];
+    const saved = localStorage.getItem("zenin_trades");
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((trade, idx) => {
+          const quantity = Number(trade?.quantity);
+          const price = Number(trade?.price);
+          const notional = Number(trade?.notional);
+          const balanceAfter = Number(trade?.balanceAfter);
+          const portfolioValueAfter = Number(trade?.portfolioValueAfter);
+          const accountEquityAfter = Number(trade?.accountEquityAfter);
+          const positionAfter = Number(trade?.positionAfter);
+          const fallbackDate = new Date().toISOString().split("T")[0];
+
+          return {
+            id: Number.isFinite(Number(trade?.id)) ? Number(trade.id) : Date.now() + idx,
+            date: trade?.date || fallbackDate,
+            executedAt: trade?.executedAt || null,
+            asset: String(trade?.asset || "UNKNOWN").toUpperCase(),
+            name: trade?.name || trade?.asset || "UNKNOWN",
+            type: String(trade?.type || "BUY").toUpperCase() === "SELL" ? "SELL" : "BUY",
+            side: String(trade?.side || "").toLowerCase() === "sell" ? "sell" : "buy",
+            marketType: trade?.marketType || "spot",
+            status: trade?.status || "Filled",
+            quantity: Number.isFinite(quantity) ? Math.abs(quantity) : 0,
+            price: Number.isFinite(price) ? price : 0,
+            notional: Number.isFinite(notional) ? notional : 0,
+            balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null,
+            portfolioValueAfter: Number.isFinite(portfolioValueAfter) ? portfolioValueAfter : null,
+            accountEquityAfter: Number.isFinite(accountEquityAfter) ? accountEquityAfter : null,
+            positionAfter: Number.isFinite(positionAfter) ? positionAfter : null
+          };
+        })
+        .filter((trade) => trade.quantity > 0);
+    } catch {
+      return [];
+    }
   });
+  const [homeMarketMovers, setHomeMarketMovers] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -61,14 +99,98 @@ useEffect(() => {
   }, []);
 
 
-  // In App.jsx, the trades useEffect currently stores full trade objects
-// At minimum, don't store price data in localStorage
-useEffect(() => {
-  const safeTrades = trades.map(({ id, date, asset, type, quantity, status }) => ({
-    id, date, asset, type, quantity, status
-  }));
-  localStorage.setItem("zenin_trades", JSON.stringify(safeTrades));
-}, [trades]);
+  useEffect(() => {
+    const persistedTrades = trades.map((trade) => ({
+      id: trade.id,
+      date: trade.date,
+      executedAt: trade.executedAt || null,
+      asset: trade.asset,
+      name: trade.name || trade.asset,
+      type: trade.type,
+      side: trade.side || (trade.type === "SELL" ? "sell" : "buy"),
+      marketType: trade.marketType || "spot",
+      status: trade.status || "Filled",
+      quantity: Number(trade.quantity) || 0,
+      price: Number(trade.price) || 0,
+      notional: Number(trade.notional) || 0,
+      balanceAfter: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
+      portfolioValueAfter: Number.isFinite(Number(trade.portfolioValueAfter)) ? Number(trade.portfolioValueAfter) : null,
+      accountEquityAfter: Number.isFinite(Number(trade.accountEquityAfter)) ? Number(trade.accountEquityAfter) : null,
+      positionAfter: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null
+    }));
+    localStorage.setItem("zenin_trades", JSON.stringify(persistedTrades));
+  }, [trades]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const chunkSymbols = (symbols, size = 35) => {
+      const chunks = [];
+      for (let i = 0; i < symbols.length; i += size) {
+        chunks.push(symbols.slice(i, i + size));
+      }
+      return chunks;
+    };
+
+    const fetchHomeMovers = async () => {
+      try {
+        const baseRes = await fetch(`${BACKEND_URL}/watchlist?category=stocks`);
+        if (!baseRes.ok) return;
+        const baseData = await baseRes.json();
+        const baseAssets = Array.isArray(baseData?.assets) ? baseData.assets : [];
+        const allSymbols = baseAssets.map((asset) => asset.symbol).filter(Boolean);
+        if (!allSymbols.length) {
+          if (isMounted) setHomeMarketMovers([]);
+          return;
+        }
+
+        const pricedBySymbol = new Map();
+        const symbolChunks = chunkSymbols(allSymbols);
+
+        for (const chunk of symbolChunks) {
+          const chunkSet = new Set(chunk);
+          const res = await fetch(
+            `${BACKEND_URL}/watchlist?category=stocks&symbols=${encodeURIComponent(chunk.join(","))}`
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+          const assetsChunk = Array.isArray(data?.assets) ? data.assets : [];
+          assetsChunk.forEach((asset) => {
+            if (!chunkSet.has(asset.symbol)) return;
+            pricedBySymbol.set(asset.symbol, {
+              price: Number(asset.price),
+              priceChangePercent: Number(asset.priceChangePercent)
+            });
+          });
+        }
+
+        const merged = baseAssets
+          .map((asset) => {
+            const priced = pricedBySymbol.get(asset.symbol);
+            const price = priced?.price;
+            const priceChangePercent = priced?.priceChangePercent;
+            return {
+              ...asset,
+              price: Number.isFinite(price) ? price : asset.price,
+              priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : asset.priceChangePercent
+            };
+          })
+          .filter((asset) => Number.isFinite(Number(asset.priceChangePercent)) && Number.isFinite(Number(asset.price)));
+
+        if (isMounted) setHomeMarketMovers(merged);
+      } catch (error) {
+        console.error("Failed to refresh home movers:", error);
+      }
+    };
+
+    fetchHomeMovers();
+    const intervalId = setInterval(fetchHomeMovers, 180000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     fetch(`${BACKEND_URL}/categories`)
@@ -221,11 +343,12 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const normalizedQuantity = Math.max(0, quantity);
   if (normalizedQuantity <= 0) return;
 
-  const cost = (asset.price || 0) * normalizedQuantity;
+  const tradePrice = Number(asset.price) || 0;
+  const notional = tradePrice * normalizedQuantity;
 
   if (orderType === "buy") {
-    if (cost > balance) {
-      alert(`Insufficient balance. You need $${(cost - balance).toFixed(2)} more to complete this purchase.`);
+    if (notional > balance) {
+      alert(`Insufficient balance. You need $${(notional - balance).toFixed(2)} more to complete this purchase.`);
       return;
     }
   }
@@ -247,18 +370,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   const direction = orderType === "buy" ? 1 : -1;
   const actualQuantity = normalizedQuantity * direction;
-
-  const newTrade = {
-    id: Date.now(),
-    date: new Date().toISOString().split('T')[0],
-    asset: asset.symbol,
-    type: orderType.toUpperCase(),
-    price: asset.price || 0,
-    profit: 0,
-    status: "Open",
-    quantity: normalizedQuantity
-  };
-  setTrades(prev => [newTrade, ...prev]);
+  const executionTimestamp = new Date().toISOString();
+  const executionDate = executionTimestamp.split("T")[0];
 
   try {
     const holding = {
@@ -280,32 +393,69 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       throw new Error(`Failed to ${orderType} asset: ${text}`);
     }
 
-    // Update balance
-    if (orderType === "buy") {
-      setBalance(prev => prev - cost);
-    } else {
-      setBalance(prev => prev + cost);
+    const nextBalance = orderType === "buy" ? balance - notional : balance + notional;
+    setBalance(nextBalance);
+    fetch(`${BACKEND_URL}/db/balance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ balance: nextBalance })
+    }).catch((err) => console.error("Failed to persist balance:", err));
+
+    const mergeSources = [...assets, ...homeMarketMovers, asset];
+    const priceMap = {};
+    mergeSources.forEach((a) => {
+      if (!a?.symbol) return;
+      if (!priceMap[a.symbol]) {
+        priceMap[a.symbol] = { price: a.price, priceChangePercent: a.priceChangePercent };
+      }
+    });
+
+    let latestHoldings = null;
+    try {
+      const portfolioRes = await fetch(`${BACKEND_URL}/db/portfolio`);
+      const data = await portfolioRes.json();
+      latestHoldings = (data.holdings || []).map((h) => ({
+        ...h,
+        price: priceMap[h.symbol]?.price ?? h.price ?? tradePrice,
+        priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? asset.priceChangePercent
+      }));
+      setPortfolio(latestHoldings);
+    } catch (portfolioErr) {
+      console.error("Failed to refresh portfolio after trade:", portfolioErr);
     }
 
-    fetch(`${BACKEND_URL}/db/portfolio`)
-      .then(res => res.json())
-      .then(data => {
-        const priceMap = {};
-        assets.forEach(a => {
-          priceMap[a.symbol] = { price: a.price, priceChangePercent: a.priceChangePercent };
-        });
-        const holdings = (data.holdings || []).map(h => ({
-          ...h,
-          price: priceMap[h.symbol]?.price ?? h.price ?? asset.price,
-          priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? asset.priceChangePercent
-        }));
-        setPortfolio(holdings);
-      })
-      .catch(console.error);
+    const fallbackPortfolioValue = calculatePortfolioValue() + (orderType === "buy" ? notional : -notional);
+    const portfolioValueAfter = latestHoldings
+      ? latestHoldings.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0)
+      : Math.max(0, fallbackPortfolioValue);
+    const symbolHolding = latestHoldings?.find(
+      (item) => item.symbol === asset.symbol && (item.marketType || "spot") === (asset.marketType || "spot")
+    );
+    const positionAfterRaw = Number(symbolHolding?.quantity);
+
+    const newTrade = {
+      id: Date.now(),
+      date: executionDate,
+      executedAt: executionTimestamp,
+      asset: asset.symbol,
+      name: asset.name || asset.symbol,
+      type: orderType.toUpperCase(),
+      side: orderType,
+      marketType: asset.marketType || (asset.type === "crypto" ? "spot" : "equity"),
+      price: tradePrice,
+      quantity: normalizedQuantity,
+      notional,
+      status: "Filled",
+      balanceAfter: nextBalance,
+      portfolioValueAfter,
+      accountEquityAfter: nextBalance + portfolioValueAfter,
+      positionAfter: Number.isFinite(positionAfterRaw) ? positionAfterRaw : null
+    };
+
+    setTrades((prev) => [newTrade, ...prev]);
 
   } catch (err) {
     console.error(`Failed to ${orderType} asset:`, err);
-    setTrades(prev => prev.filter(trade => trade.id !== newTrade.id));
   }
 
   setSelectedAsset(null);
@@ -655,6 +805,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           <HomeModule
             portfolio={portfolio}
             assets={assets}
+            marketMovers={homeMarketMovers}
             onSelectAsset={setSelectedAsset}
             calculatePortfolioValue={calculatePortfolioValue}
             calculatePortfolioGain={calculatePortfolioGain}
@@ -774,7 +925,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         )}
 
         {activeSection === "Journal" && (
-          <JournalModule trades={trades} />
+          <JournalModule trades={trades} portfolio={portfolio} />
         )}
       </main>
 

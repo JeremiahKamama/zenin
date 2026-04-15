@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
 
-export function JournalModule({ trades = [] }) {
+export function JournalModule({ trades = [], portfolio = [] }) {
   const [reportPage, setReportPage] = useState(1);
   const [calendarCursor, setCalendarCursor] = useState(() => {
     const now = new Date();
@@ -16,9 +16,52 @@ export function JournalModule({ trades = [] }) {
     setReportPage(1);
   }, [trades]);
 
+  const executionRows = useMemo(() => {
+    const normalizeSymbol = (value) => String(value || "UNKNOWN").trim().toUpperCase();
+    const ordered = [...trades].sort((a, b) => {
+      const ta = new Date(a.executedAt || a.date || 0).getTime() || 0;
+      const tb = new Date(b.executedAt || b.date || 0).getTime() || 0;
+      if (ta !== tb) return ta - tb;
+      return (a.id || 0) - (b.id || 0);
+    });
+
+    const runningPosition = new Map();
+    const rows = ordered.map((trade) => {
+      const symbol = normalizeSymbol(trade.asset);
+      const quantity = Math.max(0, Number(trade.quantity) || 0);
+      const price = Number(trade.price) || 0;
+      const side = String(trade.side || trade.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+      const direction = side === "sell" ? -1 : 1;
+      const notionalRaw = Number(trade.notional);
+      const notional = Number.isFinite(notionalRaw) ? Math.abs(notionalRaw) : Math.abs(price * quantity);
+      const nextPosition = (runningPosition.get(symbol) || 0) + direction * quantity;
+      runningPosition.set(symbol, nextPosition);
+
+      const executionTs = trade.executedAt || (trade.date ? `${trade.date}T00:00:00.000Z` : "");
+      const executionDate = executionTs
+        ? new Date(executionTs).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+        : (trade.date || "—");
+      const positionAfterRaw = Number(trade.positionAfter);
+
+      return {
+        ...trade,
+        asset: symbol,
+        type: side === "sell" ? "SELL" : "BUY",
+        quantity,
+        price,
+        notional,
+        executionDate,
+        positionAfter: Number.isFinite(positionAfterRaw) ? positionAfterRaw : nextPosition
+      };
+    });
+
+    return rows.reverse();
+  }, [trades]);
+
   const analytics = useMemo(() => {
     const dayMs = 24 * 60 * 60 * 1000;
     const eps = 1e-8;
+    const normalizeSymbol = (value) => String(value || "UNKNOWN").trim().toUpperCase();
     const safeNum = (val) => {
       const n = Number(val);
       return Number.isFinite(n) ? n : 0;
@@ -29,8 +72,8 @@ export function JournalModule({ trades = [] }) {
     };
 
     const sortedTrades = [...trades].sort((a, b) => {
-      const ta = parseTradeDate(a.date)?.getTime() ?? 0;
-      const tb = parseTradeDate(b.date)?.getTime() ?? 0;
+      const ta = parseTradeDate(a.executedAt || a.date)?.getTime() ?? 0;
+      const tb = parseTradeDate(b.executedAt || b.date)?.getTime() ?? 0;
       if (ta !== tb) return ta - tb;
       return (a.id || 0) - (b.id || 0);
     });
@@ -41,13 +84,13 @@ export function JournalModule({ trades = [] }) {
 
     for (const trade of sortedTrades) {
       const type = (trade.type || "").toUpperCase();
-      const asset = trade.asset || "UNKNOWN";
+      const asset = normalizeSymbol(trade.asset);
       const qty = Math.max(0, safeNum(trade.quantity));
       const price = safeNum(trade.price);
-      const dateObj = parseTradeDate(trade.date);
+      const dateObj = parseTradeDate(trade.executedAt || trade.date);
       if (qty <= 0) continue;
 
-      totalVolume += price * qty;
+      totalVolume += Math.abs(price * qty);
 
       if (type === "BUY") {
         const lots = lotsByAsset.get(asset) || [];
@@ -96,7 +139,15 @@ export function JournalModule({ trades = [] }) {
       ? realized.reduce((acc, r) => acc + r.holdDays, 0) / realized.length
       : 0;
 
-    const tradeDates = [...new Set(sortedTrades.map((t) => t.date).filter(Boolean))];
+    const tradeDates = [...new Set(
+      sortedTrades
+        .map((t) => {
+          const d = parseTradeDate(t.executedAt || t.date);
+          if (!d) return "";
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        })
+        .filter(Boolean)
+    )];
     const activeDays = Math.max(1, tradeDates.length);
 
     let maxConsecutiveWin = 0;
@@ -133,8 +184,11 @@ export function JournalModule({ trades = [] }) {
       : 0;
 
     const symbolStats = new Map();
-    const bumpSymbolExecution = (symbol) => {
-      const key = symbol || "UNKNOWN";
+    const bumpSymbolExecution = (trade) => {
+      const key = normalizeSymbol(trade.asset);
+      const type = (trade.type || "").toUpperCase();
+      const qty = Math.max(0, safeNum(trade.quantity));
+      const price = safeNum(trade.price);
       const row = symbolStats.get(key) || {
         symbol: key,
         executionCount: 0,
@@ -143,14 +197,26 @@ export function JournalModule({ trades = [] }) {
         losses: 0,
         breakevens: 0,
         totalHoldDays: 0,
-        totalGain: 0
+        totalGain: 0,
+        tradedNotional: 0,
+        buyQty: 0,
+        sellQty: 0,
+        netQtyFromTrades: 0
       };
       row.executionCount += 1;
+      row.tradedNotional += Math.abs(price * qty);
+      if (type === "SELL") {
+        row.sellQty += qty;
+        row.netQtyFromTrades -= qty;
+      } else {
+        row.buyQty += qty;
+        row.netQtyFromTrades += qty;
+      }
       symbolStats.set(key, row);
     };
 
     for (const trade of sortedTrades) {
-      bumpSymbolExecution(trade.asset);
+      bumpSymbolExecution(trade);
     }
 
     for (const r of realized) {
@@ -163,7 +229,11 @@ export function JournalModule({ trades = [] }) {
         losses: 0,
         breakevens: 0,
         totalHoldDays: 0,
-        totalGain: 0
+        totalGain: 0,
+        tradedNotional: 0,
+        buyQty: 0,
+        sellQty: 0,
+        netQtyFromTrades: 0
       };
       row.realizedCount += 1;
       row.totalHoldDays += r.holdDays;
@@ -172,6 +242,12 @@ export function JournalModule({ trades = [] }) {
       else if (r.pnl < -eps) row.losses += 1;
       else row.breakevens += 1;
       symbolStats.set(key, row);
+    }
+
+    const portfolioPositionMap = new Map();
+    for (const holding of portfolio || []) {
+      const symbol = normalizeSymbol(holding.symbol);
+      portfolioPositionMap.set(symbol, (portfolioPositionMap.get(symbol) || 0) + safeNum(holding.quantity));
     }
 
     const tradedAssetsReport = [...symbolStats.values()]
@@ -183,6 +259,10 @@ export function JournalModule({ trades = [] }) {
         return {
           symbol: row.symbol,
           tradeCount: row.executionCount,
+          tradedNotional: row.tradedNotional,
+          netPosition: portfolioPositionMap.has(row.symbol)
+            ? portfolioPositionMap.get(row.symbol)
+            : row.netQtyFromTrades,
           winRate,
           tradeDuration: avgDuration,
           avgGain,
@@ -191,6 +271,7 @@ export function JournalModule({ trades = [] }) {
       })
       .sort((a, b) => {
         if (b.tradeCount !== a.tradeCount) return b.tradeCount - a.tradeCount;
+        if (b.tradedNotional !== a.tradedNotional) return b.tradedNotional - a.tradedNotional;
         if (b.totalGain !== a.totalGain) return b.totalGain - a.totalGain;
         return a.symbol.localeCompare(b.symbol);
       });
@@ -217,7 +298,7 @@ export function JournalModule({ trades = [] }) {
       tradedAssetsReport,
       realizedTrades: realized
     };
-  }, [trades]);
+  }, [trades, portfolio]);
 
   const winLossSeries = [
     Math.max(analytics.wins, 0),
@@ -370,17 +451,20 @@ export function JournalModule({ trades = [] }) {
         <div className="watchlist-panel glass">
           <div className="section-header">
             <h2>Recent Executions</h2>
-            <div className="asset-count">{trades.length} Records</div>
+            <div className="asset-count">{executionRows.length} Records</div>
           </div>
           <div className="trade-list">
-            {trades.length > 0 ? (
-              trades.map((trade) => (
+            {executionRows.length > 0 ? (
+              executionRows.map((trade) => (
                 <div key={trade.id} className="trade-item">
-                  <div className="greek">{trade.date}</div>
-                  <div style={{fontWeight: 700}}>{trade.asset}</div>
-                  <div className={trade.type === "BUY" ? "positive" : "negative"}>{trade.type}</div>
-                  <div className="price">${(Number(trade.price) || 0).toFixed(2)}</div>
-                  <div className="qty">× {trade.quantity}</div>
+                  <div className="trade-date greek">{trade.executionDate}</div>
+                  <div className="trade-asset" style={{fontWeight: 700}}>{trade.asset}</div>
+                  <div className={`trade-side ${trade.type === "BUY" ? "positive" : "negative"}`}>{trade.type}</div>
+                  <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
+                  <div className="trade-details">
+                    <div className="qty">× {Number(trade.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+                    <div className="trade-meta">Cost {formatValue(Number(trade.notional) || 0, true)} · Pos {Number(trade.positionAfter || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+                  </div>
                 </div>
               ))
             ) : (
@@ -483,6 +567,8 @@ export function JournalModule({ trades = [] }) {
                   <tr>
                     <th>Symbol</th>
                     <th>Trade Count</th>
+                    <th>Traded Notional</th>
+                    <th>Current Position</th>
                     <th>Win Rate</th>
                     <th>Trade Duration</th>
                     <th>Avg Gain</th>
@@ -494,6 +580,8 @@ export function JournalModule({ trades = [] }) {
                     <tr key={row.symbol}>
                       <td>{row.symbol}</td>
                       <td>{row.tradeCount}</td>
+                      <td>{formatValue(row.tradedNotional, true)}</td>
+                      <td>{Number(row.netPosition || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                       <td>{row.winRate.toFixed(1)}%</td>
                       <td>{row.tradeDuration.toFixed(1)}d</td>
                       <td className={row.avgGain >= 0 ? "positive" : "negative"}>{formatValue(row.avgGain, true)}</td>
