@@ -90,7 +90,9 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       const dateObj = parseTradeDate(trade.executedAt || trade.date);
       if (qty <= 0) continue;
 
-      totalVolume += Math.abs(price * qty);
+      const tradeNotionalRaw = safeNum(trade.notional);
+      const tradeNotional = Math.abs(tradeNotionalRaw > 0 ? tradeNotionalRaw : price * qty);
+      totalVolume += tradeNotional;
 
       if (type === "BUY") {
         const lots = lotsByAsset.get(asset) || [];
@@ -134,7 +136,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
     const losses = realized.filter((r) => r.pnl < -eps);
     const breakevens = realized.filter((r) => Math.abs(r.pnl) <= eps);
     const decisiveTrades = wins.length + losses.length;
-    const totalGainLoss = realized.reduce((acc, r) => acc + r.pnl, 0);
+    const realizedGainLoss = realized.reduce((acc, r) => acc + r.pnl, 0);
     const avgHoldDays = realized.length
       ? realized.reduce((acc, r) => acc + r.holdDays, 0) / realized.length
       : 0;
@@ -204,7 +206,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
         netQtyFromTrades: 0
       };
       row.executionCount += 1;
-      row.tradedNotional += Math.abs(price * qty);
+      const notional = Math.abs(safeNum(trade.notional) || (price * qty));
+      row.tradedNotional += notional;
       if (type === "SELL") {
         row.sellQty += qty;
         row.netQtyFromTrades -= qty;
@@ -276,6 +279,16 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
         return a.symbol.localeCompare(b.symbol);
       });
 
+    const unrealizedPnl = (portfolio || []).reduce((sum, holding) => {
+      const price = safeNum(holding.price);
+      const qty = safeNum(holding.quantity);
+      const chgPct = safeNum(holding.priceChangePercent);
+      if (price <= 0 || qty <= 0) return sum;
+      const prevPrice = chgPct !== 0 ? price / (1 + chgPct / 100) : price;
+      return sum + ((price - prevPrice) * qty);
+    }, 0);
+    const totalGainLoss = realizedGainLoss + unrealizedPnl;
+
     return {
       totalTrades: sortedTrades.length,
       avgHoldDays,
@@ -284,7 +297,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       breakevens: breakevens.length,
       winRate: decisiveTrades ? (wins.length / decisiveTrades) * 100 : 0,
       totalGainLoss,
-      tradeExpectancy: realized.length ? totalGainLoss / realized.length : 0,
+      unrealizedPnl,
+      tradeExpectancy: realized.length ? realizedGainLoss / realized.length : 0,
       avgDailyGain: totalGainLoss / activeDays,
       avgDailyVolume: totalVolume / activeDays,
       largestGain,
@@ -325,6 +339,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
   const statsRows = [
     { label: "Total Gain/Loss", value: analytics.totalGainLoss, currency: true },
+    { label: "Unrealized PnL", value: analytics.unrealizedPnl, currency: true },
     { label: "Trade Expectancy", value: analytics.tradeExpectancy, currency: true },
     { label: "Avg Daily Gain", value: analytics.avgDailyGain, currency: true },
     { label: "Avg Daily Volume", value: analytics.avgDailyVolume, currency: true },
@@ -374,17 +389,73 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
   };
 
   const calendarPnlByDate = useMemo(() => {
+    const normalizeDateKey = (dateStr) => {
+      if (!dateStr) return "";
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+      const d = new Date(dateStr);
+      if (Number.isNaN(d.getTime())) return "";
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+
+    const equityByDate = new Map();
+    const sorted = [...executionRows].sort((a, b) => {
+      const ta = new Date(a.executedAt || a.date || 0).getTime() || 0;
+      const tb = new Date(b.executedAt || b.date || 0).getTime() || 0;
+      return ta - tb;
+    });
+
+    for (const trade of sorted) {
+      const dayKey = normalizeDateKey(trade.executedAt || trade.date);
+      if (!dayKey) continue;
+      const eqRaw = Number(trade.accountEquityAfter);
+      const balRaw = Number(trade.balanceAfter);
+      const pvRaw = Number(trade.portfolioValueAfter);
+      const eq = Number.isFinite(eqRaw)
+        ? eqRaw
+        : (Number.isFinite(balRaw) && Number.isFinite(pvRaw) ? balRaw + pvRaw : null);
+      if (Number.isFinite(eq)) {
+        // keep last execution equity snapshot of that day
+        equityByDate.set(dayKey, eq);
+      }
+    }
+
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    if (Number.isFinite(totalAccountEquity)) {
+      equityByDate.set(todayKey, Number(totalAccountEquity));
+    }
+
+    const orderedDates = [...equityByDate.keys()].sort();
+    const pnlByDate = new Map();
+    let prevEquity = null;
+    for (const day of orderedDates) {
+      const eq = Number(equityByDate.get(day));
+      if (!Number.isFinite(eq)) continue;
+      if (prevEquity === null) {
+        prevEquity = eq;
+        pnlByDate.set(day, 0);
+        continue;
+      }
+      pnlByDate.set(day, eq - prevEquity);
+      prevEquity = eq;
+    }
+
+    if (selectedSymbols.length === 0) {
+      return pnlByDate;
+    }
+
+    // Symbol-filtered fallback uses realized closes for selected symbols.
     const activeSet = new Set(selectedSymbols);
-    const byDate = new Map();
+    const realizedByDate = new Map();
     for (const trade of analytics.realizedTrades) {
       if (!trade.closeDate) continue;
       if (activeSet.size > 0 && !activeSet.has((trade.asset || "").toUpperCase())) {
         continue;
       }
-      byDate.set(trade.closeDate, (byDate.get(trade.closeDate) || 0) + (Number(trade.pnl) || 0));
+      realizedByDate.set(trade.closeDate, (realizedByDate.get(trade.closeDate) || 0) + (Number(trade.pnl) || 0));
     }
-    return byDate;
-  }, [analytics.realizedTrades, selectedSymbols]);
+    return realizedByDate;
+  }, [analytics.realizedTrades, selectedSymbols, executionRows, totalAccountEquity]);
 
   const calendarMonthLabel = calendarCursor.toLocaleDateString(undefined, {
     month: "long",
@@ -479,9 +550,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
                   <div className={`trade-side ${trade.type === "BUY" ? "positive" : "negative"}`}>{trade.type}</div>
                   <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
                   <div className="trade-details">
-                    <div className="qty">× {Number(trade.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
                     <div className="trade-meta">
-                      Cost {formatValue(Number(trade.notional) || 0, true)}
+                      {trade.type === "BUY" ? "Cost" : "Proceeds"} {formatValue(Number(trade.notional) || 0, true)}
                       {Number.isFinite(Number(trade.balanceAfter)) ? ` · Bal ${formatValue(Number(trade.balanceAfter), true)}` : ""}
                       {Number.isFinite(Number(trade.accountEquityAfter)) ? ` · Eq ${formatValue(Number(trade.accountEquityAfter), true)}` : ""}
                       {" · "}

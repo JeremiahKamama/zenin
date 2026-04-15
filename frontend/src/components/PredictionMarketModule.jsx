@@ -13,6 +13,7 @@ export function PredictionMarketModule() {
   const [marketDetails, setMarketDetails] = useState(null);
   const [marketDetailsLoading, setMarketDetailsLoading] = useState(false);
   const [marketDetailsError, setMarketDetailsError] = useState("");
+  const [activeCategory, setActiveCategory] = useState("geopolitics");
 
   useEffect(() => {
     let isMounted = true;
@@ -131,17 +132,35 @@ export function PredictionMarketModule() {
     return category.charAt(0).toUpperCase() + category.slice(1);
   };
 
+  const selectedCategoryMarkets = Array.isArray(predictionMarketsByCategory?.[activeCategory])
+    ? [...predictionMarketsByCategory[activeCategory]]
+        .sort((a, b) => Number(b?.volume || 0) - Number(a?.volume || 0))
+        .slice(0, 5)
+    : [];
+
   return (
     <div className="view-container prediction-terminal">
       <div className="watchlist-panel glass prediction-market-panel" style={{ padding: "16px" }}>
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Prediction Markets</h2>
-            <div className="asset-count">Highest volume markets per category · refreshes every 6 hours</div>
+            <div className="asset-count">Top 5 markets by lifetime volume in selected category · refreshes every 6 hours</div>
           </div>
           <div className="asset-count">
             {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
           </div>
+        </div>
+        <div className="category-tabs" style={{ marginBottom: "12px" }}>
+          {predictionCategories.map((category) => (
+            <button
+              key={category}
+              type="button"
+              className={activeCategory === category ? "active" : ""}
+              onClick={() => setActiveCategory(category)}
+            >
+              {getPredictionCategoryLabel(category).toUpperCase()}
+            </button>
+          ))}
         </div>
 
         {predictionLoading ? (
@@ -149,37 +168,28 @@ export function PredictionMarketModule() {
         ) : predictionError ? (
           <div className="loading-state">{predictionError}</div>
         ) : (
-          <div className="prediction-grid">
-            {predictionCategories.map((category) => {
-              const markets = Array.isArray(predictionMarketsByCategory?.[category])
-                ? predictionMarketsByCategory[category]
-                : [];
-              return (
-                <div key={category} className="prediction-category-card">
-                  <h3>{getPredictionCategoryLabel(category)}</h3>
-                  {markets.length === 0 ? (
-                    <p className="prediction-empty">No markets available.</p>
-                  ) : (
-                    <div className="prediction-market-list">
-                      {markets.slice(0, 5).map((market) => (
-                        <button
-                          key={market.id}
-                          type="button"
-                          className="prediction-market-row"
-                          onClick={() => setSelectedPredictionMarket(market)}
-                        >
-                          <div className="prediction-market-title">{market.question}</div>
-                          <div className="prediction-market-meta">
-                            <span>{formatDollar(market.volume)} volume</span>
-                            <span>Ends {formatDateLabel(market.endDate)}</span>
-                          </div>
-                        </button>
-                      ))}
+          <div className="prediction-category-card">
+            <h3>{getPredictionCategoryLabel(activeCategory)}</h3>
+            {selectedCategoryMarkets.length === 0 ? (
+              <p className="prediction-empty">No markets available.</p>
+            ) : (
+              <div className="prediction-market-list">
+                {selectedCategoryMarkets.map((market) => (
+                  <button
+                    key={market.id}
+                    type="button"
+                    className="prediction-market-row"
+                    onClick={() => setSelectedPredictionMarket(market)}
+                  >
+                    <div className="prediction-market-title">{market.question}</div>
+                    <div className="prediction-market-meta">
+                      <span>{formatDollar(market.volume)} volume</span>
+                      <span>Ends {formatDateLabel(market.endDate)}</span>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

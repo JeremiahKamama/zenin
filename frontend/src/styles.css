@@ -1982,6 +1982,24 @@ button {
   color: #38bdf8;
 }
 
+.chain-side-header {
+  text-align: center !important;
+  color: #cbd5e1;
+  letter-spacing: 0.02em;
+}
+
+.chain-side-divider {
+  text-align: center !important;
+  color: #38bdf8 !important;
+}
+
+.options-chain-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(2, 6, 23, 0.95);
+}
+
 .bid-ask {
   color: #e2e8f0;
 }

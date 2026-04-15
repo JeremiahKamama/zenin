@@ -589,16 +589,23 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   // ── Watchlist helpers ─────────────────────────────────────────────────
   const isInWatchlist = (symbol, marketType) => {
-    const mt = marketType || "spot";
+    const normalizedSymbol = normalizeSymbolKey(symbol);
+    const mt = String(marketType || "").trim().toLowerCase();
     return watchlistAssets.some(
-      (a) => a.symbol === symbol && (a.marketType || "spot") === mt
+      (a) => {
+        const watchlistSymbol = normalizeSymbolKey(a.symbol);
+        const watchlistMt = String(a.marketType || "").trim().toLowerCase();
+        if (watchlistSymbol !== normalizedSymbol) return false;
+        if (!mt) return true;
+        return watchlistMt === mt;
+      }
     );
   };
 
   const addToWatchlist = async (asset) => {
-    const mt = asset.marketType || "spot";
+    const mt = resolveMarketType(asset);
     const payload = {
-      symbol: asset.symbol,
+      symbol: normalizeSymbolKey(asset.symbol),
       name: asset.name,
       type: normalizeAssetType(asset),
       marketType: mt,
@@ -631,15 +638,16 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   };
 
   const removeFromWatchlist = async (symbol, marketType) => {
-    const mt = marketType || "spot";
+    const mt = String(marketType || "").trim().toLowerCase() || "spot";
+    const normalizedSymbol = normalizeSymbolKey(symbol);
     setWatchlistAssets((prev) =>
       prev.filter(
-        (a) => !(a.symbol === symbol && (a.marketType || "spot") === mt)
+        (a) => !(normalizeSymbolKey(a.symbol) === normalizedSymbol && (String(a.marketType || "").trim().toLowerCase() || "spot") === mt)
       )
     );
     try {
       const res = await fetch(
-        `${BACKEND_URL}/db/watchlist/${encodeURIComponent(symbol)}?marketType=${encodeURIComponent(mt)}`,
+        `${BACKEND_URL}/db/watchlist/${encodeURIComponent(normalizedSymbol)}?marketType=${encodeURIComponent(mt)}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error("Failed to remove from watchlist");
@@ -653,10 +661,15 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   // Amber = in watchlist → remove. Grey = not in watchlist → add.
   const toggleWatchlistStar = (asset) => {
-    if (isInWatchlist(asset.symbol, asset.marketType)) {
-      removeFromWatchlist(asset.symbol, asset.marketType);
+    const normalizedSymbol = normalizeSymbolKey(asset.symbol);
+    const existing = watchlistAssets.find(
+      (a) => normalizeSymbolKey(a.symbol) === normalizedSymbol
+    );
+    const marketType = String(asset.marketType || existing?.marketType || resolveMarketType(asset) || "spot").toLowerCase();
+    if (isInWatchlist(asset.symbol, marketType)) {
+      removeFromWatchlist(asset.symbol, marketType);
     } else {
-      addToWatchlist(asset);
+      addToWatchlist({ ...asset, marketType });
     }
   };
 

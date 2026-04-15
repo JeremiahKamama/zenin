@@ -353,9 +353,10 @@ useEffect(() => {
             <table className="options-calculator-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                  {["Strike", "Expiry", "Type", "Direction", "Qty", "Premium", "IV %", "BS Price", ""].map(h => (
+                  {["Strike", "Expiry", "Call / Put", "Long/Short", "Qty", "Premium", "IV%"].map(h => (
                     <th key={h} style={{ padding: "6px 8px", color: "#64748b", fontSize: "11px", fontWeight: 600, textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
+                  <th style={{ padding: "6px 8px" }} />
                 </tr>
               </thead>
               <tbody>
@@ -426,9 +427,6 @@ useEffect(() => {
                         placeholder="20"
                         style={{ width: "55px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
                       />
-                    </td>
-                    <td style={{ padding: "6px 8px", color: "#38bdf8", fontSize: "12px", fontWeight: 600 }}>
-                      ${greeks[i]?.bsPrice?.toFixed(4) || "—"}
                     </td>
                     <td style={{ padding: "6px 4px" }}>
                       <button onClick={() => removeLeg(i)} style={{ background: "rgba(239,68,68,0.1)", border: "none", color: "#ef4444", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontSize: "12px" }}>✕</button>

@@ -290,13 +290,13 @@ useEffect(() => {
           ) : chain.length === 0 ? (
             <div className="loading-state">No options data available for {activeAsset}.</div>
           ) : (
-            <div className="table-scroll">
+            <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto" }}>
               <table className="option-chain-table">
                 <thead>
                   <tr>
-                    <th colSpan="4" style={{ textAlign: "left", color: "#67e8f9" }}>Calls</th>
-                    <th className="strike-col" />
-                    <th colSpan="4" style={{ textAlign: "right", color: "#fca5a5" }}>Puts</th>
+                    <th colSpan="4" className="chain-side-header">Calls</th>
+                    <th className="strike-col chain-side-divider">Strike</th>
+                    <th colSpan="4" className="chain-side-header">Puts</th>
                   </tr>
                   <tr>
                     <th>IV</th>

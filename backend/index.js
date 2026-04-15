@@ -1050,6 +1050,7 @@ const predictionSnapshotCache = new Map();
 
 function firstFiniteNumber(...values) {
   for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
     const n = Number(value);
     if (Number.isFinite(n)) return n;
   }
@@ -1436,23 +1437,33 @@ app.post("/api/options/crypto", async (req, res) => {
         strikesMap[strike] = { strike, call: {}, put: {} };
       }
 
-      const data = {
-        bid: firstFiniteNumber(
+      const rawBid = firstFiniteNumber(
           t?.best_bid_price,
           t?.bid_price,
           t?.best_bid,
           t?.bid,
-          t?.bids?.[0]?.price,
-          0
-        ),
-        ask: firstFiniteNumber(
+          t?.bids?.[0]?.price
+        );
+      const rawAsk = firstFiniteNumber(
           t?.best_ask_price,
           t?.ask_price,
           t?.best_ask,
           t?.ask,
-          t?.asks?.[0]?.price,
-          0
-        ),
+          t?.asks?.[0]?.price
+        );
+      const fallbackPx = firstFiniteNumber(
+        t?.mark_price,
+        t?.last_price,
+        t?.last,
+        t?.price,
+        t?.index_price,
+        t?.underlying_price,
+        0
+      );
+
+      const data = {
+        bid: Number.isFinite(rawBid) ? rawBid : (Number.isFinite(fallbackPx) ? fallbackPx : 0),
+        ask: Number.isFinite(rawAsk) ? rawAsk : (Number.isFinite(fallbackPx) ? fallbackPx : 0),
         delta: firstFiniteNumber(t?.greeks?.delta, t?.delta, 0),
         gamma: firstFiniteNumber(t?.greeks?.gamma, t?.gamma, 0),
         vega: firstFiniteNumber(t?.greeks?.vega, t?.vega, 0),
