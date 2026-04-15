@@ -795,6 +795,9 @@ const deriveClient = axios.create({
   timeout: 10000
 });
 
+// Keep a small in-memory cache to serve stale data when Derive is temporarily unavailable.
+const optionsChainCache = new Map();
+
 // Retry wrapper
 async function safePost(url, body, retries = 2) {
   try {
@@ -815,6 +818,7 @@ async function safePost(url, body, retries = 2) {
 // ---------------------------------------------------------------------------
 app.post("/api/options/crypto", async (req, res) => {
   const { currency = "BTC", expiry } = req.body;
+  const cacheKey = `${String(currency).toUpperCase()}:latest`;
 
   try {
     // 1. Instruments
@@ -914,7 +918,7 @@ app.post("/api/options/crypto", async (req, res) => {
       allTickers.reduce((s, t) => s + parseFloat(t?.iv || 0), 0) /
       (allTickers.length || 1);
 
-    res.json({
+    const payload = {
       expiry: targetExpiry,
       expiries,
       chain,
@@ -922,13 +926,29 @@ app.post("/api/options/crypto", async (req, res) => {
         iv: avgIv || 0,
         p_c_ratio: 0.85
       }
+    };
+
+    optionsChainCache.set(cacheKey, {
+      payload,
+      cachedAt: Date.now()
     });
+
+    res.json(payload);
 
   } catch (error) {
     console.error("🔥 Derive HARD FAIL:", error.message);
 
+    const cached = optionsChainCache.get(cacheKey);
+    if (cached?.payload) {
+      return res.json({
+        ...cached.payload,
+        stale: true,
+        stale_age_seconds: Math.floor((Date.now() - cached.cachedAt) / 1000)
+      });
+    }
+
     res.status(502).json({
-      error: "Options provider unavailable (Derive API unreachable)"
+      error: "Failed to fetch options: fetch failed"
     });
   }
 });

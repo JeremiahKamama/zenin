@@ -13,6 +13,7 @@ export function OptionsModule() {
   const [chain, setChain] = useState([]);
   const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
   const [loading, setLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState("");
 
  useEffect(() => {
   // fallback assets (Derive supports these)
@@ -29,6 +30,7 @@ useEffect(() => {
   const fetchChain = async () => {
       setLoading(true);
       try {
+        setOptionsError("");
         const res = await fetch(`${BACKEND_URL}/options/crypto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -40,7 +42,7 @@ useEffect(() => {
 
       if (!res.ok) {
         const errorText = await res.text();
-        throw new Error(`HTTP error: ${res.status} ${errorText}`);
+        throw new Error(`HTTP ${res.status}: ${errorText}`);
       }
 
       const data = await res.json();
@@ -65,14 +67,19 @@ useEffect(() => {
           pcr: data?.market_metrics?.p_c_ratio || 0.85,
           skew: "Volatile"
         });
+        if (data.stale) {
+          setOptionsError(`Using cached options data (${data.stale_age_seconds || 0}s old).`);
+        }
       } else {
         console.warn("Invalid options response:", data);
-        setChain([]);
+        setOptionsError("Options data is temporarily unavailable.");
       }
 
     } catch (err) {
       console.error("Error fetching crypto options:", err);
-      if (isMounted) setChain([]);
+      if (isMounted) {
+        setOptionsError("Live options feed is temporarily unavailable. Showing last known data.");
+      }
     } finally {
       setLoading(false);
     }
@@ -216,6 +223,11 @@ useEffect(() => {
                 ))}
               </tbody>
             </table>
+          )}
+          {optionsError && (
+            <div className="loading-state" style={{ marginTop: "8px", color: "#f59e0b" }}>
+              {optionsError}
+            </div>
           )}
       </div>
       <OptionsCalculator
