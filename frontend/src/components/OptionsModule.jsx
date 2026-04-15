@@ -223,6 +223,7 @@ useEffect(() => {
         assets={allAssets}
         chainData={chain}
         activeAsset={activeAsset}
+        onAssetChange={setActiveAsset}
         activeExpiry={activeExpiry}
       />
 
