@@ -86,7 +86,7 @@ export function PredictionMarketModule() {
     };
   }, [selectedPredictionMarket]);
 
-  const predictionCategories = ["geopolitics", "crypto", "fintech", "politics", "finance"];
+  const predictionCategories = ["geopolitics", "crypto", "tech", "politics", "finance"];
   const predictionMarketsByCategory = predictionSnapshot?.categories || {};
   const predictionWhaleTransactions = Array.isArray(predictionSnapshot?.whaleTransactions)
     ? predictionSnapshot.whaleTransactions
@@ -128,7 +128,6 @@ export function PredictionMarketModule() {
 
   const getPredictionCategoryLabel = (category) => {
     if (!category) return "Other";
-    if (category === "fintech") return "Fintech";
     return category.charAt(0).toUpperCase() + category.slice(1);
   };
 

@@ -1142,8 +1142,16 @@ const MIN_WHALE_NOTIONAL_USD = 100000;
 const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 const PREDICTION_REFRESH_MS = 6 * 60 * 60 * 1000; // 6 hours
-const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "fintech", "politics", "finance"];
+const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "tech", "politics", "finance"];
 const predictionSnapshotCache = new Map();
+const PREDICTION_CATEGORY_TAGS = {
+  geopolitics: "geopolitics",
+  crypto: "crypto",
+  tech: "tech",
+  politics: "politics",
+  finance: "finance"
+};
+const PREDICTION_EVENTS_FETCH_LIMIT = 160;
 const EODHD_API_TOKEN = String(
   process.env.EODHD_API_TOKEN ||
   process.env.EODHD_API_KEY ||
@@ -1313,7 +1321,14 @@ function extractYesNoPrices(market) {
 function normalizePredictionMarket(raw = {}, sourceRank = 0) {
   const event = Array.isArray(raw.events) && raw.events.length > 0 ? raw.events[0] : null;
   const volume = toFiniteNumber(raw.volumeNum ?? raw.volume, 0);
-  const volume24h = toFiniteNumber(raw.volume24hr ?? raw.volume24hrClob, 0);
+  const volume24h = toFiniteNumber(
+    raw.volume24hr ??
+    raw.volume24h ??
+    raw.volume24hrClob ??
+    raw.volume24hClob ??
+    event?.volume24hr,
+    0
+  );
   const volume1wk = toFiniteNumber(raw.volume1wk ?? raw.volume1wkClob, 0);
   const liquidity = toFiniteNumber(raw.liquidityNum ?? raw.liquidity, 0);
   const { yesPrice, noPrice, yesLabel, noLabel } = extractYesNoPrices(raw);
@@ -1333,10 +1348,16 @@ function normalizePredictionMarket(raw = {}, sourceRank = 0) {
     id: String(raw.id || ""),
     conditionId: String(raw.conditionId || ""),
     slug: String(raw.slug || ""),
+    eventId: String(event?.id || ""),
+    eventSlug: String(event?.slug || ""),
     question: String(raw.question || raw.title || ""),
     eventTitle: String(event?.title || ""),
     eventCategory: String(event?.category || ""),
-    eventTags: Array.isArray(event?.tags) ? event.tags.map((tag) => String(tag?.name || tag || "").toLowerCase()) : [],
+    eventTags: Array.isArray(event?.tags)
+      ? event.tags
+          .map((tag) => String(tag?.slug || tag?.label || tag?.name || tag || "").toLowerCase())
+          .filter(Boolean)
+      : [],
     endDate: raw.endDate || null,
     image: raw.image || raw.icon || event?.image || null,
     volume,
@@ -1357,35 +1378,6 @@ function normalizePredictionMarket(raw = {}, sourceRank = 0) {
   };
 }
 
-function classifyPredictionCategory(market) {
-  const haystack = [
-    market.question,
-    market.eventTitle,
-    market.eventCategory,
-    ...(market.eventTags || [])
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const matchesAny = (keywords) => keywords.some((keyword) => haystack.includes(keyword));
-  if (matchesAny(["geopolitic", "war", "ceasefire", "middle east", "ukraine", "russia", "china", "iran", "israel", "taiwan", "nato"])) {
-    return "geopolitics";
-  }
-  if (matchesAny(["crypto", "bitcoin", "ethereum", "solana", "xrp", "bnb", "dogecoin", "hype", "defi", "token"])) {
-    return "crypto";
-  }
-  if (matchesAny(["fintech", "payments", "paypal", "block", "stripe", "visa", "mastercard", "neobank"])) {
-    return "fintech";
-  }
-  if (matchesAny(["politic", "election", "government", "president", "congress", "senate", "parliament", "prime minister", "campaign", "polls", "vote", "voter"])) {
-    return "politics";
-  }
-  if (matchesAny(["finance", "economy", "fed", "interest rate", "inflation", "stocks", "equity", "earnings", "gdp", "recession", "s&p", "nasdaq", "dow"])) {
-    return "finance";
-  }
-  return null;
-}
-
 async function fetchGammaJson(path) {
   const fetch = await resolveFetch();
   const response = await fetch(`${GAMMA_BASE_URL}${path}`);
@@ -1393,6 +1385,14 @@ async function fetchGammaJson(path) {
     throw new Error(`Gamma request failed: ${path} (${response.status})`);
   }
   return response.json();
+}
+
+async function fetchPredictionEventsByTag(tagSlug, limit = PREDICTION_EVENTS_FETCH_LIMIT) {
+  const safeTag = encodeURIComponent(String(tagSlug || "").trim().toLowerCase());
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || PREDICTION_EVENTS_FETCH_LIMIT));
+  return fetchGammaJson(
+    `/events?active=true&closed=false&archived=false&limit=${safeLimit}&tag_slug=${safeTag}&order=volume24hr&ascending=false`
+  );
 }
 
 async function fetchDataApiJson(path, params = {}) {
@@ -1434,24 +1434,49 @@ async function loadPredictionSnapshot() {
     return cached.payload;
   }
 
-  let rawMarkets = [];
-  try {
-    rawMarkets = await fetchGammaJson("/markets?active=true&closed=false&archived=false&limit=800");
-  } catch {
-    rawMarkets = await fetchGammaJson("/markets?limit=800");
-  }
-  const normalized = (Array.isArray(rawMarkets) ? rawMarkets : [])
-    .map((market, idx) => normalizePredictionMarket(market, idx))
-    .filter((market) => market.id && market.question);
-
   const categories = Object.fromEntries(PREDICTION_CATEGORIES.map((category) => [category, []]));
-  const categorized = normalized
-    .map((market) => ({ ...market, predictionCategory: classifyPredictionCategory(market) }))
-    .filter((market) => market.predictionCategory);
+  const allCategorizedMarkets = [];
 
-  PREDICTION_CATEGORIES.forEach((category) => {
-    categories[category] = categorized
-      .filter((market) => market.predictionCategory === category)
+  for (const category of PREDICTION_CATEGORIES) {
+    const tagSlug = PREDICTION_CATEGORY_TAGS[category] || category;
+    let events = [];
+    try {
+      events = await fetchPredictionEventsByTag(tagSlug, PREDICTION_EVENTS_FETCH_LIMIT);
+    } catch {
+      events = [];
+    }
+
+    const candidateMarkets = [];
+    (Array.isArray(events) ? events : []).forEach((event, eventIndex) => {
+      const eventMarkets = Array.isArray(event?.markets) ? event.markets : [];
+      eventMarkets.forEach((market, marketIndex) => {
+        const normalized = normalizePredictionMarket(
+          {
+            ...market,
+            events: [event]
+          },
+          eventIndex * 1000 + marketIndex
+        );
+        if (!normalized.id || !normalized.question) return;
+        if (!normalized.conditionId) return;
+        candidateMarkets.push({
+          ...normalized,
+          predictionCategory: category
+        });
+      });
+    });
+
+    const dedupedByCondition = new Map();
+    candidateMarkets.forEach((market) => {
+      const key = String(market.conditionId || market.id);
+      if (!key) return;
+      const existing = dedupedByCondition.get(key);
+      if (!existing || market.polymarketRankScore > existing.polymarketRankScore) {
+        dedupedByCondition.set(key, market);
+      }
+    });
+
+    const ranked = [...dedupedByCondition.values()]
       .sort((a, b) => {
         if (b.polymarketRankScore !== a.polymarketRankScore) return b.polymarketRankScore - a.polymarketRankScore;
         if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
@@ -1460,13 +1485,14 @@ async function loadPredictionSnapshot() {
           return Math.abs(b.oneWeekPriceChange) - Math.abs(a.oneWeekPriceChange);
         }
         return b.volume - a.volume;
-      })
-      .slice(0, 5);
-  });
+      });
 
-  const categoryMarkets = Object.values(categories).flatMap((items) => items);
+    categories[category] = ranked.slice(0, 5);
+    allCategorizedMarkets.push(...ranked);
+  }
+
   const whaleCandidateMarkets = PREDICTION_CATEGORIES.flatMap((category) =>
-    categorized
+    allCategorizedMarkets
       .filter((market) => market.predictionCategory === category)
       .sort((a, b) => b.polymarketRankScore - a.polymarketRankScore)
       .slice(0, 40)
@@ -1475,7 +1501,7 @@ async function loadPredictionSnapshot() {
   const marketByConditionId = new Map();
   whaleCandidateMarkets.forEach((market) => {
     if (!market.conditionId) return;
-    categoryByConditionId.set(market.conditionId, classifyPredictionCategory(market) || "other");
+    categoryByConditionId.set(market.conditionId, market.predictionCategory || "other");
     marketByConditionId.set(market.conditionId, market);
   });
 
