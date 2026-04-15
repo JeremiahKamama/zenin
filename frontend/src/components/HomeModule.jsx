@@ -210,7 +210,8 @@ export function HomeModule({
       return trade.side === "sell" ? cash + trade.notional : cash - trade.notional;
     }, initialBalance);
   }, [tradeTimeline]);
-  const totalAccountEquity = inferredCashBalance + portfolioValue;
+  const liveAvailableBalance = Number.isFinite(Number(balance)) ? Number(balance) : inferredCashBalance;
+  const totalAccountEquity = liveAvailableBalance + portfolioValue;
   const isTreasuryAsset = (asset) => {
     const symbol = (asset?.symbol || "").toUpperCase();
     return asset?.market === "Treasury" || /^USTY?\d+Y$/.test(symbol);

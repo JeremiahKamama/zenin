@@ -362,13 +362,15 @@ useEffect(() => {
           <div className="options-calculator-legs-grid">
             {legs.map((leg, i) => (
               <div key={i} className="options-leg-card">
-                <div className="options-leg-cell options-leg-title">Leg {i + 1}</div>
-                <div className="options-leg-cell options-leg-actions">
-                  <button className="options-leg-action-btn" onClick={() => refreshLeg(i)}>Refresh</button>
-                  <button className="options-leg-action-btn danger" onClick={() => removeLeg(i)}>Remove</button>
+                <div className="options-leg-header">
+                  <div className="options-leg-title">Leg {i + 1}</div>
+                  <div className="options-leg-header-actions">
+                    <button className="options-leg-link-btn" onClick={() => refreshLeg(i)}>Refresh</button>
+                    <button className="options-leg-link-btn danger" onClick={() => removeLeg(i)}>Remove</button>
+                  </div>
                 </div>
 
-                <div className="options-leg-cell">
+                <div className="options-leg-row two-col">
                   <select
                     value={leg.strike}
                     onChange={e => {
@@ -386,8 +388,6 @@ useEffect(() => {
                       <option key={s} value={s}>{s.toLocaleString()}</option>
                     ))}
                   </select>
-                </div>
-                <div className="options-leg-cell">
                   <input
                     type="date"
                     value={leg.expiry}
@@ -396,46 +396,67 @@ useEffect(() => {
                   />
                 </div>
 
-                <div className="options-leg-cell">
-                  <div className="options-leg-toggle-row">
-                    <button onClick={() => updateLeg(i, "type", "call")} style={btnStyle(leg.type === "call")}>Call</button>
-                    <button onClick={() => updateLeg(i, "type", "put")} style={btnStyle(leg.type === "put")}>Put</button>
+                <div className="options-leg-row two-col">
+                  <div className="options-leg-segment">
+                    <button
+                      className={`options-leg-segment-btn ${leg.type === "call" ? "active positive" : ""}`}
+                      onClick={() => updateLeg(i, "type", "call")}
+                    >
+                      Call
+                    </button>
+                    <button
+                      className={`options-leg-segment-btn ${leg.type === "put" ? "active" : ""}`}
+                      onClick={() => updateLeg(i, "type", "put")}
+                    >
+                      Put
+                    </button>
                   </div>
-                </div>
-                <div className="options-leg-cell">
-                  <div className="options-leg-toggle-row">
-                    <button onClick={() => updateLeg(i, "direction", "long")} style={btnStyle(leg.direction === "long")}>Long</button>
-                    <button onClick={() => updateLeg(i, "direction", "short")} style={btnStyle(leg.direction === "short")}>Short</button>
+
+                  <div className="options-leg-segment">
+                    <button
+                      className={`options-leg-segment-btn ${leg.direction === "long" ? "active" : ""}`}
+                      onClick={() => updateLeg(i, "direction", "long")}
+                    >
+                      Long
+                    </button>
+                    <button
+                      className={`options-leg-segment-btn ${leg.direction === "short" ? "active" : ""}`}
+                      onClick={() => updateLeg(i, "direction", "short")}
+                    >
+                      Short
+                    </button>
                   </div>
                 </div>
 
-                <div className="options-leg-cell">
-                  <div className="options-leg-mini-label">QTY Premium IV%</div>
-                  <div className="options-leg-mini-row">
-                    <input
-                      type="number"
-                      value={leg.qty}
-                      onChange={e => updateLeg(i, "qty", e.target.value)}
-                      min="1"
-                      className="options-leg-mini-input"
-                    />
-                    <input
-                      type="number"
-                      value={leg.premium}
-                      onChange={e => updateLeg(i, "premium", e.target.value)}
-                      placeholder="Premium"
-                      className="options-leg-mini-input"
-                    />
-                    <input
-                      type="number"
-                      value={leg.iv}
-                      onChange={e => updateLeg(i, "iv", e.target.value)}
-                      placeholder="IV%"
-                      className="options-leg-mini-input"
-                    />
-                  </div>
+                <div className="options-leg-label-row">
+                  <span>Qty</span>
+                  <span>Premium</span>
+                  <span>IV %</span>
                 </div>
-                <div className="options-leg-cell options-leg-empty" />
+
+                <div className="options-leg-row three-col">
+                  <input
+                    type="number"
+                    value={leg.qty}
+                    onChange={e => updateLeg(i, "qty", e.target.value)}
+                    min="1"
+                    className="options-leg-input"
+                  />
+                  <input
+                    type="number"
+                    value={leg.premium}
+                    onChange={e => updateLeg(i, "premium", e.target.value)}
+                    placeholder="Premium"
+                    className="options-leg-input"
+                  />
+                  <input
+                    type="number"
+                    value={leg.iv}
+                    onChange={e => updateLeg(i, "iv", e.target.value)}
+                    placeholder="IV%"
+                    className="options-leg-input"
+                  />
+                </div>
               </div>
             ))}
           </div>

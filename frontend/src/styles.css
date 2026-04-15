@@ -3477,108 +3477,110 @@ button {
 .options-calculator-legs-grid {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 .options-leg-card {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.9) 0%, rgba(2, 6, 23, 0.82) 100%);
+  border-radius: 24px;
+  padding: 14px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(2, 6, 23, 0.45);
+  gap: 12px;
 }
 
-.options-leg-cell {
-  padding: 10px;
-  border-right: 1px solid rgba(148, 163, 184, 0.35);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
-}
-
-.options-leg-card .options-leg-cell:nth-child(2n) {
-  border-right: none;
-}
-
-.options-leg-card .options-leg-cell:nth-last-child(-n + 2) {
-  border-bottom: none;
-}
-
-.options-leg-title {
-  font-size: 20px;
-  font-weight: 700;
-  color: #e2e8f0;
-  line-height: 1;
-}
-
-.options-leg-actions {
+.options-leg-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
 }
 
-.options-leg-action-btn {
-  flex: 1;
-  padding: 7px 10px;
-  background: rgba(56, 189, 248, 0.12);
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  color: #38bdf8;
-  border-radius: 6px;
+.options-leg-title {
+  font-size: 36px;
+  font-weight: 500;
+  color: #9ca3af;
+  line-height: 1;
+}
+
+.options-leg-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.options-leg-link-btn {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 18px;
+  font-weight: 500;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
+  padding: 0;
 }
 
-.options-leg-action-btn.danger {
-  background: rgba(239, 68, 68, 0.1);
-  border-color: rgba(239, 68, 68, 0.35);
+.options-leg-link-btn.danger {
   color: #ef4444;
+}
+
+.options-leg-row {
+  display: grid;
+  gap: 10px;
+}
+
+.options-leg-row.two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.options-leg-row.three-col {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .options-leg-input {
   width: 100%;
-  padding: 8px 10px;
+  padding: 12px 14px;
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
   color: #f1f5f9;
-  font-size: 13px;
+  font-size: 16px;
   outline: none;
 }
 
-.options-leg-toggle-row {
+.options-leg-segment {
   display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.options-leg-mini-label {
-  color: #94a3b8;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-bottom: 6px;
+.options-leg-segment-btn {
+  flex: 1;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  color: #e5e7eb;
+  font-size: 16px;
+  cursor: pointer;
 }
 
-.options-leg-mini-row {
+.options-leg-segment-btn.active {
+  background: rgba(31, 41, 55, 0.9);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.options-leg-segment-btn.active.positive {
+  background: rgba(20, 83, 45, 0.9);
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #22c55e;
+}
+
+.options-leg-label-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.options-leg-mini-input {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 9px;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 6px;
-  color: #f1f5f9;
-  font-size: 12px;
-  outline: none;
-}
-
-.options-leg-empty {
-  background: transparent;
+  gap: 10px;
+  color: #9ca3af;
+  font-size: 14px;
+  padding: 0 2px;
 }
 
 .options-calculator-greeks-grid {
@@ -3690,20 +3692,22 @@ button {
     max-height: 220px;
   }
 
-  .options-leg-card {
+  .options-leg-title {
+    font-size: 28px;
+  }
+
+  .options-leg-link-btn {
+    font-size: 15px;
+  }
+
+  .options-leg-row.two-col,
+  .options-leg-row.three-col {
     grid-template-columns: 1fr;
   }
 
-  .options-leg-cell {
-    border-right: none;
-  }
-
-  .options-leg-card .options-leg-cell:nth-last-child(-n + 2) {
-    border-bottom: 1px solid rgba(148, 163, 184, 0.35);
-  }
-
-  .options-leg-card .options-leg-cell:last-child {
-    border-bottom: none;
+  .options-leg-label-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .options-calculator-greeks-grid {

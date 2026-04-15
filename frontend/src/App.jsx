@@ -1360,6 +1360,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             <PortfolioModule
                 portfolio={portfolioWithEntry}
                 trades={trades}
+                balance={balance}
                 calculatePortfolioValue={calculatePortfolioValue}
                 calculatePortfolioGain={calculatePortfolioGain}
                 onRemove={removeFromPortfolio}

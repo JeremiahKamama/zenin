@@ -4,6 +4,7 @@ import Chart from "react-apexcharts";
 export function PortfolioModule({
   portfolio,
   trades = [],
+  balance = 0,
   calculatePortfolioValue,
   calculatePortfolioGain,
   onRemove,
@@ -52,7 +53,8 @@ export function PortfolioModule({
     }, initialBalance);
   }, [tradeTimeline]);
 
-  const currentAccountEquity = inferredCashBalance + portfolioValue;
+  const liveAvailableBalance = Number.isFinite(Number(balance)) ? Number(balance) : inferredCashBalance;
+  const currentAccountEquity = liveAvailableBalance + portfolioValue;
   const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "#22c55e" : "#ef4444") : "#38bdf8";
 
