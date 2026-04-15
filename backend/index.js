@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
-const { initializeDatabase, portfolio, watchlist, optionsCalculations,db } = require("./database");
+const { initializeDatabase, portfolio, watchlist, optionsCalculations, tradeExecutions, db } = require("./database");
 
 const app = express();
 
@@ -1416,14 +1416,45 @@ app.delete("/api/db/portfolio/:id", writeLimiter, (req, res) => {
 // Get portfolio items by symbol and marketType
 app.get("/api/db/portfolio/symbol/:symbol", (req, res) => {
   try {
-    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20).toUpperCase();
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
-    const { marketType } = req.query;
+    const marketType = String(req.query.marketType || "").trim().toLowerCase();
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
     const holdings = portfolio.findBySymbol(symbol, marketType);
     res.json({ holdings });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Trade execution endpoints (Journal persistence)
+// ---------------------------------------------------------------------------
+app.get("/api/db/trades", (req, res) => {
+  try {
+    const trades = tradeExecutions.getAll(req.query.limit);
+    res.json({ trades });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/db/trades", writeLimiter, (req, res) => {
+  try {
+    const payload = req.body || {};
+    if (!payload.asset) {
+      return res.status(400).json({ error: "asset is required" });
+    }
+    if (!Number.isFinite(Number(payload.quantity)) || Number(payload.quantity) <= 0) {
+      return res.status(400).json({ error: "quantity must be a positive number" });
+    }
+    if (!Number.isFinite(Number(payload.price)) || Number(payload.price) < 0) {
+      return res.status(400).json({ error: "price must be a non-negative number" });
+    }
+    const saved = tradeExecutions.add(payload);
+    res.status(201).json(saved);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

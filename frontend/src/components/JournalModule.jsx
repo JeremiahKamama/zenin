@@ -456,7 +456,7 @@ export function JournalModule({ trades = [], portfolio = [] }) {
           <div className="trade-list">
             {executionRows.length > 0 ? (
               executionRows.map((trade) => (
-                <div key={trade.id} className="trade-item">
+                <div key={trade.clientId || trade.id} className="trade-item">
                   <div className="trade-date greek">{trade.executionDate}</div>
                   <div className="trade-asset" style={{fontWeight: 700}}>{trade.asset}</div>
                   <div className={`trade-side ${trade.type === "BUY" ? "positive" : "negative"}`}>{trade.type}</div>

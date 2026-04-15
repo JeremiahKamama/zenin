@@ -9,6 +9,38 @@ import { HomeModule } from "./components/HomeModule";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
+const normalizeTradeRecord = (trade, idx = 0) => {
+  const quantity = Number(trade?.quantity);
+  const price = Number(trade?.price);
+  const notional = Number(trade?.notional);
+  const balanceAfter = Number(trade?.balanceAfter ?? trade?.balance_after);
+  const portfolioValueAfter = Number(trade?.portfolioValueAfter ?? trade?.portfolio_value_after);
+  const accountEquityAfter = Number(trade?.accountEquityAfter ?? trade?.account_equity_after);
+  const positionAfter = Number(trade?.positionAfter ?? trade?.position_after);
+  const fallbackDate = new Date().toISOString().split("T")[0];
+  const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+
+  return {
+    id: Number.isFinite(Number(trade?.id)) ? Number(trade.id) : Date.now() + idx,
+    clientId: trade?.clientId || trade?.client_id || `local-${Date.now()}-${idx}`,
+    date: trade?.date || fallbackDate,
+    executedAt: trade?.executedAt || trade?.executed_at || null,
+    asset: String(trade?.asset || "UNKNOWN").toUpperCase(),
+    name: trade?.name || trade?.asset || "UNKNOWN",
+    type: side === "sell" ? "SELL" : "BUY",
+    side,
+    marketType: String(trade?.marketType || "spot").toLowerCase(),
+    status: trade?.status || "Filled",
+    quantity: Number.isFinite(quantity) ? Math.abs(quantity) : 0,
+    price: Number.isFinite(price) ? price : 0,
+    notional: Number.isFinite(notional) ? Math.abs(notional) : 0,
+    balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null,
+    portfolioValueAfter: Number.isFinite(portfolioValueAfter) ? portfolioValueAfter : null,
+    accountEquityAfter: Number.isFinite(accountEquityAfter) ? accountEquityAfter : null,
+    positionAfter: Number.isFinite(positionAfter) ? positionAfter : null
+  };
+};
+
 function App() {
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
@@ -22,37 +54,7 @@ function App() {
     try {
       const parsed = JSON.parse(saved);
       if (!Array.isArray(parsed)) return [];
-      return parsed
-        .map((trade, idx) => {
-          const quantity = Number(trade?.quantity);
-          const price = Number(trade?.price);
-          const notional = Number(trade?.notional);
-          const balanceAfter = Number(trade?.balanceAfter);
-          const portfolioValueAfter = Number(trade?.portfolioValueAfter);
-          const accountEquityAfter = Number(trade?.accountEquityAfter);
-          const positionAfter = Number(trade?.positionAfter);
-          const fallbackDate = new Date().toISOString().split("T")[0];
-
-          return {
-            id: Number.isFinite(Number(trade?.id)) ? Number(trade.id) : Date.now() + idx,
-            date: trade?.date || fallbackDate,
-            executedAt: trade?.executedAt || null,
-            asset: String(trade?.asset || "UNKNOWN").toUpperCase(),
-            name: trade?.name || trade?.asset || "UNKNOWN",
-            type: String(trade?.type || "BUY").toUpperCase() === "SELL" ? "SELL" : "BUY",
-            side: String(trade?.side || "").toLowerCase() === "sell" ? "sell" : "buy",
-            marketType: trade?.marketType || "spot",
-            status: trade?.status || "Filled",
-            quantity: Number.isFinite(quantity) ? Math.abs(quantity) : 0,
-            price: Number.isFinite(price) ? price : 0,
-            notional: Number.isFinite(notional) ? notional : 0,
-            balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null,
-            portfolioValueAfter: Number.isFinite(portfolioValueAfter) ? portfolioValueAfter : null,
-            accountEquityAfter: Number.isFinite(accountEquityAfter) ? accountEquityAfter : null,
-            positionAfter: Number.isFinite(positionAfter) ? positionAfter : null
-          };
-        })
-        .filter((trade) => trade.quantity > 0);
+      return parsed.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0);
     } catch {
       return [];
     }
@@ -98,10 +100,33 @@ useEffect(() => {
       .catch((err) => console.error("Failed to load watchlist:", err));
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+    fetch(`${BACKEND_URL}/db/trades?limit=2000`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load trades from backend");
+        return res.json();
+      })
+      .then((data) => {
+        if (!isMounted) return;
+        const backendTrades = Array.isArray(data?.trades)
+          ? data.trades.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0)
+          : [];
+        if (backendTrades.length > 0) {
+          setTrades(backendTrades);
+        }
+      })
+      .catch((err) => console.error("Failed to load trade history:", err));
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
 
   useEffect(() => {
     const persistedTrades = trades.map((trade) => ({
       id: trade.id,
+      clientId: trade.clientId || null,
       date: trade.date,
       executedAt: trade.executedAt || null,
       asset: trade.asset,
@@ -339,11 +364,20 @@ useEffect(() => {
     return "stock";
   };
 
+  const normalizeSymbolKey = (symbol) => String(symbol || "").trim().toUpperCase();
+  const resolveMarketType = (asset) => {
+    if (asset?.marketType) return String(asset.marketType).trim().toLowerCase();
+    return normalizeAssetType(asset) === "crypto" ? "spot" : "equity";
+  };
+
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const normalizedQuantity = Math.max(0, quantity);
   if (normalizedQuantity <= 0) return;
+  const normalizedSymbol = normalizeSymbolKey(asset.symbol);
+  const normalizedMarketType = resolveMarketType(asset);
+  const normalizedAsset = { ...asset, symbol: normalizedSymbol, marketType: normalizedMarketType };
 
-  const tradePrice = Number(asset.price) || 0;
+  const tradePrice = Number(normalizedAsset.price) || 0;
   const notional = tradePrice * normalizedQuantity;
 
   if (orderType === "buy") {
@@ -355,15 +389,15 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   if (orderType === "sell") {
     const holding = portfolio.find(
-      item => item.symbol === asset.symbol &&
-      (item.marketType || "spot") === (asset.marketType || "spot")
+      item => normalizeSymbolKey(item.symbol) === normalizedSymbol &&
+      String(item.marketType || "spot").toLowerCase() === normalizedMarketType
     );
     if (!holding || holding.quantity <= 0) {
-      alert(`You don't hold any ${asset.symbol} to sell.`);
+      alert(`You don't hold any ${normalizedSymbol} to sell.`);
       return;
     }
     if (normalizedQuantity > holding.quantity) {
-      alert(`You can only sell up to ${holding.quantity} ${asset.symbol}.`);
+      alert(`You can only sell up to ${holding.quantity} ${normalizedSymbol}.`);
       return;
     }
   }
@@ -375,8 +409,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   try {
     const holding = {
-      ...asset,
-      type: normalizeAssetType(asset),
+      ...normalizedAsset,
+      type: normalizeAssetType(normalizedAsset),
       quantity: actualQuantity,
       orderType,
       date_added: new Date().toISOString()
@@ -417,7 +451,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       latestHoldings = (data.holdings || []).map((h) => ({
         ...h,
         price: priceMap[h.symbol]?.price ?? h.price ?? tradePrice,
-        priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? asset.priceChangePercent
+        priceChangePercent: priceMap[h.symbol]?.priceChangePercent ?? h.priceChangePercent ?? normalizedAsset.priceChangePercent
       }));
       setPortfolio(latestHoldings);
     } catch (portfolioErr) {
@@ -429,19 +463,23 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       ? latestHoldings.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0)
       : Math.max(0, fallbackPortfolioValue);
     const symbolHolding = latestHoldings?.find(
-      (item) => item.symbol === asset.symbol && (item.marketType || "spot") === (asset.marketType || "spot")
+      (item) =>
+        normalizeSymbolKey(item.symbol) === normalizedSymbol &&
+        String(item.marketType || "spot").toLowerCase() === normalizedMarketType
     );
     const positionAfterRaw = Number(symbolHolding?.quantity);
+    const clientId = `${normalizedSymbol}-${normalizedMarketType}-${Date.now()}`;
 
     const newTrade = {
       id: Date.now(),
+      clientId,
       date: executionDate,
       executedAt: executionTimestamp,
-      asset: asset.symbol,
-      name: asset.name || asset.symbol,
+      asset: normalizedSymbol,
+      name: normalizedAsset.name || normalizedSymbol,
       type: orderType.toUpperCase(),
       side: orderType,
-      marketType: asset.marketType || (asset.type === "crypto" ? "spot" : "equity"),
+      marketType: normalizedMarketType,
       price: tradePrice,
       quantity: normalizedQuantity,
       notional,
@@ -449,10 +487,31 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       balanceAfter: nextBalance,
       portfolioValueAfter,
       accountEquityAfter: nextBalance + portfolioValueAfter,
-      positionAfter: Number.isFinite(positionAfterRaw) ? positionAfterRaw : null
+      positionAfter: Number.isFinite(positionAfterRaw) ? positionAfterRaw : (orderType === "sell" ? 0 : null)
     };
 
     setTrades((prev) => [newTrade, ...prev]);
+    fetch(`${BACKEND_URL}/db/trades`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newTrade)
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((savedTrade) => {
+        const normalizedSaved = normalizeTradeRecord(savedTrade, 0);
+        setTrades((prev) =>
+          prev.map((t) => (t.clientId === normalizedSaved.clientId ? normalizedSaved : t))
+        );
+      })
+      .catch((tradeErr) => {
+        console.error("Failed to persist trade to backend:", tradeErr);
+      });
 
   } catch (err) {
     console.error(`Failed to ${orderType} asset:`, err);
@@ -911,7 +970,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                     ...asset,
                     _forceSell: true,
                     price: asset.price ?? 0,
-                    marketType: asset.marketType || "spot"
+                    marketType: String(asset.marketType || "spot").toLowerCase()
                   };
                   setSelectedAsset(enriched);
                 }}
