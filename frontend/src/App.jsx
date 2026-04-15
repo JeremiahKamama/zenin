@@ -1123,12 +1123,15 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const CEX_OPTIONS = ["Binance", "Bybit", "Kraken", "OKX", "Coinbase Advanced"];
   const DEX_OPTIONS = ["Hyperliquid", "dYdX", "Aevo", "Lyra", "Derive"];
   const BROKER_OPTIONS = ["Interactive Brokers", "Alpaca", "Tradier", "Schwab", "Robinhood"];
+  const PREDICTION_OPTIONS = ["Polymarket", "Kalshi"];
 
   const venueOptions = accountForm.venueType === "cex"
     ? CEX_OPTIONS
     : accountForm.venueType === "dex"
       ? DEX_OPTIONS
-      : BROKER_OPTIONS;
+      : accountForm.venueType === "prediction"
+        ? PREDICTION_OPTIONS
+        : BROKER_OPTIONS;
 
   const openConnectWindow = () => {
     setAccountForm({
@@ -1618,7 +1621,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                       {expandedSettingsPanels["accounts-connected"] && (
                         <div className="settings-panel-body">
                           {connectedAccounts.length === 0 ? (
-                            <p className="settings-meta">No connected CEX, DEX, or brokerage accounts yet.</p>
+                            <p className="settings-meta">No connected CEX, DEX, brokerage, or prediction market accounts yet.</p>
                           ) : (
                             <div className="connected-accounts-list">
                               {connectedAccounts.map((acc) => (
@@ -1743,13 +1746,16 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                             ? CEX_OPTIONS[0]
                             : nextType === "dex"
                               ? DEX_OPTIONS[0]
-                              : BROKER_OPTIONS[0];
+                              : nextType === "prediction"
+                                ? PREDICTION_OPTIONS[0]
+                                : BROKER_OPTIONS[0];
                           setAccountForm((prev) => ({ ...prev, venueType: nextType, provider: nextProvider }));
                         }}
                       >
                         <option value="cex">Crypto Exchange (CEX)</option>
                         <option value="dex">Decentralized Exchange (DEX)</option>
                         <option value="broker">Stock Brokerage</option>
+                        <option value="prediction">Prediction Markets</option>
                       </select>
                     </label>
                     <label className="settings-field">
