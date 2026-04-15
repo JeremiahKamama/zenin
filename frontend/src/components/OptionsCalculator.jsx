@@ -240,10 +240,7 @@ useEffect(() => {
         Options Calculator
       </h2>
 
-      {/* Top row: Symbol + Legs */}
       <div className="options-calculator-layout" style={{ marginBottom: "16px" }}>
-
-        {/* Symbol selector */}
         <div className="options-calculator-side">
           <div className="watchlist-panel glass options-calculator-symbol-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
@@ -258,53 +255,47 @@ useEffect(() => {
                 style={{ width: "100%", padding: "8px 12px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "8px", color: "#f1f5f9", fontSize: "14px", outline: "none" }}
               />
               {showSymbolDropdown && filteredSymbols.length > 0 && (
-                  <div
-                    className="options-calculator-symbol-dropdown"
-                    style={{
-                      position: "absolute",
-                      top: "100%",
-                      left: 0,
-                      right: 0,
-                      background: "#0f172a",
-                      border: "1px solid rgba(148,163,184,0.2)",
-                      borderRadius: "8px",
-                      marginTop: "4px",
-                      zIndex: 50,
-                      maxHeight: "180px",
-                      overflowY: "auto"
-                    }}
-                  >
-                    {filteredSymbols.map((s) => (
-                      <div
-                        className="options-calculator-symbol-option"
-                        key={s}
-                        onClick={() => {
-                          setSymbol(s);
-                          setSymbolSearch(s);
-                          setShowSymbolDropdown(false);
-                          if (onAssetChange) onAssetChange(s);
-                        }}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.background = "rgba(148,163,184,0.08)")
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.background =
-                            s === symbol ? "rgba(56,189,248,0.1)" : "transparent")
-                        }
-                        style={{
-                          padding: "10px 14px",
-                          cursor: "pointer",
-                          fontSize: "14px",
-                          color: s === symbol ? "#38bdf8" : "#f1f5f9",
-                          background:
-                            s === symbol ? "rgba(56,189,248,0.1)" : "transparent"
-                        }}
-                      >
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div
+                  className="options-calculator-symbol-dropdown"
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 0,
+                    right: 0,
+                    background: "#0f172a",
+                    border: "1px solid rgba(148,163,184,0.2)",
+                    borderRadius: "8px",
+                    marginTop: "4px",
+                    zIndex: 50,
+                    maxHeight: "180px",
+                    overflowY: "auto"
+                  }}
+                >
+                  {filteredSymbols.map((s) => (
+                    <div
+                      className="options-calculator-symbol-option"
+                      key={s}
+                      onClick={() => {
+                        setSymbol(s);
+                        setSymbolSearch(s);
+                        setShowSymbolDropdown(false);
+                        if (onAssetChange) onAssetChange(s);
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(148,163,184,0.08)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = s === symbol ? "rgba(56,189,248,0.1)" : "transparent")}
+                      style={{
+                        padding: "10px 14px",
+                        cursor: "pointer",
+                        fontSize: "14px",
+                        color: s === symbol ? "#38bdf8" : "#f1f5f9",
+                        background: s === symbol ? "rgba(56,189,248,0.1)" : "transparent"
+                      }}
+                    >
+                      {s}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="options-calculator-spot-box" style={{ marginTop: "12px", padding: "10px", background: "rgba(56,189,248,0.06)", borderRadius: "8px", border: "1px solid rgba(56,189,248,0.15)" }}>
               <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>
@@ -319,113 +310,135 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Strategy Presets */}
-          <div className="watchlist-panel glass options-calculator-strategy-panel" style={{ padding: "16px", flex: 1 }}>
+          <div className="watchlist-panel glass options-calculator-strategy-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
-              {STRATEGIES.map(s => (
+            <div className="options-calculator-strategy-grid">
+              {STRATEGIES.map((s) => (
                 <button
                   className={`options-calculator-strategy-btn ${activeStrategy === s.name ? "active" : ""}`}
                   key={s.name}
                   onClick={() => applyStrategy(s)}
                   style={{
-                  padding: "8px 12px", textAlign: "left", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px",
-                  background: activeStrategy === s.name ? "rgba(56,189,248,0.12)" : "transparent",
-                  color: activeStrategy === s.name ? "#38bdf8" : "#94a3b8",
-                  borderLeft: activeStrategy === s.name ? "2px solid #38bdf8" : "2px solid transparent",
-                  transition: "all 0.15s"
-                }}
+                    padding: "8px 10px",
+                    textAlign: "left",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    lineHeight: 1.35,
+                    background: activeStrategy === s.name ? "rgba(56,189,248,0.12)" : "transparent",
+                    color: activeStrategy === s.name ? "#38bdf8" : "#94a3b8",
+                    borderLeft: activeStrategy === s.name ? "2px solid #38bdf8" : "2px solid transparent",
+                    transition: "all 0.15s"
+                  }}
                   onMouseEnter={e => { if (activeStrategy !== s.name) { e.currentTarget.style.background = "rgba(148,163,184,0.06)"; e.currentTarget.style.color = "#f1f5f9"; } }}
                   onMouseLeave={e => { if (activeStrategy !== s.name) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#94a3b8"; } }}
-                >{s.name}</button>
+                >
+                  {s.name}
+                </button>
               ))}
             </div>
           </div>
         </div>
 
-
-        {/* Position Legs */}
         <div className="watchlist-panel glass options-calculator-position-panel" style={{ padding: "16px" }}>
-          <><div className="options-calculator-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+          <div className="options-calculator-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
             <p style={{ margin: 0, fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Position Legs</p>
-            <button className="options-calculator-add-leg-btn" onClick={addLeg} style={{
-              display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px",
-              background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)",
-              borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer"
-            }}>
+            <button className="options-calculator-add-leg-btn" onClick={addLeg} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
               <span style={{ fontSize: "16px", lineHeight: 1 }}>+</span> Add Leg
             </button>
-          </div><div className="options-calculator-table-wrap" style={{ overflowX: "auto" }}>
-              <table className="options-calculator-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                    {["Strike", "Expiry", "Type", "Direction", "Qty", "Premium", "IV %", "BS Price", ""].map(h => (
-                      <th key={h} style={{ padding: "6px 8px", color: "#64748b", fontSize: "11px", fontWeight: 600, textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {legs.map((leg, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                      <td style={{ padding: "6px 4px" }}>
-                        <select
-                          value={leg.strike}
-                          onChange={e => {
-                            const strike = e.target.value;
-                            updateLeg(i, "strike", strike);
-                            const iv = getChainIV(strike, leg.type);
-                            const premium = getChainPremium(strike, leg.type);
-                            if (iv) updateLeg(i, "iv", iv);
-                            if (premium) updateLeg(i, "premium", premium);
-                          } }
-                          style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none", maxWidth: "90px" }}
-                        >
-                          <option value="">Strike</option>
-                          {getChainStrikes().map(s => (
-                            <option key={s} value={s}>{s.toLocaleString()}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <input type="date" value={leg.expiry} onChange={e => updateLeg(i, "expiry", e.target.value)}
-                          style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }} />
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <div style={{ display: "flex", gap: "2px" }}>
-                          <button onClick={() => updateLeg(i, "type", "call")} style={btnStyle(leg.type === "call")}>Call</button>
-                          <button onClick={() => updateLeg(i, "type", "put")} style={btnStyle(leg.type === "put")}>Put</button>
-                        </div>
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <div style={{ display: "flex", gap: "2px" }}>
-                          <button onClick={() => updateLeg(i, "direction", "long")} style={btnStyle(leg.direction === "long")}>Long</button>
-                          <button onClick={() => updateLeg(i, "direction", "short")} style={btnStyle(leg.direction === "short")}>Short</button>
-                        </div>
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <input type="number" value={leg.qty} onChange={e => updateLeg(i, "qty", e.target.value)} min="1"
-                          style={{ width: "50px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }} />
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <input type="number" value={leg.premium} onChange={e => updateLeg(i, "premium", e.target.value)} placeholder="0.00"
-                          style={{ width: "70px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }} />
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <input type="number" value={leg.iv} onChange={e => updateLeg(i, "iv", e.target.value)} placeholder="20"
-                          style={{ width: "55px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }} />
-                      </td>
-                      <td style={{ padding: "6px 8px", color: "#38bdf8", fontSize: "12px", fontWeight: 600 }}>
-                        ${greeks[i]?.bsPrice?.toFixed(4) || "—"}
-                      </td>
-                      <td style={{ padding: "6px 4px" }}>
-                        <button onClick={() => removeLeg(i)} style={{ background: "rgba(239,68,68,0.1)", border: "none", color: "#ef4444", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontSize: "12px" }}>✕</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div></>
+          </div>
 
-          {/* Greeks Summary */}
+          <div className="options-calculator-table-wrap" style={{ overflowX: "auto" }}>
+            <table className="options-calculator-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                  {["Strike", "Expiry", "Type", "Direction", "Qty", "Premium", "IV %", "BS Price", ""].map(h => (
+                    <th key={h} style={{ padding: "6px 8px", color: "#64748b", fontSize: "11px", fontWeight: 600, textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {legs.map((leg, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <td style={{ padding: "6px 4px" }}>
+                      <select
+                        value={leg.strike}
+                        onChange={e => {
+                          const strike = e.target.value;
+                          updateLeg(i, "strike", strike);
+                          const iv = getChainIV(strike, leg.type);
+                          const premium = getChainPremium(strike, leg.type);
+                          if (iv) updateLeg(i, "iv", iv);
+                          if (premium) updateLeg(i, "premium", premium);
+                        }}
+                        style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none", maxWidth: "90px" }}
+                      >
+                        <option value="">Strike</option>
+                        {getChainStrikes().map(s => (
+                          <option key={s} value={s}>{s.toLocaleString()}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <input
+                        type="date"
+                        value={leg.expiry}
+                        onChange={e => updateLeg(i, "expiry", e.target.value)}
+                        style={{ padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
+                      />
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <div style={{ display: "flex", gap: "2px" }}>
+                        <button onClick={() => updateLeg(i, "type", "call")} style={btnStyle(leg.type === "call")}>Call</button>
+                        <button onClick={() => updateLeg(i, "type", "put")} style={btnStyle(leg.type === "put")}>Put</button>
+                      </div>
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <div style={{ display: "flex", gap: "2px" }}>
+                        <button onClick={() => updateLeg(i, "direction", "long")} style={btnStyle(leg.direction === "long")}>Long</button>
+                        <button onClick={() => updateLeg(i, "direction", "short")} style={btnStyle(leg.direction === "short")}>Short</button>
+                      </div>
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <input
+                        type="number"
+                        value={leg.qty}
+                        onChange={e => updateLeg(i, "qty", e.target.value)}
+                        min="1"
+                        style={{ width: "50px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
+                      />
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <input
+                        type="number"
+                        value={leg.premium}
+                        onChange={e => updateLeg(i, "premium", e.target.value)}
+                        placeholder="0.00"
+                        style={{ width: "70px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
+                      />
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <input
+                        type="number"
+                        value={leg.iv}
+                        onChange={e => updateLeg(i, "iv", e.target.value)}
+                        placeholder="20"
+                        style={{ width: "55px", padding: "5px 8px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: "6px", color: "#f1f5f9", fontSize: "12px", outline: "none" }}
+                      />
+                    </td>
+                    <td style={{ padding: "6px 8px", color: "#38bdf8", fontSize: "12px", fontWeight: 600 }}>
+                      ${greeks[i]?.bsPrice?.toFixed(4) || "—"}
+                    </td>
+                    <td style={{ padding: "6px 4px" }}>
+                      <button onClick={() => removeLeg(i)} style={{ background: "rgba(239,68,68,0.1)", border: "none", color: "#ef4444", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontSize: "12px" }}>✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
           <div className="options-calculator-greeks-grid" style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
             {[
               { label: "Net P&L", value: `$${totals.pnl.toFixed(2)}`, color: isProfitColor(totals.pnl) },
@@ -441,21 +454,20 @@ useEffect(() => {
             ))}
           </div>
 
-          {/* Save button */}
           <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
-            <button onClick={saveCalculation} style={{
-              padding: "8px 18px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)",
-              borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer"
-            }}>Save Calculation</button>
+            <button onClick={saveCalculation} style={{ padding: "8px 18px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+              Save Calculation
+            </button>
             {saveMsg && <span style={{ fontSize: "12px", color: "#22c55e" }}>{saveMsg}</span>}
           </div>
+        </div>
+      </div>
 
-         {/* P&L Diagram */}
       <div className="watchlist-panel glass options-calculator-pnl-panel" style={{ padding: "20px" }}>
         <div className="options-calculator-pnl-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
             <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>
-            <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>At expiration — underlying price vs profit/loss</p>
+            <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>At expiration - underlying price vs profit/loss</p>
           </div>
           <div className="options-calculator-pnl-stats" style={{ display: "flex", gap: "20px" }}>
             <div style={{ textAlign: "center" }}>
@@ -479,13 +491,13 @@ useEffect(() => {
           </div>
         </div>
         <Chart
-            options={chartOptions}
-            series={[{ name: "P&L", data: pnlData }]}
-            type="area"
-            height={280}
-            width="100%"/>
-        </div>
+          options={chartOptions}
+          series={[{ name: "P&L", data: pnlData }]}
+          type="area"
+          height={280}
+          width="100%"
+        />
       </div>
-  </div>
+    </div>
   );
 }

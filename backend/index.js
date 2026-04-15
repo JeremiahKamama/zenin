@@ -1043,6 +1043,14 @@ const optionsChainCache = new Map();
 const WHALE_CURRENCIES = ["BTC", "ETH", "SOL", "HYPE"];
 const MIN_WHALE_NOTIONAL_USD = 100000;
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 function parseExpiration(instrumentName = "") {
   const parts = String(instrumentName).split("-");
   return parts[1] || "—";
@@ -1087,8 +1095,10 @@ function extractTradesFromPayload(payload) {
   if (Array.isArray(result?.data)) return result.data;
   if (Array.isArray(result?.last_trades)) return result.last_trades;
   if (Array.isArray(result?.items)) return result.items;
+  if (Array.isArray(result?.rows)) return result.rows;
   if (Array.isArray(result)) return result;
   if (Array.isArray(payload?.trades)) return payload.trades;
+  if (Array.isArray(payload?.data)) return payload.data;
   return [];
 }
 
@@ -1186,9 +1196,14 @@ app.post("/api/options/crypto", async (req, res) => {
     const strikesMap = {};
 
     allTickers.forEach(t => {
-      const strike = parseFloat(t?.option_details?.strike);
+      const details = t?.option_details || {};
+      const strike = firstFiniteNumber(
+        details?.strike,
+        t?.strike_price,
+        t?.strike
+      );
       const type = normalizeOptionType(
-        t?.option_details?.option_type || t?.option_type,
+        details?.option_type || t?.option_type || t?.kind,
         t?.instrument_name
       );
 
@@ -1199,13 +1214,34 @@ app.post("/api/options/crypto", async (req, res) => {
       }
 
       const data = {
-        bid: parseFloat(t?.best_bid_price || 0),
-        ask: parseFloat(t?.best_ask_price || 0),
-        delta: parseFloat(t?.greeks?.delta ?? 0),
-        gamma: parseFloat(t?.greeks?.gamma ?? 0),
-        vega: parseFloat(t?.greeks?.vega ?? 0),
-        theta: parseFloat(t?.greeks?.theta ?? 0),
-        iv: parseFloat(t?.iv || 0),
+        bid: firstFiniteNumber(
+          t?.best_bid_price,
+          t?.bid_price,
+          t?.best_bid,
+          t?.bid,
+          t?.bids?.[0]?.price,
+          0
+        ),
+        ask: firstFiniteNumber(
+          t?.best_ask_price,
+          t?.ask_price,
+          t?.best_ask,
+          t?.ask,
+          t?.asks?.[0]?.price,
+          0
+        ),
+        delta: firstFiniteNumber(t?.greeks?.delta, t?.delta, 0),
+        gamma: firstFiniteNumber(t?.greeks?.gamma, t?.gamma, 0),
+        vega: firstFiniteNumber(t?.greeks?.vega, t?.vega, 0),
+        theta: firstFiniteNumber(t?.greeks?.theta, t?.theta, 0),
+        iv: firstFiniteNumber(
+          t?.iv,
+          t?.mark_iv,
+          t?.bid_iv,
+          t?.ask_iv,
+          t?.greeks?.iv,
+          0
+        ),
       };
 
       if (type === "call") strikesMap[strike].call = data;
@@ -1217,7 +1253,7 @@ app.post("/api/options/crypto", async (req, res) => {
       .slice(0, 30);
 
     const avgIv =
-      allTickers.reduce((s, t) => s + parseFloat(t?.iv || 0), 0) /
+      allTickers.reduce((s, t) => s + (firstFiniteNumber(t?.iv, t?.mark_iv, t?.bid_iv, t?.ask_iv, 0) || 0), 0) /
       (allTickers.length || 1);
 
     const referenceTicker = allTickers.find(Boolean) || null;
@@ -1261,28 +1297,18 @@ app.post("/api/options/crypto", async (req, res) => {
   }
 });
 
-app.get("/api/options/whale-trades", async (_req, res) => {
+app.get("/api/options/whale-trades", async (req, res) => {
   try {
-    const settled = await Promise.allSettled(
-      WHALE_CURRENCIES.map((currency) =>
-        safePost("/public/get_last_trades_by_currency", {
-          currency,
-          kind: "option",
-          count: 100,
-          include_old: true
-        })
-      )
-    );
+    const requestedMinNotional = Number(req.query?.minNotional);
+    const minNotionalUsd = Number.isFinite(requestedMinNotional) && requestedMinNotional > 0
+      ? requestedMinNotional
+      : MIN_WHALE_NOTIONAL_USD;
 
     const merged = [];
     const debugRawTradeCounts = Object.fromEntries(WHALE_CURRENCIES.map((currency) => [currency, 0]));
-    settled.forEach((result, idx) => {
-      const currency = WHALE_CURRENCIES[idx];
-      if (result.status !== "fulfilled") return;
-      const payload = result.value;
-      const trades = extractTradesFromPayload(payload);
-      debugRawTradeCounts[currency] = trades.length;
+    const debugFallbackTradeCounts = Object.fromEntries(WHALE_CURRENCIES.map((currency) => [currency, 0]));
 
+    const addTrades = (trades, currency) => {
       trades.forEach((trade) => {
         const instrument = String(trade.instrument_name || "");
         const symbol = instrument.split("-")[0] || currency;
@@ -1305,9 +1331,64 @@ app.get("/api/options/whale-trades", async (_req, res) => {
           timestamp: Number(trade.timestamp || 0)
         });
       });
+    };
+
+    const settled = await Promise.allSettled(
+      WHALE_CURRENCIES.map((currency) =>
+        safePost("/public/get_last_trades_by_currency", {
+          currency,
+          kind: "option",
+          count: 200
+        })
+      )
+    );
+
+    settled.forEach((result, idx) => {
+      const currency = WHALE_CURRENCIES[idx];
+      if (result.status !== "fulfilled") return;
+      const payload = result.value;
+      const trades = extractTradesFromPayload(payload);
+      debugRawTradeCounts[currency] = trades.length;
+      addTrades(trades, currency);
     });
 
-    const whaleFiltered = merged.filter((t) => Number.isFinite(t.totalNotional) && t.totalNotional >= MIN_WHALE_NOTIONAL_USD);
+    if (!merged.length) {
+      for (const currency of WHALE_CURRENCIES) {
+        try {
+          const instrumentsPayload = await safePost("/public/get_instruments", {
+            currency,
+            instrument_type: "option",
+            expired: false
+          });
+          const instruments = Array.isArray(instrumentsPayload?.result) ? instrumentsPayload.result : [];
+          const nearTerm = instruments
+            .slice()
+            .sort((a, b) => Number(a?.option_details?.expiry || 0) - Number(b?.option_details?.expiry || 0))
+            .slice(0, 14);
+
+          const perInstrument = await Promise.allSettled(
+            nearTerm.map((instrument) =>
+              safePost("/public/get_last_trades_by_instrument", {
+                instrument_name: instrument?.instrument_name,
+                count: 20,
+                include_old: true
+              })
+            )
+          );
+
+          perInstrument.forEach((result) => {
+            if (result.status !== "fulfilled") return;
+            const trades = extractTradesFromPayload(result.value);
+            debugFallbackTradeCounts[currency] += trades.length;
+            addTrades(trades, currency);
+          });
+        } catch (fallbackError) {
+          console.warn(`Whale fallback failed for ${currency}:`, fallbackError.message);
+        }
+      }
+    }
+
+    const whaleFiltered = merged.filter((t) => Number.isFinite(t.totalNotional) && t.totalNotional >= minNotionalUsd);
     const source = whaleFiltered.length > 0 ? whaleFiltered : merged
       .sort((a, b) => b.totalNotional - a.totalNotional)
       .slice(0, 80);
@@ -1320,8 +1401,9 @@ app.get("/api/options/whale-trades", async (_req, res) => {
 
     res.json({
       updatedAt: new Date().toISOString(),
-      minNotionalUsd: MIN_WHALE_NOTIONAL_USD,
+      minNotionalUsd,
       debug_raw_trade_counts: debugRawTradeCounts,
+      debug_fallback_trade_counts: debugFallbackTradeCounts,
       trades
     });
   } catch (error) {

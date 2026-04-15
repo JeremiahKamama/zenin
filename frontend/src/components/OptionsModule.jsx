@@ -19,6 +19,7 @@ export function OptionsModule() {
   const [whaleLoading, setWhaleLoading] = useState(false);
   const [whaleError, setWhaleError] = useState("");
   const [whalePage, setWhalePage] = useState(1);
+  const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
 
  useEffect(() => {
   // fallback assets (Derive supports these)
@@ -156,7 +157,8 @@ useEffect(() => {
     setWhaleLoading(true);
     setWhaleError("");
     try {
-      const res = await fetch(`${BACKEND_URL}/options/whale-trades`);
+      const params = new URLSearchParams({ minNotional: String(whaleMinNotional) });
+      const res = await fetch(`${BACKEND_URL}/options/whale-trades?${params.toString()}`);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`HTTP ${res.status}: ${text}`);
@@ -164,6 +166,7 @@ useEffect(() => {
       const data = await res.json();
       if (!isMounted) return;
       setWhaleTrades(Array.isArray(data?.trades) ? data.trades : []);
+      setWhalePage(1);
     } catch (err) {
       if (!isMounted) return;
       setWhaleError("Unable to load whale options trades.");
@@ -179,7 +182,7 @@ useEffect(() => {
     isMounted = false;
     clearInterval(interval);
   };
-}, []);
+}, [whaleMinNotional]);
 
   const whalePageSize = 10;
   const whaleTotalPages = Math.max(1, Math.ceil(whaleTrades.length / whalePageSize));
@@ -210,6 +213,11 @@ useEffect(() => {
     return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : "-";
   };
 
+  const formatOptionPx = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? `$${n.toFixed(4)}` : "-";
+  };
+
   const formatDate = (ts) => {
     if (!ts) return "";
     return new Date(ts * 1000).toLocaleDateString(undefined, {
@@ -217,6 +225,14 @@ useEffect(() => {
       day: 'numeric'
     }).toUpperCase();
   };
+
+  const whaleThresholdOptions = [
+    { label: "Above $100K", value: 100000 },
+    { label: "Above $250K", value: 250000 },
+    { label: "Above $500K", value: 500000 },
+    { label: "Above $750K", value: 750000 },
+    { label: "Above $1M", value: 1000000 }
+  ];
 
   return (
     <div className="view-container options-terminal">
@@ -278,6 +294,11 @@ useEffect(() => {
               <table className="option-chain-table">
                 <thead>
                   <tr>
+                    <th colSpan="4" style={{ textAlign: "left", color: "#67e8f9" }}>Calls</th>
+                    <th className="strike-col" />
+                    <th colSpan="4" style={{ textAlign: "right", color: "#fca5a5" }}>Puts</th>
+                  </tr>
+                  <tr>
                     <th>IV</th>
                     <th>Delta</th>
                     <th>Bid</th>
@@ -286,7 +307,7 @@ useEffect(() => {
                     <th>Bid</th>
                     <th>Ask</th>
                     <th>Delta</th>
-                    <th>Theta</th>
+                    <th>IV</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -294,13 +315,13 @@ useEffect(() => {
                     <tr key={row.strike}>
                       <td className="greek">{formatIv(row.call?.iv)}</td>
                       <td className="greek">{formatGreek(row.call?.delta, 3)}</td>
-                      <td className="bid-ask positive">{row.call?.bid > 0 ? `$${row.call.bid.toFixed(4)}` : "-"}</td>
-                      <td className="bid-ask positive">{row.call?.ask > 0 ? `$${row.call.ask.toFixed(4)}` : "-"}</td>
-                      <td className="strike-col">{row.strike.toLocaleString()}</td>
-                      <td className="bid-ask negative">{row.put?.bid > 0 ? `$${row.put.bid.toFixed(4)}` : "-"}</td>
-                      <td className="bid-ask negative">{row.put?.ask > 0 ? `$${row.put.ask.toFixed(4)}` : "-"}</td>
+                      <td className="bid-ask positive">{formatOptionPx(row.call?.bid)}</td>
+                      <td className="bid-ask positive">{formatOptionPx(row.call?.ask)}</td>
+                      <td className="strike-col">{Number(row.strike || 0).toLocaleString()}</td>
+                      <td className="bid-ask negative">{formatOptionPx(row.put?.bid)}</td>
+                      <td className="bid-ask negative">{formatOptionPx(row.put?.ask)}</td>
                       <td className="greek">{formatGreek(row.put?.delta, 3)}</td>
-                      <td className="greek">{formatGreek(row.put?.theta, 4)}</td>
+                      <td className="greek">{formatIv(row.put?.iv)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -319,6 +340,16 @@ useEffect(() => {
           <div className="header-left">
             <h2>Whale Options Trades <span className="live-pill">Live</span></h2>
             <div className="asset-count">BTC / ETH / SOL / HYPE</div>
+          </div>
+          <div className="asset-dropdown-container">
+            <select
+              value={whaleMinNotional}
+              onChange={(e) => setWhaleMinNotional(Number(e.target.value) || 100000)}
+            >
+              {whaleThresholdOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
         </div>
 

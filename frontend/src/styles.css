@@ -2986,8 +2986,9 @@ button {
 
 .options-calculator-layout {
   display: grid;
-  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
   gap: 16px;
+  align-items: start;
 }
 
 .options-calculator-side {
@@ -3001,6 +3002,16 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.options-calculator-strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
 }
 
 .options-calculator-strategy-btn {
@@ -3118,6 +3129,10 @@ button {
 
   .options-calculator-layout {
     grid-template-columns: 1fr;
+  }
+
+  .options-calculator-strategy-grid {
+    max-height: 220px;
   }
 
   .options-calculator-greeks-grid {
