@@ -606,6 +606,53 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
+app.get("/api/earnings", async (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+
+  const safeSymbol = symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+
+  return new Promise((resolve) => {
+    const child = spawn("python3", ["fetch_earnings.py"], { cwd: __dirname });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+    child.on("close", (code) => {
+      if (stderr) console.error("Earnings stderr:", stderr);
+      if (code !== 0) {
+        res.status(502).json({ error: "Failed to fetch earnings" });
+        resolve();
+        return;
+      }
+      try {
+        const result = JSON.parse(stdout);
+        res.json(result);
+      } catch {
+        res.status(502).json({ error: "Failed to parse earnings data" });
+      }
+      resolve();
+    });
+
+    child.on("error", (err) => {
+      console.error("Failed to start earnings process:", err);
+      res.status(502).json({ error: err.message });
+      resolve();
+    });
+
+    child.stdin.write(JSON.stringify({ symbol: safeSymbol }));
+    child.stdin.end();
+
+    setTimeout(() => {
+      child.kill();
+      res.status(504).json({ error: "Earnings fetch timed out" });
+      resolve();
+    }, 20000);
+  });
+});
+
 app.get("/api/watchlist", async (req, res) => {
   const { category } = req.query;
 

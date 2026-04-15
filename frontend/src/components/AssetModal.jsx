@@ -17,9 +17,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 // ✅ ADD THIS (missing state causing crash)
 const [chartType, setChartType] = useState("line");
 
-const [orderType, setOrderType] = useState(() =>
-  asset?._forceSell ? "sell" : "buy"
-);
 
 const [quantity, setQuantity] = useState(() =>  {
     if (!asset?._forceSell) return 1;
