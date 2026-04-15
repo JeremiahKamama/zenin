@@ -8,6 +8,7 @@ export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
   const [spotPrices, setSpotPrices] = useState({});
+  const [spotSources, setSpotSources] = useState({});
   const [activeExpiry, setActiveExpiry] = useState(null);
   const [allAssets, setAllAssets] = useState(["BTC", "ETH", "SOL"]);
   const [chain, setChain] = useState([]);
@@ -30,6 +31,22 @@ export function OptionsModule() {
 
 useEffect(() => {
   let isMounted = true; // prevent state update after unmount
+
+  const getHyperliquidFallbackSpot = async (assetSymbol) => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/crypto-market`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const rows = Array.isArray(data?.assets) ? data.assets : [];
+      const match = rows.find(
+        (row) => String(row?.symbol || "").toUpperCase() === String(assetSymbol || "").toUpperCase()
+      );
+      const price = Number(match?.price);
+      return Number.isFinite(price) && price > 0 ? price : null;
+    } catch {
+      return null;
+    }
+  };
 
   const fetchChain = async () => {
       setLoading(true);
@@ -61,10 +78,26 @@ useEffect(() => {
         }
 
         setChain(data.chain);
-        setSpotPrices(prev => ({
-          ...prev,
-          [activeAsset]: data.market_price || data.spot || 0
-        }));
+        const lyraSpot = Number(data?.market_price ?? data?.spot);
+        if (Number.isFinite(lyraSpot) && lyraSpot > 0) {
+          setSpotPrices((prev) => ({
+            ...prev,
+            [activeAsset]: lyraSpot
+          }));
+          setSpotSources((prev) => ({ ...prev, [activeAsset]: "lyra" }));
+        } else {
+          const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
+          if (!isMounted) return;
+          if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
+            setSpotPrices((prev) => ({
+              ...prev,
+              [activeAsset]: fallbackSpot
+            }));
+            setSpotSources((prev) => ({ ...prev, [activeAsset]: "hyperliquid" }));
+          } else {
+            setSpotSources((prev) => ({ ...prev, [activeAsset]: "unavailable" }));
+          }
+        }
 
         setMetrics({
           iv: parseFloat(data?.market_metrics?.iv) || 0.42,
@@ -83,6 +116,17 @@ useEffect(() => {
       console.error("Error fetching crypto options:", err);
       if (isMounted) {
         setOptionsError("Live options feed is temporarily unavailable. Showing last known data.");
+        const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
+        if (!isMounted) return;
+        if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
+          setSpotPrices((prev) => ({
+            ...prev,
+            [activeAsset]: fallbackSpot
+          }));
+          setSpotSources((prev) => ({ ...prev, [activeAsset]: "hyperliquid" }));
+        } else {
+          setSpotSources((prev) => ({ ...prev, [activeAsset]: "unavailable" }));
+        }
       }
     } finally {
       setLoading(false);
@@ -335,6 +379,7 @@ useEffect(() => {
       </div>
       <OptionsCalculator
         spotPrice={spotPrices[activeAsset]}
+        spotSource={spotSources[activeAsset]}
         assets={allAssets}
         chainData={chain}
         activeAsset={activeAsset}

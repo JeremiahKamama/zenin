@@ -48,6 +48,7 @@ function blackScholes(S, K, T, r, sigma, type) {
 }
 
 export function OptionsCalculator({   spotPrice = 0,
+  spotSource = "unavailable",
   chainData = [],
   activeAsset,
   assets = [],
@@ -63,18 +64,20 @@ useEffect(() => {
   const [activeStrategy, setActiveStrategy] = useState(null);
   const [savedCalculations, setSavedCalculations] = useState([]);
   const [saveMsg, setSaveMsg] = useState("");
-  const filteredChainData = chainData.filter(
-  row => row.symbol === symbol
-);
-  const DEFAULT_SPOTS = {
-  BTC: 80000,
-  ETH: 4000,
-  SOL: 150,
-};
-const effectiveSpot = Number(spotPrice) > 0
-  ? Number(spotPrice)
-  : (DEFAULT_SPOTS[symbol] || 50000);
-  const S = effectiveSpot;
+  const filteredChainData = Array.isArray(chainData) ? chainData : [];
+  const deriveSpotFromChain = () => {
+    const strikes = filteredChainData
+      .map((row) => Number(row?.strike))
+      .filter((val) => Number.isFinite(val) && val > 0)
+      .sort((a, b) => a - b);
+    if (!strikes.length) return null;
+    return strikes[Math.floor(strikes.length / 2)];
+  };
+  const derivedSpot = deriveSpotFromChain();
+  const effectiveSpot = Number(spotPrice) > 0
+    ? Number(spotPrice)
+    : (Number.isFinite(derivedSpot) ? Number(derivedSpot) : null);
+  const S = Number.isFinite(effectiveSpot) && effectiveSpot > 0 ? effectiveSpot : 1;
   const r = 0.0425;
 
   useEffect(() => {
@@ -107,7 +110,8 @@ const effectiveSpot = Number(spotPrice) > 0
   );
   if (!row) return "";
   const side = type === "call" ? row.call : row.put;
-  return side?.mark_price ? side.mark_price.toFixed(4) : "";
+  const mid = ((Number(side?.bid) || 0) + (Number(side?.ask) || 0)) / 2;
+  return Number.isFinite(mid) && mid > 0 ? mid.toFixed(4) : "";
 };
   
   const addLeg = () => setLegs(prev => [...prev, { ...EMPTY_LEG }]);
@@ -303,8 +307,15 @@ const effectiveSpot = Number(spotPrice) > 0
                 )}
             </div>
             <div className="options-calculator-spot-box" style={{ marginTop: "12px", padding: "10px", background: "rgba(56,189,248,0.06)", borderRadius: "8px", border: "1px solid rgba(56,189,248,0.15)" }}>
-              <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>Spot Price</p>
-              <p className="options-calculator-spot-value" style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "#38bdf8" }}>${S.toLocaleString()}</p>
+              <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>
+                Last Available Price
+              </p>
+              <p className="options-calculator-spot-value" style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "#38bdf8" }}>
+                {Number.isFinite(effectiveSpot) && effectiveSpot > 0 ? `$${effectiveSpot.toLocaleString()}` : "Unavailable"}
+              </p>
+              <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#64748b" }}>
+                Source: {spotSource === "lyra" ? "Lyra" : spotSource === "hyperliquid" ? "Hyperliquid (fallback)" : "Unavailable"}
+              </p>
             </div>
           </div>
 
