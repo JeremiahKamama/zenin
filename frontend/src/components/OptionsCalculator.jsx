@@ -500,6 +500,6 @@ const effectiveSpot = useMemo(() => {
             height={280}
             width="100%"/>
         </div>  
-}
+
 
 
