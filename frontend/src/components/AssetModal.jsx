@@ -5,9 +5,14 @@ const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 
 export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, portfolio = [], balance = 0 }) {
-const [history, setHistory] = useState([]);
-const [loading, setLoading] = useState(true);
-const [activeInterval, setActiveInterval] = useState("1D");
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeInterval, setActiveInterval] = useState("1D");
+  const [orderType, setOrderType] = useState(() => asset?._forceSell ? "sell" : "buy");
+  const [earnings, setEarnings] = useState(null);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+
+  const isTradFi = asset && asset.type !== "crypto" && !asset.marketType;
 
 // ✅ ADD THIS (missing state causing crash)
 const [chartType, setChartType] = useState("line");
@@ -27,10 +32,24 @@ const [quantity, setQuantity] = useState(() =>  {
 
   const [performanceMap, setPerformanceMap] = useState({});
 
-  useEffect(() => {
+useEffect(() => {
     fetchHistory();
     fetchPerformance();
+    if (isTradFi) fetchEarnings();
   }, [activeInterval, asset]);
+
+  const fetchEarnings = async () => {
+    setEarningsLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/earnings?symbol=${encodeURIComponent(asset.symbol)}`);
+      const data = await res.json();
+      if (!data.error) setEarnings(data);
+    } catch (err) {
+      console.error("Failed to fetch earnings:", err);
+    } finally {
+      setEarningsLoading(false);
+    }
+  };
 
   const fetchHistory = async () => {
     setLoading(true);
@@ -220,6 +239,88 @@ const [quantity, setQuantity] = useState(() =>  {
               })}
             </div>
           </div>
+
+{isTradFi && (
+            <div style={{ padding: "0 32px 16px" }}>
+              {earningsLoading ? (
+                <div style={{ fontSize: "12px", color: "#64748b", textAlign: "center", padding: "8px" }}>
+                  Loading fundamentals...
+                </div>
+              ) : earnings ? (
+                <div style={{ border: "1px solid rgba(148,163,184,0.12)", borderRadius: "10px", overflow: "hidden" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                    <thead>
+                      <tr style={{ background: "rgba(148,163,184,0.06)" }}>
+                        <th style={{ padding: "8px 12px", textAlign: "left", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Metric</th>
+                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Consensus</th>
+                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Previous</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>EPS</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
+                          {earnings.eps?.consensus != null ? `$${Number(earnings.eps.consensus).toFixed(2)}` : "—"}
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8" }}>
+                          {earnings.eps?.previous != null ? `$${Number(earnings.eps.previous).toFixed(2)}` : "—"}
+                        </td>
+                      </tr>
+                      <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Revenue</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
+                          {earnings.revenue?.consensus != null
+                            ? `$${(Number(earnings.revenue.consensus) / 1e9).toFixed(2)}B`
+                            : "—"}
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8" }}>
+                          {earnings.revenue?.previous != null
+                            ? `$${(Number(earnings.revenue.previous) / 1e9).toFixed(2)}B`
+                            : "—"}
+                        </td>
+                      </tr>
+                      <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Market Cap</td>
+                        <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
+                          {earnings.marketCap != null
+                            ? earnings.marketCap >= 1e12
+                              ? `$${(earnings.marketCap / 1e12).toFixed(2)}T`
+                              : `$${(earnings.marketCap / 1e9).toFixed(2)}B`
+                            : "—"}
+                        </td>
+                      </tr>
+                      {earnings.targetPrice != null && (
+                        <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
+                          <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Analyst Target</td>
+                          <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right" }}>
+                            <span style={{ color: "#38bdf8", fontWeight: 600 }}>${Number(earnings.targetPrice).toFixed(2)}</span>
+                            {earnings.analystRating && (
+                              <span style={{
+                                marginLeft: "8px", fontSize: "10px", padding: "2px 6px", borderRadius: "4px", fontWeight: 700, textTransform: "uppercase",
+                                background: earnings.analystRating.includes("buy") ? "rgba(34,197,94,0.15)" : earnings.analystRating.includes("sell") ? "rgba(239,68,68,0.15)" : "rgba(148,163,184,0.1)",
+                                color: earnings.analystRating.includes("buy") ? "#22c55e" : earnings.analystRating.includes("sell") ? "#ef4444" : "#94a3b8"
+                              }}>
+                                {earnings.analystRating.replace(/_/g, " ")}
+                                {earnings.analystCount ? ` (${earnings.analystCount})` : ""}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      {earnings.nextEarnings && (
+                        <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
+                          <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Next Earnings</td>
+                          <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 600, fontSize: "11px" }}>
+                            {earnings.nextEarnings}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          )}
 
           <div className="order-type-toggle">
             <button className={`buy-selector ${orderType === 'buy' ? 'active' : ''}`} onClick={() => setOrderType('buy')}>Buy</button>
