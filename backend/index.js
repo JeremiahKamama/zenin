@@ -875,6 +875,36 @@ const deriveClient = axios.create({
 // Keep a small in-memory cache to serve stale data when Derive is temporarily unavailable.
 const optionsChainCache = new Map();
 
+const WHALE_CURRENCIES = ["BTC", "ETH", "SOL", "HYPE"];
+const MIN_WHALE_NOTIONAL_USD = 100000;
+
+function parseExpiration(instrumentName = "") {
+  const parts = String(instrumentName).split("-");
+  return parts[1] || "—";
+}
+
+function parseOptionType(instrumentName = "") {
+  const parts = String(instrumentName).split("-");
+  const side = parts[parts.length - 1];
+  return side === "C" ? "call" : side === "P" ? "put" : null;
+}
+
+function deriveStrategy(direction, optionType) {
+  if (optionType === "call") return direction === "buy" ? "Long Call" : "Short Call";
+  if (optionType === "put") return direction === "buy" ? "Long Put" : "Short Put";
+  return "Option Trade";
+}
+
+function computeTradeNotionalUsd(trade = {}) {
+  const amount = Number(trade.amount || trade.contracts || trade.size || 0);
+  const optionPrice = Number(trade.price || trade.mark_price || 0);
+  const refPrice = Number(trade.index_price || trade.underlying_price || trade.mark_price || 0);
+
+  if (amount <= 0 || refPrice <= 0) return 0;
+  if (optionPrice > 0) return amount * optionPrice * refPrice;
+  return amount * refPrice;
+}
+
 // Retry wrapper
 async function safePost(url, body, retries = 2) {
   try {
@@ -1027,6 +1057,72 @@ app.post("/api/options/crypto", async (req, res) => {
     res.status(502).json({
       error: "Failed to fetch options: fetch failed"
     });
+  }
+});
+
+app.get("/api/options/whale-trades", async (_req, res) => {
+  try {
+    const settled = await Promise.allSettled(
+      WHALE_CURRENCIES.map((currency) =>
+        safePost("/public/get_last_trades_by_currency", {
+          currency,
+          kind: "option",
+          count: 100,
+          include_old: true
+        })
+      )
+    );
+
+    const merged = [];
+    settled.forEach((result, idx) => {
+      const currency = WHALE_CURRENCIES[idx];
+      if (result.status !== "fulfilled") return;
+      const payload = result.value;
+      const trades = Array.isArray(payload?.result?.trades)
+        ? payload.result.trades
+        : Array.isArray(payload?.result)
+          ? payload.result
+          : [];
+
+      trades.forEach((trade) => {
+        const instrument = String(trade.instrument_name || "");
+        const symbol = instrument.split("-")[0] || currency;
+        const expiration = parseExpiration(instrument);
+        const referencePrice = Number(trade.index_price || trade.underlying_price || 0);
+        const direction = String(trade.direction || "buy").toLowerCase() === "sell" ? "sell" : "buy";
+        const optionType = parseOptionType(instrument);
+        const strategy = deriveStrategy(direction, optionType);
+        const totalNotional = computeTradeNotionalUsd(trade);
+
+        merged.push({
+          id: `${trade.trade_id || instrument}-${trade.timestamp || Date.now()}`,
+          symbol,
+          expiration,
+          referencePrice: Number.isFinite(referencePrice) ? referencePrice : 0,
+          strategy,
+          totalNotional: Number.isFinite(totalNotional) ? totalNotional : 0,
+          timestamp: Number(trade.timestamp || 0)
+        });
+      });
+    });
+
+    const whaleFiltered = merged.filter((t) => t.totalNotional >= MIN_WHALE_NOTIONAL_USD);
+    const source = whaleFiltered.length > 0 ? whaleFiltered : merged
+      .sort((a, b) => b.totalNotional - a.totalNotional)
+      .slice(0, 80);
+
+    const trades = source
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 100);
+
+    res.json({
+      updatedAt: new Date().toISOString(),
+      minNotionalUsd: MIN_WHALE_NOTIONAL_USD,
+      trades
+    });
+  } catch (error) {
+    console.error("Whale options fetch failed:", error.message);
+    res.status(502).json({ error: "Failed to fetch whale options trades" });
   }
 });
 

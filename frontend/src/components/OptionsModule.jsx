@@ -14,6 +14,10 @@ export function OptionsModule() {
   const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState("");
+  const [whaleTrades, setWhaleTrades] = useState([]);
+  const [whaleLoading, setWhaleLoading] = useState(false);
+  const [whaleError, setWhaleError] = useState("");
+  const [whalePage, setWhalePage] = useState(1);
 
  useEffect(() => {
   // fallback assets (Derive supports these)
@@ -96,6 +100,58 @@ useEffect(() => {
   };
 
 }, [activeAsset, activeExpiry]);
+
+useEffect(() => {
+  let isMounted = true;
+
+  const fetchWhaleTrades = async () => {
+    if (!isMounted) return;
+    setWhaleLoading(true);
+    setWhaleError("");
+    try {
+      const res = await fetch(`${BACKEND_URL}/options/whale-trades`);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+      const data = await res.json();
+      if (!isMounted) return;
+      setWhaleTrades(Array.isArray(data?.trades) ? data.trades : []);
+    } catch (err) {
+      if (!isMounted) return;
+      setWhaleError("Unable to load whale options trades.");
+    } finally {
+      if (isMounted) setWhaleLoading(false);
+    }
+  };
+
+  fetchWhaleTrades();
+  const interval = setInterval(fetchWhaleTrades, 120000); // every 2 minutes
+
+  return () => {
+    isMounted = false;
+    clearInterval(interval);
+  };
+}, []);
+
+  const whalePageSize = 10;
+  const whaleTotalPages = Math.max(1, Math.ceil(whaleTrades.length / whalePageSize));
+  const pagedWhaleTrades = whaleTrades.slice(
+    (whalePage - 1) * whalePageSize,
+    whalePage * whalePageSize
+  );
+
+  useEffect(() => {
+    if (whalePage > whaleTotalPages) setWhalePage(whaleTotalPages);
+  }, [whalePage, whaleTotalPages]);
+
+  const formatDollar = (value) => {
+    const n = Number(value || 0);
+    if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+    if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+    if (n >= 1e3) return `$${(n / 1e3).toFixed(2)}K`;
+    return `$${n.toFixed(2)}`;
+  };
 
 useEffect(() => {
   if (!WS_URL) return undefined;
@@ -229,6 +285,68 @@ useEffect(() => {
               {optionsError}
             </div>
           )}
+      </div>
+
+      <div className="watchlist-panel glass" style={{ marginTop: "16px", padding: "16px" }}>
+        <div className="section-header" style={{ marginBottom: "10px" }}>
+          <div className="header-left">
+            <h2>Whale Options Trades <span className="live-pill">Live</span></h2>
+            <div className="asset-count">BTC / ETH / SOL / HYPE</div>
+          </div>
+        </div>
+
+        {whaleLoading ? (
+          <div className="loading-state">Loading whale options trades...</div>
+        ) : whaleError ? (
+          <div className="loading-state">{whaleError}</div>
+        ) : pagedWhaleTrades.length === 0 ? (
+          <div className="loading-state">No whale options trades available.</div>
+        ) : (
+          <table className="option-chain-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Expiration</th>
+                <th>Reference Price</th>
+                <th>Strategy</th>
+                <th>Total Notional</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pagedWhaleTrades.map((trade) => (
+                <tr key={trade.id}>
+                  <td className="greek">{trade.symbol}</td>
+                  <td className="greek">{trade.expiration || "—"}</td>
+                  <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>
+                  <td className="greek">{trade.strategy}</td>
+                  <td className="bid-ask positive">{formatDollar(trade.totalNotional)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {whaleTotalPages > 1 && (
+          <div className="pagination-controls" style={{ marginTop: "10px" }}>
+            <button
+              className="pagination-button"
+              disabled={whalePage === 1}
+              onClick={() => setWhalePage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </button>
+            <div className="pagination-label">
+              Page {whalePage} of {whaleTotalPages}
+            </div>
+            <button
+              className="pagination-button"
+              disabled={whalePage === whaleTotalPages}
+              onClick={() => setWhalePage((p) => Math.min(whaleTotalPages, p + 1))}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
       <OptionsCalculator
         spotPrice={spotPrices[activeAsset]}

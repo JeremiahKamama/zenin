@@ -205,6 +205,18 @@ useEffect(() => {
     if (category !== "stocks") setActiveTheme("Robotics");
   };
 
+  const normalizeAssetType = (asset) => {
+    const raw = String(asset?.type || "").toLowerCase();
+    if (["stock", "stocks", "equity"].includes(raw)) return "stock";
+    if (raw === "crypto") return "crypto";
+    if (raw === "bond") return "bond";
+    if (["commodity", "commodities", "metal", "metals"].includes(raw)) return "commodity";
+    if (["etf", "etfs"].includes(raw)) return "etf";
+    if (asset?.marketType) return "crypto";
+    if (asset?.theme || asset?.category) return "stock";
+    return "stock";
+  };
+
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const normalizedQuantity = Math.max(0, quantity);
   if (normalizedQuantity <= 0) return;
@@ -251,6 +263,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   try {
     const holding = {
       ...asset,
+      type: normalizeAssetType(asset),
       quantity: actualQuantity,
       orderType,
       date_added: new Date().toISOString()
@@ -262,7 +275,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       body: JSON.stringify(holding)
     });
 
-    if (!response.ok) throw new Error(`Failed to ${orderType} asset`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to ${orderType} asset: ${text}`);
+    }
 
     // Update balance
     if (orderType === "buy") {
@@ -352,7 +368,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const payload = {
       symbol: asset.symbol,
       name: asset.name,
-      type: asset.type || asset.theme || "stock",
+      type: normalizeAssetType(asset),
       marketType: mt,
       date_added: new Date().toISOString(),
     };
