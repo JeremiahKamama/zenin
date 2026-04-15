@@ -133,10 +133,14 @@ export function PredictionMarketModule() {
   };
 
   const selectedCategoryMarkets = Array.isArray(predictionMarketsByCategory?.[activeCategory])
-    ? [...predictionMarketsByCategory[activeCategory]]
-        .sort((a, b) => Number(b?.volume || 0) - Number(a?.volume || 0))
-        .slice(0, 5)
+    ? predictionMarketsByCategory[activeCategory].slice(0, 5)
     : [];
+
+  const formatProbability = (price) => {
+    const n = Number(price);
+    if (!Number.isFinite(n)) return "—";
+    return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+  };
 
   return (
     <div className="view-container prediction-terminal">
@@ -144,7 +148,7 @@ export function PredictionMarketModule() {
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Prediction Markets</h2>
-            <div className="asset-count">Top 5 markets by lifetime volume in selected category · refreshes every 6 hours</div>
+            <div className="asset-count">Top 5 by importance (volume + trending + recent) · refreshes every 6 hours</div>
           </div>
           <div className="asset-count">
             {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
@@ -184,7 +188,11 @@ export function PredictionMarketModule() {
                     <div className="prediction-market-title">{market.question}</div>
                     <div className="prediction-market-meta">
                       <span>{formatDollar(market.volume)} volume</span>
-                      <span>Ends {formatDateLabel(market.endDate)}</span>
+                      <span>{formatDollar(market.volume24h)} recent</span>
+                      <span>{formatPercent(market.oneWeekPriceChange || 0)} trend</span>
+                      <span>
+                        Ends {formatDateLabel(market.endDate)} · {formatProbability(market.yesPrice)} {market.yesLabel || "Yes"}
+                      </span>
                     </div>
                   </button>
                 ))}

@@ -978,6 +978,16 @@ app.get("/api/watchlist", async (req, res) => {
     }
   }
 
+  if (key === "indicators") {
+    const indicatorAssets = (watchlistData[key] || []).map((asset) => ({
+      ...asset,
+      type: "indicator",
+      price: null,
+      priceChangePercent: null
+    }));
+    return res.json({ category: key, assets: indicatorAssets });
+  }
+
   const baseAssets = watchlistData[key] || [];
 
   const allDbAssets = await watchlist.getAll();
@@ -1124,7 +1134,12 @@ const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 const PREDICTION_REFRESH_MS = 6 * 60 * 60 * 1000; // 6 hours
 const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "fintech", "tech", "finance"];
 const predictionSnapshotCache = new Map();
-const EODHD_API_TOKEN = String(process.env.EODHD_API_TOKEN || "").trim();
+const EODHD_API_TOKEN = String(
+  process.env.EODHD_API_TOKEN ||
+  process.env.EODHD_API_KEY ||
+  process.env.EODHD_TOKEN ||
+  ""
+).trim().replace(/^,+|,+$/g, "");
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const macroIndicatorsCache = new Map();
 
@@ -1211,23 +1226,42 @@ function extractYesNoPrices(market) {
 
   let yesPrice = toFiniteNumber(outcomePrices[0], 0);
   let noPrice = toFiniteNumber(outcomePrices[1], 0);
+  let yesLabel = String(outcomes[0] || "Yes");
+  let noLabel = String(outcomes[1] || "No");
 
   const normalizedOutcomes = outcomes.map((outcome) => String(outcome || "").trim().toLowerCase());
   const yesIdx = normalizedOutcomes.findIndex((name) => name === "yes");
   const noIdx = normalizedOutcomes.findIndex((name) => name === "no");
 
-  if (yesIdx >= 0) yesPrice = toFiniteNumber(outcomePrices[yesIdx], yesPrice);
-  if (noIdx >= 0) noPrice = toFiniteNumber(outcomePrices[noIdx], noPrice);
+  if (yesIdx >= 0) {
+    yesPrice = toFiniteNumber(outcomePrices[yesIdx], yesPrice);
+    yesLabel = String(outcomes[yesIdx] || yesLabel);
+  }
+  if (noIdx >= 0) {
+    noPrice = toFiniteNumber(outcomePrices[noIdx], noPrice);
+    noLabel = String(outcomes[noIdx] || noLabel);
+  }
 
-  return { yesPrice, noPrice };
+  return { yesPrice, noPrice, yesLabel, noLabel };
 }
 
 function normalizePredictionMarket(raw = {}) {
   const event = Array.isArray(raw.events) && raw.events.length > 0 ? raw.events[0] : null;
   const volume = toFiniteNumber(raw.volumeNum ?? raw.volume, 0);
   const volume24h = toFiniteNumber(raw.volume24hr ?? raw.volume24hrClob, 0);
+  const volume1wk = toFiniteNumber(raw.volume1wk ?? raw.volume1wkClob, 0);
   const liquidity = toFiniteNumber(raw.liquidityNum ?? raw.liquidity, 0);
-  const { yesPrice, noPrice } = extractYesNoPrices(raw);
+  const { yesPrice, noPrice, yesLabel, noLabel } = extractYesNoPrices(raw);
+  const trendingPct = toFiniteNumber(raw.oneWeekPriceChange, 0);
+  const recentMetric = volume24h > 0 ? volume24h : toFiniteNumber(raw.volume1mo ?? raw.volume1moClob, 0);
+  const trendMetric = Math.abs(trendingPct);
+  const importanceScore =
+    volume * 0.55 +
+    recentMetric * 0.25 +
+    volume1wk * 0.15 +
+    trendMetric * 10000 +
+    (raw?.featured ? 500000 : 0) +
+    (raw?.new ? 150000 : 0);
   return {
     id: String(raw.id || ""),
     conditionId: String(raw.conditionId || ""),
@@ -1240,11 +1274,17 @@ function normalizePredictionMarket(raw = {}) {
     image: raw.image || raw.icon || event?.image || null,
     volume,
     volume24h,
+    volume1wk,
     liquidity,
     yesPrice,
     noPrice,
-    oneWeekPriceChange: toFiniteNumber(raw.oneWeekPriceChange, 0),
+    yesLabel,
+    noLabel,
+    oneWeekPriceChange: trendingPct,
     oneMonthPriceChange: toFiniteNumber(raw.oneMonthPriceChange, 0),
+    recentMetric,
+    trendMetric,
+    importanceScore,
     updatedAt: raw.updatedAt || null
   };
 }
@@ -1337,14 +1377,23 @@ async function loadPredictionSnapshot() {
     .filter((market) => market.id && market.question);
 
   const categories = Object.fromEntries(PREDICTION_CATEGORIES.map((category) => [category, []]));
-  normalized
+  const categorized = normalized
     .map((market) => ({ ...market, predictionCategory: classifyPredictionCategory(market) }))
-    .filter((market) => market.predictionCategory)
-    .sort((a, b) => b.volume - a.volume)
-    .forEach((market) => {
-      const bucket = categories[market.predictionCategory];
-      if (bucket && bucket.length < 5) bucket.push(market);
-    });
+    .filter((market) => market.predictionCategory);
+
+  PREDICTION_CATEGORIES.forEach((category) => {
+    categories[category] = categorized
+      .filter((market) => market.predictionCategory === category)
+      .sort((a, b) => {
+        if (b.importanceScore !== a.importanceScore) return b.importanceScore - a.importanceScore;
+        if (b.volume24h !== a.volume24h) return b.volume24h - a.volume24h;
+        if (Math.abs(b.oneWeekPriceChange) !== Math.abs(a.oneWeekPriceChange)) {
+          return Math.abs(b.oneWeekPriceChange) - Math.abs(a.oneWeekPriceChange);
+        }
+        return b.volume - a.volume;
+      })
+      .slice(0, 5);
+  });
 
   const categoryMarkets = Object.values(categories).flatMap((items) => items);
   const categoryByConditionId = new Map();

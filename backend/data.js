@@ -11,6 +11,15 @@ const watchlistData = {
     {"symbol":"VCIT","name":"Vanguard Intermediate-Term Corporate Bond ETF","market":"ETF"},
     {"symbol":"BND","name":"Vanguard Total Bond Market ETF","market":"ETF"}
   ],
+  "indicators": [
+    {"symbol":"USA","name":"United States Macro Indicators","market":"Macro"},
+    {"symbol":"CAN","name":"Canada Macro Indicators","market":"Macro"},
+    {"symbol":"GBR","name":"United Kingdom Macro Indicators","market":"Macro"},
+    {"symbol":"FRA","name":"France Macro Indicators","market":"Macro"},
+    {"symbol":"DEU","name":"Germany Macro Indicators","market":"Macro"},
+    {"symbol":"ITA","name":"Italy Macro Indicators","market":"Macro"},
+    {"symbol":"JPN","name":"Japan Macro Indicators","market":"Macro"}
+  ],
   "crypto": [
     {"symbol":"BTC","name":"Bitcoin","market":"Spot"},
     {"symbol":"ETH","name":"Ethereum","market":"Spot"},

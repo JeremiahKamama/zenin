@@ -16,7 +16,6 @@ const STOCK_THEMES = [
   "Transportation",
 ];
 
-const BOND_THEMES = ["Bonds", "Indicators"];
 const G7_COUNTRIES = [
   { code: "USA", name: "United States" },
   { code: "CAN", name: "Canada" },
@@ -52,7 +51,6 @@ export function Watchlist({
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsError, setEarningsError] = useState("");
-  const [bondsTheme, setBondsTheme] = useState("Bonds");
   const [indicatorCountry, setIndicatorCountry] = useState("USA");
   const [macroSnapshot, setMacroSnapshot] = useState(null);
   const [macroLoading, setMacroLoading] = useState(false);
@@ -63,8 +61,7 @@ export function Watchlist({
   }, [activeCategory, activeTheme]);
 
   useEffect(() => {
-    if (activeCategory !== "bonds") {
-      setBondsTheme("Bonds");
+    if (activeCategory !== "indicators") {
       setIndicatorCountry("USA");
       setMacroSnapshot(null);
       setMacroError("");
@@ -103,7 +100,7 @@ useEffect(() => {
 }, [currentPage, activeTheme, activeCategory, pageSymbols]);
 
   useEffect(() => {
-    if (activeCategory !== "bonds" || bondsTheme !== "Indicators") return;
+    if (activeCategory !== "indicators") return;
 
     let isMounted = true;
     const controller = new AbortController();
@@ -115,8 +112,15 @@ useEffect(() => {
           signal: controller.signal
         });
         if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`HTTP ${res.status}: ${text}`);
+          let msg = `HTTP ${res.status}`;
+          try {
+            const payload = await res.json();
+            msg = payload?.error || msg;
+          } catch {
+            const text = await res.text();
+            if (text) msg = text;
+          }
+          throw new Error(msg);
         }
         const data = await res.json();
         if (!isMounted) return;
@@ -125,7 +129,7 @@ useEffect(() => {
         if (err.name === "AbortError") return;
         if (!isMounted) return;
         setMacroSnapshot(null);
-        setMacroError("Unable to load macro indicators.");
+        setMacroError(err?.message || "Unable to load macro indicators.");
       } finally {
         if (isMounted) setMacroLoading(false);
       }
@@ -136,7 +140,7 @@ useEffect(() => {
       isMounted = false;
       controller.abort();
     };
-  }, [activeCategory, bondsTheme, indicatorCountry]);
+  }, [activeCategory, indicatorCountry]);
 
   useEffect(() => {
     if (activeCategory !== "stocks") return;
@@ -240,23 +244,9 @@ useEffect(() => {
           ))}
         </div>
       )}
-      {activeCategory === "bonds" && (
-        <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "10px" }}>
-          {BOND_THEMES.map((theme) => (
-            <button
-              key={theme}
-              className={`theme-pill ${bondsTheme === theme ? "active" : ""}`}
-              onClick={() => setBondsTheme(theme)}
-            >
-              {theme}
-            </button>
-          ))}
-        </div>
-      )}
-
       {loading ? (
         <div className="loading-state">Loading market data...</div>
-      ) : activeCategory === "bonds" && bondsTheme === "Indicators" ? (
+      ) : activeCategory === "indicators" ? (
         <div>
           <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "12px" }}>
             {G7_COUNTRIES.map((country) => (
@@ -277,36 +267,28 @@ useEffect(() => {
             <div className="loading-state">No macro indicators available.</div>
           ) : (
             <div style={{ display: "grid", gap: "10px" }}>
-              {macroSnapshot.metrics.map((metric) => (
-                <div
-                  key={metric.key}
-                  style={{
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: "10px",
-                    padding: "10px 12px",
-                    background: "rgba(15,23,42,0.4)"
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                    <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{metric.label}</strong>
-                    <span style={{ fontSize: "11px", color: "#64748b" }}>{metric.unit || "Value"}</span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "8px" }}>
-                    <div>
-                      <div style={{ fontSize: "10px", color: "#64748b", textTransform: "uppercase" }}>Previous</div>
-                      <div style={{ fontSize: "13px", color: "#94a3b8" }}>{formatMacroValue(metric.previous)}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: "10px", color: "#64748b", textTransform: "uppercase" }}>Current</div>
-                      <div style={{ fontSize: "13px", color: "#e2e8f0" }}>{formatMacroValue(metric.current)}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: "10px", color: "#64748b", textTransform: "uppercase" }}>Expectations</div>
-                      <div style={{ fontSize: "13px", color: "#38bdf8" }}>{formatMacroValue(metric.expectation)}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+              <div className="table-scroll">
+                <table className="option-chain-table" style={{ minWidth: "620px" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left" }}>Indicator</th>
+                      <th>Previous</th>
+                      <th>Current</th>
+                      <th>Expected</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {macroSnapshot.metrics.map((metric) => (
+                      <tr key={metric.key}>
+                        <td style={{ textAlign: "left", color: "#e2e8f0", fontWeight: 600 }}>{metric.label}</td>
+                        <td className="greek">{formatMacroValue(metric.previous)}</td>
+                        <td style={{ color: "#e2e8f0" }}>{formatMacroValue(metric.current)}</td>
+                        <td style={{ color: "#38bdf8" }}>{formatMacroValue(metric.expectation)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               <div style={{ fontSize: "11px", color: "#64748b" }}>
                 Source: {macroSnapshot?.source || "EODHD"}{macroSnapshot?.updatedAt ? ` · Updated ${new Date(macroSnapshot.updatedAt).toLocaleString()}` : ""}
               </div>
