@@ -142,13 +142,19 @@ export function PredictionMarketModule() {
     return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
   };
 
+  const toProbabilityPct = (price) => {
+    const n = Number(price);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(Math.max(0, Math.min(1, n)) * 100);
+  };
+
   return (
     <div className="view-container prediction-terminal">
       <div className="watchlist-panel glass prediction-market-panel" style={{ padding: "16px" }}>
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Prediction Markets</h2>
-            <div className="asset-count">Top 5 by importance (volume + trending + recent) · refreshes every 6 hours</div>
+            <div className="asset-count">Top 5 markets per category · refreshes every 6 hours</div>
           </div>
           <div className="asset-count">
             {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
@@ -185,13 +191,33 @@ export function PredictionMarketModule() {
                     className="prediction-market-row"
                     onClick={() => setSelectedPredictionMarket(market)}
                   >
-                    <div className="prediction-market-title">{market.question}</div>
+                    <div className="prediction-market-head">
+                      <div className="prediction-market-title">{market.question}</div>
+                      <div className="prediction-prob-gauge">
+                        {(() => {
+                          const pct = toProbabilityPct(market.yesPrice);
+                          const arcLen = 157;
+                          const fillLen = (pct / 100) * arcLen;
+                          return (
+                            <>
+                              <svg viewBox="0 0 120 72" className="prediction-gauge-svg" aria-hidden="true">
+                                <path d="M10 60 A50 50 0 0 1 110 60" className="prediction-gauge-track" />
+                                <path
+                                  d="M10 60 A50 50 0 0 1 110 60"
+                                  className="prediction-gauge-fill"
+                                  style={{ strokeDasharray: `${fillLen} ${arcLen}` }}
+                                />
+                              </svg>
+                              <div className="prediction-gauge-value">{formatProbability(market.yesPrice)}</div>
+                              <div className="prediction-gauge-label">{market.yesLabel || "Yes"}</div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
                     <div className="prediction-market-meta">
-                      <span>{formatDollar(market.volume)} volume</span>
-                      <span>{formatDollar(market.volume24h)} recent</span>
-                      <span>{formatPercent(market.oneWeekPriceChange || 0)} trend</span>
                       <span>
-                        Ends {formatDateLabel(market.endDate)} · {formatProbability(market.yesPrice)} {market.yesLabel || "Yes"}
+                        Ends {formatDateLabel(market.endDate)}
                       </span>
                     </div>
                   </button>

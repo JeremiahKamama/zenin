@@ -1245,7 +1245,7 @@ function extractYesNoPrices(market) {
   return { yesPrice, noPrice, yesLabel, noLabel };
 }
 
-function normalizePredictionMarket(raw = {}) {
+function normalizePredictionMarket(raw = {}, sourceRank = 0) {
   const event = Array.isArray(raw.events) && raw.events.length > 0 ? raw.events[0] : null;
   const volume = toFiniteNumber(raw.volumeNum ?? raw.volume, 0);
   const volume24h = toFiniteNumber(raw.volume24hr ?? raw.volume24hrClob, 0);
@@ -1255,13 +1255,15 @@ function normalizePredictionMarket(raw = {}) {
   const trendingPct = toFiniteNumber(raw.oneWeekPriceChange, 0);
   const recentMetric = volume24h > 0 ? volume24h : toFiniteNumber(raw.volume1mo ?? raw.volume1moClob, 0);
   const trendMetric = Math.abs(trendingPct);
-  const importanceScore =
-    volume * 0.55 +
-    recentMetric * 0.25 +
-    volume1wk * 0.15 +
-    trendMetric * 10000 +
-    (raw?.featured ? 500000 : 0) +
-    (raw?.new ? 150000 : 0);
+  const polymarketRankScore =
+    (raw?.featured ? 2_000_000_000 : 0) +
+    (raw?.new ? 1_000_000_000 : 0) +
+    (Math.max(0, 1000 - Number(sourceRank || 0)) * 5_000_000) +
+    (recentMetric * 0.3) +
+    (trendMetric * 15_000) +
+    (volume * 0.15) +
+    (liquidity * 0.1) +
+    (volume1wk * 0.08);
   return {
     id: String(raw.id || ""),
     conditionId: String(raw.conditionId || ""),
@@ -1284,7 +1286,8 @@ function normalizePredictionMarket(raw = {}) {
     oneMonthPriceChange: toFiniteNumber(raw.oneMonthPriceChange, 0),
     recentMetric,
     trendMetric,
-    importanceScore,
+    sourceRank,
+    polymarketRankScore,
     updatedAt: raw.updatedAt || null
   };
 }
@@ -1373,7 +1376,7 @@ async function loadPredictionSnapshot() {
     rawMarkets = await fetchGammaJson("/markets?limit=800");
   }
   const normalized = (Array.isArray(rawMarkets) ? rawMarkets : [])
-    .map(normalizePredictionMarket)
+    .map((market, idx) => normalizePredictionMarket(market, idx))
     .filter((market) => market.id && market.question);
 
   const categories = Object.fromEntries(PREDICTION_CATEGORIES.map((category) => [category, []]));
@@ -1385,7 +1388,8 @@ async function loadPredictionSnapshot() {
     categories[category] = categorized
       .filter((market) => market.predictionCategory === category)
       .sort((a, b) => {
-        if (b.importanceScore !== a.importanceScore) return b.importanceScore - a.importanceScore;
+        if (b.polymarketRankScore !== a.polymarketRankScore) return b.polymarketRankScore - a.polymarketRankScore;
+        if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
         if (b.volume24h !== a.volume24h) return b.volume24h - a.volume24h;
         if (Math.abs(b.oneWeekPriceChange) !== Math.abs(a.oneWeekPriceChange)) {
           return Math.abs(b.oneWeekPriceChange) - Math.abs(a.oneWeekPriceChange);
@@ -1396,9 +1400,15 @@ async function loadPredictionSnapshot() {
   });
 
   const categoryMarkets = Object.values(categories).flatMap((items) => items);
+  const whaleCandidateMarkets = PREDICTION_CATEGORIES.flatMap((category) =>
+    categorized
+      .filter((market) => market.predictionCategory === category)
+      .sort((a, b) => b.polymarketRankScore - a.polymarketRankScore)
+      .slice(0, 40)
+  );
   const categoryByConditionId = new Map();
   const marketByConditionId = new Map();
-  categoryMarkets.forEach((market) => {
+  whaleCandidateMarkets.forEach((market) => {
     if (!market.conditionId) return;
     categoryByConditionId.set(market.conditionId, classifyPredictionCategory(market) || "other");
     marketByConditionId.set(market.conditionId, market);
@@ -1421,7 +1431,17 @@ async function loadPredictionSnapshot() {
     trades.forEach((trade) => {
       const size = toFiniteNumber(trade?.size, 0);
       const price = toFiniteNumber(trade?.price, 0);
-      const notional = size * price;
+      const rawNotional = size * price;
+      const inferredNotional = Math.max(
+        toFiniteNumber(trade?.sizeUsd, 0),
+        toFiniteNumber(trade?.usdSize, 0),
+        toFiniteNumber(trade?.usdAmount, 0),
+        toFiniteNumber(trade?.amountUsd, 0),
+        rawNotional,
+        // Some payloads represent dollar value in `size` directly.
+        size
+      );
+      const notional = inferredNotional;
       if (!Number.isFinite(notional) || notional < 10000) return;
       whaleTransactions.push({
         id: `${trade?.transactionHash || "tx"}-${trade?.asset || conditionId}-${trade?.timestamp || 0}`,

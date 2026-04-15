@@ -660,14 +660,23 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   };
 
   // Amber = in watchlist → remove. Grey = not in watchlist → add.
-  const toggleWatchlistStar = (asset) => {
+  const toggleWatchlistStar = async (asset) => {
     const normalizedSymbol = normalizeSymbolKey(asset.symbol);
-    const existing = watchlistAssets.find(
+    const existingEntries = watchlistAssets.filter(
       (a) => normalizeSymbolKey(a.symbol) === normalizedSymbol
     );
+    const existing = existingEntries[0];
     const marketType = String(asset.marketType || existing?.marketType || resolveMarketType(asset) || "spot").toLowerCase();
-    if (isInWatchlist(asset.symbol, marketType)) {
-      removeFromWatchlist(asset.symbol, marketType);
+    if (existingEntries.length > 0 || isInWatchlist(asset.symbol, marketType)) {
+      const uniqueMarketTypes = [...new Set(existingEntries.map((entry) => String(entry.marketType || "spot").toLowerCase()))];
+      // Remove all saved entries for this symbol to avoid marketType mismatch leftovers.
+      const typesToRemove = uniqueMarketTypes.length > 0 ? uniqueMarketTypes : [marketType];
+      setWatchlistAssets((prev) =>
+        prev.filter((entry) => normalizeSymbolKey(entry.symbol) !== normalizedSymbol)
+      );
+      await Promise.all(
+        typesToRemove.map((mt) => removeFromWatchlist(asset.symbol, mt))
+      );
     } else {
       addToWatchlist({ ...asset, marketType });
     }

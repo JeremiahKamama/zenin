@@ -45,6 +45,13 @@ export function Watchlist({
     return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
   };
 
+  const addCategoryText = (() => {
+    const raw = String(activeCategory || "asset").trim();
+    if (!raw) return "Add Asset";
+    const label = raw.charAt(0).toUpperCase() + raw.slice(1);
+    return `Add ${label}`;
+  })();
+
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
   const [earningsPage, setEarningsPage] = useState(1);
@@ -309,7 +316,7 @@ useEffect(() => {
 
           <div className={`asset-grid ${viewMode === "list" ? "list-mode" : ""}`}>
             {displayedAssets.length === 0 ? (
-              <div className="empty-state">No assets in this theme yet.</div>
+              <div className="empty-state">{addCategoryText}</div>
             ) : (
               pagedAssets.map((asset) => (
                 <article

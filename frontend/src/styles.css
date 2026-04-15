@@ -1874,21 +1874,78 @@ button {
   transition: border-color 0.2s ease, background 0.2s ease;
 }
 
+.prediction-market-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .prediction-market-row:hover {
   border-color: rgba(56, 189, 248, 0.6);
   background: rgba(56, 189, 248, 0.08);
 }
 
 .prediction-market-title {
-  font-size: 0.82rem;
+  font-size: 1rem;
   font-weight: 600;
   line-height: 1.35;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  flex: 1;
+}
+
+.prediction-prob-gauge {
+  width: 126px;
+  min-width: 126px;
+  height: 82px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
+
+.prediction-gauge-svg {
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 120px;
+  height: 72px;
+}
+
+.prediction-gauge-track {
+  fill: none;
+  stroke: #334155;
+  stroke-width: 10;
+  stroke-linecap: round;
+  opacity: 0.95;
+}
+
+.prediction-gauge-fill {
+  fill: none;
+  stroke: #4ade80;
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+
+.prediction-gauge-value {
+  margin-top: 18px;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #f8fafc;
+  line-height: 1;
+}
+
+.prediction-gauge-label {
+  margin-top: 4px;
+  font-size: 1.1rem;
+  color: #94a3b8;
+  font-weight: 500;
 }
 
 .prediction-market-meta {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   font-size: 0.72rem;
   color: #94a3b8;
