@@ -7,7 +7,8 @@ export function PortfolioModule({
   calculatePortfolioValue,
   calculatePortfolioGain,
   onRemove,
-  onSellAsset
+  onSellAsset,
+  onSelectAsset
 }){
   const [chartMode, setChartMode] = useState("equity");
   const [chartInterval, setChartInterval] = useState("1D");
@@ -150,48 +151,127 @@ export function PortfolioModule({
 
   // Performance Metrics
   const metrics = useMemo(() => {
-    if (portfolio.length === 0) return null;
+    const EPS = 1e-8;
+    const annualization = Math.sqrt(252);
+    const riskFreeDaily = 0.0425 / 252;
+    const formatMetric = (value, digits = 2) => (Number.isFinite(value) ? value.toFixed(digits) : "N/A");
 
-    const returns = portfolio.map(item => item.priceChangePercent || 0).map(r => r / 100);
-    const avgReturn = returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
-    const riskFreeRate = 0.0425 / 252;
+    const equityPoints = [
+      { t: Date.now(), equity: currentAccountEquity },
+      ...tradeTimeline
+        .filter((point) => Number.isFinite(point?.equity))
+        .map((point) => ({ t: Number(point.t) || 0, equity: Number(point.equity) }))
+    ]
+      .filter((point) => Number.isFinite(point.equity) && point.equity > 0)
+      .sort((a, b) => a.t - b.t);
 
-    const variance = returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / (returns.length || 1);
-    const stdDev = Math.sqrt(variance);
+    if (equityPoints.length < 2) {
+      return {
+        sharpe: "N/A",
+        sortino: "N/A",
+        maxDrawdown: "0.00",
+        alpha: "N/A",
+        beta: "N/A"
+      };
+    }
 
-    const downsideReturns = returns.filter(r => r < riskFreeRate);
-    const downsideVariance = downsideReturns.reduce((sum, r) => sum + Math.pow(r - riskFreeRate, 2), 0) / (downsideReturns.length || 1);
-    const downsideDeviation = Math.sqrt(downsideVariance);
+    const returns = [];
+    for (let i = 1; i < equityPoints.length; i += 1) {
+      const prev = equityPoints[i - 1].equity;
+      const next = equityPoints[i].equity;
+      if (prev <= EPS || !Number.isFinite(prev) || !Number.isFinite(next)) continue;
+      const r = (next / prev) - 1;
+      if (Number.isFinite(r)) returns.push(r);
+    }
 
-    const sharpe = stdDev > 0 ? ((avgReturn - riskFreeRate) / stdDev) * Math.sqrt(252) : 0;
-    const sortino = downsideDeviation > 0 ? ((avgReturn - riskFreeRate) / downsideDeviation) * Math.sqrt(252) : 0;
+    const meanReturn = returns.length
+      ? returns.reduce((sum, r) => sum + r, 0) / returns.length
+      : NaN;
+    const variance = returns.length > 1
+      ? returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / (returns.length - 1)
+      : NaN;
+    const stdDev = Number.isFinite(variance) && variance > EPS ? Math.sqrt(variance) : NaN;
 
-    // Max drawdown from portfolio value vs initial
-    const maxDrawdown = portfolioValue < initialBalance
-      ? ((initialBalance - portfolioValue) / initialBalance) * 100
-      : 0;
+    const downsideSquares = returns.map((r) => Math.min(0, r - riskFreeDaily) ** 2);
+    const downsideVariance = downsideSquares.length
+      ? downsideSquares.reduce((sum, v) => sum + v, 0) / downsideSquares.length
+      : NaN;
+    const downsideDeviation = Number.isFinite(downsideVariance) && downsideVariance > EPS ? Math.sqrt(downsideVariance) : NaN;
 
-    // Beta: weighted average beta approximation using priceChangePercent vs market proxy (1% market daily)
-    const marketReturn = 0.01;
-    const weightedBeta = portfolio.reduce((sum, item) => {
-      const weight = ((item.price || 0) * (item.quantity || 0)) / (portfolioValue || 1);
-      const assetReturn = (item.priceChangePercent || 0) / 100;
-      const beta = marketReturn > 0 ? assetReturn / marketReturn : 1;
-      return sum + weight * beta;
-    }, 0);
+    const sharpe = Number.isFinite(stdDev) ? ((meanReturn - riskFreeDaily) / stdDev) * annualization : NaN;
+    const sortino = Number.isFinite(downsideDeviation) ? ((meanReturn - riskFreeDaily) / downsideDeviation) * annualization : NaN;
 
-    // Jensen's Alpha: portfolio return - [risk free + beta * (market - risk free)]
-    const marketDailyReturn = 0.0001;
-    const alpha = (avgReturn - riskFreeRate - weightedBeta * (marketDailyReturn - riskFreeRate)) * 252 * 100;
+    let peak = equityPoints[0].equity;
+    let maxDrawdown = 0;
+    equityPoints.forEach((point) => {
+      peak = Math.max(peak, point.equity);
+      const drawdown = peak > EPS ? ((peak - point.equity) / peak) * 100 : 0;
+      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    });
 
     return {
-      sharpe: sharpe.toFixed(2),
-      sortino: sortino.toFixed(2),
-      maxDrawdown: maxDrawdown.toFixed(2),
-      alpha: alpha.toFixed(2),
-      beta: weightedBeta.toFixed(2)
+      sharpe: formatMetric(sharpe),
+      sortino: formatMetric(sortino),
+      maxDrawdown: formatMetric(maxDrawdown),
+      alpha: "N/A",
+      beta: "N/A"
     };
-  }, [portfolio, portfolioValue]);
+  }, [tradeTimeline, currentAccountEquity]);
+
+  const predictionMarketRows = useMemo(() => {
+    const source = Array.isArray(trades) ? trades : [];
+    const predictionTrades = source
+      .filter((trade) => {
+        const mt = String(trade?.marketType || "").toLowerCase();
+        return ["prediction", "polymarket", "yesno"].includes(mt);
+      })
+      .map((trade) => {
+        const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+        const qty = Math.abs(Number(trade?.quantity) || 0);
+        const price = Number(trade?.price) || 0;
+        const ts = new Date(trade?.executedAt || trade?.date || 0).getTime() || 0;
+        const market = String(trade?.name || trade?.asset || "Unknown Market").trim();
+        return { market, side, qty, price, ts };
+      })
+      .filter((trade) => trade.qty > 0 && trade.price >= 0 && trade.market)
+      .sort((a, b) => a.ts - b.ts);
+
+    if (!predictionTrades.length) return [];
+
+    const byMarket = new Map();
+    predictionTrades.forEach((trade) => {
+      const row = byMarket.get(trade.market) || {
+        market: trade.market,
+        netQty: 0,
+        netCost: 0,
+        realizedPnl: 0,
+        lastPrice: 0,
+        lastTs: 0
+      };
+      if (trade.side === "buy") {
+        row.netQty += trade.qty;
+        row.netCost += trade.qty * trade.price;
+      } else {
+        const qtyToClose = Math.min(row.netQty, trade.qty);
+        const avgCost = row.netQty > 0 ? row.netCost / row.netQty : 0;
+        row.realizedPnl += qtyToClose * (trade.price - avgCost);
+        row.netQty -= qtyToClose;
+        row.netCost -= qtyToClose * avgCost;
+      }
+      row.lastPrice = trade.price;
+      row.lastTs = trade.ts;
+      byMarket.set(trade.market, row);
+    });
+
+    return [...byMarket.values()]
+      .map((row) => {
+        const avgOpenCost = row.netQty > 0 ? row.netCost / row.netQty : 0;
+        const unrealizedPnl = row.netQty > 0 ? row.netQty * (row.lastPrice - avgOpenCost) : 0;
+        const pnl = row.realizedPnl + unrealizedPnl;
+        return { market: row.market, pnl, netQty: row.netQty, updatedAt: row.lastTs };
+      })
+      .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+  }, [trades]);
 
   return (
     <div className="portfolio-module" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
@@ -305,7 +385,11 @@ export function PortfolioModule({
                     const positionGain = (item.price || 0) * (item.quantity || 0) - (prevPrice || 0) * (item.quantity || 0);
                     const gainPercent = item.priceChangePercent || 0;
                     return (
-                      <div key={item.id} className="portfolio-card">
+                      <div
+                        key={item.id}
+                        className="portfolio-card clickable"
+                        onClick={() => onSelectAsset?.({ ...item, _fromHoldings: true })}
+                      >
                         <div className="portfolio-left">
                           <div>
                             <strong>{item.symbol}</strong>
@@ -327,18 +411,6 @@ export function PortfolioModule({
                             {positionGain >= 0 ? "+" : ""}${positionGain.toFixed(2)}
                           </div>
                         </div>
-                        <button
-                            className="portfolio-remove-button"
-                            title="Sell this position"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (typeof onSellAsset === "function") {
-                                onSellAsset(item);
-                              } else {
-                                onRemove(item.id);
-                              }
-                            }}
-                          >🗑️</button>
                       </div>
                     );
                   })}
@@ -363,11 +435,46 @@ export function PortfolioModule({
             {metrics ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 {[
-                  { key: "sharpe", label: "Sharpe Ratio", value: metrics.sharpe, color: parseFloat(metrics.sharpe) >= 1 ? "#22c55e" : parseFloat(metrics.sharpe) >= 0 ? "#f59e0b" : "#ef4444" },
-                  { key: "sortino", label: "Sortino Ratio", value: metrics.sortino, color: parseFloat(metrics.sortino) >= 1 ? "#22c55e" : parseFloat(metrics.sortino) >= 0 ? "#f59e0b" : "#ef4444" },
-                  { key: "maxDrawdown", label: "Max Drawdown", value: `${metrics.maxDrawdown}%`, color: parseFloat(metrics.maxDrawdown) < 5 ? "#22c55e" : parseFloat(metrics.maxDrawdown) < 15 ? "#f59e0b" : "#ef4444" },
-                  { key: "alpha", label: "Alpha (Jensen's)", value: `${metrics.alpha}%`, color: parseFloat(metrics.alpha) >= 0 ? "#22c55e" : "#ef4444" },
-                  { key: "beta", label: "Beta", value: metrics.beta, color: Math.abs(parseFloat(metrics.beta) - 1) < 0.3 ? "#38bdf8" : "#f59e0b" }
+                  {
+                    key: "sharpe",
+                    label: "Sharpe Ratio",
+                    value: metrics.sharpe,
+                    color: Number.isFinite(Number(metrics.sharpe))
+                      ? (Number(metrics.sharpe) >= 1 ? "#22c55e" : Number(metrics.sharpe) >= 0 ? "#f59e0b" : "#ef4444")
+                      : "#94a3b8"
+                  },
+                  {
+                    key: "sortino",
+                    label: "Sortino Ratio",
+                    value: metrics.sortino,
+                    color: Number.isFinite(Number(metrics.sortino))
+                      ? (Number(metrics.sortino) >= 1 ? "#22c55e" : Number(metrics.sortino) >= 0 ? "#f59e0b" : "#ef4444")
+                      : "#94a3b8"
+                  },
+                  {
+                    key: "maxDrawdown",
+                    label: "Max Drawdown",
+                    value: `${metrics.maxDrawdown}%`,
+                    color: Number.isFinite(Number(metrics.maxDrawdown))
+                      ? (Number(metrics.maxDrawdown) < 5 ? "#22c55e" : Number(metrics.maxDrawdown) < 15 ? "#f59e0b" : "#ef4444")
+                      : "#94a3b8"
+                  },
+                  {
+                    key: "alpha",
+                    label: "Alpha (Jensen's)",
+                    value: Number.isFinite(Number(metrics.alpha)) ? `${metrics.alpha}%` : metrics.alpha,
+                    color: Number.isFinite(Number(metrics.alpha))
+                      ? (Number(metrics.alpha) >= 0 ? "#22c55e" : "#ef4444")
+                      : "#94a3b8"
+                  },
+                  {
+                    key: "beta",
+                    label: "Beta",
+                    value: metrics.beta,
+                    color: Number.isFinite(Number(metrics.beta))
+                      ? (Math.abs(Number(metrics.beta) - 1) < 0.3 ? "#38bdf8" : "#f59e0b")
+                      : "#94a3b8"
+                  }
                 ].map(({ key, label, value, color }) => (
                   <div key={key} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -383,6 +490,44 @@ export function PortfolioModule({
           </div>
 
         </div>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header" style={{ marginBottom: "12px" }}>
+          <h2>Prediction Markets</h2>
+          <div className="asset-count">{predictionMarketRows.length} Markets</div>
+        </div>
+        {predictionMarketRows.length === 0 ? (
+          <p style={{ padding: "20px", color: "var(--color-text-secondary)" }}>
+            No prediction market trades yet.
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: "10px" }}>
+            {predictionMarketRows.map((row) => (
+              <div
+                key={row.market}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: "10px",
+                  padding: "10px 12px",
+                  background: "rgba(15,23,42,0.3)"
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {row.market}
+                  </div>
+                </div>
+                <div style={{ fontWeight: 700, color: row.pnl >= 0 ? "#22c55e" : "#ef4444", marginLeft: "12px" }}>
+                  {row.pnl >= 0 ? "+" : ""}${Math.abs(row.pnl).toFixed(2)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

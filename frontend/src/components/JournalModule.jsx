@@ -136,6 +136,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
     const losses = realized.filter((r) => r.pnl < -eps);
     const breakevens = realized.filter((r) => Math.abs(r.pnl) <= eps);
     const decisiveTrades = wins.length + losses.length;
+    const totalRealizedTrades = decisiveTrades + breakevens.length;
     const realizedGainLoss = realized.reduce((acc, r) => acc + r.pnl, 0);
     const avgHoldDays = realized.length
       ? realized.reduce((acc, r) => acc + r.holdDays, 0) / realized.length
@@ -296,6 +297,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       losses: losses.length,
       breakevens: breakevens.length,
       winRate: decisiveTrades ? (wins.length / decisiveTrades) * 100 : 0,
+      breakevenRate: totalRealizedTrades ? (breakevens.length / totalRealizedTrades) * 100 : 0,
       totalGainLoss,
       unrealizedPnl,
       tradeExpectancy: realized.length ? realizedGainLoss / realized.length : 0,
@@ -359,6 +361,15 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       return `$${safeVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
     return safeVal.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  };
+
+  const formatDurationFromDays = (days) => {
+    const safeDays = Number.isFinite(Number(days)) ? Number(days) : 0;
+    const hours = safeDays * 24;
+    if (Math.abs(hours) < 24) {
+      return `${hours.toFixed(1)}h`;
+    }
+    return `${safeDays.toFixed(1)}d`;
   };
 
   const reportRowsPerPage = 10;
@@ -490,7 +501,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
         </div>
         <div className="metric-card glass">
           <label>Average Hold</label>
-          <div className="value">{analytics.avgHoldDays.toFixed(1)}d</div>
+          <div className="value">{formatDurationFromDays(analytics.avgHoldDays)}</div>
         </div>
         <div className="metric-card glass">
           <label>Available Balance</label>
@@ -501,8 +512,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
           <div className="value">{formatValue(totalAccountEquity, true)}</div>
         </div>
         <div className="metric-card glass journal-winrate-card">
-          <label>Win Rate</label>
-          <div className="value">{analytics.winRate.toFixed(1)}%</div>
+          <label>Breakeven</label>
+          <div className="value">{analytics.breakevenRate.toFixed(1)}%</div>
           <div className="journal-winrate-body">
             <div className="journal-winrate-chart">
               <Chart
@@ -552,10 +563,6 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
                   <div className="trade-details">
                     <div className="trade-meta">
                       {trade.type === "BUY" ? "Cost" : "Proceeds"} {formatValue(Number(trade.notional) || 0, true)}
-                      {Number.isFinite(Number(trade.balanceAfter)) ? ` · Bal ${formatValue(Number(trade.balanceAfter), true)}` : ""}
-                      {Number.isFinite(Number(trade.accountEquityAfter)) ? ` · Eq ${formatValue(Number(trade.accountEquityAfter), true)}` : ""}
-                      {" · "}
-                      Pos {Number(trade.positionAfter || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}
                     </div>
                   </div>
                 </div>
@@ -630,9 +637,9 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
             }
             return (
               <div key={cell.key} className={`calendar-cell ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>
-                <div className="calendar-day">{cell.dayNum}</div>
+                <div className={`calendar-day ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>{cell.dayNum}</div>
                 {cell.pnl != null && (
-                  <div className="calendar-pnl">
+                  <div className={`calendar-pnl ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>
                     {cell.pnl >= 0 ? "+" : ""}
                     {formatValue(cell.pnl, true)}
                   </div>
@@ -676,7 +683,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
                       <td>{formatValue(row.tradedNotional, true)}</td>
                       <td>{Number(row.netPosition || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                       <td>{row.winRate.toFixed(1)}%</td>
-                      <td>{row.tradeDuration.toFixed(1)}d</td>
+                      <td>{formatDurationFromDays(row.tradeDuration)}</td>
                       <td className={row.avgGain >= 0 ? "positive" : "negative"}>{formatValue(row.avgGain, true)}</td>
                       <td className={row.totalGain >= 0 ? "positive" : "negative"}>{formatValue(row.totalGain, true)}</td>
                     </tr>

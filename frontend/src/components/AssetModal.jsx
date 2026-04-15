@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Chart from "react-apexcharts";
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
@@ -28,6 +28,10 @@ const [quantity, setQuantity] = useState(() =>  {
   }); // 'line' or 'candlestick'
 
   const [performanceMap, setPerformanceMap] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [shake, setShake] = useState(false);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [showFireworks, setShowFireworks] = useState(false);
 
 useEffect(() => {
     fetchHistory();
@@ -76,6 +80,75 @@ useEffect(() => {
   };
 
   const totalValue = (asset.price || 0) * (quantity || 0);
+  const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
+  const insufficientBalance = orderType === "buy" && totalValue > availableBalance;
+  const confettiPieces = useMemo(() => Array.from({ length: 26 }, (_, i) => i), []);
+  const fireworkBursts = useMemo(() => Array.from({ length: 18 }, (_, i) => i), []);
+
+  const playKaching = () => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const now = ctx.currentTime;
+      const notes = [880, 1320, 1760];
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.12, now + 0.015 + idx * 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16 + idx * 0.025);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + idx * 0.03);
+        osc.stop(now + 0.22 + idx * 0.03);
+      });
+      setTimeout(() => ctx.close().catch(() => {}), 380);
+    } catch {
+      // no-op for unsupported environments
+    }
+  };
+
+  const triggerInsufficientFeedback = () => {
+    setShake(true);
+    setTimeout(() => setShake(false), 560);
+    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+      navigator.vibrate([90, 55, 90]);
+    }
+  };
+
+  const handleConfirmOrder = async () => {
+    if (isSubmitting || quantity <= 0) return;
+    setIsSubmitting(true);
+    const result = await onConfirm?.(cleanAsset, quantity, orderType);
+    setIsSubmitting(false);
+
+    if (!result?.ok) {
+      if (result?.reason === "insufficient_balance") {
+        triggerInsufficientFeedback();
+      }
+      return;
+    }
+
+    if (result?.action === "buy") {
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 1200);
+      setTimeout(() => onClose?.(), 900);
+      return;
+    }
+
+    if (result?.action === "sell") {
+      playKaching();
+      setShowFireworks(true);
+      setTimeout(() => setShowFireworks(false), 1200);
+      setTimeout(() => onClose?.(), 950);
+      return;
+    }
+
+    onClose?.();
+  };
 
   const getChartData = () => {
     if (chartType === "candlestick") {
@@ -172,7 +245,21 @@ useEffect(() => {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+      <div className={`modal-content ${shake ? "modal-shake" : ""}`} onClick={(e) => e.stopPropagation()}>
+        {showConfetti && (
+          <div className="trade-effect-layer confetti-layer">
+            {confettiPieces.map((idx) => (
+              <span key={`confetti-${idx}`} className="confetti-piece" style={{ "--i": idx }} />
+            ))}
+          </div>
+        )}
+        {showFireworks && (
+          <div className="trade-effect-layer fireworks-layer">
+            {fireworkBursts.map((idx) => (
+              <span key={`fire-${idx}`} className="firework-burst" style={{ "--i": idx }} />
+            ))}
+          </div>
+        )}
         <header className="modal-header">
           <div className="asset-info">
             <h2>{asset.symbol}</h2>
@@ -344,6 +431,24 @@ useEffect(() => {
               </div>
             );
           })()}
+        {orderType === "buy" && (
+          <div
+            style={{
+              padding: "8px 0",
+              fontSize: "13px",
+              color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-secondary)"
+            }}
+          >
+            Available balance: <strong style={{ color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
+              ${availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </strong>
+            {insufficientBalance ? (
+              <span style={{ marginLeft: "8px" }}>
+                · Need ${(totalValue - availableBalance).toFixed(2)} more
+              </span>
+            ) : null}
+          </div>
+        )}
         <footer className="modal-footer">
           <div className="footer-left">
             <div className="quantity-input">
@@ -379,10 +484,10 @@ useEffect(() => {
               </div>
             </div>
           </div>
-          <button className={`confirm-order-btn ${orderType}`} onClick={() => onConfirm(cleanAsset, quantity, orderType)} disabled={quantity <= 0}>
-            Confirm Order
-          </button>
-        </footer>
+	          <button className={`confirm-order-btn ${orderType}`} onClick={handleConfirmOrder} disabled={quantity <= 0 || isSubmitting}>
+	            {isSubmitting ? "Submitting..." : "Confirm Order"}
+	          </button>
+	        </footer>
       </div>
     </div>
   );

@@ -91,6 +91,8 @@ function App() {
   });
   const [watchlistPrompt, setWatchlistPrompt] = useState(null);
   const [selectedAsset, setSelectedAsset] = useState(null);
+  const [tradeToast, setTradeToast] = useState(null);
+  const searchSectionRef = useRef(null);
   const priceCacheRef = useRef(new Map());
   const PRICE_CACHE_TTL_MS = 60000;
 
@@ -287,6 +289,34 @@ useEffect(() => {
       .finally(() => setSearchLoading(false));
   }, [searchTerm, searchType]);
 
+  useEffect(() => {
+    if (!searchTerm) return;
+    const handlePointerDown = (event) => {
+      const container = searchSectionRef.current;
+      if (!container) return;
+      if (!container.contains(event.target)) {
+        setSearchTerm("");
+        setSearchResults([]);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [searchTerm]);
+
+  const showTradeToast = (message, type = "info") => {
+    setTradeToast({ id: Date.now(), message, type });
+  };
+
+  useEffect(() => {
+    if (!tradeToast) return;
+    const timer = setTimeout(() => setTradeToast(null), 2600);
+    return () => clearTimeout(timer);
+  }, [tradeToast]);
+
   const mergeAssetPrices = (incomingAssets, previousAssets = []) => {
     const prevMap = new Map(previousAssets.map((a) => [a.symbol, a]));
     const now = Date.now();
@@ -464,8 +494,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   if (orderType === "buy") {
     if (notional > balance) {
-      alert(`Insufficient balance. You need $${(notional - balance).toFixed(2)} more to complete this purchase.`);
-      return;
+      const msg = `Insufficient balance. You need $${(notional - balance).toFixed(2)} more.`;
+      showTradeToast(msg, "error");
+      return { ok: false, reason: "insufficient_balance", message: msg };
     }
   }
 
@@ -475,12 +506,14 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       String(item.marketType || "spot").toLowerCase() === normalizedMarketType
     );
     if (!holding || holding.quantity <= 0) {
-      alert(`You don't hold any ${normalizedSymbol} to sell.`);
-      return;
+      const msg = `You don't hold any ${normalizedSymbol} to sell.`;
+      showTradeToast(msg, "error");
+      return { ok: false, reason: "no_position", message: msg };
     }
     if (normalizedQuantity > holding.quantity) {
-      alert(`You can only sell up to ${holding.quantity} ${normalizedSymbol}.`);
-      return;
+      const msg = `You can only sell up to ${holding.quantity} ${normalizedSymbol}.`;
+      showTradeToast(msg, "error");
+      return { ok: false, reason: "size_exceeded", message: msg };
     }
   }
 
@@ -611,9 +644,12 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   } catch (err) {
     console.error(`Failed to ${orderType} asset:`, err);
+    showTradeToast(`Failed to ${orderType} ${normalizedSymbol}. Please try again.`, "error");
+    return { ok: false, reason: "trade_failed", message: err?.message || "Trade failed" };
   }
 
-  setSelectedAsset(null);
+  showTradeToast(`${orderType === "buy" ? "Bought" : "Sold"} ${normalizedQuantity} ${normalizedSymbol} successfully.`, "success");
+  return { ok: true, action: orderType, symbol: normalizedSymbol };
 };
 
   const removeFromPortfolio = async (id) => {
@@ -771,13 +807,16 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           });
           return [...prev, ...restored];
         });
+        return "error";
       }
+      return "updated";
     } else {
       if (searchType === "tradfi") {
         openWatchlistPrompt(asset);
-        return;
+        return "prompt";
       }
-      addToWatchlist({ ...asset, marketType });
+      const added = await addToWatchlist({ ...asset, marketType });
+      return added ? "updated" : "error";
     }
   };
 
@@ -820,6 +859,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
         return;
       }
+      setSearchResults((prev) =>
+        prev.filter((row) => normalizeSymbolKey(row.symbol) !== normalizeSymbolKey(assetForWatchlist.symbol))
+      );
       setWatchlistPrompt(null);
     } catch {
       setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
@@ -1071,7 +1113,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         )}
         {activeSection === "Watchlist" && (
           <div className="view-container">
-            <div className="search-section">
+            <div className="search-section" ref={searchSectionRef}>
               <div className="search-controls">
                 <input
                   type="text"
@@ -1116,9 +1158,14 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                             </div>
                             <button
                               className={`star-button ${inWatchlist ? "active" : ""}`}
-                              onClick={(e) => {
+                              onClick={async (e) => {
                                 e.stopPropagation();
-                                toggleWatchlistStar(asset);
+                                const outcome = await toggleWatchlistStar(asset);
+                                if (outcome === "updated") {
+                                  setSearchResults((prev) =>
+                                    prev.filter((row) => normalizeSymbolKey(row.symbol) !== normalizeSymbolKey(asset.symbol))
+                                  );
+                                }
                               }}
                               title={inWatchlist ? "Remove from watchlist" : "Add to watchlist"}
                             >
@@ -1165,6 +1212,14 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                 calculatePortfolioValue={calculatePortfolioValue}
                 calculatePortfolioGain={calculatePortfolioGain}
                 onRemove={removeFromPortfolio}
+                onSelectAsset={(asset) => {
+                  const enriched = {
+                    ...asset,
+                    _forceSell: false,
+                    marketType: String(asset.marketType || "spot").toLowerCase()
+                  };
+                  setSelectedAsset(enriched);
+                }}
                 onSellAsset={(asset) => {
                   const enriched = {
                     ...asset,
@@ -1207,6 +1262,12 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           portfolio={portfolio}
           balance={balance}
         />
+      )}
+
+      {tradeToast && (
+        <div className={`trade-toast ${tradeToast.type}`}>
+          {tradeToast.message}
+        </div>
       )}
 
       {watchlistPrompt?.asset && (

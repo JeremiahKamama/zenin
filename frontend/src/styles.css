@@ -1596,6 +1596,100 @@ button {
   position: relative;
 }
 
+.modal-shake {
+  animation: modalShake 0.56s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+@keyframes modalShake {
+  10%, 90% { transform: translate3d(-1px, 0, 0); }
+  20%, 80% { transform: translate3d(2px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+  40%, 60% { transform: translate3d(4px, 0, 0); }
+}
+
+.trade-effect-layer {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 5;
+}
+
+.confetti-piece {
+  --x: calc((var(--i) % 13) * 7.5%);
+  position: absolute;
+  left: var(--x);
+  top: -10px;
+  width: 8px;
+  height: 14px;
+  border-radius: 2px;
+  background: hsl(calc((var(--i) * 27) % 360), 90%, 60%);
+  animation: confettiDrop 0.95s ease-out forwards;
+  animation-delay: calc((var(--i) % 7) * 0.03s);
+}
+
+@keyframes confettiDrop {
+  0% { transform: translateY(0) rotate(0deg); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(420px) rotate(540deg); opacity: 0; }
+}
+
+.firework-burst {
+  --x: calc(18% + (var(--i) % 6) * 13%);
+  --y: calc(16% + (var(--i) % 3) * 23%);
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: hsl(calc((var(--i) * 32) % 360), 95%, 62%);
+  box-shadow: 0 0 0 rgba(255,255,255,0.7);
+  animation: fireworkPop 0.9s ease-out forwards;
+  animation-delay: calc((var(--i) % 5) * 0.04s);
+}
+
+@keyframes fireworkPop {
+  0% { transform: scale(0.5); opacity: 0; box-shadow: 0 0 0 rgba(255,255,255,0.7); }
+  30% { opacity: 1; }
+  100% {
+    transform: scale(1.2) translate(calc((var(--i) - 9) * 3px), calc((var(--i) - 9) * -2px));
+    opacity: 0;
+    box-shadow: 0 0 28px rgba(255,255,255,0.45);
+  }
+}
+
+.trade-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1500;
+  max-width: min(420px, 92vw);
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(2, 6, 23, 0.95);
+  color: #e2e8f0;
+  font-size: 0.87rem;
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.55);
+  animation: tradeToastIn 0.2s ease-out;
+}
+
+.trade-toast.success {
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #86efac;
+}
+
+.trade-toast.error {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+}
+
+@keyframes tradeToastIn {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 .asset-card .star-button {
   position: absolute;
   top: 14px;
@@ -2410,11 +2504,27 @@ button {
   font-weight: 700;
 }
 
+.calendar-day.positive {
+  color: #22c55e;
+}
+
+.calendar-day.negative {
+  color: #ef4444;
+}
+
 .calendar-pnl {
   margin-top: 8px;
   font-size: 0.76rem;
   font-weight: 600;
   color: #cbd5e1;
+}
+
+.calendar-pnl.positive {
+  color: #22c55e;
+}
+
+.calendar-pnl.negative {
+  color: #ef4444;
 }
 
 .pagination-button.active {
