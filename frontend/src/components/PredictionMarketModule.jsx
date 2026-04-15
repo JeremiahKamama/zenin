@@ -239,7 +239,7 @@ export function PredictionMarketModule() {
                     </div>
                     <div className="prediction-market-meta">
                       <span>
-                        Ends {formatDateLabel(market.endDate)}
+                        Ends {formatDateLabel(market.endDate)} · Vol {formatDollar(market.volume24h || market.volume || 0)}
                       </span>
                     </div>
                   </button>
