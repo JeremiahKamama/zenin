@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -91,6 +91,21 @@ export function PredictionMarketModule() {
   const predictionWhaleTransactions = Array.isArray(predictionSnapshot?.whaleTransactions)
     ? predictionSnapshot.whaleTransactions
     : [];
+  const marketByConditionId = useMemo(() => {
+    const byCondition = new Map();
+    const categories = predictionSnapshot?.categories && typeof predictionSnapshot.categories === "object"
+      ? predictionSnapshot.categories
+      : {};
+    Object.values(categories).forEach((markets) => {
+      if (!Array.isArray(markets)) return;
+      markets.forEach((market) => {
+        const key = String(market?.conditionId || "");
+        if (!key || byCondition.has(key)) return;
+        byCondition.set(key, market);
+      });
+    });
+    return byCondition;
+  }, [predictionSnapshot]);
 
   const predictionWhalePageSize = 10;
   const predictionWhaleTotalPages = Math.max(1, Math.ceil(predictionWhaleTransactions.length / predictionWhalePageSize));
@@ -123,6 +138,40 @@ export function PredictionMarketModule() {
     const n = Number(value);
     if (!Number.isFinite(n)) return "—";
     return `$${n.toFixed(3)}`;
+  };
+
+  const formatSignedDollar = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    const sign = n >= 0 ? "+" : "-";
+    return `${sign}${formatDollar(Math.abs(n)).replace("$", "$")}`;
+  };
+
+  const computeWhalePnl = (item) => {
+    const shares = Number(item?.shares);
+    const entryPrice = Number(item?.price);
+    const conditionId = String(item?.conditionId || "");
+    const market = marketByConditionId.get(conditionId);
+    if (!Number.isFinite(shares) || shares <= 0 || !Number.isFinite(entryPrice) || !market) return null;
+
+    const outcomeIndex = Number(item?.outcomeIndex);
+    const outcomeRaw = String(item?.outcome || "").trim().toLowerCase();
+    const isYesOutcome = Number.isFinite(outcomeIndex)
+      ? outcomeIndex === 0
+      : outcomeRaw === "yes";
+    const isNoOutcome = Number.isFinite(outcomeIndex)
+      ? outcomeIndex === 1
+      : outcomeRaw === "no";
+    if (!isYesOutcome && !isNoOutcome) return null;
+
+    const yesMark = Number(market?.yesPrice);
+    const noMark = Number(market?.noPrice);
+    const markPrice = isYesOutcome ? yesMark : noMark;
+    if (!Number.isFinite(markPrice)) return null;
+
+    const side = String(item?.side || "").toUpperCase();
+    const direction = side === "SELL" ? -1 : 1;
+    return (markPrice - entryPrice) * shares * direction;
   };
 
   const formatDateLabel = (value) => {
@@ -274,17 +323,26 @@ export function PredictionMarketModule() {
                   <th>Type</th>
                   <th>Avg Price</th>
                   <th>Transaction Size</th>
+                  <th>PnL</th>
                 </tr>
               </thead>
               <tbody>
                 {pagedPredictionWhales.map((item) => (
-                  <tr key={item.id}>
-                    <td className="greek">{getPredictionCategoryLabel(item.category)}</td>
-                    <td className="greek">{item.market}</td>
-                    <td className="greek">{formatWhaleType(item)}</td>
-                    <td className="greek">{formatAvgPrice(item.price)}</td>
-                    <td className="bid-ask positive">{formatDollar(item.transactionSize)}</td>
-                  </tr>
+                  (() => {
+                    const pnl = computeWhalePnl(item);
+                    return (
+                      <tr key={item.id}>
+                        <td className="greek">{getPredictionCategoryLabel(item.category)}</td>
+                        <td className="greek">{item.market}</td>
+                        <td className="greek">{formatWhaleType(item)}</td>
+                        <td className="greek">{formatAvgPrice(item.price)}</td>
+                        <td className="bid-ask positive">{formatDollar(item.transactionSize)}</td>
+                        <td className={!Number.isFinite(Number(pnl)) ? "greek" : (Number(pnl) >= 0 ? "positive" : "negative")}>
+                          {formatSignedDollar(pnl)}
+                        </td>
+                      </tr>
+                    );
+                  })()
                 ))}
               </tbody>
             </table>
