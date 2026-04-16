@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import Chart from "react-apexcharts";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
@@ -10,12 +11,14 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyStale, setHistoryStale] = useState(false);
+  const [historyNotice, setHistoryNotice] = useState("");
   const [activeInterval, setActiveInterval] = useState("1D");
   const [historySource, setHistorySource] = useState("");
   const [orderType, setOrderType] = useState(() => asset?._forceSell ? "sell" : "buy");
   const [earnings, setEarnings] = useState(null);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
+  const [earningsNotice, setEarningsNotice] = useState("");
 
   const normalizeAssetKind = (value) => {
     const rawType = String(value?.type || "").trim().toLowerCase();
@@ -78,7 +81,8 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         if (cachedHistory.length > 0) {
           setHistory(cachedHistory);
           setHistorySource(String(cached.payload?.source || ""));
-          setHistoryStale(false);
+          setHistoryStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+          setHistoryNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
           setLoading(false);
         }
       } else {
@@ -99,7 +103,8 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         setHistory(nextHistory);
         setHistorySource(nextSource);
         setHistoryStale(Boolean(data?.stale || data?.unavailable));
-        writeResilientCache("asset-history", cacheParams, {
+        setHistoryNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
+        writeResilientCache("asset-history", cacheParams, data || {
           history: nextHistory,
           source: nextSource
         });
@@ -112,6 +117,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
             setHistory(cachedHistory);
             setHistorySource(String(cached.payload?.source || ""));
           }
+          setHistoryNotice(getSnapshotFallbackMessage(cached.payload));
+        } else {
+          setHistoryNotice("Rate limit hit. Showing the last saved snapshot. Try later.");
         }
         setHistoryStale(true);
       } finally {
@@ -169,6 +177,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       if (cached?.payload && typeof cached.payload === "object") {
         setEarnings(cached.payload);
         setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+        setEarningsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
         if (cacheIsFresh && !cached.payload?.stale && !cached.payload?.unavailable) {
           setEarningsLoading(false);
           return;
@@ -186,6 +195,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         if (data && typeof data === "object") {
           setEarnings(data);
           setEarningsStale(Boolean(data?.stale || data?.unavailable));
+          setEarningsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
           writeResilientCache("asset-fundamentals", cacheParams, data);
           return;
         }
@@ -194,6 +204,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         console.error("Failed to fetch earnings:", err);
         if (cached?.payload && typeof cached.payload === "object") {
           setEarnings(cached.payload);
+          setEarningsNotice(getSnapshotFallbackMessage(cached.payload));
+        } else {
+          setEarningsNotice("Rate limit hit. Showing the last saved snapshot. Try later.");
         }
         setEarningsStale(true);
       } finally {
@@ -441,6 +454,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               </div>
             ) : null}
           </div>
+          {historyStale && historyNotice ? (
+            <div className="snapshot-inline-note" style={{ marginTop: "10px" }}>{historyNotice}</div>
+          ) : null}
 
           <div className="interval-toggle-bottom">
             <div className="interval-toggle">
@@ -565,6 +581,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                   Waiting for fundamentals...
                 </div>
               )}
+              {earningsStale && earningsNotice ? (
+                <div className="snapshot-inline-note" style={{ marginTop: "10px" }}>{earningsNotice}</div>
+              ) : null}
             </div>
           )}
 

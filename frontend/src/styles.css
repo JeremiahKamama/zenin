@@ -1275,6 +1275,12 @@ button {
   color: #cbd5e1;
 }
 
+.snapshot-inline-note {
+  color: #fbbf24;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
 .error {
   padding: 16px;
   border-radius: 16px;
@@ -1453,6 +1459,13 @@ button {
   color: #cbd5e1;
   line-height: 1.7;
   font-size: 0.95rem;
+}
+
+.company-page-fallback-note {
+  margin-top: 12px;
+  color: #fbbf24;
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
 
 .company-page-health {

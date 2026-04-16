@@ -125,20 +125,30 @@ async function readServiceSnapshot(scope, params = {}) {
 
 async function writeServiceSnapshot(scope, params = {}, payload = {}) {
   try {
-    await serviceSnapshots.set(buildSnapshotKey(scope, params), payload);
+    const snapshotKey = buildSnapshotKey(scope, params);
+    await serviceSnapshots.delete(snapshotKey);
+    await serviceSnapshots.set(snapshotKey, payload);
   } catch (error) {
     console.warn("Service snapshot write failed:", error?.message || error);
   }
 }
 
+function isRateLimitReason(reason = "") {
+  return /(^|\b)(429|rate[_\s-]?limit|too many requests)(\b|$)/i.test(String(reason || ""));
+}
+
 function applyStaleMeta(payload = {}, snapshot = null, reason = "") {
+  const normalizedReason = String(reason || "upstream_fetch_failed");
+  const tryLater = isRateLimitReason(normalizedReason);
   return {
     ...(payload || {}),
     stale: true,
     unavailable: false,
-    stale_reason: String(reason || "upstream_fetch_failed"),
+    stale_reason: normalizedReason,
     cache_updated_at: snapshot?.updatedAt || null,
-    stale_age_seconds: snapshotAgeSeconds(snapshot?.updatedAt)
+    stale_age_seconds: snapshotAgeSeconds(snapshot?.updatedAt),
+    tryLater,
+    statusMessage: tryLater ? "Rate limit hit. Showing the last saved snapshot. Try later." : null
   };
 }
 
@@ -227,6 +237,33 @@ function validateWatchlistAsset(req, res, next) {
     return res.status(400).json({ error: "Invalid theme" });
   }
   next();
+}
+
+function normalizeWatchlistCategoryKey(asset = {}) {
+  const explicitCategory = String(asset?.category || "").trim().toLowerCase();
+  if (explicitCategory) return explicitCategory;
+
+  const rawType = String(asset?.type || "").trim().toLowerCase();
+  const marketType = String(asset?.marketType || "").trim().toLowerCase();
+  if (["stock", "stocks", "equity", "etf", "etfs"].includes(rawType) || marketType === "equity") return "stocks";
+  if (rawType === "bond") return "bonds";
+  if (rawType === "indicator" || marketType === "macro") return "indicators";
+  if (rawType === "crypto" || marketType === "spot" || marketType === "perp") return "crypto";
+  if (["commodity", "commodities", "metal", "metals"].includes(rawType)) return "commodities";
+  return rawType;
+}
+
+function buildWatchlistAssetIdentityKey(asset = {}) {
+  const rawType = String(asset?.type || "").trim().toLowerCase();
+  const inferredMarketType = String(
+    asset?.marketType || (rawType === "crypto" ? "spot" : rawType === "indicator" ? "macro" : "equity")
+  ).trim().toLowerCase();
+  return [
+    String(asset?.symbol || "").trim().toUpperCase(),
+    inferredMarketType,
+    String(asset?.category || "").trim().toLowerCase(),
+    String(asset?.theme || "").trim().toLowerCase()
+  ].join("::");
 }
 
 function validateOptionsCalculation(req, res, next) {
@@ -476,6 +513,20 @@ const cryptoTickerMap = {
 
 async function resolveFetch() {
   return globalThis.fetch || (await import("node-fetch")).default;
+}
+
+function normalizeCountryLookupValue(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function isSnapshotFresh(snapshot, ttlMs) {
+  const updatedAtMs = new Date(snapshot?.updatedAt || 0).getTime();
+  return Number.isFinite(updatedAtMs) && updatedAtMs > 0 && (Date.now() - updatedAtMs) < ttlMs;
 }
 
 async function postHyperliquidInfo(body) {
@@ -1242,23 +1293,7 @@ app.get("/api/search", async (req, res) => {
       const hyperResults = await fetchHyperliquidSearchResults(q);
       results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
     } else if (normalizedType === "indicator" || normalizedType === "indicators") {
-      const needle = String(q || "").trim().toLowerCase();
-      const indicatorAssets = Array.isArray(watchlistData?.indicators) ? watchlistData.indicators : [];
-      results = indicatorAssets
-        .filter((asset) => {
-          const symbol = String(asset?.symbol || "").toLowerCase();
-          const name = String(asset?.name || "").toLowerCase();
-          return symbol.includes(needle) || name.includes(needle);
-        })
-        .slice(0, 20)
-        .map((asset) => ({
-          symbol: asset.symbol,
-          name: asset.name,
-          type: "indicator",
-          category: "indicators",
-          marketType: "macro",
-          market: asset.market || "Macro"
-        }));
+      results = await searchCountries(q, 20);
     } else {
       results = await searchYahooFinance(q, normalizedType);
     }
@@ -1704,10 +1739,23 @@ app.get("/api/earnings-calendar", async (req, res) => {
 });
 
 app.get("/api/macro-indicators", async (req, res) => {
-  const country = String(req.query.country || "USA").trim().toUpperCase();
-  if (!G7_COUNTRIES[country]) {
-    return res.status(400).json({ error: "country must be one of USA,CAN,GBR,FRA,DEU,ITA,JPN" });
+  const requestedCountry = String(req.query.country || "").trim();
+  if (!requestedCountry) {
+    return res.status(400).json({ error: "country query parameter required" });
   }
+
+  let countryMeta = null;
+  try {
+    countryMeta = await resolveCountryReference(requestedCountry);
+  } catch (error) {
+    console.error("Country resolution failed:", error?.message || error);
+    return res.status(502).json({ error: "Could not resolve the requested country right now." });
+  }
+  if (!countryMeta?.cca3) {
+    return res.status(400).json({ error: "country must be a valid country name or ISO code" });
+  }
+  const country = String(countryMeta.cca3 || "").trim().toUpperCase();
+  const countryName = String(countryMeta.name || country).trim() || country;
 
   const cacheKey = `macro:${country}`;
   const now = Date.now();
@@ -1727,7 +1775,7 @@ app.get("/api/macro-indicators", async (req, res) => {
 
   const buildFallbackPayload = (reason) => ({
     country,
-    countryName: G7_COUNTRIES[country],
+    countryName,
     source: "Macro data temporarily unavailable",
     updatedAt: new Date().toISOString(),
     stale: true,
@@ -1809,7 +1857,7 @@ app.get("/api/macro-indicators", async (req, res) => {
 
     const payload = {
       country,
-      countryName: G7_COUNTRIES[country],
+      countryName,
       source: "EODHD Macro Indicators API",
       updatedAt: new Date().toISOString(),
       metrics,
@@ -1886,12 +1934,17 @@ app.get("/api/watchlist", async (req, res) => {
   }
 
   if (key === "indicators") {
-    const indicatorAssets = (watchlistData[key] || []).map((asset) => ({
-      ...asset,
-      type: "indicator",
-      price: null,
-      priceChangePercent: null
-    }));
+    const allDbAssets = await watchlist.getAll();
+    const indicatorAssets = allDbAssets
+      .filter((asset) => String(asset?.marketType || "").trim().toLowerCase() === "macro" || String(asset?.type || "").trim().toLowerCase() === "indicator")
+      .map((asset) => ({
+        ...asset,
+        type: "indicator",
+        category: "indicators",
+        marketType: "macro",
+        price: null,
+        priceChangePercent: null
+      }));
     const payload = {
       category: key,
       assets: indicatorAssets,
@@ -1903,19 +1956,12 @@ app.get("/api/watchlist", async (req, res) => {
   }
 
   const baseAssets = watchlistData[key] || [];
+  const baseAssetKeys = new Set(baseAssets.map((asset) => buildWatchlistAssetIdentityKey(asset)));
 
   const allDbAssets = await watchlist.getAll();
-  const customAssets = allDbAssets.filter(dbAsset => {
-    if (baseAssets.some(a => a.symbol === dbAsset.symbol)) return false;
-    const dbType = (dbAsset.type || "").toLowerCase();
-    
-    if (key === 'stocks' && (dbType === 'stock' || dbType === 'equity' || dbType === 'etf')) return true;
-    if (key === 'bonds' && dbType === 'bond') return true;
-    if (key === 'metals' && dbType === 'commodity') return true;
-    if (key === 'commodities' && dbType === 'commodity') return true;
-    if (dbType === key) return true;
-    
-    return false;
+  const customAssets = allDbAssets.filter((dbAsset) => {
+    if (baseAssetKeys.has(buildWatchlistAssetIdentityKey(dbAsset))) return false;
+    return normalizeWatchlistCategoryKey(dbAsset) === key;
   });
 
   const assets = [...baseAssets, ...customAssets];
@@ -2157,15 +2203,10 @@ const EODHD_API_TOKEN = String(
 ).trim().replace(/^,+|,+$/g, "");
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const macroIndicatorsCache = new Map();
-
-const G7_COUNTRIES = {
-  USA: "United States",
-  CAN: "Canada",
-  GBR: "United Kingdom",
-  FRA: "France",
-  DEU: "Germany",
-  ITA: "Italy",
-  JPN: "Japan"
+const COUNTRY_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+let countryCatalogMemory = {
+  countries: [],
+  cachedAt: 0
 };
 
 const MACRO_INDICATOR_CONFIG = [
@@ -2224,6 +2265,165 @@ function buildMacroMetric(payload, config) {
         ts: point.ts
       }))
   };
+}
+
+function normalizeCountryCatalogEntry(raw = {}) {
+  const cca3 = String(raw?.cca3 || "").trim().toUpperCase();
+  if (!cca3) return null;
+  const cca2 = String(raw?.cca2 || "").trim().toUpperCase() || null;
+  const commonName = String(raw?.name?.common || raw?.name || "").trim() || cca3;
+  const officialName = String(raw?.name?.official || "").trim() || null;
+  const translationNames = raw?.translations && typeof raw.translations === "object"
+    ? Object.values(raw.translations)
+        .flatMap((entry) => [entry?.common, entry?.official])
+        .filter(Boolean)
+    : [];
+  const aliases = [...new Set(
+    [
+      commonName,
+      officialName,
+      ...(Array.isArray(raw?.altSpellings) ? raw.altSpellings : []),
+      ...translationNames,
+      cca2,
+      cca3
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  )];
+
+  return {
+    cca3,
+    cca2,
+    name: commonName,
+    officialName,
+    aliases
+  };
+}
+
+async function loadCountryCatalog(forceRefresh = false) {
+  if (!forceRefresh && Array.isArray(countryCatalogMemory.countries) && countryCatalogMemory.countries.length > 0) {
+    if (Date.now() - countryCatalogMemory.cachedAt < COUNTRY_CATALOG_CACHE_TTL_MS) {
+      return countryCatalogMemory.countries;
+    }
+  }
+
+  const persisted = await readServiceSnapshot("country-catalog", { provider: "restcountries-v3.1" });
+  if (!forceRefresh && Array.isArray(persisted?.payload?.countries) && persisted.payload.countries.length > 0 && isSnapshotFresh(persisted, COUNTRY_CATALOG_CACHE_TTL_MS)) {
+    countryCatalogMemory = {
+      countries: persisted.payload.countries,
+      cachedAt: new Date(persisted.updatedAt || Date.now()).getTime() || Date.now()
+    };
+    return countryCatalogMemory.countries;
+  }
+
+  try {
+    const fetch = await resolveFetch();
+    const response = await fetch("https://restcountries.com/v3.1/all?fields=name,cca2,cca3,altSpellings,translations");
+    if (!response.ok) {
+      throw new Error(`country_catalog_fetch_failed:${response.status}`);
+    }
+    const payload = await response.json();
+    const countries = (Array.isArray(payload) ? payload : [])
+      .map(normalizeCountryCatalogEntry)
+      .filter(Boolean)
+      .sort((a, b) => String(a.name || a.cca3).localeCompare(String(b.name || b.cca3)));
+
+    if (countries.length === 0) {
+      throw new Error("country_catalog_empty");
+    }
+
+    countryCatalogMemory = {
+      countries,
+      cachedAt: Date.now()
+    };
+    await writeServiceSnapshot("country-catalog", { provider: "restcountries-v3.1" }, { countries });
+    return countries;
+  } catch (error) {
+    if (Array.isArray(persisted?.payload?.countries) && persisted.payload.countries.length > 0) {
+      countryCatalogMemory = {
+        countries: persisted.payload.countries,
+        cachedAt: new Date(persisted.updatedAt || Date.now()).getTime() || Date.now()
+      };
+      return countryCatalogMemory.countries;
+    }
+    throw error;
+  }
+}
+
+async function searchCountries(query, limit = 20) {
+  const normalizedNeedle = normalizeCountryLookupValue(query);
+  if (!normalizedNeedle) return [];
+  const countries = await loadCountryCatalog();
+  const scored = countries
+    .map((country) => {
+      const aliasHits = (Array.isArray(country.aliases) ? country.aliases : [])
+        .map((alias) => normalizeCountryLookupValue(alias))
+        .filter(Boolean);
+      let score = -1;
+      for (const alias of aliasHits) {
+        if (alias === normalizedNeedle) {
+          score = Math.max(score, 1000);
+          continue;
+        }
+        if (alias.startsWith(normalizedNeedle)) {
+          score = Math.max(score, 750 - alias.length);
+          continue;
+        }
+        if (alias.includes(normalizedNeedle)) {
+          score = Math.max(score, 500 - alias.indexOf(normalizedNeedle));
+        }
+      }
+      if (score < 0) return null;
+      return { country, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || String(a.country.name || "").localeCompare(String(b.country.name || "")))
+    .slice(0, Math.max(1, Number(limit) || 20))
+    .map(({ country }) => ({
+      symbol: country.cca3,
+      name: country.name,
+      type: "indicator",
+      category: "indicators",
+      marketType: "macro",
+      market: "Macro",
+      countryCode: country.cca3,
+      countryName: country.name
+    }));
+  return scored;
+}
+
+async function resolveCountryReference(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  const normalized = normalizeCountryLookupValue(raw);
+  const upperRaw = raw.toUpperCase();
+  const countries = await loadCountryCatalog();
+
+  const exact = countries.find((country) => {
+    if (country.cca3 === upperRaw || country.cca2 === upperRaw) return true;
+    return (Array.isArray(country.aliases) ? country.aliases : []).some(
+      (alias) => normalizeCountryLookupValue(alias) === normalized
+    );
+  });
+  if (exact) return exact;
+
+  const partial = countries.find((country) => {
+    return (Array.isArray(country.aliases) ? country.aliases : []).some(
+      (alias) => normalizeCountryLookupValue(alias).includes(normalized)
+    );
+  });
+  if (partial) return partial;
+
+  if (/^[A-Z]{3}$/.test(upperRaw)) {
+    return {
+      cca3: upperRaw,
+      cca2: null,
+      name: upperRaw,
+      officialName: null,
+      aliases: [upperRaw]
+    };
+  }
+  return null;
 }
 
 function normalizeIndicatorKey(value) {
@@ -3862,11 +4062,11 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
-    const { marketType } = req.query;
+    const { marketType, category = null, theme = null } = req.query;
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const result = await watchlist.delete(symbol, marketType);
+    const result = await watchlist.delete(symbol, marketType, category, theme);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Watchlist delete failed", error);
@@ -3877,11 +4077,11 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
 app.get("/api/db/watchlist/check/:symbol", async (req, res) => {
   try {
     const { symbol } = req.params;
-    const { marketType } = req.query;
+    const { marketType, category = null, theme = null } = req.query;
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const exists = await watchlist.exists(symbol, marketType);
+    const exists = await watchlist.exists(symbol, marketType, category, theme);
     res.json({ exists });
   } catch (error) {
     handleServerError(res, "Watchlist exists check failed", error);

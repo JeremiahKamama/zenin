@@ -10,21 +10,9 @@ import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
+import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const DEFAULT_STOCK_THEMES = [
-  "AI",
-  "Defense",
-  "Energy",
-  "ETFs",
-  "Gaming",
-  "Hardware",
-  "Metals",
-  "Pharmco",
-  "Robotics",
-  "Space",
-  "Transportation"
-];
 
 function parseRouteFromLocation() {
   if (typeof window === "undefined") {
@@ -77,8 +65,8 @@ const normalizeTradeRecord = (trade, idx = 0) => {
 function App() {
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
-  const [activeCategory, setActiveCategory] = useState("bonds");
-  const [activeTheme, setActiveTheme] = useState("Robotics");
+  const [activeCategory, setActiveCategory] = useState("");
+  const [activeTheme, setActiveTheme] = useState("");
   const [portfolio, setPortfolio] = useState([]);
   const [watchlistAssets, setWatchlistAssets] = useState([]);
   const [trades, setTrades] = useState(() => {
@@ -96,6 +84,7 @@ function App() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [watchlistStale, setWatchlistStale] = useState(false);
+  const [watchlistNotice, setWatchlistNotice] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -124,7 +113,12 @@ function App() {
 
   const stockThemes = useMemo(() => {
     const seen = new Set();
-    return [...DEFAULT_STOCK_THEMES, ...customStockThemes]
+    const derivedThemes = [
+      ...(Array.isArray(assets) ? assets : []).map((asset) => asset?.theme),
+      ...(Array.isArray(watchlistAssets) ? watchlistAssets : []).map((asset) => asset?.theme),
+      ...customStockThemes
+    ];
+    return derivedThemes
       .map((theme) => String(theme || "").trim())
       .filter((theme) => {
         if (!theme) return false;
@@ -133,7 +127,7 @@ function App() {
         seen.add(key);
         return true;
       });
-  }, [customStockThemes]);
+  }, [assets, watchlistAssets, customStockThemes]);
 
   // Replace the localStorage balance useState with:
 const [balance, setBalance] = useState(10000);
@@ -389,6 +383,17 @@ useEffect(() => {
     return [symbol, marketType, type, theme, category].join("::");
   };
 
+  const getSearchResultKey = (asset) => (
+    [
+      normalizeSymbolKey(asset?.symbol),
+      String(asset?.marketType || inferWatchlistMarketType(asset)).trim().toLowerCase(),
+      normalizeMetaKey(asset?.type),
+      normalizeMetaKey(asset?.category),
+      normalizeMetaKey(asset?.theme),
+      String(asset?.name || "").trim().toLowerCase()
+    ].join("::")
+  );
+
   const isStrictStockAsset = (asset) => {
     const normalizedType = inferWatchlistAssetKind(asset);
     return normalizedType === "stock" || normalizedType === "etf";
@@ -515,8 +520,10 @@ useEffect(() => {
     if (cachedAssets.length > 0) {
       setAssets((prev) => mergeAssetPrices(cachedAssets, prev));
       setWatchlistStale(Boolean(cached?.payload?.stale || cached?.payload?.unavailable));
+      setWatchlistNotice(Boolean(cached?.payload?.stale || cached?.payload?.unavailable) ? getSnapshotFallbackMessage(cached?.payload) : "");
     } else {
       setWatchlistStale(false);
+      setWatchlistNotice("");
     }
     setLoading(cachedAssets.length === 0);
     setError(null);
@@ -535,10 +542,14 @@ useEffect(() => {
         const allAssets = Array.isArray(data) ? data : data.assets || [];
         setAssets((prev) => mergeAssetPrices(allAssets, prev));
         setWatchlistStale(Boolean(data?.stale || data?.unavailable));
+        setWatchlistNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("watchlist-category", cacheParams, {
           category: activeCategory,
           assets: allAssets,
-          stale: Boolean(data?.stale || data?.unavailable)
+          stale: Boolean(data?.stale || data?.unavailable),
+          stale_reason: data?.stale_reason || null,
+          tryLater: Boolean(data?.tryLater),
+          statusMessage: data?.statusMessage || null
         });
         setLoading(false);
 
@@ -559,6 +570,7 @@ useEffect(() => {
           setAssets((prev) => mergeAssetPrices(cachedAssets, prev));
         }
         setWatchlistStale(true);
+        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Showing the last saved snapshot while refresh retries.");
         setLoading(false);
       });
   }, [activeCategory]);
@@ -581,7 +593,7 @@ useEffect(() => {
   };
   const handleCategorySelect = (category) => {
     setActiveCategory(category);
-    if (category !== "stocks") setActiveTheme("Robotics");
+    if (category !== "stocks") setActiveTheme("");
   };
 
   const normalizeAssetType = (asset) => {
@@ -631,18 +643,38 @@ useEffect(() => {
 
   const tradfiCategoryOptions = useMemo(() => {
     const blocked = new Set(["crypto", "indicators"]);
-    const fromBackend = (Array.isArray(categories) ? categories : [])
+    const derived = [
+      ...(Array.isArray(categories) ? categories : []),
+      ...(Array.isArray(watchlistAssets) ? watchlistAssets : []).map((asset) => asset?.category),
+      ...(Array.isArray(assets) ? assets : []).map((asset) => asset?.category)
+    ];
+    const fromSources = derived
       .map((category) => String(category || "").trim().toLowerCase())
       .filter((category) => category && !blocked.has(category));
-    if (fromBackend.length > 0) return fromBackend;
-    return ["stocks", "bonds", "commodities"];
-  }, [categories]);
+    return [...new Set(fromSources)];
+  }, [assets, categories, watchlistAssets]);
+
+  useEffect(() => {
+    const availableCategories = (Array.isArray(categories) ? categories : [])
+      .map((category) => String(category || "").trim().toLowerCase())
+      .filter(Boolean);
+    if (activeCategory && availableCategories.includes(activeCategory)) return;
+    const preferredCategory = availableCategories.includes("stocks")
+      ? "stocks"
+      : availableCategories[0] || "";
+    if (preferredCategory && preferredCategory !== activeCategory) {
+      setActiveCategory(preferredCategory);
+    }
+  }, [activeCategory, categories]);
 
   const openWatchlistPrompt = (asset) => {
-    const defaultCategory = tradfiCategoryOptions.includes("stocks")
-      ? "stocks"
-      : tradfiCategoryOptions[0] || "stocks";
-    const defaultTheme = stockThemes.includes(activeTheme) ? activeTheme : stockThemes[0] || "";
+    const assetCategory = String(asset?.category || "").trim().toLowerCase();
+    const defaultCategory = tradfiCategoryOptions.includes(assetCategory)
+      ? assetCategory
+      : (tradfiCategoryOptions.includes("stocks") ? "stocks" : tradfiCategoryOptions[0] || "");
+    const defaultTheme = stockThemes.includes(activeTheme)
+      ? activeTheme
+      : (String(asset?.theme || "").trim() || stockThemes[0] || "");
     setWatchlistPrompt({
       asset,
       category: defaultCategory,
@@ -994,9 +1026,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       marketType: mt,
       date_added: new Date().toISOString(),
     };
-    const sameEntry = (entry) =>
-      normalizeSymbolKey(entry.symbol) === payload.symbol &&
-      (String(entry.marketType || "").trim().toLowerCase() || "spot") === mt;
+    const payloadKey = getAssetCatalogKey(payload);
+    const sameEntry = (entry) => getAssetCatalogKey(entry) === payloadKey;
     setWatchlistAssets((prev) => {
       const next = prev.filter((entry) => !sameEntry(entry));
       return [...next, payload];
@@ -1009,36 +1040,33 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       });
       if (!res.ok) throw new Error("Failed to add to watchlist");
       const saved = await res.json();
-      const savedSymbol = normalizeSymbolKey(saved?.symbol || payload.symbol);
-      const savedMt = String(saved?.marketType || mt).trim().toLowerCase() || "spot";
+      const savedEntry = { ...payload, ...saved };
+      const savedKey = getAssetCatalogKey(savedEntry);
       setWatchlistAssets((prev) => {
         const next = prev.filter(
-          (entry) =>
-            !(
-              normalizeSymbolKey(entry.symbol) === savedSymbol &&
-              (String(entry.marketType || "").trim().toLowerCase() || "spot") === savedMt
-            )
+          (entry) => getAssetCatalogKey(entry) !== savedKey
         );
-        return [...next, { ...payload, ...saved }];
+        return [...next, savedEntry];
       });
       return true;
     } catch (err) {
       console.error("addToWatchlist failed:", err);
       setWatchlistAssets((prev) =>
-        prev.filter(
-          (a) => !(a.symbol === payload.symbol && (a.marketType || "spot") === mt)
-        )
+        prev.filter((entry) => getAssetCatalogKey(entry) !== payloadKey)
       );
       return false;
     }
   };
 
-  const removeFromWatchlist = async (symbol, marketType) => {
+  const removeFromWatchlist = async ({ symbol, marketType, category = null, theme = null }) => {
     const mt = String(marketType || "").trim().toLowerCase() || "spot";
     const normalizedSymbol = normalizeSymbolKey(symbol);
+    const params = new URLSearchParams({ marketType: mt });
+    if (category) params.set("category", String(category).trim().toLowerCase());
+    if (theme) params.set("theme", String(theme).trim());
     try {
       const res = await fetch(
-        `${BACKEND_URL}/db/watchlist/${encodeURIComponent(normalizedSymbol)}?marketType=${encodeURIComponent(mt)}`,
+        `${BACKEND_URL}/db/watchlist/${encodeURIComponent(normalizedSymbol)}?${params.toString()}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error("Failed to remove from watchlist");
@@ -1051,30 +1079,35 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   // Amber = in watchlist → remove. Grey = not in watchlist → add.
   const toggleWatchlistStar = async (asset) => {
-    const normalizedSymbol = normalizeSymbolKey(asset.symbol);
+    const strictStockMeta = isStrictStockAsset(asset);
     const existingEntries = watchlistAssets.filter(
-      (a) => normalizeSymbolKey(a.symbol) === normalizedSymbol
+      (entry) => doesWatchlistEntryMatchAsset(entry, asset, { strictStockMeta })
     );
     const existing = existingEntries[0];
     const marketType = String(asset.marketType || existing?.marketType || resolveMarketType(asset) || "spot").toLowerCase();
-    if (existingEntries.length > 0 || isInWatchlist(asset.symbol, marketType)) {
-      const uniqueMarketTypes = [...new Set(existingEntries.map((entry) => String(entry.marketType || "spot").toLowerCase()))];
-      const typesToRemove = uniqueMarketTypes.length > 0 ? uniqueMarketTypes : [marketType];
+    if (existingEntries.length > 0 || isInWatchlist(asset, undefined, { strictStockMeta })) {
       const removedEntries = watchlistAssets.filter(
-        (entry) => normalizeSymbolKey(entry.symbol) === normalizedSymbol
+        (entry) => doesWatchlistEntryMatchAsset(entry, asset, { strictStockMeta })
       );
       setWatchlistAssets((prev) =>
-        prev.filter((entry) => normalizeSymbolKey(entry.symbol) !== normalizedSymbol)
+        prev.filter((entry) => !doesWatchlistEntryMatchAsset(entry, asset, { strictStockMeta }))
       );
       const outcomes = await Promise.all(
-        typesToRemove.map((mt) => removeFromWatchlist(asset.symbol, mt))
+        (removedEntries.length > 0 ? removedEntries : [{ symbol: asset.symbol, marketType, category: asset?.category, theme: asset?.theme }]).map((entry) =>
+          removeFromWatchlist({
+            symbol: entry.symbol,
+            marketType: entry.marketType || marketType,
+            category: strictStockMeta ? entry.category : null,
+            theme: strictStockMeta ? entry.theme : null
+          })
+        )
       );
       const failed = outcomes.some((ok) => !ok);
       if (failed) {
         setWatchlistAssets((prev) => {
-          const dedupe = new Set(prev.map((entry) => `${normalizeSymbolKey(entry.symbol)}::${String(entry.marketType || "spot").toLowerCase()}`));
+          const dedupe = new Set(prev.map((entry) => getAssetCatalogKey(entry)));
           const restored = removedEntries.filter((entry) => {
-            const key = `${normalizeSymbolKey(entry.symbol)}::${String(entry.marketType || "spot").toLowerCase()}`;
+            const key = getAssetCatalogKey(entry);
             return !dedupe.has(key);
           });
           return [...prev, ...restored];
@@ -1131,9 +1164,6 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
         return;
       }
-      setSearchResults((prev) =>
-        prev.filter((row) => normalizeSymbolKey(row.symbol) !== normalizeSymbolKey(assetForWatchlist.symbol))
-      );
       setWatchlistPrompt(null);
     } catch {
       setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
@@ -1811,9 +1841,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                         searchType === "tradfi"
                           ? "stocks"
                           : searchType === "indicator"
-                            ? "indicators"
+                            ? "for Country"
                             : "crypto"
-                      } by symbol or name...`
+                      }${searchType === "indicator" ? "" : " by symbol or name..."}`
                       : "Select class and search assets..."
                   }
                   value={searchTerm}
@@ -1850,7 +1880,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                         const inWatchlist = isInWatchlist(asset);
                         return (
                           <div
-                            key={asset.symbol}
+                            key={getSearchResultKey(asset)}
                             className="search-result-item clickable"
                             onClick={() => setSelectedAsset(asset)}
                           >
@@ -1863,12 +1893,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                               className={`star-button ${inWatchlist ? "active" : ""}`}
                               onClick={async (e) => {
                                 e.stopPropagation();
-                                const outcome = await toggleWatchlistStar(asset);
-                                if (outcome === "updated") {
-                                  setSearchResults((prev) =>
-                                    prev.filter((row) => normalizeSymbolKey(row.symbol) !== normalizeSymbolKey(asset.symbol))
-                                  );
-                                }
+                                await toggleWatchlistStar(asset);
                               }}
                               title={inWatchlist ? "Remove from watchlist" : "Add to watchlist"}
                             >
@@ -1888,7 +1913,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             {watchlistStale ? (
               <div className="stale-banner">
                 <span className="status-icon">⚠</span>
-                Showing last synced watchlist snapshot while refresh retries.
+                {watchlistNotice || "Showing the last saved watchlist snapshot while refresh retries."}
               </div>
             ) : null}
             <Watchlist

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const COMPANY_PROFILE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
@@ -854,6 +855,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
   }), [asset, profile]);
 
   const companyName = asset?.name || profile?.name || normalizedSymbol;
+  const primaryTag = displayMeta?.theme || displayMeta?.category || profile?.industry || "";
   const framework = useMemo(() => buildFrameworkSections(profile || {}, displayMeta), [profile, displayMeta]);
   const visibleSections = activeTab === "deep" ? framework.deep : framework.base;
   const earningsHistory = Array.isArray(profile?.earningsHistory) ? profile.earningsHistory : [];
@@ -888,14 +890,14 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
           <div className="company-page-kicker">{framework.subtitle}</div>
           <h1>{companyName}</h1>
           <div className="company-page-subtitle">
-            <span>{normalizedSymbol}</span>
-            {profile?.industry && <span>{profile.industry}</span>}
-            {displayMeta?.theme && <span>{displayMeta.theme}</span>}
-            {displayMeta?.category && <span>{displayMeta.category}</span>}
+            {primaryTag ? <span>{primaryTag}</span> : null}
           </div>
           <p>
             {profile?.summary || "Public company profile information will appear here once the stock snapshot loads."}
           </p>
+          {profile?.stale && profile?.statusMessage ? (
+            <p className="company-page-fallback-note">{getSnapshotFallbackMessage(profile, profile.statusMessage)}</p>
+          ) : null}
         </div>
         <div className={`company-page-health ${profile?.stale ? "hazard" : "ok"}`}>
           {profile?.stale ? "Cached snapshot" : "Public snapshot"}
@@ -989,7 +991,6 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
         <div className="company-earnings-card">
           <div className="company-earnings-head">
             <h2>Recent earnings performance</h2>
-            <span>{normalizedSymbol}</span>
           </div>
           <div className="company-earnings-table-wrap">
             <table className="company-earnings-table">

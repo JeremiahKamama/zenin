@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
@@ -19,12 +20,14 @@ export function OptionsModule() {
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState("");
   const [optionsStale, setOptionsStale] = useState(false);
+  const [optionsNotice, setOptionsNotice] = useState("");
   const [marketStructure, setMarketStructure] = useState("orderbook");
   const [marketStructureLabel, setMarketStructureLabel] = useState("Orderbook");
   const [marketStructureNote, setMarketStructureNote] = useState("");
   const [whaleTrades, setWhaleTrades] = useState([]);
   const [whaleLoading, setWhaleLoading] = useState(false);
   const [whaleStale, setWhaleStale] = useState(false);
+  const [whaleNotice, setWhaleNotice] = useState("");
   const [whaleMeta, setWhaleMeta] = useState({});
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
@@ -73,6 +76,7 @@ useEffect(() => {
         setMarketStructure(cached.payload?.market_structure || inferredMarketStructure);
         setMarketStructureLabel(cached.payload?.market_structure_label || inferredMarketStructureLabel);
         setMarketStructureNote(cached.payload?.market_structure_note || inferredMarketStructureNote);
+        setOptionsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
         if (cachedChain.length > 0) {
           setChain(cachedChain);
           setAvailableExpiries(Array.isArray(cached.payload?.expiries) ? cached.payload.expiries : []);
@@ -147,6 +151,7 @@ useEffect(() => {
           skew: "Volatile"
         });
         setOptionsStale(Boolean(data?.stale || data?.unavailable));
+        setOptionsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("options-chain", cacheParams, data);
         if (data.stale) {
           setOptionsError(`Using cached options data (${data.stale_age_seconds || 0}s old).`);
@@ -155,6 +160,7 @@ useEffect(() => {
         console.warn("Invalid options response:", data);
         setOptionsError("Options data is syncing.");
         setOptionsStale(true);
+        setOptionsNotice("Rate limit hit. Showing the last saved snapshot. Try later.");
         setMarketStructure(inferredMarketStructure);
         setMarketStructureLabel(inferredMarketStructureLabel);
         setMarketStructureNote(inferredMarketStructureNote);
@@ -166,6 +172,7 @@ useEffect(() => {
       if (isMounted) {
         setOptionsError("Showing previous options snapshot while refresh retries.");
         setOptionsStale(true);
+        setOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
         setMarketStructure(inferredMarketStructure);
         setMarketStructureLabel(inferredMarketStructureLabel);
         setMarketStructureNote(inferredMarketStructureNote);
@@ -213,6 +220,7 @@ useEffect(() => {
       setWhaleTrades(cached.payload.trades);
       setWhaleStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
       setWhaleMeta(cached.payload || {});
+      setWhaleNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
     }
     setWhaleLoading(true);
     try {
@@ -230,12 +238,14 @@ useEffect(() => {
       setWhaleTrades(Array.isArray(data?.trades) ? data.trades : []);
       setWhaleStale(Boolean(data?.stale || data?.unavailable));
       setWhaleMeta(data || {});
+      setWhaleNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
       writeResilientCache("options-whale-trades", cacheParams, data || { trades: [] });
       setWhalePage(1);
     } catch (err) {
       if (!isMounted) return;
       setWhaleStale(true);
       setWhaleMeta((prev) => prev || {});
+      setWhaleNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
     } finally {
       if (isMounted) setWhaleLoading(false);
     }
@@ -463,6 +473,9 @@ useEffect(() => {
               {optionsError}
             </div>
           )}
+          {optionsStale && optionsNotice ? (
+            <div className="snapshot-inline-note">{optionsNotice}</div>
+          ) : null}
       </div>
 
       <div className="watchlist-panel glass whale-trades-panel" style={{ marginTop: "16px", padding: "16px" }}>
@@ -509,6 +522,9 @@ useEffect(() => {
             {telegramTransportLabel ? ` · Transport: ${telegramTransportLabel}` : ""}
             {telegramDebug?.status && telegramDebug.status !== "ok" ? ` · Status: ${telegramDebug.status}` : ""}
           </div>
+        ) : null}
+        {whaleStale && whaleNotice ? (
+          <div className="snapshot-inline-note" style={{ marginBottom: "10px" }}>{whaleNotice}</div>
         ) : null}
 
         {whaleLoading && whaleTrades.length === 0 ? (

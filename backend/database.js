@@ -227,6 +227,20 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
+      ALTER TABLE watchlist_assets
+      DROP CONSTRAINT IF EXISTS watchlist_assets_symbol_market_type_key;
+    `);
+
+    await client.query(`
+      DROP INDEX IF EXISTS watchlist_assets_symbol_market_type_key;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_watchlist_assets_lookup
+      ON watchlist_assets (symbol, market_type, category, theme, date_added DESC);
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_balance (
         id INTEGER PRIMARY KEY,
         balance DOUBLE PRECISION NOT NULL DEFAULT 10000
@@ -303,8 +317,15 @@ async function initializeDatabase() {
 
           await client.query(`
             INSERT INTO watchlist_assets (symbol, name, type, category, theme, market_type, date_added)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (symbol, market_type) DO NOTHING;
+            SELECT $1, $2, $3, $4, $5, $6, $7
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM watchlist_assets
+              WHERE symbol = $1
+                AND market_type = $6
+                AND COALESCE(category, '') = COALESCE($4, '')
+                AND COALESCE(theme, '') = COALESCE($5, '')
+            );
           `, [
             symbol,
             String(asset.name || symbol),
@@ -1011,16 +1032,18 @@ const watchlist = {
     const marketType = normalizeMarketType(type, asset.marketType);
     const dateAdded = asset.date_added || new Date().toISOString();
 
-    const result = await pool.query(`
-      INSERT INTO watchlist_assets (symbol, name, type, category, theme, market_type, date_added)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (symbol, market_type)
-      DO UPDATE SET
-        name = EXCLUDED.name,
-        type = EXCLUDED.type,
-        category = EXCLUDED.category,
-        theme = EXCLUDED.theme,
-        date_added = EXCLUDED.date_added
+    const updateResult = await pool.query(`
+      UPDATE watchlist_assets
+      SET
+        name = $2,
+        type = $3,
+        category = $4,
+        theme = $5,
+        date_added = $7
+      WHERE symbol = $1
+        AND market_type = $6
+        AND COALESCE(category, '') = COALESCE($4, '')
+        AND COALESCE(theme, '') = COALESCE($5, '')
       RETURNING
         id,
         symbol,
@@ -1032,26 +1055,73 @@ const watchlist = {
         date_added;
     `, [symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
 
-    return mapWatchlistRow(result.rows[0]);
+    if (updateResult.rows[0]) {
+      return mapWatchlistRow(updateResult.rows[0]);
+    }
+
+    const insertResult = await pool.query(`
+      INSERT INTO watchlist_assets (symbol, name, type, category, theme, market_type, date_added)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING
+        id,
+        symbol,
+        name,
+        type,
+        category,
+        theme,
+        market_type AS "marketType",
+        date_added;
+    `, [symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
+
+    return mapWatchlistRow(insertResult.rows[0]);
   },
 
-  delete: async (symbol, marketType) => {
+  delete: async (symbol, marketType, category = null, theme = null) => {
     const cleanSymbol = String(symbol || "").trim().toUpperCase();
     const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
-    await pool.query("DELETE FROM watchlist_assets WHERE symbol = $1 AND market_type = $2", [
-      cleanSymbol,
-      cleanMarketType
-    ]);
-    return { success: true, symbol: cleanSymbol, marketType: cleanMarketType };
+    const cleanCategory = String(category || "").trim().toLowerCase() || null;
+    const cleanTheme = String(theme || "").trim() || null;
+
+    if (cleanCategory || cleanTheme) {
+      await pool.query(`
+        DELETE FROM watchlist_assets
+        WHERE symbol = $1
+          AND market_type = $2
+          AND COALESCE(category, '') = COALESCE($3, '')
+          AND COALESCE(theme, '') = COALESCE($4, '');
+      `, [cleanSymbol, cleanMarketType, cleanCategory, cleanTheme]);
+      return {
+        success: true,
+        symbol: cleanSymbol,
+        marketType: cleanMarketType,
+        category: cleanCategory,
+        theme: cleanTheme
+      };
+    }
+
+    await pool.query("DELETE FROM watchlist_assets WHERE symbol = $1 AND market_type = $2", [cleanSymbol, cleanMarketType]);
+    return { success: true, symbol: cleanSymbol, marketType: cleanMarketType, category: null, theme: null };
   },
 
-  exists: async (symbol, marketType) => {
+  exists: async (symbol, marketType, category = null, theme = null) => {
     const cleanSymbol = String(symbol || "").trim().toUpperCase();
     const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
-    const result = await pool.query(
-      "SELECT id FROM watchlist_assets WHERE symbol = $1 AND market_type = $2 LIMIT 1",
-      [cleanSymbol, cleanMarketType]
-    );
+    const cleanCategory = String(category || "").trim().toLowerCase() || null;
+    const cleanTheme = String(theme || "").trim() || null;
+    const result = cleanCategory || cleanTheme
+      ? await pool.query(`
+          SELECT id
+          FROM watchlist_assets
+          WHERE symbol = $1
+            AND market_type = $2
+            AND COALESCE(category, '') = COALESCE($3, '')
+            AND COALESCE(theme, '') = COALESCE($4, '')
+          LIMIT 1
+        `, [cleanSymbol, cleanMarketType, cleanCategory, cleanTheme])
+      : await pool.query(
+          "SELECT id FROM watchlist_assets WHERE symbol = $1 AND market_type = $2 LIMIT 1",
+          [cleanSymbol, cleanMarketType]
+        );
     return result.rows.length > 0;
   }
 };
@@ -1167,6 +1237,26 @@ const serviceSnapshots = {
         updated_at AS "updatedAt";
     `, [key, payloadJson]);
     const row = result.rows[0];
+    return {
+      snapshotKey: row.snapshotKey,
+      payload: parseJsonPayload(row.payload, null),
+      updatedAt: toIsoString(row.updatedAt)
+    };
+  },
+
+  delete: async (snapshotKey) => {
+    const key = String(snapshotKey || "").trim();
+    if (!key) return null;
+    const result = await pool.query(`
+      DELETE FROM service_snapshots
+      WHERE snapshot_key = $1
+      RETURNING
+        snapshot_key AS "snapshotKey",
+        payload_json AS payload,
+        updated_at AS "updatedAt";
+    `, [key]);
+    const row = result.rows[0];
+    if (!row) return null;
     return {
       snapshotKey: row.snapshotKey,
       payload: parseJsonPayload(row.payload, null),

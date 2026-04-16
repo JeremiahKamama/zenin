@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -9,11 +10,13 @@ export function PredictionMarketModule() {
   const [predictionSnapshot, setPredictionSnapshot] = useState(null);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionStale, setPredictionStale] = useState(false);
+  const [predictionNotice, setPredictionNotice] = useState("");
   const [predictionWhalePage, setPredictionWhalePage] = useState(1);
   const [selectedPredictionMarket, setSelectedPredictionMarket] = useState(null);
   const [marketDetails, setMarketDetails] = useState(null);
   const [marketDetailsLoading, setMarketDetailsLoading] = useState(false);
   const [marketDetailsStale, setMarketDetailsStale] = useState(false);
+  const [marketDetailsNotice, setMarketDetailsNotice] = useState("");
   const [activeCategory, setActiveCategory] = useState("geopolitics");
   const [whaleMinSize, setWhaleMinSize] = useState(10000);
   const [whaleSort, setWhaleSort] = useState({ key: "transactionSize", direction: "desc" });
@@ -27,6 +30,7 @@ export function PredictionMarketModule() {
       if (cached?.payload && typeof cached.payload === "object") {
         setPredictionSnapshot(cached.payload);
         setPredictionStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+        setPredictionNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
       }
       setPredictionLoading(true);
       try {
@@ -39,11 +43,13 @@ export function PredictionMarketModule() {
         if (!isMounted) return;
         setPredictionSnapshot(data || null);
         setPredictionStale(Boolean(data?.stale || data?.unavailable));
+        setPredictionNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("prediction-snapshot", { scope: "default" }, data || null);
         setPredictionWhalePage(1);
       } catch {
         if (!isMounted) return;
         setPredictionStale(true);
+        setPredictionNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
       } finally {
         if (isMounted) setPredictionLoading(false);
       }
@@ -75,6 +81,7 @@ export function PredictionMarketModule() {
       if (cached?.payload && typeof cached.payload === "object") {
         setMarketDetails(cached.payload);
         setMarketDetailsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+        setMarketDetailsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
       }
       setMarketDetailsLoading(true);
       try {
@@ -87,10 +94,12 @@ export function PredictionMarketModule() {
         if (!isMounted) return;
         setMarketDetails(data || null);
         setMarketDetailsStale(Boolean(data?.stale || data?.unavailable));
+        setMarketDetailsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("prediction-market-details", cacheParams, data || null);
       } catch {
         if (!isMounted) return;
         setMarketDetailsStale(true);
+        setMarketDetailsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
       } finally {
         if (isMounted) setMarketDetailsLoading(false);
       }
@@ -308,6 +317,9 @@ export function PredictionMarketModule() {
             </button>
           ))}
         </div>
+        {predictionStale && predictionNotice ? (
+          <div className="snapshot-inline-note" style={{ marginBottom: "12px" }}>{predictionNotice}</div>
+        ) : null}
 
         {predictionLoading && !predictionSnapshot ? (
           <div className="loading-state">Loading prediction markets...</div>
@@ -473,6 +485,9 @@ export function PredictionMarketModule() {
               </span>
               <button className="close-btn" onClick={() => setSelectedPredictionMarket(null)}>&times;</button>
             </div>
+            {marketDetailsStale && marketDetailsNotice ? (
+              <div className="snapshot-inline-note" style={{ marginBottom: "12px" }}>{marketDetailsNotice}</div>
+            ) : null}
 
             {marketDetailsLoading && !marketDetails ? (
               <div className="loading-state">Loading market details...</div>

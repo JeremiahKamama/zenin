@@ -1,34 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
-
-const G7_COUNTRIES = [
-  { code: "USA", name: "United States" },
-  { code: "CAN", name: "Canada" },
-  { code: "GBR", name: "United Kingdom" },
-  { code: "FRA", name: "France" },
-  { code: "DEU", name: "Germany" },
-  { code: "ITA", name: "Italy" },
-  { code: "JPN", name: "Japan" }
-];
-
-const DEFAULT_STOCK_THEMES = [
-  "AI",
-  "Defense",
-  "Energy",
-  "ETFs",
-  "Gaming",
-  "Hardware",
-  "Metals",
-  "Pharmco",
-  "Robotics",
-  "Space",
-  "Transportation"
-];
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const EARNINGS_CLIENT_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
@@ -60,10 +37,12 @@ export function Watchlist({
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
-  const [indicatorCountry, setIndicatorCountry] = useState("USA");
+  const [earningsNotice, setEarningsNotice] = useState("");
+  const [indicatorCountry, setIndicatorCountry] = useState("");
   const [macroSnapshot, setMacroSnapshot] = useState(null);
   const [macroLoading, setMacroLoading] = useState(false);
   const [macroStale, setMacroStale] = useState(false);
+  const [macroNotice, setMacroNotice] = useState("");
   const [macroByCountry, setMacroByCountry] = useState({});
   const [selectedIndicatorMetric, setSelectedIndicatorMetric] = useState(null);
 
@@ -71,6 +50,17 @@ export function Watchlist({
   const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
   const normalizeCategory = (value) => String(value || "").trim().toLowerCase();
   const normalizeTheme = (value) => String(value || "").trim().toLowerCase();
+  const resolveWatchlistCategory = (asset) => {
+    const explicitCategory = normalizeCategory(asset?.category);
+    if (explicitCategory) return explicitCategory;
+    const kind = normalizeAssetKind(asset);
+    if (kind === "stock" || kind === "etf") return "stocks";
+    if (kind === "crypto") return "crypto";
+    if (kind === "bond") return "bonds";
+    if (kind === "indicator") return "indicators";
+    if (kind === "commodity") return "commodities";
+    return kind;
+  };
   const normalizeAssetKind = (asset) => {
     const rawType = String(asset?.type || "").trim().toLowerCase();
     const rawCategory = normalizeCategory(asset?.category);
@@ -107,7 +97,7 @@ export function Watchlist({
 
   const mergedStockThemes = (() => {
     const seen = new Set();
-    return [...DEFAULT_STOCK_THEMES, ...(Array.isArray(stockThemes) ? stockThemes : [])]
+    return [...(Array.isArray(stockThemes) ? stockThemes : [])]
       .map((theme) => String(theme || "").trim())
       .filter((theme) => {
         if (!theme) return false;
@@ -143,7 +133,7 @@ export function Watchlist({
 
   useEffect(() => {
     if (activeCategory !== "indicators") {
-      setIndicatorCountry("USA");
+      setIndicatorCountry("");
       setMacroSnapshot(null);
       setMacroStale(false);
       setSelectedIndicatorMetric(null);
@@ -172,16 +162,7 @@ export function Watchlist({
   }, [assets]);
 
   const doesEntryBelongToActiveCategory = (entry) => {
-    const category = normalizeCategory(entry?.category);
-    const kind = normalizeAssetKind(entry);
-    if (activeCategory === "stocks") return category === "stocks" || kind === "stock" || kind === "etf";
-    if (activeCategory === "crypto") return category === "crypto" || kind === "crypto";
-    if (activeCategory === "bonds") return category === "bonds" || kind === "bond";
-    if (activeCategory === "indicators") return category === "indicators" || kind === "indicator";
-    if (["commodities", "metals"].includes(activeCategory)) {
-      return category === activeCategory || kind === "commodity";
-    }
-    return category === normalizeCategory(activeCategory) || kind === normalizeCategory(activeCategory);
+    return resolveWatchlistCategory(entry) === normalizeCategory(activeCategory);
   };
 
   const starredAssets = useMemo(() => {
@@ -216,6 +197,17 @@ export function Watchlist({
         )
       : starredAssets;
 
+  const indicatorWatchlistCountries = useMemo(() => {
+    return (Array.isArray(watchlistAssets) ? watchlistAssets : [])
+      .filter((entry) => normalizeAssetKind(entry) === "indicator")
+      .map((entry) => ({
+        ...entry,
+        symbol: normalizeSymbol(entry.symbol),
+        name: String(entry.name || entry.symbol || "").replace(/\s+macro indicators$/i, "").trim() || normalizeSymbol(entry.symbol)
+      }))
+      .sort((a, b) => getWatchlistOrder(a) - getWatchlistOrder(b));
+  }, [watchlistAssets]);
+
   const itemsPerPage = 10;
   const totalPages = Math.max(1, Math.ceil(displayedAssets.length / itemsPerPage));
   const pagedAssets = displayedAssets.slice(
@@ -224,18 +216,10 @@ export function Watchlist({
 );
 const pageSymbols = pagedAssets.map((a) => a.symbol).join(",");
 
-  const activeIndicator = useMemo(() => {
-    const matched = G7_COUNTRIES.find((country) => country.code === indicatorCountry);
-    const countryName = matched?.name || indicatorCountry;
-    return {
-      symbol: indicatorCountry,
-      name: `${countryName} Macro Indicators`,
-      type: "indicator",
-      category: "indicators",
-      marketType: "macro",
-      market: "Macro"
-    };
-  }, [indicatorCountry]);
+  const activeIndicator = useMemo(
+    () => indicatorWatchlistCountries.find((country) => country.symbol === indicatorCountry) || null,
+    [indicatorCountry, indicatorWatchlistCountries]
+  );
 
   const earningsAssets = activeCategory === "stocks" ? displayedAssets : [];
   const earningsPerPage = 5;
@@ -250,6 +234,20 @@ useEffect(() => {
 
   useEffect(() => {
     if (activeCategory !== "indicators") return;
+    if (indicatorWatchlistCountries.length === 0) {
+      setIndicatorCountry("");
+      setMacroSnapshot(null);
+      setMacroStale(false);
+      setMacroNotice("");
+      return;
+    }
+    if (!indicatorCountry || !indicatorWatchlistCountries.some((country) => country.symbol === indicatorCountry)) {
+      setIndicatorCountry(indicatorWatchlistCountries[0].symbol);
+    }
+  }, [activeCategory, indicatorCountry, indicatorWatchlistCountries]);
+
+  useEffect(() => {
+    if (activeCategory !== "indicators" || !indicatorCountry) return;
 
     let isMounted = true;
     const controller = new AbortController();
@@ -261,6 +259,7 @@ useEffect(() => {
     if (cachedPayload) {
       setMacroSnapshot(cachedPayload);
       setMacroStale(Boolean(cachedPayload?.stale || cachedPayload?.unavailable));
+      setMacroNotice(Boolean(cachedPayload?.stale || cachedPayload?.unavailable) ? getSnapshotFallbackMessage(cachedPayload) : "");
       if (now - cachedAt < MACRO_CLIENT_CACHE_TTL_MS) {
         setMacroLoading(false);
         return () => {
@@ -291,6 +290,7 @@ useEffect(() => {
         if (!isMounted) return;
         setMacroSnapshot(data || null);
         setMacroStale(Boolean(data?.stale || data?.unavailable));
+        setMacroNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         setMacroByCountry((prev) => ({
           ...prev,
           [indicatorCountry]: {
@@ -304,6 +304,7 @@ useEffect(() => {
         if (!isMounted) return;
         if (!cachedPayload) setMacroSnapshot(null);
         setMacroStale(true);
+        setMacroNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
       } finally {
         if (isMounted) setMacroLoading(false);
       }
@@ -321,6 +322,7 @@ useEffect(() => {
     if (!earningsSymbols.length) {
       setEarningsItems([]);
       setEarningsStale(false);
+      setEarningsNotice("");
       return;
     }
 
@@ -332,6 +334,7 @@ useEffect(() => {
     if (cached?.payload && Array.isArray(cached.payload?.items)) {
       setEarningsItems(cached.payload.items);
       setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+      setEarningsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
       if (cacheIsFresh && !cached.payload?.stale && !cached.payload?.unavailable) {
         setEarningsLoading(false);
         return () => {
@@ -360,12 +363,14 @@ useEffect(() => {
         const items = Array.isArray(data?.items) ? data.items : [];
         setEarningsItems(items);
         setEarningsStale(Boolean(data?.stale || data?.unavailable));
+        setEarningsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("earnings-calendar", cacheParams, data || { items });
       } catch (err) {
         if (err.name === "AbortError") return;
         if (!isMounted) return;
         if (!cached?.payload?.items) setEarningsItems([]);
         setEarningsStale(true);
+        setEarningsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
       } finally {
         if (isMounted) setEarningsLoading(false);
       }
@@ -442,31 +447,35 @@ useEffect(() => {
         <div>
           <div className="indicator-controls-row">
             <div className="theme-tabs indicator-country-tabs" style={{ paddingTop: 0, marginBottom: 0 }}>
-              {G7_COUNTRIES.map((country) => (
+              {indicatorWatchlistCountries.map((country) => (
                 <button
-                  key={country.code}
-                  className={`theme-pill ${indicatorCountry === country.code ? "active" : ""}`}
-                  onClick={() => setIndicatorCountry(country.code)}
+                  key={country.symbol}
+                  className={`theme-pill ${indicatorCountry === country.symbol ? "active" : ""}`}
+                  onClick={() => setIndicatorCountry(country.symbol)}
                 >
                   {country.name}
                 </button>
               ))}
             </div>
             <div className="indicator-toolbar">
-              <button
-                className={`modal-action-btn ${isInWatchlist(activeIndicator) ? "active" : ""}`}
-                onClick={() => onToggleStar(activeIndicator)}
-                title={isInWatchlist(activeIndicator) ? "Remove from watchlist" : "Add to watchlist"}
-              >
-                {isInWatchlist(activeIndicator) ? "Remove" : "Add"}
-              </button>
+              {activeIndicator ? (
+                <button
+                  className="modal-action-btn active"
+                  onClick={() => onToggleStar(activeIndicator)}
+                  title={`Remove ${activeIndicator.name} from watchlist`}
+                >
+                  Remove
+                </button>
+              ) : null}
               <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
                 <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
                 Indicators
               </span>
             </div>
           </div>
-          {macroLoading && (!Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0) ? (
+          {indicatorWatchlistCountries.length === 0 ? (
+            <div className="loading-state">Search for a country, then star it to track its indicators here.</div>
+          ) : macroLoading && (!Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0) ? (
             <div className="loading-state">Loading macro indicators...</div>
           ) : !Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0 ? (
             <div className="loading-state">Waiting for macro indicators...</div>
@@ -475,12 +484,15 @@ useEffect(() => {
               snapshot={macroSnapshot}
               onSelectMetric={(metric) =>
                 setSelectedIndicatorMetric({
-                  countryName: macroSnapshot?.countryName || activeIndicator.name,
+                  countryName: macroSnapshot?.countryName || activeIndicator?.name || indicatorCountry,
                   metric
                 })
               }
             />
           )}
+          {macroStale && macroNotice ? (
+            <div className="snapshot-inline-note">{macroNotice}</div>
+          ) : null}
         </div>
       ) : (
         <>
@@ -622,6 +634,9 @@ useEffect(() => {
               ))}
             </div>
           )}
+          {earningsStale && earningsNotice ? (
+            <div className="snapshot-inline-note">{earningsNotice}</div>
+          ) : null}
           {earningsTotalPages > 1 && (
             <div className="pagination-controls" style={{ marginTop: "10px", paddingTop: 0 }}>
               <button

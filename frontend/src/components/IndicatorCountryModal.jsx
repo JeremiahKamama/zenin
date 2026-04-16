@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
 
@@ -12,6 +13,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [stale, setStale] = useState(false);
+  const [notice, setNotice] = useState("");
   const [selectedMetric, setSelectedMetric] = useState(null);
 
   useEffect(() => {
@@ -26,6 +28,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
     if (cachedPayload) {
       setSnapshot(cachedPayload);
       setStale(Boolean(cachedPayload?.stale || cachedPayload?.unavailable));
+      setNotice(Boolean(cachedPayload?.stale || cachedPayload?.unavailable) ? getSnapshotFallbackMessage(cachedPayload) : "");
       if (Date.now() - cachedAt < MACRO_CLIENT_CACHE_TTL_MS) {
         return () => {
           isMounted = false;
@@ -47,11 +50,13 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
         if (!isMounted) return;
         setSnapshot(data || null);
         setStale(Boolean(data?.stale || data?.unavailable));
+        setNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("macro-indicators", { country: countryCode }, data || null);
       } catch (error) {
         if (error.name === "AbortError" || !isMounted) return;
         if (!cachedPayload) setSnapshot(null);
         setStale(true);
+        setNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -65,7 +70,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
   }, [countryCode]);
 
   const displayName = useMemo(
-    () => snapshot?.countryName || String(asset?.name || "").replace(/\s+Macro Indicators$/i, "") || countryCode,
+    () => snapshot?.countryName || String(asset?.countryName || asset?.name || "").replace(/\s+Macro Indicators$/i, "").trim() || countryCode,
     [asset, countryCode, snapshot]
   );
 
@@ -78,8 +83,8 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
         <div className="modal-content indicator-country-modal" onClick={(event) => event.stopPropagation()}>
           <header className="modal-header">
             <div className="asset-info">
-              <h2>{countryCode}</h2>
-              <p>{displayName} Macro Indicators</p>
+              <h2>{displayName}</h2>
+              <p>{countryCode} macro indicators</p>
             </div>
             <div className="modal-header-actions">
               <button
@@ -88,7 +93,8 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
                   onToggleStar?.({
                     ...asset,
                     symbol: countryCode,
-                    name: `${displayName} Macro Indicators`,
+                    name: displayName,
+                    countryName: displayName,
                     type: "indicator",
                     category: "indicators",
                     marketType: "macro",
@@ -110,6 +116,9 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
                 Indicators
               </span>
             </div>
+            {stale && notice ? (
+              <div className="snapshot-inline-note" style={{ marginBottom: "10px" }}>{notice}</div>
+            ) : null}
 
             {loading && metrics.length === 0 ? (
               <div className="chart-loading">Loading macro indicators...</div>

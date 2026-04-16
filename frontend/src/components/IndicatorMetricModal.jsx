@@ -173,7 +173,7 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
             {filteredSeries.length > 0 ? (
               <Chart options={chartOptions} series={chartSeries} type="area" height="400" width="100%" />
             ) : (
-              <div className="chart-no-data">Waiting for indicator history...</div>
+              <div className="chart-no-data">Waiting for {String(metric?.label || "indicator")} history...</div>
             )}
           </div>
         </div>
