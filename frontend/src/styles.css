@@ -1,9 +1,9 @@
 :root {
   color-scheme: dark;
   --color-bg-base: #000000;
-  --color-surface-card: rgba(2, 6, 23, 0.82);
-  --color-surface-card-strong: rgba(2, 6, 23, 0.94);
-  --color-surface-panel: rgba(2, 6, 23, 0.9);
+  --color-surface-card: rgba(2, 6, 23, 0.9);
+  --color-surface-card-strong: rgba(2, 6, 23, 0.97);
+  --color-surface-panel: rgba(2, 6, 23, 0.95);
   --color-surface-elevated: rgba(15, 23, 42, 0.72);
   --color-border-subtle: rgba(148, 163, 184, 0.16);
   --color-text-primary: #f8fafc;
@@ -42,6 +42,65 @@ textarea::placeholder {
 select option {
   background: #020617;
   color: #e2e8f0;
+}
+
+/* ── Hard Dark Surfaces For Cards/Sections/Modals ─────────────────── */
+.watchlist-panel,
+.portfolio-panel,
+.asset-card,
+.portfolio-card,
+.metric-card,
+.glass,
+.prediction-market-panel,
+.prediction-whale-panel,
+.whale-trades-panel,
+.prediction-category-card,
+.prediction-market-row,
+.prediction-split-card,
+.prediction-split-pane,
+.prediction-column,
+.journal-stat-card,
+.trade-item,
+.options-calculator-symbol-panel,
+.options-calculator-strategy-panel,
+.options-calculator-position-panel,
+.options-calculator-pnl-panel,
+.options-leg-card,
+.modal-content,
+.prediction-modal-window,
+.watchlist-add-modal,
+.settings-window,
+.connect-account-window,
+.payment-method-modal,
+.settings-panel,
+.settings-panel-header,
+.settings-panel-body,
+.connected-account-item,
+.calendar-symbol-dropdown,
+.journal-report-table-wrap,
+.table-scroll {
+  background: var(--color-surface-card-strong) !important;
+  border-color: var(--color-border-subtle) !important;
+}
+
+.settings-categories {
+  background: rgba(2, 6, 23, 0.82);
+}
+
+.settings-field input,
+.settings-field select,
+.settings-field textarea,
+.options-leg-input,
+.options-leg-card select,
+.options-calculator-symbol-input {
+  background: rgba(2, 6, 23, 0.82) !important;
+  border-color: rgba(148, 163, 184, 0.3) !important;
+  color: #e2e8f0 !important;
+}
+
+.options-leg-input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+  opacity: 0.9;
 }
 
 button {
@@ -2216,8 +2275,8 @@ button {
 }
 
 .prediction-market-row:hover {
-  border-color: rgba(56, 189, 248, 0.6);
-  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.6) !important;
+  background: rgba(56, 189, 248, 0.12) !important;
 }
 
 .prediction-market-title {

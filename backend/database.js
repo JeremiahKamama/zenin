@@ -10,6 +10,32 @@ function shouldUseSsl(connectionString) {
   return !/localhost|127\.0\.0\.1/i.test(connectionString);
 }
 
+function isRenderEnvironment(connectionString) {
+  if (process.env.RENDER === "true") return true;
+  if (process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_INSTANCE_ID) return true;
+  return /render\.com/i.test(String(connectionString || ""));
+}
+
+function resolveRejectUnauthorized(connectionString) {
+  const explicit = process.env.PGSSL_REJECT_UNAUTHORIZED;
+  if (explicit != null && String(explicit).trim() !== "") {
+    return String(explicit).toLowerCase() !== "false";
+  }
+
+  // "no-verify" is an explicit request to skip CA/hostname verification.
+  if (String(process.env.PGSSLMODE || "").toLowerCase() === "no-verify") {
+    return false;
+  }
+
+  // Render PostgreSQL commonly requires TLS with non-public CA chains for node-postgres.
+  // Default to non-strict verification on Render unless overridden by env.
+  if (isRenderEnvironment(connectionString)) {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "production";
+}
+
 function createPoolConfig() {
   const connectionString = (
     process.env.DATABASE_URL ||
@@ -18,10 +44,7 @@ function createPoolConfig() {
     process.env.POSTGRES_PRISMA_URL ||
     null
   );
-  const rejectUnauthorizedDefault = process.env.NODE_ENV === "production" ? "true" : "false";
-  const rejectUnauthorized = String(
-    process.env.PGSSL_REJECT_UNAUTHORIZED ?? rejectUnauthorizedDefault
-  ).toLowerCase() !== "false";
+  const rejectUnauthorized = resolveRejectUnauthorized(connectionString);
   const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized } : false;
 
   if (connectionString) {
