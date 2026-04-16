@@ -1,10 +1,12 @@
 import { useState, useMemo } from "react";
 import Chart from "react-apexcharts";
+import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 
 export function PortfolioModule({
   portfolio,
   trades = [],
   balance = 0,
+  accountMetrics = null,
   calculatePortfolioValue,
   calculatePortfolioGain,
   onRemove,
@@ -15,47 +17,24 @@ export function PortfolioModule({
   const [chartInterval, setChartInterval] = useState("1D");
   const [showDiversificationModal, setShowDiversificationModal] = useState(false);
   const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
-  const initialBalance = 10000;
   const portfolioValue = calculatePortfolioValue();
-  const tradeTimeline = useMemo(() => {
-    return (Array.isArray(trades) ? trades : [])
-      .map((trade, idx) => {
-        const timestamp = new Date(trade?.executedAt || trade?.date || 0).getTime();
-        if (!Number.isFinite(timestamp)) return null;
-        const accountEquityAfter = Number(trade?.accountEquityAfter ?? trade?.account_equity_after);
-        const balanceAfter = Number(trade?.balanceAfter ?? trade?.balance_after);
-        const portfolioValueAfter = Number(trade?.portfolioValueAfter ?? trade?.portfolio_value_after);
-        const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
-        const notional = Number(trade?.notional);
-        const fallbackNotional = Number(trade?.price) * Math.abs(Number(trade?.quantity));
-        return {
-          id: trade?.id ?? `trade-${idx}`,
-          t: timestamp,
-          side,
-          notional: Number.isFinite(notional) ? Math.abs(notional) : (Number.isFinite(fallbackNotional) ? Math.abs(fallbackNotional) : 0),
-          equity: Number.isFinite(accountEquityAfter)
-            ? accountEquityAfter
-            : Number.isFinite(balanceAfter) && Number.isFinite(portfolioValueAfter)
-              ? balanceAfter + portfolioValueAfter
-              : null,
-          balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.t - b.t);
-  }, [trades]);
-
-  const inferredCashBalance = useMemo(() => {
-    const latestWithBalance = [...tradeTimeline].reverse().find((trade) => Number.isFinite(trade.balanceAfter));
-    if (latestWithBalance) return latestWithBalance.balanceAfter;
-    return tradeTimeline.reduce((cash, trade) => {
-      if (!Number.isFinite(trade.notional)) return cash;
-      return trade.side === "sell" ? cash + trade.notional : cash - trade.notional;
-    }, initialBalance);
-  }, [tradeTimeline]);
-
-  const liveAvailableBalance = Number.isFinite(Number(balance)) ? Number(balance) : inferredCashBalance;
-  const currentAccountEquity = liveAvailableBalance + portfolioValue;
+  const derivedAccountMetrics = useMemo(
+    () => calculateAccountSnapshot({
+      trades,
+      portfolioValue,
+      balance
+    }),
+    [trades, portfolioValue, balance]
+  );
+  const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
+  const initialBalance = Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
+  const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline) ? activeAccountMetrics.tradeTimeline : [];
+  const liveAvailableBalance = Number.isFinite(Number(activeAccountMetrics?.liveAvailableBalance))
+    ? Number(activeAccountMetrics.liveAvailableBalance)
+    : initialBalance;
+  const currentAccountEquity = Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
+    ? Number(activeAccountMetrics.totalAccountEquity)
+    : (liveAvailableBalance + portfolioValue);
   const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "#22c55e" : "#ef4444") : "#38bdf8";
 
@@ -316,10 +295,10 @@ export function PortfolioModule({
     <div className="portfolio-module" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
         <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
                 <div className="metric-card glass">
-                  <label>Account Value</label>
-                  <div className="value">${calculatePortfolioValue().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                  <div className={`change ${calculatePortfolioGain() >= 0 ? "positive" : "negative"}`}>
-                    {calculatePortfolioGain() >= 0 ? "▲" : "▼"} ${Math.abs(calculatePortfolioGain()).toFixed(2)}
+                  <label>Total Account Equity</label>
+                  <div className="value">${currentAccountEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  <div className={`change ${liveAvailableBalance >= 0 ? "positive" : "negative"}`}>
+                    Cash ${liveAvailableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                 </div>
 

@@ -2697,6 +2697,21 @@ button {
   color: #64748b;
 }
 
+.home-movers-status.warning {
+  color: #f59e0b;
+}
+
+.home-movers-note {
+  margin: -2px 0 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 /* ── Options & Journal Styles ────────────────────────────────────── */
 .options-terminal,
 .journal-dashboard {
@@ -2769,6 +2784,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
 }
 
 .prediction-market-row:hover {
@@ -2782,6 +2798,9 @@ button {
   line-height: 1.35;
   margin-bottom: 6px;
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .prediction-prob-gauge {
@@ -2836,6 +2855,7 @@ button {
 .prediction-market-meta {
   display: flex;
   justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 0.72rem;
   color: #94a3b8;
@@ -2972,6 +2992,131 @@ button {
 }
 
 @media (max-width: 640px) {
+  .section-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .header-left {
+    min-width: 0;
+  }
+
+  .header-left h2,
+  .header-left .asset-count {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .modal-header {
+    padding: 18px 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .modal-header-actions {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .modal-action-btn,
+  .modal-remove-btn {
+    flex: 1 1 140px;
+  }
+
+  .prediction-market-panel,
+  .prediction-whale-panel,
+  .company-page-framework,
+  .company-earnings-card {
+    padding: 12px !important;
+  }
+
+  .prediction-market-row {
+    padding: 10px;
+    overflow: hidden;
+  }
+
+  .prediction-market-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .prediction-prob-gauge {
+    align-self: flex-end;
+  }
+
+  .prediction-modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .prediction-modal-window {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: 20px 20px 0 0;
+    padding: 12px;
+  }
+
+  .prediction-holder-row,
+  .prediction-position-row {
+    align-items: flex-start;
+  }
+
+  .prediction-position-row > div:last-child,
+  .prediction-holder-row > span:last-child {
+    text-align: right;
+  }
+
+  .watchlist-add-modal,
+  .connect-account-window,
+  .payment-method-modal,
+  .indicator-country-modal,
+  .indicator-metric-modal,
+  .options-calculation-history-modal,
+  .portfolio-diversification-modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: 20px 20px 0 0;
+  }
+
+  .company-page {
+    gap: 14px;
+  }
+
+  .company-page-header,
+  .company-page-framework,
+  .company-earnings-card {
+    border-radius: 16px;
+  }
+
+  .company-page-header {
+    padding: 16px;
+  }
+
+  .company-page-title-wrap h1 {
+    font-size: 1.5rem;
+  }
+
+  .company-page-title-wrap p {
+    font-size: 0.88rem;
+  }
+
+  .company-page-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .company-section-item {
+    padding: 14px 14px 14px 16px;
+  }
+
+  .company-earnings-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .prediction-split-grid {
     grid-template-columns: 1fr;
   }
@@ -4383,6 +4528,52 @@ button {
   gap: 14px;
 }
 
+.options-calculator-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.options-calculator-section-kicker {
+  margin: 0;
+  font-size: clamp(0.72rem, 0.68rem + 0.18vw, 0.82rem);
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+}
+
+.options-calculator-add-leg-btn,
+.options-calculator-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: clamp(0.84rem, 0.8rem + 0.2vw, 0.92rem);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.options-calculator-add-leg-btn {
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #38bdf8;
+}
+
+.options-calculator-add-leg-icon {
+  font-size: clamp(1rem, 0.94rem + 0.22vw, 1.15rem);
+  line-height: 1;
+}
+
 .options-leg-card {
   border: 1px solid rgba(148, 163, 184, 0.22);
   background: linear-gradient(180deg, rgba(2, 6, 23, 0.96) 0%, rgba(2, 6, 23, 0.84) 100%);
@@ -4400,7 +4591,7 @@ button {
 }
 
 .options-leg-title {
-  font-size: 14px;
+  font-size: clamp(0.98rem, 0.92rem + 0.22vw, 1.08rem);
   font-weight: 600;
   color: #9ca3af;
   line-height: 1.2;
@@ -4416,10 +4607,11 @@ button {
   border: none;
   background: transparent;
   color: #9ca3af;
-  font-size: 13px;
+  font-size: clamp(0.82rem, 0.78rem + 0.16vw, 0.9rem);
   font-weight: 500;
   cursor: pointer;
   padding: 0;
+  line-height: 1.2;
 }
 
 .options-leg-link-btn.danger {
@@ -4446,7 +4638,8 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 10px;
   color: #f1f5f9;
-  font-size: 14px;
+  font-size: clamp(0.92rem, 0.88rem + 0.18vw, 1rem);
+  line-height: 1.3;
   outline: none;
 }
 
@@ -4462,7 +4655,9 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 10px;
   color: #e5e7eb;
-  font-size: 14px;
+  font-size: clamp(0.9rem, 0.86rem + 0.18vw, 0.98rem);
+  font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
 }
 
@@ -4494,7 +4689,8 @@ button {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   color: #9ca3af;
-  font-size: 12px;
+  font-size: clamp(0.74rem, 0.7rem + 0.14vw, 0.82rem);
+  line-height: 1.3;
   padding: 0 2px;
 }
 
@@ -4508,6 +4704,35 @@ button {
 
 .options-calculator-save-row {
   flex-wrap: wrap;
+}
+
+.options-calculator-action-btn {
+  border: 1px solid transparent;
+}
+
+.options-calculator-action-btn.primary {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.3);
+  color: #38bdf8;
+}
+
+.options-calculator-action-btn.secondary {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.22);
+  color: #e2e8f0;
+}
+
+.options-calculator-save-message {
+  font-size: clamp(0.76rem, 0.72rem + 0.16vw, 0.84rem);
+  line-height: 1.35;
+}
+
+.options-calculator-save-message.error {
+  color: #ef4444;
+}
+
+.options-calculator-save-message.success {
+  color: #22c55e;
 }
 
 .options-calculator-pnl-head {
@@ -4675,12 +4900,9 @@ button {
     max-height: 220px;
   }
 
-  .options-leg-title {
-    font-size: 28px;
-  }
-
-  .options-leg-link-btn {
-    font-size: 15px;
+  .options-calculator-add-leg-btn,
+  .options-calculator-action-btn {
+    min-height: 42px;
   }
 
   .options-leg-row.two-col,
@@ -4806,6 +5028,11 @@ button {
     align-items: stretch !important;
     gap: 8px !important;
   }
+
+  .options-calculator-add-leg-btn,
+  .options-calculator-action-btn {
+    width: 100%;
+  }
 }
 
 @media (max-width: 430px) {
@@ -4868,7 +5095,8 @@ button {
   .search-input,
   .options-calculator-symbol-input,
   .options-calculator-table input,
-  .options-calculator-table select {
+  .options-calculator-table select,
+  .options-leg-input {
     font-size: 16px !important;
   }
 
@@ -4901,6 +5129,30 @@ button {
 
   .options-calculator-greeks-grid {
     grid-template-columns: 1fr !important;
+  }
+
+  .options-calculator-section-head {
+    align-items: stretch;
+  }
+
+  .options-leg-card {
+    border-radius: 18px;
+    padding: 12px;
+  }
+
+  .options-leg-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .options-leg-header-actions,
+  .options-leg-segment {
+    width: 100%;
+  }
+
+  .options-leg-header-actions {
+    justify-content: space-between;
+    gap: 12px;
   }
 
   .options-calculator-pnl-stats > div {
@@ -4947,6 +5199,10 @@ button {
 }
 
 @media (max-width: 360px) {
+  .company-page-stats {
+    grid-template-columns: 1fr;
+  }
+
   .asset-grid {
     grid-template-columns: 1fr;
   }

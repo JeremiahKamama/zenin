@@ -523,10 +523,10 @@ export function OptionsCalculator({   spotPrice = 0,
         </div>
 
         <div className="watchlist-panel glass options-calculator-position-panel" style={{ padding: "16px" }}>
-          <div className="options-calculator-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-            <p style={{ margin: 0, fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Position Legs</p>
-            <button type="button" className="options-calculator-add-leg-btn" onClick={addLeg} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
-              <span style={{ fontSize: "16px", lineHeight: 1 }}>+</span> Add Leg
+          <div className="options-calculator-section-head">
+            <p className="options-calculator-section-kicker">Position Legs</p>
+            <button type="button" className="options-calculator-add-leg-btn" onClick={addLeg}>
+              <span className="options-calculator-add-leg-icon">+</span> Add Leg
             </button>
           </div>
 
@@ -652,17 +652,17 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
 
           <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
-            <button type="button" onClick={saveCalculation} style={{ padding: "8px 18px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+            <button type="button" onClick={saveCalculation} className="options-calculator-action-btn primary">
               Save Calculation
             </button>
             <button
               type="button"
               onClick={() => setSavedCalculationsOpen(true)}
-              style={{ padding: "8px 18px", background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "8px", color: "#e2e8f0", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}
+              className="options-calculator-action-btn secondary"
             >
               View Calculations
             </button>
-            {saveMsg && <span style={{ fontSize: "12px", color: saveMsgType === "error" ? "#ef4444" : "#22c55e" }}>{saveMsg}</span>}
+            {saveMsg && <span className={`options-calculator-save-message ${saveMsgType === "error" ? "error" : "success"}`}>{saveMsg}</span>}
           </div>
         </div>
       </div>

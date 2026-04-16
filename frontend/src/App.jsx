@@ -8,6 +8,7 @@ import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
 import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
+import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -892,12 +893,12 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     }
   };
 
-  const calculatePortfolioValue = () => {
-    return portfolioWithEntry.reduce((total, item) => {
-      const itemValue = (item.price || 0) * (item.quantity || 0);
-      return total + itemValue;
-    }, 0);
-  };
+  const portfolioMarketValue = useMemo(
+    () => calculatePortfolioMarketValue(portfolioWithEntry),
+    [portfolioWithEntry]
+  );
+
+  const calculatePortfolioValue = () => portfolioMarketValue;
 
   const calculatePortfolioGain = () => {
     return portfolioWithEntry.reduce((total, item) => {
@@ -908,6 +909,15 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       return total + (itemValue - costValue);
     }, 0);
   };
+
+  const accountMetrics = useMemo(
+    () => calculateAccountSnapshot({
+      trades,
+      portfolioValue: portfolioMarketValue,
+      balance
+    }),
+    [trades, portfolioMarketValue, balance]
+  );
 
   useEffect(() => {
     if (!portfolioRef.current.length) return;
@@ -1814,6 +1824,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
             marketMovers={homeMarketMovers}
             watchlistAssets={watchlistAssets}
             onSelectAsset={setSelectedAsset}
+            accountMetrics={accountMetrics}
             calculatePortfolioValue={calculatePortfolioValue}
             calculatePortfolioGain={calculatePortfolioGain}
             balance={balance}
@@ -1936,6 +1947,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                 portfolio={portfolioWithEntry}
                 trades={trades}
                 balance={balance}
+                accountMetrics={accountMetrics}
                 calculatePortfolioValue={calculatePortfolioValue}
                 calculatePortfolioGain={calculatePortfolioGain}
                 onRemove={removeFromPortfolio}
@@ -1973,8 +1985,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           <JournalModule
             trades={trades}
             portfolio={portfolioWithEntry}
-            balance={balance}
-            accountEquity={(Number(balance) || 0) + calculatePortfolioValue()}
+            balance={accountMetrics.liveAvailableBalance}
+            accountEquity={accountMetrics.totalAccountEquity}
           />
         )}
           </>

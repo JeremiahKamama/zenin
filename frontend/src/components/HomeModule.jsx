@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
+import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -19,6 +20,7 @@ export function HomeModule({
   marketMovers = [],
   watchlistAssets = [],
   onSelectAsset,
+  accountMetrics = null,
   calculatePortfolioValue,
   calculatePortfolioGain,
   balance = 0
@@ -160,13 +162,37 @@ export function HomeModule({
     const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
     const value = Number(perf?.[intervalCode]);
     if (Number.isFinite(value)) return value;
-    const fallbackDaily = Number(asset?.priceChangePercent);
-    return Number.isFinite(fallbackDaily) ? fallbackDaily : null;
+    if (intervalCode === "1D") {
+      const fallbackDaily = Number(asset?.priceChangePercent);
+      return Number.isFinite(fallbackDaily) ? fallbackDaily : null;
+    }
+    return null;
   };
 
   const moversWithChange = moversUniverse
     .map((asset) => ({ ...asset, __moverChange: getMoverChange(asset) }))
     .filter((asset) => Number.isFinite(asset.__moverChange));
+
+  const moversCoverage = useMemo(() => {
+    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    return moversUniverse.reduce((summary, asset) => {
+      const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
+      const key = `${String(asset?.symbol || "").toUpperCase()}:${moverType}`;
+      const perf = moversPerformanceByKey[key];
+      const exactValue = Number(perf?.[intervalCode]);
+      const dailyFallback = Number(asset?.priceChangePercent);
+
+      summary.total += 1;
+      if (Number.isFinite(exactValue)) {
+        summary.resolved += 1;
+      } else if (intervalCode === "1D" && Number.isFinite(dailyFallback)) {
+        summary.fallback += 1;
+      } else {
+        summary.unavailable += 1;
+      }
+      return summary;
+    }, { total: 0, resolved: 0, fallback: 0, unavailable: 0 });
+  }, [moversUniverse, moversPerformanceByKey, moversHorizon]);
 
   const gainers = [...moversWithChange]
     .sort((a, b) => (b.__moverChange || 0) - (a.__moverChange || 0))
@@ -176,46 +202,23 @@ export function HomeModule({
     .slice(0, 5);
 
   const portfolioValue = calculatePortfolioValue();
-  const initialBalance = 10000;
-  const tradeTimeline = useMemo(() => {
-    return (Array.isArray(trades) ? trades : [])
-      .map((trade, idx) => {
-        const timestamp = new Date(trade?.executedAt || trade?.date || 0).getTime();
-        if (!Number.isFinite(timestamp)) return null;
-        const accountEquityAfter = Number(trade?.accountEquityAfter ?? trade?.account_equity_after);
-        const balanceAfter = Number(trade?.balanceAfter ?? trade?.balance_after);
-        const portfolioValueAfter = Number(trade?.portfolioValueAfter ?? trade?.portfolio_value_after);
-        const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
-        const notional = Number(trade?.notional);
-        const fallbackNotional = Number(trade?.price) * Math.abs(Number(trade?.quantity));
-        return {
-          id: trade?.id ?? `trade-${idx}`,
-          t: timestamp,
-          side,
-          notional: Number.isFinite(notional) ? Math.abs(notional) : (Number.isFinite(fallbackNotional) ? Math.abs(fallbackNotional) : 0),
-          equity: Number.isFinite(accountEquityAfter)
-            ? accountEquityAfter
-            : Number.isFinite(balanceAfter) && Number.isFinite(portfolioValueAfter)
-              ? balanceAfter + portfolioValueAfter
-              : null,
-          balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.t - b.t);
-  }, [trades]);
-  const inferredCashBalance = useMemo(() => {
-    const latestWithBalance = [...tradeTimeline].reverse().find((trade) => Number.isFinite(trade.balanceAfter));
-    if (latestWithBalance) return latestWithBalance.balanceAfter;
-    return tradeTimeline.reduce((cash, trade) => {
-      if (!Number.isFinite(trade.notional)) return cash;
-      return trade.side === "sell" ? cash + trade.notional : cash - trade.notional;
-    }, initialBalance);
-  }, [tradeTimeline]);
-  const liveAvailableBalance = Number.isFinite(inferredCashBalance)
-    ? Number(inferredCashBalance)
-    : (Number.isFinite(Number(balance)) ? Number(balance) : initialBalance);
-  const totalAccountEquity = liveAvailableBalance + portfolioValue;
+  const derivedAccountMetrics = useMemo(
+    () => calculateAccountSnapshot({
+      trades,
+      portfolioValue,
+      balance
+    }),
+    [trades, portfolioValue, balance]
+  );
+  const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
+  const initialBalance = Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
+  const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline) ? activeAccountMetrics.tradeTimeline : [];
+  const liveAvailableBalance = Number.isFinite(Number(activeAccountMetrics?.liveAvailableBalance))
+    ? Number(activeAccountMetrics.liveAvailableBalance)
+    : initialBalance;
+  const totalAccountEquity = Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
+    ? Number(activeAccountMetrics.totalAccountEquity)
+    : (liveAvailableBalance + portfolioValue);
   const isTreasuryAsset = (asset) => {
     const symbol = (asset?.symbol || "").toUpperCase();
     return asset?.market === "Treasury" || /^USTY?\d+Y$/.test(symbol);
@@ -415,7 +418,15 @@ export function HomeModule({
           <div className="section-header" style={{ marginBottom: "8px" }}>
             <h2 className="home-subsection-title">Top Movers</h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              {moversLoading ? <span className="asset-count">Loading...</span> : null}
+              {moversLoading ? (
+                <span className="asset-count">Loading...</span>
+              ) : moversCoverage.total > 0 ? (
+                <span className={`asset-count home-movers-status ${moversCoverage.unavailable > 0 || moversCoverage.fallback > 0 ? "warning" : ""}`}>
+                  {moversCoverage.resolved} synced
+                  {moversCoverage.fallback > 0 ? ` · ${moversCoverage.fallback} fallback` : ""}
+                  {moversCoverage.unavailable > 0 ? ` · ${moversCoverage.unavailable} unavailable` : ""}
+                </span>
+              ) : null}
               <select
                 value={moversHorizon}
                 onChange={(e) => setMoversHorizon(e.target.value)}
@@ -436,6 +447,13 @@ export function HomeModule({
               </select>
             </div>
           </div>
+          {!moversLoading && (moversCoverage.fallback > 0 || moversCoverage.unavailable > 0) ? (
+            <div className="home-movers-note">
+              {(MOVERS_HORIZONS[moversHorizon]?.interval || "1D") === "1D"
+                ? "Daily movers can fall back to quote change when interval snapshots are unavailable."
+                : `Only symbols with verified ${MOVERS_HORIZONS[moversHorizon]?.label?.toLowerCase() || "selected"} performance are shown when upstream interval data is partial.`}
+            </div>
+          ) : null}
           <div className="home-movers-split" style={{ display: "flex", gap: "0" }}>
             
             <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>

@@ -63,8 +63,7 @@ This README reflects the current implementation in this repository.
 - Security/account settings are currently workspace-level UX state (stored in local browser storage), not full backend-authenticated account security.
 - Connected account entries are currently metadata only (not live exchange/broker API execution).
 - The persistence model is currently single-workspace/single-tenant (`user_balance` uses a fixed id and core tables are not user-scoped).
-- Cross-module equity/balance metrics are being unified to ensure Home, Portfolio, and Journal always use the same canonical computation path.
-- Top Movers and some derived analytics are being hardened to degrade more gracefully when upstream interval/performance fetches are partially unavailable.
+- Top Movers now prefers verified interval-performance data for each selected horizon and only falls back to quote-change values for daily movers; non-daily horizons may therefore show fewer rows when upstream interval data is partial.
 
 ## Data sources and integrations
 
