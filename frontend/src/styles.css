@@ -1,10 +1,10 @@
 :root {
   color-scheme: dark;
   --color-bg-base: #000000;
-  --color-surface-card: rgba(2, 6, 23, 0.9);
-  --color-surface-card-strong: rgba(2, 6, 23, 0.97);
-  --color-surface-panel: rgba(2, 6, 23, 0.95);
-  --color-surface-elevated: rgba(15, 23, 42, 0.72);
+  --color-surface-card: rgba(0, 0, 0, 0.72);
+  --color-surface-card-strong: rgba(0, 0, 0, 0.9);
+  --color-surface-panel: rgba(0, 0, 0, 0.82);
+  --color-surface-elevated: rgba(0, 0, 0, 0.64);
   --color-border-subtle: rgba(148, 163, 184, 0.16);
   --color-text-primary: #f8fafc;
   --color-text-secondary: #94a3b8;
@@ -29,7 +29,7 @@ body {
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
-  background: rgba(2, 6, 23, 0.72);
+  background: rgba(0, 0, 0, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.24);
   color: #e2e8f0;
 }
@@ -40,7 +40,7 @@ textarea::placeholder {
 }
 
 select option {
-  background: #020617;
+  background: #000000;
   color: #e2e8f0;
 }
 
@@ -84,11 +84,11 @@ select option {
 }
 
 .settings-categories {
-  background: rgba(2, 6, 23, 0.82);
+  background: rgba(0, 0, 0, 0.78);
 }
 
 .portfolio-performance-card {
-  background: rgba(2, 6, 23, 0.68) !important;
+  background: rgba(0, 0, 0, 0.62) !important;
   border-color: rgba(148, 163, 184, 0.22) !important;
   backdrop-filter: blur(10px);
 }
@@ -99,7 +99,7 @@ select option {
 .options-leg-input,
 .options-leg-card select,
 .options-calculator-symbol-input {
-  background: rgba(2, 6, 23, 0.82) !important;
+  background: rgba(0, 0, 0, 0.68) !important;
   border-color: rgba(148, 163, 184, 0.3) !important;
   color: #e2e8f0 !important;
 }
