@@ -87,6 +87,12 @@ select option {
   background: rgba(2, 6, 23, 0.82);
 }
 
+.portfolio-performance-card {
+  background: rgba(2, 6, 23, 0.68) !important;
+  border-color: rgba(148, 163, 184, 0.22) !important;
+  backdrop-filter: blur(10px);
+}
+
 .settings-field input,
 .settings-field select,
 .settings-field textarea,

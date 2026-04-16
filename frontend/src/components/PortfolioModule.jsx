@@ -334,7 +334,7 @@ export function PortfolioModule({
         <div className="section-header" style={{ marginBottom: "12px" }}>
           <h2>Performance Chart</h2>
         </div>
-        <div className="watchlist-panel glass">
+        <div className="watchlist-panel glass portfolio-performance-card">
           <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
             {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
               <button key={mode} onClick={() => setChartMode(mode)} style={{
