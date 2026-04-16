@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import Chart from "react-apexcharts";
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 
 const STRATEGIES = [
   { name: "Long Call", legs: [{ type: "call", direction: "long", qty: 1 }] },
@@ -25,6 +26,44 @@ const STRATEGIES = [
 ];
 
 const EMPTY_LEG = { strike: "", expiry: "", type: "call", direction: "long", qty: 1, premium: "", iv: "" };
+const CALCULATIONS_PAGE_SIZE = 10;
+
+function formatCalculationTimestamp(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function formatMoney(value, digits = 2) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `$${amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}` : "—";
+}
+
+function formatNumber(value, digits = 4) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount.toFixed(digits) : "—";
+}
+
+function formatLegSummary(leg = {}, index = 0) {
+  const side = String(leg.direction || "long").toLowerCase() === "short" ? "Short" : "Long";
+  const type = String(leg.type || "call").toLowerCase() === "put" ? "Put" : "Call";
+  const qty = Number(leg.qty) || 1;
+  const strike = Number(leg.strike);
+  const premium = Number(leg.premium);
+  const iv = Number(leg.iv);
+  const strikeLabel = Number.isFinite(strike) && strike > 0 ? strike.toLocaleString() : "—";
+  const premiumLabel = Number.isFinite(premium) && premium > 0 ? formatMoney(premium, 4) : "—";
+  const ivLabel = Number.isFinite(iv) && iv > 0 ? `${iv.toFixed(1)}%` : "—";
+  const expiryLabel = leg.expiry || "Open";
+  return `Leg ${index + 1} · ${side} ${type} · Strike ${strikeLabel} · Qty ${qty} · Premium ${premiumLabel} · IV ${ivLabel} · Exp ${expiryLabel}`;
+}
 
 function blackScholes(S, K, T, r, sigma, type) {
   if (T <= 0 || sigma <= 0 || S <= 0 || K <= 0) return { price: 0, delta: 0, gamma: 0, theta: 0, vega: 0 };
@@ -51,20 +90,23 @@ export function OptionsCalculator({   spotPrice = 0,
   spotSource = "unavailable",
   chainData = [],
   activeAsset,
-  assets = [],
-  onAssetChange }) {
-useEffect(() => {
-  setSymbol(activeAsset);
-  setSymbolSearch(activeAsset);
-}, [activeAsset]);
-  const [symbol, setSymbol] = useState(activeAsset);
-  const [symbolSearch, setSymbolSearch] = useState(activeAsset);
+  assets = [] }) {
+  const [symbol, setSymbol] = useState(() => String(activeAsset || "").trim().toUpperCase() || "BTC");
+  const [symbolSearch, setSymbolSearch] = useState(() => String(activeAsset || "").trim().toUpperCase() || "BTC");
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
   const [legs, setLegs] = useState([{ ...EMPTY_LEG }]);
   const [activeStrategy, setActiveStrategy] = useState(null);
   const [savedCalculations, setSavedCalculations] = useState([]);
+  const [savedCalculationsOpen, setSavedCalculationsOpen] = useState(false);
+  const [savedCalculationsLoading, setSavedCalculationsLoading] = useState(false);
+  const [savedCalculationsError, setSavedCalculationsError] = useState("");
+  const [savedCalculationsPage, setSavedCalculationsPage] = useState(1);
   const [saveMsg, setSaveMsg] = useState("");
-  const filteredChainData = Array.isArray(chainData) ? chainData : [];
+  const [saveMsgType, setSaveMsgType] = useState("success");
+  const normalizedActiveAsset = String(activeAsset || "").trim().toUpperCase();
+  const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+  const isUsingActiveChainAsset = normalizedSymbol === normalizedActiveAsset;
+  const filteredChainData = isUsingActiveChainAsset && Array.isArray(chainData) ? chainData : [];
   const deriveSpotFromChain = () => {
     const strikes = filteredChainData
       .map((row) => Number(row?.strike))
@@ -74,20 +116,31 @@ useEffect(() => {
     return strikes[Math.floor(strikes.length / 2)];
   };
   const derivedSpot = deriveSpotFromChain();
-  const effectiveSpot = Number(spotPrice) > 0
+  const effectiveSpot = isUsingActiveChainAsset && Number(spotPrice) > 0
     ? Number(spotPrice)
     : (Number.isFinite(derivedSpot) ? Number(derivedSpot) : null);
-  const S = Number.isFinite(effectiveSpot) && effectiveSpot > 0 ? effectiveSpot : 1;
+  const hasCalculatorMarketData = isUsingActiveChainAsset && filteredChainData.length > 0 && Number.isFinite(effectiveSpot) && effectiveSpot > 0;
+  const S = hasCalculatorMarketData ? effectiveSpot : 0;
   const r = 0.0425;
 
   useEffect(() => {
-  setLegs([{ ...EMPTY_LEG }]);
-  setActiveStrategy(null);
-}, [symbol]);
+    setLegs([{ ...EMPTY_LEG }]);
+    setActiveStrategy(null);
+    setSavedCalculationsPage(1);
+  }, [symbol]);
 
-  const filteredSymbols = assets.filter(s =>
-  s.toLowerCase().includes(symbolSearch.toLowerCase())
-);
+  const normalizedSearch = String(symbolSearch || "").trim().toUpperCase();
+  const filteredSymbols = assets.filter((s) =>
+    String(s || "").trim().toUpperCase().includes(normalizedSearch)
+  );
+
+  const commitSymbolSelection = (nextSymbol) => {
+    const committed = String(nextSymbol || "").trim().toUpperCase();
+    if (!committed) return;
+    setSymbol(committed);
+    setSymbolSearch(committed);
+    setShowSymbolDropdown(false);
+  };
 
   // Auto-populate strike from chain data when available
   const getChainStrikes = () => {
@@ -117,6 +170,20 @@ useEffect(() => {
   const addLeg = () => setLegs(prev => [...prev, { ...EMPTY_LEG }]);
   const removeLeg = (i) => setLegs(prev => prev.filter((_, idx) => idx !== i));
   const updateLeg = (i, field, value) => setLegs(prev => prev.map((leg, idx) => idx === i ? { ...leg, [field]: value } : leg));
+  const updateLegMarketSelection = (i, patch) => {
+    setLegs((prev) => prev.map((leg, idx) => {
+      if (idx !== i) return leg;
+      const nextLeg = { ...leg, ...patch };
+      if (!nextLeg.strike) return nextLeg;
+      const iv = getChainIV(nextLeg.strike, nextLeg.type);
+      const premium = getChainPremium(nextLeg.strike, nextLeg.type);
+      return {
+        ...nextLeg,
+        iv: iv || nextLeg.iv,
+        premium: premium || nextLeg.premium
+      };
+    }));
+  };
   const refreshLeg = (i) => {
     const leg = legs[i];
     if (!leg) return;
@@ -186,7 +253,13 @@ useEffect(() => {
   const maxLoss = Math.min(...pnlData.map(d => d[1]));
   const breakevenPoints = pnlData
     .filter((d, i) => i > 0 && Math.sign(pnlData[i - 1][1]) !== Math.sign(d[1]))
-    .map(d => d[0].toLocaleString(undefined, { maximumFractionDigits: 0 }));
+    .map(d => Number(d[0].toFixed(2)));
+  const hasConfiguredLegs = legs.some((leg) => Number.isFinite(Number(leg.strike)) && Number(leg.strike) > 0);
+  const totalSavedCalculationsPages = Math.max(1, Math.ceil(savedCalculations.length / CALCULATIONS_PAGE_SIZE));
+  const pagedSavedCalculations = savedCalculations.slice(
+    (savedCalculationsPage - 1) * CALCULATIONS_PAGE_SIZE,
+    savedCalculationsPage * CALCULATIONS_PAGE_SIZE
+  );
 
   const isProfitColor = (val) => val >= 0 ? "#22c55e" : "#ef4444";
 
@@ -217,32 +290,118 @@ useEffect(() => {
     markers: { size: 0 }
   };
 
+  useEffect(() => {
+    if (savedCalculationsPage > totalSavedCalculationsPages) {
+      setSavedCalculationsPage(totalSavedCalculationsPages);
+    }
+  }, [savedCalculationsPage, totalSavedCalculationsPages]);
+
+  useEffect(() => {
+    if (!normalizedSymbol) {
+      setSavedCalculations([]);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let ignore = false;
+
+    const loadSavedCalculations = async () => {
+      setSavedCalculationsLoading(true);
+      setSavedCalculationsError("");
+      try {
+        const params = new URLSearchParams({
+          symbol: normalizedSymbol,
+          limit: "100"
+        });
+        const res = await fetch(`${BACKEND_URL}/db/options-calculations?${params.toString()}`, {
+          signal: controller.signal
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+        const data = await res.json();
+        if (ignore) return;
+        setSavedCalculations(Array.isArray(data?.calculations) ? data.calculations : []);
+      } catch (error) {
+        if (ignore || error?.name === "AbortError") return;
+        setSavedCalculations([]);
+        setSavedCalculationsError("Unable to load saved calculations right now.");
+      } finally {
+        if (!ignore) setSavedCalculationsLoading(false);
+      }
+    };
+
+    loadSavedCalculations();
+
+    return () => {
+      ignore = true;
+      controller.abort();
+    };
+  }, [normalizedSymbol]);
+
   const saveCalculation = async () => {
-    const calc = { symbol, legs, totals, timestamp: new Date().toISOString(), strategy: activeStrategy };
+    if (!normalizedSymbol) {
+      setSaveMsgType("error");
+      setSaveMsg("Search for an asset before saving.");
+      setTimeout(() => setSaveMsg(""), 2500);
+      return;
+    }
+    if (!hasConfiguredLegs) {
+      setSaveMsgType("error");
+      setSaveMsg("Add at least one strike before saving.");
+      setTimeout(() => setSaveMsg(""), 2500);
+      return;
+    }
+    const calc = {
+      symbol: normalizedSymbol,
+      strategy: activeStrategy || "Custom",
+      netPnl: Number(totals.pnl.toFixed(4)),
+      delta: Number(totals.delta.toFixed(6)),
+      gamma: Number(totals.gamma.toFixed(6)),
+      theta: Number(totals.theta.toFixed(6)),
+      vega: Number(totals.vega.toFixed(6)),
+      maxProfit: Number.isFinite(maxProfit) ? Number(maxProfit.toFixed(2)) : null,
+      maxLoss: Number.isFinite(maxLoss) ? Number(maxLoss.toFixed(2)) : null,
+      breakevens: breakevenPoints,
+      legs: legs.map((leg) => ({
+        strike: Number.isFinite(Number(leg.strike)) ? Number(leg.strike) : null,
+        expiry: leg.expiry || null,
+        type: String(leg.type || "call").toLowerCase() === "put" ? "put" : "call",
+        direction: String(leg.direction || "long").toLowerCase() === "short" ? "short" : "long",
+        qty: Math.max(1, Number(leg.qty) || 1),
+        premium: Number.isFinite(Number(leg.premium)) ? Number(leg.premium) : 0,
+        iv: Number.isFinite(Number(leg.iv)) ? Number(leg.iv) : 0
+      })),
+      createdAt: new Date().toISOString()
+    };
     try {
-      const res = await fetch(`${BACKEND_URL}/api/db/options-calculations`, {
+      const res = await fetch(`${BACKEND_URL}/db/options-calculations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(calc)
       });
-      if (res.ok) {
-        setSaveMsg("Saved!");
-        setSavedCalculations(prev => [calc, ...prev]);
-        setTimeout(() => setSaveMsg(""), 2000);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
       }
-    } catch {
-      // Save locally if endpoint doesn't exist yet
-      setSavedCalculations(prev => [calc, ...prev]);
-      setSaveMsg("Saved locally!");
+      const savedRecord = await res.json();
+      const normalizedRecord = {
+        ...savedRecord,
+        legs: Array.isArray(savedRecord?.legs) ? savedRecord.legs : calc.legs,
+        breakevens: Array.isArray(savedRecord?.breakevens) ? savedRecord.breakevens : calc.breakevens
+      };
+      setSaveMsgType("success");
+      setSaveMsg("Calculation saved.");
+      setSavedCalculations((prev) => [normalizedRecord, ...prev.filter((row) => row?.id !== normalizedRecord?.id)]);
+      setSavedCalculationsPage(1);
       setTimeout(() => setSaveMsg(""), 2000);
+    } catch {
+      setSaveMsgType("error");
+      setSaveMsg("Save failed. Please try again.");
+      setTimeout(() => setSaveMsg(""), 2500);
     }
   };
-
-  const btnStyle = (active) => ({
-    padding: "4px 10px", fontSize: "11px", borderRadius: "6px", cursor: "pointer", border: "none",
-    background: active ? "#38bdf8" : "rgba(148,163,184,0.1)",
-    color: active ? "#000" : "#94a3b8", fontWeight: active ? 700 : 400
-  });
 
   return (
     <div className="options-calculator" style={{ marginTop: "32px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "24px" }}>
@@ -257,9 +416,18 @@ useEffect(() => {
             <div style={{ position: "relative" }}>
               <input
                 value={symbolSearch}
-                onChange={e => { setSymbolSearch(e.target.value); setShowSymbolDropdown(true); }}
+                onChange={e => { setSymbolSearch(e.target.value.toUpperCase()); setShowSymbolDropdown(true); }}
                 onFocus={() => setShowSymbolDropdown(true)}
-                onBlur={() => setTimeout(() => setShowSymbolDropdown(false), 150)}
+                onBlur={() => setTimeout(() => {
+                  setShowSymbolDropdown(false);
+                  commitSymbolSelection(symbolSearch);
+                }, 150)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitSymbolSelection(symbolSearch);
+                  }
+                }}
                 placeholder="Search symbol..."
                 className="options-calculator-symbol-input"
                 style={{ width: "100%", padding: "8px 12px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "8px", color: "#f1f5f9", fontSize: "14px", outline: "none" }}
@@ -286,10 +454,7 @@ useEffect(() => {
                       className="options-calculator-symbol-option"
                       key={s}
                       onClick={() => {
-                        setSymbol(s);
-                        setSymbolSearch(s);
-                        setShowSymbolDropdown(false);
-                        if (onAssetChange) onAssetChange(s);
+                        commitSymbolSelection(s);
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(148,163,184,0.08)")}
                       onMouseLeave={(e) => (e.currentTarget.style.background = s === symbol ? "rgba(56,189,248,0.1)" : "transparent")}
@@ -318,6 +483,11 @@ useEffect(() => {
                 Source: {spotSource === "lyra" ? "Lyra" : spotSource === "hyperliquid" ? "Hyperliquid (fallback)" : "Unavailable"}
               </p>
             </div>
+            {!hasCalculatorMarketData ? (
+              <p style={{ margin: "10px 0 0", fontSize: "11px", lineHeight: 1.45, color: "#f59e0b" }}>
+                No options market data is available for {normalizedSymbol || "this asset"} right now. Search another asset to continue calculations.
+              </p>
+            ) : null}
           </div>
 
           <div className="watchlist-panel glass options-calculator-strategy-panel" style={{ padding: "16px" }}>
@@ -325,6 +495,7 @@ useEffect(() => {
             <div className="options-calculator-strategy-grid">
               {STRATEGIES.map((s) => (
                 <button
+                  type="button"
                   className={`options-calculator-strategy-btn ${activeStrategy === s.name ? "active" : ""}`}
                   key={s.name}
                   onClick={() => applyStrategy(s)}
@@ -354,7 +525,7 @@ useEffect(() => {
         <div className="watchlist-panel glass options-calculator-position-panel" style={{ padding: "16px" }}>
           <div className="options-calculator-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
             <p style={{ margin: 0, fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Position Legs</p>
-            <button className="options-calculator-add-leg-btn" onClick={addLeg} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+            <button type="button" className="options-calculator-add-leg-btn" onClick={addLeg} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
               <span style={{ fontSize: "16px", lineHeight: 1 }}>+</span> Add Leg
             </button>
           </div>
@@ -365,8 +536,8 @@ useEffect(() => {
                 <div className="options-leg-header">
                   <div className="options-leg-title">Leg {i + 1}</div>
                   <div className="options-leg-header-actions">
-                    <button className="options-leg-link-btn" onClick={() => refreshLeg(i)}>Refresh</button>
-                    <button className="options-leg-link-btn danger" onClick={() => removeLeg(i)}>Remove</button>
+                    <button type="button" className="options-leg-link-btn" onClick={() => refreshLeg(i)}>Refresh</button>
+                    <button type="button" className="options-leg-link-btn danger" onClick={() => removeLeg(i)}>Remove</button>
                   </div>
                 </div>
 
@@ -375,11 +546,7 @@ useEffect(() => {
                     value={leg.strike}
                     onChange={e => {
                       const strike = e.target.value;
-                      updateLeg(i, "strike", strike);
-                      const iv = getChainIV(strike, leg.type);
-                      const premium = getChainPremium(strike, leg.type);
-                      if (iv) updateLeg(i, "iv", iv);
-                      if (premium) updateLeg(i, "premium", premium);
+                      updateLegMarketSelection(i, { strike });
                     }}
                     className="options-leg-input"
                   >
@@ -399,14 +566,18 @@ useEffect(() => {
                 <div className="options-leg-row two-col">
                   <div className="options-leg-segment">
                     <button
-                      className={`options-leg-segment-btn ${leg.type === "call" ? "active positive" : ""}`}
-                      onClick={() => updateLeg(i, "type", "call")}
+                      type="button"
+                      className={`options-leg-segment-btn ${leg.type === "call" ? "active info" : ""}`}
+                      aria-pressed={leg.type === "call"}
+                      onClick={() => updateLegMarketSelection(i, { type: "call" })}
                     >
                       Call
                     </button>
                     <button
-                      className={`options-leg-segment-btn ${leg.type === "put" ? "active" : ""}`}
-                      onClick={() => updateLeg(i, "type", "put")}
+                      type="button"
+                      className={`options-leg-segment-btn ${leg.type === "put" ? "active negative" : ""}`}
+                      aria-pressed={leg.type === "put"}
+                      onClick={() => updateLegMarketSelection(i, { type: "put" })}
                     >
                       Put
                     </button>
@@ -414,13 +585,17 @@ useEffect(() => {
 
                   <div className="options-leg-segment">
                     <button
-                      className={`options-leg-segment-btn ${leg.direction === "long" ? "active" : ""}`}
+                      type="button"
+                      className={`options-leg-segment-btn ${leg.direction === "long" ? "active positive" : ""}`}
+                      aria-pressed={leg.direction === "long"}
                       onClick={() => updateLeg(i, "direction", "long")}
                     >
                       Long
                     </button>
                     <button
-                      className={`options-leg-segment-btn ${leg.direction === "short" ? "active" : ""}`}
+                      type="button"
+                      className={`options-leg-segment-btn ${leg.direction === "short" ? "active negative" : ""}`}
+                      aria-pressed={leg.direction === "short"}
                       onClick={() => updateLeg(i, "direction", "short")}
                     >
                       Short
@@ -477,10 +652,17 @@ useEffect(() => {
           </div>
 
           <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
-            <button onClick={saveCalculation} style={{ padding: "8px 18px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+            <button type="button" onClick={saveCalculation} style={{ padding: "8px 18px", background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: "8px", color: "#38bdf8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
               Save Calculation
             </button>
-            {saveMsg && <span style={{ fontSize: "12px", color: "#22c55e" }}>{saveMsg}</span>}
+            <button
+              type="button"
+              onClick={() => setSavedCalculationsOpen(true)}
+              style={{ padding: "8px 18px", background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "8px", color: "#e2e8f0", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}
+            >
+              View Calculations
+            </button>
+            {saveMsg && <span style={{ fontSize: "12px", color: saveMsgType === "error" ? "#ef4444" : "#22c55e" }}>{saveMsg}</span>}
           </div>
         </div>
       </div>
@@ -507,19 +689,127 @@ useEffect(() => {
             <div style={{ textAlign: "center" }}>
               <p style={{ margin: "0 0 2px", fontSize: "10px", color: "#64748b" }}>BREAKEVEN</p>
               <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#f59e0b" }}>
-                {breakevenPoints.length > 0 ? `$${breakevenPoints.join(" / $")}` : "—"}
+                {breakevenPoints.length > 0 ? `$${breakevenPoints.map((point) => point.toLocaleString()).join(" / $")}` : "—"}
               </p>
             </div>
           </div>
         </div>
-        <Chart
-          options={chartOptions}
-          series={[{ name: "P&L", data: pnlData }]}
-          type="area"
-          height={280}
-          width="100%"
-        />
+        {hasCalculatorMarketData ? (
+          <Chart
+            options={chartOptions}
+            series={[{ name: "P&L", data: pnlData }]}
+            type="area"
+            height={280}
+            width="100%"
+          />
+        ) : (
+          <div className="chart-no-data" style={{ minHeight: "220px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            Search another asset with available options market data to plot the calculator.
+          </div>
+        )}
       </div>
+
+      {savedCalculationsOpen ? (
+        <div className="modal-overlay" onClick={() => setSavedCalculationsOpen(false)}>
+          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="options-calculation-history-head">
+              <div>
+                <p className="options-calculation-history-kicker">Saved Calculations</p>
+                <h3>{normalizedSymbol || "Selected Asset"} Calculation History</h3>
+                <p className="options-calculation-history-subtitle">Position legs and outputs saved to the database for this symbol.</p>
+              </div>
+              <button type="button" className="options-leg-link-btn" onClick={() => setSavedCalculationsOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            {savedCalculationsLoading ? (
+              <div className="loading-state" style={{ marginTop: "8px" }}>Loading saved calculations...</div>
+            ) : savedCalculationsError ? (
+              <div className="loading-state" style={{ marginTop: "8px", color: "#f59e0b" }}>{savedCalculationsError}</div>
+            ) : savedCalculations.length === 0 ? (
+              <div className="loading-state" style={{ marginTop: "8px" }}>No saved calculations for {normalizedSymbol || "this asset"} yet.</div>
+            ) : (
+              <>
+                <div className="table-scroll options-calculation-history-scroll">
+                  <table className="option-chain-table options-calculation-history-table">
+                    <thead>
+                      <tr>
+                        <th>Saved</th>
+                        <th>Strategy</th>
+                        <th>Position Legs</th>
+                        <th>Breakevens</th>
+                        <th>Net P&amp;L</th>
+                        <th>Delta</th>
+                        <th>Gamma</th>
+                        <th>Theta</th>
+                        <th>Vega</th>
+                        <th>Max Profit</th>
+                        <th>Max Loss</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pagedSavedCalculations.map((calc) => (
+                        <tr key={calc.id || calc.created_at || calc.createdAt}>
+                          <td className="greek">{formatCalculationTimestamp(calc.created_at || calc.createdAt)}</td>
+                          <td className="greek">{calc.strategy || "Custom"}</td>
+                          <td>
+                            <div className="options-calculation-leg-list">
+                              {(Array.isArray(calc.legs) ? calc.legs : []).map((leg, index) => (
+                                <div key={`${calc.id || calc.created_at || calc.createdAt}-leg-${index}`} className="options-calculation-leg-item">
+                                  {formatLegSummary(leg, index)}
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="greek">
+                            {Array.isArray(calc.breakevens) && calc.breakevens.length > 0
+                              ? calc.breakevens.map((point) => formatMoney(point, 2)).join(" / ")
+                              : "—"}
+                          </td>
+                          <td className={Number(calc.net_pnl ?? calc.netPnl) >= 0 ? "bid-ask positive" : "bid-ask negative"}>
+                            {formatMoney(calc.net_pnl ?? calc.netPnl)}
+                          </td>
+                          <td className="greek">{formatNumber(calc.delta, 4)}</td>
+                          <td className="greek">{formatNumber(calc.gamma, 6)}</td>
+                          <td className="greek">{formatNumber(calc.theta, 4)}</td>
+                          <td className="greek">{formatNumber(calc.vega, 4)}</td>
+                          <td className="bid-ask positive">{formatMoney(calc.max_profit ?? calc.maxProfit)}</td>
+                          <td className="bid-ask negative">{formatMoney(calc.max_loss ?? calc.maxLoss)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {totalSavedCalculationsPages > 1 ? (
+                  <div className="pagination-controls" style={{ marginTop: "12px" }}>
+                    <button
+                      type="button"
+                      className="pagination-button"
+                      disabled={savedCalculationsPage === 1}
+                      onClick={() => setSavedCalculationsPage((page) => Math.max(1, page - 1))}
+                    >
+                      Previous
+                    </button>
+                    <div className="pagination-label">
+                      Page {savedCalculationsPage} of {totalSavedCalculationsPages}
+                    </div>
+                    <button
+                      type="button"
+                      className="pagination-button"
+                      disabled={savedCalculationsPage === totalSavedCalculationsPages}
+                      onClick={() => setSavedCalculationsPage((page) => Math.min(totalSavedCalculationsPages, page + 1))}
+                    >
+                      Next
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

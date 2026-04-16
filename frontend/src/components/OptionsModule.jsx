@@ -20,6 +20,7 @@ export function OptionsModule() {
   const [whaleTrades, setWhaleTrades] = useState([]);
   const [whaleLoading, setWhaleLoading] = useState(false);
   const [whaleStale, setWhaleStale] = useState(false);
+  const [whaleMeta, setWhaleMeta] = useState({});
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
   const [whaleSource, setWhaleSource] = useState("derive");
@@ -182,6 +183,7 @@ useEffect(() => {
     if (cached?.payload && Array.isArray(cached.payload?.trades)) {
       setWhaleTrades(cached.payload.trades);
       setWhaleStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+      setWhaleMeta(cached.payload || {});
     }
     setWhaleLoading(true);
     try {
@@ -198,11 +200,13 @@ useEffect(() => {
       if (!isMounted) return;
       setWhaleTrades(Array.isArray(data?.trades) ? data.trades : []);
       setWhaleStale(Boolean(data?.stale || data?.unavailable));
+      setWhaleMeta(data || {});
       writeResilientCache("options-whale-trades", cacheParams, data || { trades: [] });
       setWhalePage(1);
     } catch (err) {
       if (!isMounted) return;
       setWhaleStale(true);
+      setWhaleMeta((prev) => prev || {});
     } finally {
       if (isMounted) setWhaleLoading(false);
     }
@@ -264,6 +268,7 @@ useEffect(() => {
   };
 
   const whaleThresholdOptions = [
+    { label: "Above $10K", value: 10000 },
     { label: "Above $100K", value: 100000 },
     { label: "Above $250K", value: 250000 },
     { label: "Above $500K", value: 500000 },
@@ -274,6 +279,30 @@ useEffect(() => {
     { label: "Derive", value: "derive" },
     { label: "Telegram", value: "telegram" }
   ];
+  const telegramDebug = whaleMeta?.debug_telegram_ingest || null;
+  const telegramChannels = Array.isArray(telegramDebug?.channels) ? telegramDebug.channels : [];
+  const telegramSourceLabel = telegramChannels.length > 0 ? telegramChannels.map((channel) => `@${channel}`).join(", ") : "@derivetradetape";
+  const whaleEmptyStateText = whaleSource === "telegram"
+    ? (() => {
+        if (telegramDebug?.status === "disabled") {
+          return "Telegram whale ingestion is disabled. Configure Telegram MTProto credentials on the backend to load channel trades.";
+        }
+        if (telegramDebug?.status === "error") {
+          return telegramDebug?.error
+            ? `Telegram whale ingestion failed: ${telegramDebug.error}`
+            : "Telegram whale ingestion failed before any trades could be parsed.";
+        }
+        if (telegramDebug?.status === "empty" && Number(telegramDebug?.messageCount) > 0) {
+          return `Parsed 0 whale trades from ${telegramDebug.messageCount} Telegram messages across ${telegramChannels.length || 1} channel${(telegramChannels.length || 1) === 1 ? "" : "s"}.`;
+        }
+        if (telegramDebug?.status === "partial") {
+          return telegramDebug?.error
+            ? `Telegram pulled some channels but others failed: ${telegramDebug.error}`
+            : "Telegram whale ingestion returned a partial snapshot.";
+        }
+        return `Waiting for Telegram whale options trades from ${telegramSourceLabel}...`;
+      })()
+    : "Waiting for Derive whale options trades...";
 
   return (
     <div className="view-container options-terminal">
@@ -420,16 +449,24 @@ useEffect(() => {
           </div>
         </div>
 
+        {whaleSource === "telegram" ? (
+          <div style={{ marginBottom: "10px", fontSize: "12px", color: "#64748b" }}>
+            Sources: {telegramSourceLabel}
+            {telegramDebug?.status && telegramDebug.status !== "ok" ? ` · Status: ${telegramDebug.status}` : ""}
+          </div>
+        ) : null}
+
         {whaleLoading && whaleTrades.length === 0 ? (
           <div className="loading-state">Loading whale options trades...</div>
         ) : pagedWhaleTrades.length === 0 ? (
-          <div className="loading-state">Waiting for {whaleSource === "telegram" ? "Telegram" : "Derive"} whale options trades...</div>
+          <div className="loading-state">{whaleEmptyStateText}</div>
         ) : (
           <div className="table-scroll">
             <table className="option-chain-table whale-trades-table">
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th>Source</th>
                   <th>Expiration</th>
                   <th>Reference Price</th>
                   <th>Strategy</th>
@@ -440,6 +477,7 @@ useEffect(() => {
                 {pagedWhaleTrades.map((trade) => (
                   <tr key={trade.id}>
                     <td className="greek">{trade.symbol}</td>
+                    <td className="greek">{trade.sourceLabel || (trade.source === "telegram" ? "Telegram" : "Derive")}</td>
                     <td className="greek">{trade.expiration || "—"}</td>
                     <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>
                     <td className="greek">{trade.strategy}</td>

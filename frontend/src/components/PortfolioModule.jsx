@@ -13,6 +13,7 @@ export function PortfolioModule({
 }){
   const [chartMode, setChartMode] = useState("equity");
   const [chartInterval, setChartInterval] = useState("1D");
+  const [showDiversificationModal, setShowDiversificationModal] = useState(false);
   const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
   const initialBalance = 10000;
   const portfolioValue = calculatePortfolioValue();
@@ -150,6 +151,42 @@ export function PortfolioModule({
     plotOptions: { pie: { donut: { size: "65%" } } },
     tooltip: { y: { formatter: v => `$${v.toLocaleString(undefined, { minimumFractionDigits: 2 })}` } }
   };
+
+  const diversificationRows = useMemo(() => {
+    const stockLikeHoldings = (Array.isArray(portfolio) ? portfolio : []).filter((item) => {
+      const type = String(item?.type || "").trim().toLowerCase();
+      return ["stock", "stocks", "equity", "etf", "etfs"].includes(type) || !!item?.theme;
+    });
+    const source = stockLikeHoldings.length > 0 ? stockLikeHoldings : (Array.isArray(portfolio) ? portfolio : []);
+    const totalExposure = source.reduce(
+      (sum, item) => sum + ((Number(item?.price) || 0) * (Number(item?.quantity) || 0)),
+      0
+    );
+    const grouped = new Map();
+
+    source.forEach((item) => {
+      const theme = String(item?.theme || item?.type || "Unassigned").trim() || "Unassigned";
+      const value = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
+      const row = grouped.get(theme) || {
+        theme,
+        positions: 0,
+        value: 0,
+        symbols: []
+      };
+      row.positions += 1;
+      row.value += value;
+      const symbol = String(item?.symbol || "").trim().toUpperCase();
+      if (symbol && !row.symbols.includes(symbol)) row.symbols.push(symbol);
+      grouped.set(theme, row);
+    });
+
+    return [...grouped.values()]
+      .map((row) => ({
+        ...row,
+        weight: totalExposure > 0 ? (row.value / totalExposure) * 100 : 0
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [portfolio]);
 
   // Performance Metrics
   const metrics = useMemo(() => {
@@ -297,7 +334,12 @@ export function PortfolioModule({
                   })() : <div className="value">N/A</div>}
                 </div>
 
-                <div className="metric-card glass" style={{ overflow: "hidden" }}>
+                <div
+                  className="metric-card glass clickable"
+                  style={{ overflow: "hidden", cursor: "pointer" }}
+                  onClick={() => setShowDiversificationModal(true)}
+                  title="View diversification by theme"
+                >
                   <label>Diversification</label>
                   {themeSeries.length > 0 ? (
                     <Chart
@@ -530,6 +572,59 @@ export function PortfolioModule({
           </div>
         )}
       </div>
+
+      {showDiversificationModal ? (
+        <div className="modal-overlay" onClick={() => setShowDiversificationModal(false)}>
+          <div className="modal-content portfolio-diversification-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="section-header" style={{ marginBottom: "12px" }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Diversification By Theme</h2>
+                <p style={{ margin: "6px 0 0", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                  Theme exposure across your current stock picks.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="pagination-button"
+                onClick={() => setShowDiversificationModal(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            {diversificationRows.length === 0 ? (
+              <div className="loading-state">No themed holdings yet.</div>
+            ) : (
+              <div className="table-scroll">
+                <table className="option-chain-table">
+                  <thead>
+                    <tr>
+                      <th>Theme</th>
+                      <th>Positions</th>
+                      <th>Symbols</th>
+                      <th>Exposure</th>
+                      <th>Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diversificationRows.map((row) => (
+                      <tr key={row.theme}>
+                        <td className="greek">{row.theme}</td>
+                        <td className="greek">{row.positions}</td>
+                        <td className="greek">{row.symbols.join(", ") || "—"}</td>
+                        <td className="bid-ask positive">
+                          ${row.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="greek">{row.weight.toFixed(2)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

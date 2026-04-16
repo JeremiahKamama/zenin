@@ -30,6 +30,7 @@ const DEFAULT_STOCK_THEMES = [
   "Transportation"
 ];
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const EARNINGS_CLIENT_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 export function Watchlist({
   categories,
@@ -68,6 +69,41 @@ export function Watchlist({
 
   const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
   const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
+  const normalizeCategory = (value) => String(value || "").trim().toLowerCase();
+  const normalizeTheme = (value) => String(value || "").trim().toLowerCase();
+  const normalizeAssetKind = (asset) => {
+    const rawType = String(asset?.type || "").trim().toLowerCase();
+    const rawCategory = normalizeCategory(asset?.category);
+    const marketType = normalizeMarketType(asset?.marketType);
+    if (["stock", "stocks", "equity"].includes(rawType)) return "stock";
+    if (["etf", "etfs"].includes(rawType)) return "etf";
+    if (rawType === "crypto" || marketType === "spot") return "crypto";
+    if (rawType === "indicator" || rawCategory === "indicators" || marketType === "macro") return "indicator";
+    if (rawType === "bond" || rawCategory === "bonds") return "bond";
+    if (["commodity", "commodities", "metal", "metals"].includes(rawType) || ["commodities", "metals"].includes(rawCategory)) return "commodity";
+    if (asset?.theme || rawCategory === "stocks") return "stock";
+    return rawType || "stock";
+  };
+  const buildAssetMetaKey = (asset) => (
+    [
+      normalizeSymbol(asset?.symbol),
+      normalizeMarketType(asset?.marketType),
+      normalizeCategory(asset?.category),
+      normalizeTheme(asset?.theme)
+    ].join("::")
+  );
+  const buildAssetSymbolKey = (asset) => (
+    [
+      normalizeSymbol(asset?.symbol),
+      normalizeMarketType(asset?.marketType)
+    ].join("::")
+  );
+  const isCacheFresh = (cacheEntry, ttlMs) => {
+    if (!cacheEntry?.updatedAt) return false;
+    const updatedAtMs = new Date(cacheEntry.updatedAt).getTime();
+    if (!Number.isFinite(updatedAtMs)) return false;
+    return Date.now() - updatedAtMs < ttlMs;
+  };
 
   const mergedStockThemes = (() => {
     const seen = new Set();
@@ -84,18 +120,19 @@ export function Watchlist({
 
   const orderMap = new Map(
     (Array.isArray(watchlistAssets) ? watchlistAssets : []).map((entry, index) => [
-      `${normalizeSymbol(entry.symbol)}::${normalizeMarketType(entry.marketType)}`,
+      buildAssetMetaKey(entry),
       index
     ])
   );
 
   const getWatchlistOrder = (asset) => {
-    const exactKey = `${normalizeSymbol(asset.symbol)}::${normalizeMarketType(asset.marketType)}`;
+    const exactKey = buildAssetMetaKey(asset);
     if (orderMap.has(exactKey)) return orderMap.get(exactKey);
     const symbol = normalizeSymbol(asset.symbol);
+    const marketType = normalizeMarketType(asset.marketType);
     let fallback = Number.MAX_SAFE_INTEGER;
     orderMap.forEach((idx, key) => {
-      if (key.startsWith(`${symbol}::`)) fallback = Math.min(fallback, idx);
+      if (key.startsWith(`${symbol}::${marketType}::`)) fallback = Math.min(fallback, idx);
     });
     return fallback;
   };
@@ -121,16 +158,61 @@ export function Watchlist({
     setEarningsPage(1);
   }, [activeCategory, activeTheme]);
 
-  // Show only assets currently in user's watchlist for the selected category.
-  const starredAssets = assets
-    .filter((asset) => isInWatchlist(asset.symbol, asset.marketType))
-    .sort((a, b) => getWatchlistOrder(a) - getWatchlistOrder(b));
+  const assetCatalogByMeta = useMemo(
+    () => new Map((Array.isArray(assets) ? assets : []).map((asset) => [buildAssetMetaKey(asset), asset])),
+    [assets]
+  );
+  const assetCatalogBySymbol = useMemo(() => {
+    const next = new Map();
+    (Array.isArray(assets) ? assets : []).forEach((asset) => {
+      const key = buildAssetSymbolKey(asset);
+      if (!next.has(key)) next.set(key, asset);
+    });
+    return next;
+  }, [assets]);
+
+  const doesEntryBelongToActiveCategory = (entry) => {
+    const category = normalizeCategory(entry?.category);
+    const kind = normalizeAssetKind(entry);
+    if (activeCategory === "stocks") return category === "stocks" || kind === "stock" || kind === "etf";
+    if (activeCategory === "crypto") return category === "crypto" || kind === "crypto";
+    if (activeCategory === "bonds") return category === "bonds" || kind === "bond";
+    if (activeCategory === "indicators") return category === "indicators" || kind === "indicator";
+    if (["commodities", "metals"].includes(activeCategory)) {
+      return category === activeCategory || kind === "commodity";
+    }
+    return category === normalizeCategory(activeCategory) || kind === normalizeCategory(activeCategory);
+  };
+
+  const starredAssets = useMemo(() => {
+    const source = Array.isArray(watchlistAssets) ? watchlistAssets : [];
+    return source
+      .filter((entry) => doesEntryBelongToActiveCategory(entry))
+      .map((entry) => {
+        const exactCatalogAsset = assetCatalogByMeta.get(buildAssetMetaKey(entry));
+        const fallbackCatalogAsset = assetCatalogBySymbol.get(buildAssetSymbolKey(entry));
+        const marketAsset = exactCatalogAsset || fallbackCatalogAsset || null;
+        return {
+          ...(marketAsset || {}),
+          ...entry,
+          name: entry?.name || marketAsset?.name || entry?.symbol || "Unknown",
+          type: entry?.type || marketAsset?.type || "stock",
+          category: entry?.category || marketAsset?.category || activeCategory,
+          theme: entry?.theme || marketAsset?.theme || null,
+          marketType: entry?.marketType || marketAsset?.marketType || "spot",
+          market: entry?.market || marketAsset?.market || null,
+          price: marketAsset?.price ?? entry?.price ?? null,
+          priceChangePercent: marketAsset?.priceChangePercent ?? entry?.priceChangePercent ?? null
+        };
+      })
+      .sort((a, b) => getWatchlistOrder(a) - getWatchlistOrder(b));
+  }, [watchlistAssets, activeCategory, assetCatalogByMeta, assetCatalogBySymbol]);
 
   // Derive displayed assets based on selected stock theme after watchlist filter.
   const displayedAssets =
     activeCategory === "stocks" && activeTheme && activeTheme !== "All"
       ? starredAssets.filter(
-          (a) => a.theme && a.theme.toLowerCase() === activeTheme.toLowerCase()
+          (a) => normalizeTheme(a.theme) === normalizeTheme(activeTheme)
         )
       : starredAssets;
 
@@ -246,9 +328,17 @@ useEffect(() => {
     const controller = new AbortController();
     const cacheParams = { symbols: earningsSymbols };
     const cached = readResilientCache("earnings-calendar", cacheParams);
+    const cacheIsFresh = isCacheFresh(cached, EARNINGS_CLIENT_CACHE_TTL_MS);
     if (cached?.payload && Array.isArray(cached.payload?.items)) {
       setEarningsItems(cached.payload.items);
       setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+      if (cacheIsFresh && !cached.payload?.stale && !cached.payload?.unavailable) {
+        setEarningsLoading(false);
+        return () => {
+          isMounted = false;
+          controller.abort();
+        };
+      }
     }
 
     const fetchEarningsCalendar = async () => {
@@ -363,11 +453,11 @@ useEffect(() => {
           </div>
           <div className="indicator-toolbar">
             <button
-              className={`modal-action-btn ${isInWatchlist(activeIndicator.symbol, activeIndicator.marketType) ? "active" : ""}`}
+              className={`modal-action-btn ${isInWatchlist(activeIndicator) ? "active" : ""}`}
               onClick={() => onToggleStar(activeIndicator)}
-              title={isInWatchlist(activeIndicator.symbol, activeIndicator.marketType) ? "Remove from watchlist" : "Add to watchlist"}
+              title={isInWatchlist(activeIndicator) ? "Remove from watchlist" : "Add to watchlist"}
             >
-              {isInWatchlist(activeIndicator.symbol, activeIndicator.marketType) ? "Remove" : "Add"}
+              {isInWatchlist(activeIndicator) ? "Remove" : "Add"}
             </button>
             <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
               <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
@@ -408,7 +498,7 @@ useEffect(() => {
             ) : (
               pagedAssets.map((asset) => (
                 <article
-                  key={`${asset.symbol}-${asset.marketType || asset.theme || "default"}`}
+                  key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
                   className="asset-card clickable"
                   onClick={() => onAdd(asset)}
                 >
@@ -452,12 +542,12 @@ useEffect(() => {
                     )}
                   </div>
                   <button
-                    className={`star-button ${isInWatchlist(asset.symbol, asset.marketType) ? "active" : ""}`}
+                    className={`star-button ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       onToggleStar(asset);
                     }}
-                    title={isInWatchlist(asset.symbol, asset.marketType) ? "Remove from watchlist" : "Add to watchlist"}
+                    title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
                   >
                     ★
                   </button>

@@ -4,8 +4,9 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
+const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, portfolio = [], balance = 0 }) {
+export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, onViewCompanyProfile, portfolio = [], balance = 0 }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyStale, setHistoryStale] = useState(false);
@@ -16,9 +17,12 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
 
-  const isTradFi = asset && asset.type !== "crypto" && !asset.marketType;
+  const normalizedMarketType = String(asset?.marketType || "").toLowerCase();
+  const isCryptoAsset = asset?.type === "crypto" || normalizedMarketType === "spot" || normalizedMarketType === "perp";
+  const isTradFi = Boolean(asset) && !isCryptoAsset;
   const assetSymbol = String(asset?.symbol || "").toUpperCase();
-  const assetType = asset?.type || (asset?.marketType ? "crypto" : "stock");
+  const assetType = asset?.type || (isCryptoAsset ? "crypto" : "stock");
+  const isStockResearchEligible = assetType === "stock";
 
   const [chartType, setChartType] = useState("line");
 
@@ -36,6 +40,12 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [shake, setShake] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [showFireworks, setShowFireworks] = useState(false);
+  const isCacheFresh = (cacheEntry, ttlMs) => {
+    if (!cacheEntry?.updatedAt) return false;
+    const updatedAtMs = new Date(cacheEntry.updatedAt).getTime();
+    if (!Number.isFinite(updatedAtMs)) return false;
+    return Date.now() - updatedAtMs < ttlMs;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -135,8 +145,14 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     const fetchEarnings = async () => {
       const cacheParams = { symbol: assetSymbol };
       const cached = readResilientCache("asset-fundamentals", cacheParams);
+      const cacheIsFresh = isCacheFresh(cached, EARNINGS_FUNDAMENTALS_CACHE_TTL_MS);
       if (cached?.payload && typeof cached.payload === "object") {
         setEarnings(cached.payload);
+        setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+        if (cacheIsFresh && !cached.payload?.stale && !cached.payload?.unavailable) {
+          setEarningsLoading(false);
+          return;
+        }
       }
       setEarningsLoading(true);
       try {
@@ -359,9 +375,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
             <button
               className="modal-remove-btn"
               onClick={() => onToggleStar?.(asset)}
-              title={isInWatchlist?.(asset.symbol, asset.marketType) ? "Remove from watchlist" : "Add to watchlist"}
+              title={isInWatchlist?.(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
             >
-              {isInWatchlist?.(asset.symbol, asset.marketType) ? "Remove" : "Add"}
+              {isInWatchlist?.(asset, undefined, { strictStockMeta: true }) ? "Remove" : "Add"}
             </button>
             <button className="close-btn" onClick={onClose}>&times;</button>
           </div>
@@ -431,7 +447,18 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
 {isTradFi && (
             <div style={{ padding: "0 32px 16px" }}>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+                {isStockResearchEligible ? (
+                  <button
+                    type="button"
+                    className="asset-modal-more-link"
+                    onClick={() => onViewCompanyProfile?.(asset)}
+                  >
+                    See more
+                  </button>
+                ) : (
+                  <span />
+                )}
                 <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing fundamentals data" : earningsStale ? "Showing previous fundamentals snapshot" : "Fundamentals are up to date"}>
                   <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
                   Fundamentals

@@ -125,6 +125,8 @@ function mapWatchlistRow(row) {
     symbol: row.symbol,
     name: row.name,
     type: row.type,
+    category: row.category || null,
+    theme: row.theme || null,
     marketType: row.marketType || row.market_type || "spot",
     date_added: toIsoString(row.date_added)
   };
@@ -206,10 +208,22 @@ async function initializeDatabase() {
         symbol TEXT NOT NULL,
         name TEXT NOT NULL,
         type TEXT NOT NULL,
+        category TEXT,
+        theme TEXT,
         market_type TEXT NOT NULL,
         date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(symbol, market_type)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE watchlist_assets
+      ADD COLUMN IF NOT EXISTS category TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE watchlist_assets
+      ADD COLUMN IF NOT EXISTS theme TEXT;
     `);
 
     await client.query(`
@@ -284,20 +298,51 @@ async function initializeDatabase() {
           if (!symbol) continue;
           const type = String(asset.type || asset.theme || category || "stock").trim().toLowerCase();
           const marketType = normalizeMarketType(type, asset.marketType);
+          const assetCategory = String(asset.category || category || "").trim().toLowerCase() || null;
+          const assetTheme = String(asset.theme || "").trim() || null;
 
           await client.query(`
-            INSERT INTO watchlist_assets (symbol, name, type, market_type, date_added)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO watchlist_assets (symbol, name, type, category, theme, market_type, date_added)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (symbol, market_type) DO NOTHING;
           `, [
             symbol,
             String(asset.name || symbol),
             type,
+            assetCategory,
+            assetTheme,
             marketType,
             insertedAt
           ]);
         }
       }
+    }
+
+    const seededWatchlistMeta = new Map();
+    for (const [category, assets] of Object.entries(watchlistData)) {
+      for (const asset of assets) {
+        const symbol = String(asset.symbol || "").trim().toUpperCase();
+        if (!symbol) continue;
+        const type = String(asset.type || asset.theme || category || "stock").trim().toLowerCase();
+        const marketType = normalizeMarketType(type, asset.marketType);
+        const key = `${symbol}::${marketType}`;
+        if (seededWatchlistMeta.has(key)) continue;
+        seededWatchlistMeta.set(key, {
+          category: String(asset.category || category || "").trim().toLowerCase() || null,
+          theme: String(asset.theme || "").trim() || null
+        });
+      }
+    }
+
+    for (const [key, meta] of seededWatchlistMeta.entries()) {
+      const [symbol, marketType] = key.split("::");
+      await client.query(`
+        UPDATE watchlist_assets
+        SET
+          category = COALESCE(category, $3),
+          theme = COALESCE(theme, $4)
+        WHERE symbol = $1 AND market_type = $2;
+      `, [symbol, marketType, meta.category, meta.theme]);
     }
 
     const staleHoldings = await client.query(`
@@ -948,6 +993,8 @@ const watchlist = {
         symbol,
         name,
         type,
+        category,
+        theme,
         market_type AS "marketType",
         date_added
       FROM watchlist_assets
@@ -959,22 +1006,31 @@ const watchlist = {
   add: async (asset) => {
     const symbol = String(asset.symbol || "").trim().toUpperCase();
     const type = String(asset.type || "stock").trim().toLowerCase();
+    const category = String(asset.category || "").trim().toLowerCase() || null;
+    const theme = String(asset.theme || "").trim() || null;
     const marketType = normalizeMarketType(type, asset.marketType);
     const dateAdded = asset.date_added || new Date().toISOString();
 
     const result = await pool.query(`
-      INSERT INTO watchlist_assets (symbol, name, type, market_type, date_added)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO watchlist_assets (symbol, name, type, category, theme, market_type, date_added)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (symbol, market_type)
-      DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, date_added = EXCLUDED.date_added
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        type = EXCLUDED.type,
+        category = EXCLUDED.category,
+        theme = EXCLUDED.theme,
+        date_added = EXCLUDED.date_added
       RETURNING
         id,
         symbol,
         name,
         type,
+        category,
+        theme,
         market_type AS "marketType",
         date_added;
-    `, [symbol, String(asset.name || symbol), type, marketType, dateAdded]);
+    `, [symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
 
     return mapWatchlistRow(result.rows[0]);
   },

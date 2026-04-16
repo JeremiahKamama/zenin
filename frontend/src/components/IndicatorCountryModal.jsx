@@ -69,7 +69,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
     [asset, countryCode, snapshot]
   );
 
-  const inWatchlist = isInWatchlist?.(countryCode, "macro");
+  const inWatchlist = isInWatchlist?.(asset);
   const metrics = Array.isArray(snapshot?.metrics) ? snapshot.metrics : [];
 
   return (

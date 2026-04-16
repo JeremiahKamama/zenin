@@ -176,7 +176,7 @@ function validatePortfolioUpdate(req, res, next) {
 }
 
 function validateWatchlistAsset(req, res, next) {
-  const { symbol, name, type, marketType } = req.body;
+  const { symbol, name, type, marketType, category, theme } = req.body;
   if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
     return res.status(400).json({ error: "Invalid symbol" });
   }
@@ -185,6 +185,12 @@ function validateWatchlistAsset(req, res, next) {
   }
   if (!type || typeof type !== "string" || type.length > 50) {
     return res.status(400).json({ error: "Invalid type" });
+  }
+  if (category != null && (typeof category !== "string" || category.length > 100)) {
+    return res.status(400).json({ error: "Invalid category" });
+  }
+  if (theme != null && (typeof theme !== "string" || theme.length > 100)) {
+    return res.status(400).json({ error: "Invalid theme" });
   }
   next();
 }
@@ -251,6 +257,148 @@ const SYMBOL_MAP = {
   "ALOY":       "ALOY",
   "USAR":       "USAR",
 };
+
+const STOCK_CATALOG = Array.isArray(watchlistData?.stocks) ? watchlistData.stocks : [];
+
+function normalizeCatalogValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getStockCatalogMatches(symbol) {
+  const safeSymbol = sanitizeSymbol(String(symbol || "").toUpperCase());
+  if (!safeSymbol) return [];
+  return STOCK_CATALOG.filter((entry) => sanitizeSymbol(String(entry?.symbol || "").toUpperCase()) === safeSymbol);
+}
+
+function scoreStockCatalogEntry(entry = {}) {
+  return [
+    entry?.market,
+    entry?.theme,
+    entry?.category,
+    entry?.role,
+    entry?.edge
+  ].filter(Boolean).length;
+}
+
+function selectPrimaryStockCatalogEntry(symbol, preferredMeta = {}) {
+  const matches = getStockCatalogMatches(symbol);
+  if (!matches.length) return null;
+  const preferredTheme = normalizeCatalogValue(preferredMeta?.theme);
+  const preferredCategory = normalizeCatalogValue(preferredMeta?.category);
+
+  return [...matches].sort((a, b) => {
+    const aTheme = normalizeCatalogValue(a?.theme);
+    const bTheme = normalizeCatalogValue(b?.theme);
+    const aCategory = normalizeCatalogValue(a?.category);
+    const bCategory = normalizeCatalogValue(b?.category);
+    const aMetaMatch = (preferredTheme && aTheme === preferredTheme ? 1 : 0) + (preferredCategory && aCategory === preferredCategory ? 2 : 0);
+    const bMetaMatch = (preferredTheme && bTheme === preferredTheme ? 1 : 0) + (preferredCategory && bCategory === preferredCategory ? 2 : 0);
+    return bMetaMatch - aMetaMatch || scoreStockCatalogEntry(b) - scoreStockCatalogEntry(a);
+  })[0];
+}
+
+function buildStockPeers(symbol, primaryEntry = null, limit = 6) {
+  const safeSymbol = sanitizeSymbol(String(symbol || "").toUpperCase());
+  const targetTheme = normalizeCatalogValue(primaryEntry?.theme);
+  const targetCategory = normalizeCatalogValue(primaryEntry?.category);
+  const dedupe = new Set();
+
+  return STOCK_CATALOG
+    .filter((entry) => sanitizeSymbol(String(entry?.symbol || "").toUpperCase()) !== safeSymbol)
+    .map((entry) => {
+      const categoryMatch = targetCategory && normalizeCatalogValue(entry?.category) === targetCategory ? 2 : 0;
+      const themeMatch = targetTheme && normalizeCatalogValue(entry?.theme) === targetTheme ? 1 : 0;
+      return {
+        ...entry,
+        _score: categoryMatch + themeMatch
+      };
+    })
+    .filter((entry) => entry._score > 0)
+    .sort((a, b) => b._score - a._score || scoreStockCatalogEntry(b) - scoreStockCatalogEntry(a))
+    .filter((entry) => {
+      const key = `${sanitizeSymbol(String(entry?.symbol || "").toUpperCase())}::${normalizeCatalogValue(entry?.theme)}::${normalizeCatalogValue(entry?.category)}`;
+      if (dedupe.has(key)) return false;
+      dedupe.add(key);
+      return true;
+    })
+    .slice(0, limit)
+    .map(({ _score, ...entry }) => ({
+      symbol: entry.symbol,
+      name: entry.name,
+      market: entry.market || null,
+      theme: entry.theme || null,
+      category: entry.category || null,
+      role: entry.role || null,
+      edge: entry.edge || null
+    }));
+}
+
+function isIndustrialCompany(profile = {}, stockMeta = null) {
+  const haystack = [
+    profile?.sector,
+    profile?.industry,
+    profile?.summary,
+    stockMeta?.theme,
+    stockMeta?.category,
+    stockMeta?.role
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return /(manufact|industrial|factory|semiconductor|chip|energy|defense|machinery|equipment|materials|mining|chemical|aerospace|auto|vehicle|battery|solar|nuclear|components|photonics|robotics)/.test(haystack);
+}
+
+function buildManufacturingNotes(profile = {}, stockMeta = null) {
+  const industrial = isIndustrialCompany(profile, stockMeta);
+  const headquartersBits = [profile?.city, profile?.state, profile?.country].filter(Boolean);
+  const efficiencySignals = [];
+  const inputNotes = [];
+  const fulfillmentNotes = [];
+
+  if (profile?.grossMargins != null) {
+    efficiencySignals.push(`Gross margin: ${Number(profile.grossMargins * 100).toFixed(1)}%`);
+  }
+  if (profile?.operatingMargins != null) {
+    efficiencySignals.push(`Operating margin: ${Number(profile.operatingMargins * 100).toFixed(1)}%`);
+  }
+  if (profile?.returnOnAssets != null) {
+    efficiencySignals.push(`Return on assets: ${Number(profile.returnOnAssets * 100).toFixed(1)}%`);
+  }
+  if (!efficiencySignals.length) {
+    efficiencySignals.push("Structured efficiency metrics were not fully disclosed in the current public snapshot.");
+  }
+
+  if (stockMeta?.category) {
+    inputNotes.push(`Tracked internally under the ${stockMeta.category} category, which helps frame likely component and end-market exposure.`);
+  }
+  if (stockMeta?.edge) {
+    inputNotes.push(stockMeta.edge);
+  }
+  if (!inputNotes.length) {
+    inputNotes.push("No structured product-input mapping was available from the current public snapshot.");
+  }
+
+  if (profile?.analystCount != null) {
+    fulfillmentNotes.push(`Analyst coverage currently spans ${profile.analystCount} opinions, which gives a market read on demand durability but not shipment-level fulfillment rates.`);
+  }
+  if (profile?.earnings?.nextEarnings) {
+    fulfillmentNotes.push(`Next earnings date: ${profile.earnings.nextEarnings}, which is the nearest public checkpoint for backlog, timelines, and execution commentary.`);
+  }
+  if (!fulfillmentNotes.length) {
+    fulfillmentNotes.push("Customer timeline and fulfillment-rate disclosures were not available in structured form from the current public snapshot.");
+  }
+
+  return {
+    isIndustrial: industrial,
+    factoryFootprint: headquartersBits.length
+      ? [`Headquarters: ${headquartersBits.join(", ")}`]
+      : ["Factory footprint details were not available in structured form from the current public snapshot."],
+    efficiencySignals,
+    customerFulfillment: fulfillmentNotes,
+    inputExposure: inputNotes
+  };
+}
 
 function normaliseSymbol(symbol) {
   // Safety fallback: if BTC/ETH ever reach here, they need the -USD suffix for Yahoo
@@ -1188,6 +1336,164 @@ app.get("/api/earnings", async (req, res) => {
   });
 });
 
+app.get("/api/company-profile", async (req, res) => {
+  const { symbol, theme, category } = req.query;
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+
+  const safeSymbol = sanitizeSymbol(String(symbol || "").toUpperCase()).slice(0, 20);
+  const preferredMeta = {
+    theme: String(theme || "").trim() || null,
+    category: String(category || "").trim() || null
+  };
+  const snapshotParams = {
+    symbol: safeSymbol,
+    theme: preferredMeta.theme || null,
+    category: preferredMeta.category || null
+  };
+  const cached = await readServiceSnapshot("company-profile", snapshotParams);
+  const stockMeta = selectPrimaryStockCatalogEntry(safeSymbol, preferredMeta);
+  const peers = buildStockPeers(safeSymbol, stockMeta);
+
+  const enrichPayload = (payload = {}, stale = false) => ({
+    ...(payload || {}),
+    symbol: safeSymbol,
+    catalog: {
+      theme: stockMeta?.theme || null,
+      category: stockMeta?.category || null,
+      role: stockMeta?.role || null,
+      edge: stockMeta?.edge || null,
+      market: stockMeta?.market || null
+    },
+    peers,
+    manufacturing: buildManufacturingNotes(payload, stockMeta),
+    updatedAt: payload?.updatedAt || new Date().toISOString(),
+    stale: Boolean(stale)
+  });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = null;
+
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      res.json(payload);
+      resolve();
+    };
+
+    try {
+      const child = spawn("python3", ["fetch_company_profile.py"], { cwd: __dirname });
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (d) => { stdout += d.toString(); });
+      child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+      child.on("close", async (code) => {
+        if (stderr) console.error("Company profile stderr:", stderr);
+
+        if (code !== 0) {
+          if (cached?.payload) {
+            return finish(enrichPayload(applyStaleMeta(cached.payload, cached, "company_profile_fetch_failed"), true));
+          }
+          return finish(enrichPayload({
+            symbol: safeSymbol,
+            updatedAt: new Date().toISOString(),
+            unavailable: true,
+            stale_reason: "company_profile_fetch_failed",
+            cache_updated_at: null,
+            stale_age_seconds: null
+          }, true));
+        }
+
+        try {
+          const result = JSON.parse(stdout || "{}");
+          if (result?.error) {
+            if (cached?.payload) {
+              return finish(enrichPayload(applyStaleMeta(cached.payload, cached, result.error), true));
+            }
+            return finish(enrichPayload({
+              symbol: safeSymbol,
+              updatedAt: new Date().toISOString(),
+              unavailable: true,
+              stale_reason: result.error,
+              cache_updated_at: null,
+              stale_age_seconds: null
+            }, true));
+          }
+
+          const payload = enrichPayload({
+            ...(result || {}),
+            symbol: safeSymbol,
+            updatedAt: new Date().toISOString(),
+            stale: false
+          }, false);
+          await writeServiceSnapshot("company-profile", snapshotParams, payload);
+          finish(payload);
+        } catch {
+          if (cached?.payload) {
+            return finish(enrichPayload(applyStaleMeta(cached.payload, cached, "company_profile_parse_failed"), true));
+          }
+          finish(enrichPayload({
+            symbol: safeSymbol,
+            updatedAt: new Date().toISOString(),
+            unavailable: true,
+            stale_reason: "company_profile_parse_failed",
+            cache_updated_at: null,
+            stale_age_seconds: null
+          }, true));
+        }
+      });
+
+      child.on("error", (err) => {
+        console.error("Failed to start company profile process:", err);
+        if (cached?.payload) {
+          return finish(enrichPayload(applyStaleMeta(cached.payload, cached, err?.message || "company_profile_start_failed"), true));
+        }
+        finish(enrichPayload({
+          symbol: safeSymbol,
+          updatedAt: new Date().toISOString(),
+          unavailable: true,
+          stale_reason: err?.message || "company_profile_start_failed",
+          cache_updated_at: null,
+          stale_age_seconds: null
+        }, true));
+      });
+
+      child.stdin.write(JSON.stringify({ symbol: safeSymbol }));
+      child.stdin.end();
+
+      timeoutId = setTimeout(() => {
+        child.kill();
+        if (cached?.payload) {
+          return finish(enrichPayload(applyStaleMeta(cached.payload, cached, "company_profile_fetch_timed_out"), true));
+        }
+        finish(enrichPayload({
+          symbol: safeSymbol,
+          updatedAt: new Date().toISOString(),
+          unavailable: true,
+          stale_reason: "company_profile_fetch_timed_out",
+          cache_updated_at: null,
+          stale_age_seconds: null
+        }, true));
+      }, 25000);
+    } catch (error) {
+      if (cached?.payload) {
+        return finish(enrichPayload(applyStaleMeta(cached.payload, cached, error?.message || "company_profile_start_failed"), true));
+      }
+      finish(enrichPayload({
+        symbol: safeSymbol,
+        updatedAt: new Date().toISOString(),
+        unavailable: true,
+        stale_reason: error?.message || "company_profile_start_failed",
+        cache_updated_at: null,
+        stale_age_seconds: null
+      }, true));
+    }
+  });
+});
+
 app.get("/api/earnings-calendar", async (req, res) => {
   const rawSymbols = String(req.query.symbols || "");
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 5);
@@ -1736,7 +2042,17 @@ const optionsChainCache = new Map();
 
 const WHALE_CURRENCIES = ["BTC", "ETH", "SOL", "HYPE"];
 const MIN_WHALE_NOTIONAL_USD = 100000;
-const TELEGRAM_CHANNEL_USERNAME = String(process.env.TELEGRAM_CHANNEL_USERNAME || "derivetradetape").replace(/^@/, "").trim();
+const TELEGRAM_CHANNEL_USERNAMES = Array.from(new Set(
+  String(
+    process.env.TELEGRAM_CHANNEL_USERNAMES ||
+    process.env.TELEGRAM_CHANNEL_USERNAME ||
+    "derivetradetape"
+  )
+    .split(/[,\n]/)
+    .map((value) => String(value || "").replace(/^@/, "").trim())
+    .filter(Boolean)
+));
+const TELEGRAM_PRIMARY_CHANNEL_USERNAME = TELEGRAM_CHANNEL_USERNAMES[0] || "derivetradetape";
 const TELEGRAM_FETCH_LIMIT = Math.max(20, Math.min(300, Number(process.env.TELEGRAM_FETCH_LIMIT || 160)));
 const TELEGRAM_CACHE_TTL_MS = Math.max(15000, Number(process.env.TELEGRAM_CACHE_TTL_MS || 60000));
 const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 0);
@@ -1752,7 +2068,10 @@ let telegramWhaleCache = {
   fetchedAt: 0,
   trades: [],
   status: "disabled",
-  error: null
+  error: null,
+  channels: TELEGRAM_CHANNEL_USERNAMES,
+  messageCount: 0,
+  parsedCount: 0
 };
 const PREDICTION_CATEGORY_TAGS = {
   geopolitics: "geopolitics",
@@ -2395,6 +2714,9 @@ async function fetchTelegramWhaleTrades() {
       trades: telegramWhaleCache.trades,
       status: telegramWhaleCache.status,
       error: telegramWhaleCache.error,
+      channels: telegramWhaleCache.channels,
+      messageCount: telegramWhaleCache.messageCount,
+      parsedCount: telegramWhaleCache.parsedCount,
       cached: true
     };
   }
@@ -2404,12 +2726,18 @@ async function fetchTelegramWhaleTrades() {
       fetchedAt: now,
       trades: [],
       status: "disabled",
-      error: "Missing Telegram MTProto credentials."
+      error: "Missing Telegram MTProto credentials.",
+      channels: TELEGRAM_CHANNEL_USERNAMES,
+      messageCount: 0,
+      parsedCount: 0
     };
     return {
       trades: [],
       status: "disabled",
       error: telegramWhaleCache.error,
+      channels: telegramWhaleCache.channels,
+      messageCount: 0,
+      parsedCount: 0,
       cached: false
     };
   }
@@ -2417,35 +2745,78 @@ async function fetchTelegramWhaleTrades() {
   try {
     const client = await getTelegramWhaleClient();
     if (!client) {
-      return { trades: [], status: "disabled", error: "Telegram client unavailable.", cached: false };
+      return {
+        trades: [],
+        status: "disabled",
+        error: "Telegram client unavailable.",
+        channels: TELEGRAM_CHANNEL_USERNAMES,
+        messageCount: 0,
+        parsedCount: 0,
+        cached: false
+      };
     }
 
-    const messages = await client.getMessages(TELEGRAM_CHANNEL_USERNAME, {
-      limit: TELEGRAM_FETCH_LIMIT
-    });
-    const parsedRows = (Array.isArray(messages) ? messages : [])
-      .map((msg) => {
-        const parsed = parseTelegramWhaleTradeText(msg?.message || "");
-        if (!parsed) return null;
-        const timestamp = toEpochMs(msg?.date);
-        const idPart = Number(msg?.id || 0) || Math.abs(timestamp);
-        return {
-          ...parsed,
-          id: `tg-${idPart}`,
-          timestamp,
-          source: "telegram"
-        };
+    const settled = await Promise.allSettled(
+      TELEGRAM_CHANNEL_USERNAMES.map((channel) =>
+        client.getMessages(channel, {
+          limit: TELEGRAM_FETCH_LIMIT
+        })
+      )
+    );
+    const channelErrors = [];
+    let messageCount = 0;
+    const parsedRows = settled
+      .flatMap((result, index) => {
+        const channel = TELEGRAM_CHANNEL_USERNAMES[index];
+        if (result.status !== "fulfilled") {
+          channelErrors.push(`${channel}: ${result.reason?.message || "fetch failed"}`);
+          return [];
+        }
+        const messages = Array.isArray(result.value) ? result.value : [];
+        messageCount += messages.length;
+        return messages
+          .map((msg) => {
+            const parsed = parseTelegramWhaleTradeText(msg?.message || "");
+            if (!parsed) return null;
+            const timestamp = toEpochMs(msg?.date);
+            const idPart = Number(msg?.id || 0) || Math.abs(timestamp);
+            return {
+              ...parsed,
+              id: `tg-${channel}-${idPart}`,
+              timestamp,
+              source: "telegram",
+              sourceChannel: channel,
+              sourceLabel: `@${channel}`
+            };
+          })
+          .filter(Boolean);
       })
-      .filter(Boolean)
       .sort((a, b) => b.timestamp - a.timestamp);
+
+    const parsedCount = parsedRows.length;
+    const status = channelErrors.length
+      ? (parsedCount > 0 ? "partial" : "error")
+      : (parsedCount > 0 ? "ok" : "empty");
+    const error = channelErrors.length ? channelErrors.join(" | ") : null;
 
     telegramWhaleCache = {
       fetchedAt: now,
       trades: parsedRows,
-      status: "ok",
-      error: null
+      status,
+      error,
+      channels: TELEGRAM_CHANNEL_USERNAMES,
+      messageCount,
+      parsedCount
     };
-    return { trades: parsedRows, status: "ok", error: null, cached: false };
+    return {
+      trades: parsedRows,
+      status,
+      error,
+      channels: TELEGRAM_CHANNEL_USERNAMES,
+      messageCount,
+      parsedCount,
+      cached: false
+    };
   } catch (error) {
     const errMsg = error?.message || "Telegram MTProto fetch failed.";
     console.warn("Telegram whale ingestion failed:", errMsg);
@@ -2454,6 +2825,9 @@ async function fetchTelegramWhaleTrades() {
         trades: telegramWhaleCache.trades,
         status: "stale",
         error: errMsg,
+        channels: telegramWhaleCache.channels,
+        messageCount: telegramWhaleCache.messageCount,
+        parsedCount: telegramWhaleCache.parsedCount,
         cached: true
       };
     }
@@ -2461,9 +2835,20 @@ async function fetchTelegramWhaleTrades() {
       fetchedAt: now,
       trades: [],
       status: "error",
-      error: errMsg
+      error: errMsg,
+      channels: TELEGRAM_CHANNEL_USERNAMES,
+      messageCount: 0,
+      parsedCount: 0
     };
-    return { trades: [], status: "error", error: errMsg, cached: false };
+    return {
+      trades: [],
+      status: "error",
+      error: errMsg,
+      channels: TELEGRAM_CHANNEL_USERNAMES,
+      messageCount: 0,
+      parsedCount: 0,
+      cached: false
+    };
   }
 }
 
@@ -2764,7 +3149,8 @@ app.get("/api/options/whale-trades", async (req, res) => {
           strategy,
           totalNotional: Number.isFinite(totalNotional) ? totalNotional : 0,
           timestamp,
-          source: "derive"
+          source: "derive",
+          sourceLabel: "Derive"
         });
       });
     };
@@ -2854,7 +3240,10 @@ app.get("/api/options/whale-trades", async (req, res) => {
         cached: !!telegramIngest.cached,
         error: telegramIngest.error || null,
         trades: Array.isArray(telegramIngest.trades) ? telegramIngest.trades.length : 0,
-        channel: TELEGRAM_CHANNEL_USERNAME
+        parsedCount: Number(telegramIngest.parsedCount || 0),
+        messageCount: Number(telegramIngest.messageCount || 0),
+        channels: Array.isArray(telegramIngest.channels) ? telegramIngest.channels : TELEGRAM_CHANNEL_USERNAMES,
+        primaryChannel: TELEGRAM_PRIMARY_CHANNEL_USERNAME
       },
       trades,
       stale: false
