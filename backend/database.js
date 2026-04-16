@@ -18,7 +18,10 @@ function createPoolConfig() {
     process.env.POSTGRES_PRISMA_URL ||
     null
   );
-  const rejectUnauthorized = String(process.env.PGSSL_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
+  const rejectUnauthorizedDefault = process.env.NODE_ENV === "production" ? "true" : "false";
+  const rejectUnauthorized = String(
+    process.env.PGSSL_REJECT_UNAUTHORIZED ?? rejectUnauthorizedDefault
+  ).toLowerCase() !== "false";
   const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized } : false;
 
   if (connectionString) {
