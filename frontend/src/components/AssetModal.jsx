@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import Chart from "react-apexcharts";
+import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
@@ -7,11 +8,13 @@ const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, portfolio = [], balance = 0 }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [historyStale, setHistoryStale] = useState(false);
   const [activeInterval, setActiveInterval] = useState("1D");
   const [historySource, setHistorySource] = useState("");
   const [orderType, setOrderType] = useState(() => asset?._forceSell ? "sell" : "buy");
   const [earnings, setEarnings] = useState(null);
   const [earningsLoading, setEarningsLoading] = useState(false);
+  const [earningsStale, setEarningsStale] = useState(false);
 
   const isTradFi = asset && asset.type !== "crypto" && !asset.marketType;
   const assetSymbol = String(asset?.symbol || "").toUpperCase();
@@ -38,6 +41,19 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     let cancelled = false;
     const fetchHistory = async () => {
       if (!assetSymbol) return;
+      const cacheParams = { symbol: assetSymbol, type: assetType, interval: activeInterval };
+      const cached = readResilientCache("asset-history", cacheParams);
+      if (cached?.payload) {
+        const cachedHistory = Array.isArray(cached.payload?.history) ? cached.payload.history : [];
+        if (cachedHistory.length > 0) {
+          setHistory(cachedHistory);
+          setHistorySource(String(cached.payload?.source || ""));
+          setHistoryStale(false);
+          setLoading(false);
+        }
+      } else {
+        setLoading(true);
+      }
       setLoading(true);
       try {
         const params = new URLSearchParams({
@@ -48,13 +64,26 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         const res = await fetch(`${BACKEND_URL}/history?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
-        setHistory(Array.isArray(data?.history) ? data.history : []);
-        setHistorySource(String(data?.source || ""));
+        const nextHistory = Array.isArray(data?.history) ? data.history : [];
+        const nextSource = String(data?.source || "");
+        setHistory(nextHistory);
+        setHistorySource(nextSource);
+        setHistoryStale(Boolean(data?.stale || data?.unavailable));
+        writeResilientCache("asset-history", cacheParams, {
+          history: nextHistory,
+          source: nextSource
+        });
       } catch (err) {
         if (cancelled) return;
         console.error("Failed to fetch history:", err);
-        setHistory([]);
-        setHistorySource("");
+        if (cached?.payload) {
+          const cachedHistory = Array.isArray(cached.payload?.history) ? cached.payload.history : [];
+          if (cachedHistory.length > 0) {
+            setHistory(cachedHistory);
+            setHistorySource(String(cached.payload?.source || ""));
+          }
+        }
+        setHistoryStale(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -70,16 +99,22 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     let cancelled = false;
     const fetchPerformance = async () => {
       if (!assetSymbol) return;
+      const cacheParams = { symbol: assetSymbol, type: assetType };
+      const cached = readResilientCache("asset-performance", cacheParams);
+      if (cached?.payload && cached.payload?.performance && typeof cached.payload.performance === "object") {
+        setPerformanceMap(cached.payload.performance);
+      }
       try {
         const params = new URLSearchParams({ symbol: assetSymbol, type: assetType });
         const res = await fetch(`${BACKEND_URL}/interval-performance?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
-        setPerformanceMap(data?.performance || {});
+        const performance = data?.performance && typeof data.performance === "object" ? data.performance : {};
+        setPerformanceMap(performance);
+        writeResilientCache("asset-performance", cacheParams, { performance });
       } catch (err) {
         if (cancelled) return;
         console.error("Failed to fetch performance summary:", err);
-        setPerformanceMap({});
       }
     };
 
@@ -93,10 +128,16 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     if (!isTradFi || !assetSymbol) {
       setEarnings(null);
       setEarningsLoading(false);
+      setEarningsStale(false);
       return;
     }
     const controller = new AbortController();
     const fetchEarnings = async () => {
+      const cacheParams = { symbol: assetSymbol };
+      const cached = readResilientCache("asset-fundamentals", cacheParams);
+      if (cached?.payload && typeof cached.payload === "object") {
+        setEarnings(cached.payload);
+      }
       setEarningsLoading(true);
       try {
         const params = new URLSearchParams({ symbol: assetSymbol });
@@ -104,14 +145,21 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         const data = await res.json();
         if (controller.signal.aborted) return;
         if (!res.ok || data?.error) {
-          setEarnings(null);
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+        if (data && typeof data === "object") {
+          setEarnings(data);
+          setEarningsStale(Boolean(data?.stale || data?.unavailable));
+          writeResilientCache("asset-fundamentals", cacheParams, data);
           return;
         }
-        setEarnings(data);
       } catch (err) {
         if (controller.signal.aborted) return;
         console.error("Failed to fetch earnings:", err);
-        setEarnings(null);
+        if (cached?.payload && typeof cached.payload === "object") {
+          setEarnings(cached.payload);
+        }
+        setEarningsStale(true);
       } finally {
         if (!controller.signal.aborted) setEarningsLoading(false);
       }
@@ -331,6 +379,10 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                   Source: {historySource === "hyperliquid" ? "Hyperliquid" : historySource === "coingecko" ? "CoinGecko (fallback)" : historySource}
                 </span>
               ) : null}
+              <span className={`data-health-badge ${loading ? "loading" : historyStale ? "hazard" : "ok"}`} title={loading ? "Refreshing chart data" : historyStale ? "Showing previous chart snapshot" : "Chart is up to date"}>
+                <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : historyStale ? "⚠" : "✓"}</span>
+                Chart
+              </span>
             </div>
             <div className="chart-type-toggle">
               <button className={chartType === 'line' ? 'active' : ''} onClick={() => setChartType('line')}>Line</button>
@@ -339,13 +391,19 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           </div>
 
           <div className="chart-container">
-            {loading ? (
-              <div className="chart-loading">Loading market data...</div>
-            ) : history.length > 0 ? (
+            {history.length > 0 ? (
               <Chart options={chartOptions} series={getChartData()} type={chartType} height="400" width="100%" />
+            ) : loading ? (
+              <div className="chart-loading">Loading market data...</div>
             ) : (
-              <div className="chart-no-data">No historical data available for this range.</div>
+              <div className="chart-no-data">Waiting for chart data...</div>
             )}
+            {loading && history.length > 0 ? (
+              <div className="chart-refresh-overlay">
+                <span className="status-icon spinner">⟳</span>
+                Updating...
+              </div>
+            ) : null}
           </div>
 
           <div className="interval-toggle-bottom">
@@ -373,7 +431,13 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
 {isTradFi && (
             <div style={{ padding: "0 32px 16px" }}>
-              {earningsLoading ? (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
+                <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing fundamentals data" : earningsStale ? "Showing previous fundamentals snapshot" : "Fundamentals are up to date"}>
+                  <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
+                  Fundamentals
+                </span>
+              </div>
+              {earningsLoading && !earnings ? (
                 <div style={{ fontSize: "12px", color: "#64748b", textAlign: "center", padding: "8px" }}>
                   Loading fundamentals...
                 </div>
@@ -449,7 +513,11 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                     </tbody>
                   </table>
                 </div>
-              ) : null}
+              ) : (
+                <div style={{ fontSize: "12px", color: "#64748b", textAlign: "center", padding: "8px" }}>
+                  Waiting for fundamentals...
+                </div>
+              )}
             </div>
           )}
 

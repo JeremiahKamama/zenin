@@ -4,7 +4,16 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
-const { initializeDatabase, portfolio, watchlist, optionsCalculations, tradeExecutions, balance, trading } = require("./database");
+const {
+  initializeDatabase,
+  portfolio,
+  watchlist,
+  optionsCalculations,
+  serviceSnapshots,
+  tradeExecutions,
+  balance,
+  trading
+} = require("./database");
 
 const app = express();
 
@@ -73,6 +82,63 @@ app.use(express.json({ limit: "100kb" }));
 function handleServerError(res, context, error) {
   console.error(`${context}:`, error?.message || error);
   return res.status(500).json({ error: "Internal server error" });
+}
+
+function normalizeSnapshotParamValue(value) {
+  if (Array.isArray(value)) return value.map((row) => normalizeSnapshotParamValue(row));
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = normalizeSnapshotParamValue(value[key]);
+        return acc;
+      }, {});
+  }
+  return value == null ? null : String(value);
+}
+
+function buildSnapshotKey(scope, params = {}) {
+  const normalizedParams = Object.keys(params || {})
+    .sort()
+    .reduce((acc, key) => {
+      acc[key] = normalizeSnapshotParamValue(params[key]);
+      return acc;
+    }, {});
+  return `${String(scope || "service").trim()}:${JSON.stringify(normalizedParams)}`;
+}
+
+function snapshotAgeSeconds(updatedAt) {
+  const ts = new Date(updatedAt || 0).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  return Math.max(0, Math.floor((Date.now() - ts) / 1000));
+}
+
+async function readServiceSnapshot(scope, params = {}) {
+  try {
+    return await serviceSnapshots.get(buildSnapshotKey(scope, params));
+  } catch (error) {
+    console.warn("Service snapshot read failed:", error?.message || error);
+    return null;
+  }
+}
+
+async function writeServiceSnapshot(scope, params = {}, payload = {}) {
+  try {
+    await serviceSnapshots.set(buildSnapshotKey(scope, params), payload);
+  } catch (error) {
+    console.warn("Service snapshot write failed:", error?.message || error);
+  }
+}
+
+function applyStaleMeta(payload = {}, snapshot = null, reason = "") {
+  return {
+    ...(payload || {}),
+    stale: true,
+    unavailable: false,
+    stale_reason: String(reason || "upstream_fetch_failed"),
+    cache_updated_at: snapshot?.updatedAt || null,
+    stale_age_seconds: snapshotAgeSeconds(snapshot?.updatedAt)
+  };
 }
 
 function validatePortfolioHolding(req, res, next) {
@@ -877,6 +943,12 @@ app.get("/api/history", async (req, res) => {
   const { type, interval = "1D" } = req.query;
   const symbol = sanitizeSymbol(req.query.symbol || "");
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  const snapshotParams = {
+    symbol: String(symbol).toUpperCase(),
+    type: String(type || "stock").toLowerCase(),
+    interval: String(interval || "1D").toUpperCase()
+  };
+  const cached = await readServiceSnapshot("history", snapshotParams);
 
   try {
     let history = [];
@@ -888,25 +960,53 @@ app.get("/api/history", async (req, res) => {
     } else {
       history = await fetchHistoryFromYahoo(symbol, interval);
     }
-    res.json({ history, source });
+    const payload = {
+      history: Array.isArray(history) ? history : [],
+      source: source || "",
+      updatedAt: new Date().toISOString(),
+      stale: false
+    };
+    await writeServiceSnapshot("history", snapshotParams, payload);
+    res.json(payload);
   } catch (error) {
-    res.status(502).json({ error: error.message });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "history_fetch_failed"));
+    }
+    res.json({
+      history: [],
+      source: "unavailable",
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "history_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 
 app.get("/api/interval-performance", async (req, res) => {
   const { symbol, type } = req.query;
+  const cleanSymbol = sanitizeSymbol(symbol || "").toUpperCase();
+  if (!cleanSymbol) {
+    return res.status(400).json({ error: "Invalid symbol" });
+  }
   const intervals = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
+  const snapshotParams = {
+    symbol: cleanSymbol,
+    type: String(type || "stock").toLowerCase()
+  };
+  const cached = await readServiceSnapshot("interval-performance", snapshotParams);
   
   try {
     const results = await Promise.all(intervals.map(async (int) => {
       try {
         let history = [];
         if (type === "crypto") {
-          const cryptoHistory = await fetchHistoryForCrypto(symbol, int);
+          const cryptoHistory = await fetchHistoryForCrypto(cleanSymbol, int);
           history = cryptoHistory.history;
         } else {
-          history = await fetchHistoryFromYahoo(symbol, int);
+          history = await fetchHistoryFromYahoo(cleanSymbol, int);
         }
         
         if (history && history.length > 1) {
@@ -925,10 +1025,26 @@ app.get("/api/interval-performance", async (req, res) => {
       acc[curr.interval] = curr.change;
       return acc;
     }, {});
-    
-    res.json({ performance: performanceMap });
+    const payload = {
+      performance: performanceMap,
+      updatedAt: new Date().toISOString(),
+      stale: false
+    };
+    await writeServiceSnapshot("interval-performance", snapshotParams, payload);
+    res.json(payload);
   } catch (error) {
-    res.status(502).json({ error: error.message });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "interval_performance_fetch_failed"));
+    }
+    res.json({
+      performance: {},
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "interval_performance_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 
@@ -975,8 +1091,17 @@ app.get("/api/earnings", async (req, res) => {
   if (!symbol) return res.status(400).json({ error: "symbol required" });
 
   const safeSymbol = symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+  const snapshotParams = { symbol: safeSymbol.toUpperCase() };
+  const cached = await readServiceSnapshot("earnings", snapshotParams);
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      res.json(payload);
+      resolve();
+    };
     const child = spawn("python3", ["fetch_earnings.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
@@ -984,26 +1109,62 @@ app.get("/api/earnings", async (req, res) => {
     child.stdout.on("data", (d) => { stdout += d.toString(); });
     child.stderr.on("data", (d) => { stderr += d.toString(); });
 
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       if (stderr) console.error("Earnings stderr:", stderr);
       if (code !== 0) {
-        res.status(502).json({ error: "Failed to fetch earnings" });
-        resolve();
-        return;
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "earnings_fetch_failed"));
+        }
+        return finish({
+          symbol: safeSymbol.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+          stale: true,
+          unavailable: true,
+          stale_reason: "earnings_fetch_failed",
+          cache_updated_at: null,
+          stale_age_seconds: null
+        });
       }
       try {
         const result = JSON.parse(stdout);
-        res.json(result);
+        const payload = {
+          ...(result || {}),
+          symbol: safeSymbol.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+          stale: false
+        };
+        await writeServiceSnapshot("earnings", snapshotParams, payload);
+        finish(payload);
       } catch {
-        res.status(502).json({ error: "Failed to parse earnings data" });
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "earnings_parse_failed"));
+        }
+        finish({
+          symbol: safeSymbol.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+          stale: true,
+          unavailable: true,
+          stale_reason: "earnings_parse_failed",
+          cache_updated_at: null,
+          stale_age_seconds: null
+        });
       }
-      resolve();
     });
 
     child.on("error", (err) => {
       console.error("Failed to start earnings process:", err);
-      res.status(502).json({ error: err.message });
-      resolve();
+      if (cached?.payload) {
+        return finish(applyStaleMeta(cached.payload, cached, err?.message || "earnings_process_start_failed"));
+      }
+      finish({
+        symbol: safeSymbol.toUpperCase(),
+        updatedAt: new Date().toISOString(),
+        stale: true,
+        unavailable: true,
+        stale_reason: err?.message || "earnings_process_start_failed",
+        cache_updated_at: null,
+        stale_age_seconds: null
+      });
     });
 
     child.stdin.write(JSON.stringify({ symbol: safeSymbol }));
@@ -1011,8 +1172,18 @@ app.get("/api/earnings", async (req, res) => {
 
     setTimeout(() => {
       child.kill();
-      res.status(504).json({ error: "Earnings fetch timed out" });
-      resolve();
+      if (cached?.payload) {
+        return finish(applyStaleMeta(cached.payload, cached, "earnings_fetch_timed_out"));
+      }
+      finish({
+        symbol: safeSymbol.toUpperCase(),
+        updatedAt: new Date().toISOString(),
+        stale: true,
+        unavailable: true,
+        stale_reason: "earnings_fetch_timed_out",
+        cache_updated_at: null,
+        stale_age_seconds: null
+      });
     }, 20000);
   });
 });
@@ -1035,13 +1206,15 @@ app.get("/api/earnings-calendar", async (req, res) => {
 
   const { toYF } = buildSymbolMaps(symbols);
   const yfSymbols = symbols.map((s) => toYF[s]);
+  const snapshotParams = { symbols };
+  const cached = await readServiceSnapshot("earnings-calendar", snapshotParams);
 
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (statusCode, payload) => {
+    const finish = (payload) => {
       if (settled) return;
       settled = true;
-      res.status(statusCode).json(payload);
+      res.json(payload);
       resolve();
     };
 
@@ -1055,7 +1228,22 @@ app.get("/api/earnings-calendar", async (req, res) => {
     child.on("close", (code) => {
       if (stderr) console.error("Earnings calendar stderr:", stderr);
       if (code !== 0) {
-        return finish(502, { error: "Failed to fetch earnings calendar" });
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "earnings_calendar_fetch_failed"));
+        }
+        return finish({
+          items: symbols.map((originalSymbol) => ({
+            symbol: originalSymbol,
+            nextEarnings: null,
+            source: "Yahoo Finance"
+          })),
+          updatedAt: new Date().toISOString(),
+          stale: true,
+          unavailable: true,
+          stale_reason: "earnings_calendar_fetch_failed",
+          cache_updated_at: null,
+          stale_age_seconds: null
+        });
       }
 
       try {
@@ -1072,16 +1260,50 @@ app.get("/api/earnings-calendar", async (req, res) => {
             source: "Yahoo Finance"
           };
         });
-
-        finish(200, { items: normalizedItems });
+        const payload = {
+          items: normalizedItems,
+          updatedAt: new Date().toISOString(),
+          stale: false
+        };
+        writeServiceSnapshot("earnings-calendar", snapshotParams, payload).finally(() => finish(payload));
       } catch {
-        finish(502, { error: "Failed to parse earnings calendar data" });
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "earnings_calendar_parse_failed"));
+        }
+        finish({
+          items: symbols.map((originalSymbol) => ({
+            symbol: originalSymbol,
+            nextEarnings: null,
+            source: "Yahoo Finance"
+          })),
+          updatedAt: new Date().toISOString(),
+          stale: true,
+          unavailable: true,
+          stale_reason: "earnings_calendar_parse_failed",
+          cache_updated_at: null,
+          stale_age_seconds: null
+        });
       }
     });
 
     child.on("error", (err) => {
       console.error("Failed to start earnings calendar process:", err);
-      finish(502, { error: err.message });
+      if (cached?.payload) {
+        return finish(applyStaleMeta(cached.payload, cached, err?.message || "earnings_calendar_start_failed"));
+      }
+      finish({
+        items: symbols.map((originalSymbol) => ({
+          symbol: originalSymbol,
+          nextEarnings: null,
+          source: "Yahoo Finance"
+        })),
+        updatedAt: new Date().toISOString(),
+        stale: true,
+        unavailable: true,
+        stale_reason: err?.message || "earnings_calendar_start_failed",
+        cache_updated_at: null,
+        stale_age_seconds: null
+      });
     });
 
     child.stdin.write(JSON.stringify({ symbols: yfSymbols }));
@@ -1089,7 +1311,22 @@ app.get("/api/earnings-calendar", async (req, res) => {
 
     setTimeout(() => {
       child.kill();
-      finish(504, { error: "Earnings calendar fetch timed out" });
+      if (cached?.payload) {
+        return finish(applyStaleMeta(cached.payload, cached, "earnings_calendar_timeout"));
+      }
+      finish({
+        items: symbols.map((originalSymbol) => ({
+          symbol: originalSymbol,
+          nextEarnings: null,
+          source: "Yahoo Finance"
+        })),
+        updatedAt: new Date().toISOString(),
+        stale: true,
+        unavailable: true,
+        stale_reason: "earnings_calendar_timeout",
+        cache_updated_at: null,
+        stale_age_seconds: null
+      });
     }, 20000);
   });
 });
@@ -1102,7 +1339,16 @@ app.get("/api/macro-indicators", async (req, res) => {
 
   const cacheKey = `macro:${country}`;
   const now = Date.now();
-  const cached = macroIndicatorsCache.get(cacheKey);
+  const memoryCached = macroIndicatorsCache.get(cacheKey);
+  const persisted = await readServiceSnapshot("macro-indicators", { country });
+  const cached = memoryCached?.payload
+    ? memoryCached
+    : (persisted?.payload
+      ? {
+          payload: persisted.payload,
+          cachedAt: new Date(persisted.updatedAt || 0).getTime() || now
+        }
+      : null);
   if (cached?.payload && now - cached.cachedAt < MACRO_CACHE_TTL_MS) {
     return res.json(cached.payload);
   }
@@ -1201,16 +1447,14 @@ app.get("/api/macro-indicators", async (req, res) => {
     };
 
     macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
+    await writeServiceSnapshot("macro-indicators", { country }, payload);
     res.json(payload);
   } catch (error) {
     console.error("Macro indicators fetch failed:", error.message);
     if (cached?.payload) {
-      return res.json({
-        ...cached.payload,
-        stale: true,
-        unavailable: true,
-        stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000)
-      });
+      return res.json(applyStaleMeta(cached.payload, {
+        updatedAt: persisted?.updatedAt || new Date(cached.cachedAt).toISOString()
+      }, error?.message || "macro_fetch_failed"));
     }
     return res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
   }
@@ -1230,13 +1474,41 @@ app.get("/api/watchlist", async (req, res) => {
     return res.status(404).json({ error: "Category not found" });
   }
 
+  const requestedSymbols = req.query.symbols
+    ? req.query.symbols.split(",").map((s) => String(s || "").trim().toUpperCase()).filter(Boolean)
+    : [];
+  const snapshotParams = {
+    category: key,
+    symbols: requestedSymbols.length > 0 ? requestedSymbols.slice().sort() : ["__all__"]
+  };
+  const cached = await readServiceSnapshot("watchlist", snapshotParams);
+
   // Crypto — live prices from Binance
   if (key === "crypto") {
     try {
       const assets = await fetchCryptoMarketData();
-      return res.json({ category: key, assets });
+      const payload = {
+        category: key,
+        assets: Array.isArray(assets) ? assets : [],
+        updatedAt: new Date().toISOString(),
+        stale: false
+      };
+      await writeServiceSnapshot("watchlist", snapshotParams, payload);
+      return res.json(payload);
     } catch (error) {
-      return res.status(502).json({ error: error.message });
+      if (cached?.payload) {
+        return res.json(applyStaleMeta(cached.payload, cached, error?.message || "watchlist_crypto_fetch_failed"));
+      }
+      return res.json({
+        category: key,
+        assets: [],
+        updatedAt: new Date().toISOString(),
+        stale: true,
+        unavailable: true,
+        stale_reason: error?.message || "watchlist_crypto_fetch_failed",
+        cache_updated_at: null,
+        stale_age_seconds: null
+      });
     }
   }
 
@@ -1247,7 +1519,14 @@ app.get("/api/watchlist", async (req, res) => {
       price: null,
       priceChangePercent: null
     }));
-    return res.json({ category: key, assets: indicatorAssets });
+    const payload = {
+      category: key,
+      assets: indicatorAssets,
+      updatedAt: new Date().toISOString(),
+      stale: false
+    };
+    await writeServiceSnapshot("watchlist", snapshotParams, payload);
+    return res.json(payload);
   }
 
   const baseAssets = watchlistData[key] || [];
@@ -1270,27 +1549,48 @@ app.get("/api/watchlist", async (req, res) => {
   const symbols = assets.map((a) => a.symbol);
 
   // Stocks — fetch prices inline (no separate /api/prices call needed)
-  const requestedSymbols = req.query.symbols
-    ? req.query.symbols.split(",").map((s) => String(s || "").trim().toUpperCase()).filter(Boolean)
-    : [];
-
   const pricedSymbols = requestedSymbols.length > 0
     ? symbols.filter((s) => requestedSymbols.includes(String(s || "").trim().toUpperCase()))
     : symbols;
+  try {
+    const prices = pricedSymbols.length > 0
+      ? await fetchYFinancePrices(pricedSymbols)
+      : {};
 
-  const prices = pricedSymbols.length > 0
-    ? await fetchYFinancePrices(pricedSymbols)
-    : {};
-    // await fetchYFinancePrices(symbols);
-
-  const enrichedAssets = assets.map((asset) => ({
-    ...asset,
-    type: asset.type || "stock",
-    price: prices[asset.symbol]?.price ?? null,
-    priceChangePercent: prices[asset.symbol]?.priceChangePercent ?? null,
-  }));
-
-  return res.json({ category: key, assets: enrichedAssets });
+    const enrichedAssets = assets.map((asset) => ({
+      ...asset,
+      type: asset.type || "stock",
+      price: prices[asset.symbol]?.price ?? null,
+      priceChangePercent: prices[asset.symbol]?.priceChangePercent ?? null,
+    }));
+    const payload = {
+      category: key,
+      assets: enrichedAssets,
+      updatedAt: new Date().toISOString(),
+      stale: false
+    };
+    await writeServiceSnapshot("watchlist", snapshotParams, payload);
+    return res.json(payload);
+  } catch (error) {
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "watchlist_prices_fetch_failed"));
+    }
+    return res.json({
+      category: key,
+      assets: assets.map((asset) => ({
+        ...asset,
+        type: asset.type || "stock",
+        price: null,
+        priceChangePercent: null
+      })),
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "watchlist_prices_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
+  }
 });
 
 app.get("/api/prices", async (req, res) => {
@@ -1306,16 +1606,34 @@ app.get("/api/prices", async (req, res) => {
   if (!symbols.length) {
     return res.status(400).json({ error: "symbols query is required" });
   }
+  const snapshotParams = { type, symbols: symbols.slice().sort() };
+  const cached = await readServiceSnapshot("prices", snapshotParams);
 
   try {
+    let payload = null;
     if (type === "crypto") {
       const prices = await fetchCryptoQuotesBySymbols(symbols);
-      return res.json({ type: "crypto", prices });
+      payload = { type: "crypto", prices, updatedAt: new Date().toISOString(), stale: false };
+    } else {
+      const prices = await fetchYFinancePrices(symbols);
+      payload = { type: "tradfi", prices, updatedAt: new Date().toISOString(), stale: false };
     }
-    const prices = await fetchYFinancePrices(symbols);
-    return res.json({ type: "tradfi", prices });
+    await writeServiceSnapshot("prices", snapshotParams, payload);
+    return res.json(payload);
   } catch (error) {
-    return res.status(502).json({ error: error.message || "Failed to fetch prices" });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "prices_fetch_failed"));
+    }
+    return res.json({
+      type,
+      prices: {},
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "prices_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 
@@ -2191,6 +2509,11 @@ async function safePost(url, body, retries = 1) {
 app.post("/api/options/crypto", async (req, res) => {
   const { currency = "BTC", expiry } = req.body;
   const cacheKey = `${String(currency).toUpperCase()}:latest`;
+  const snapshotParams = {
+    currency: String(currency || "BTC").toUpperCase(),
+    expiry: expiry == null ? "latest" : String(expiry)
+  };
+  const persistedSnapshot = await readServiceSnapshot("options-chain", snapshotParams);
 
   try {
     // 1. Instruments
@@ -2349,6 +2672,7 @@ app.post("/api/options/crypto", async (req, res) => {
       payload,
       cachedAt: Date.now()
     });
+    await writeServiceSnapshot("options-chain", snapshotParams, payload);
 
     res.json(payload);
 
@@ -2363,23 +2687,50 @@ app.post("/api/options/crypto", async (req, res) => {
         stale_age_seconds: Math.floor((Date.now() - cached.cachedAt) / 1000)
       });
     }
-
-    res.status(502).json({
-      error: "Failed to fetch options: fetch failed"
+    if (persistedSnapshot?.payload) {
+      return res.json(applyStaleMeta(persistedSnapshot.payload, persistedSnapshot, error?.message || "options_chain_fetch_failed"));
+    }
+    res.json({
+      expiry: expiry ? parseInt(expiry, 10) : null,
+      expiries: [],
+      chain: [],
+      spot: null,
+      market_price: null,
+      market_metrics: {
+        iv: 0,
+        p_c_ratio: 0
+      },
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "options_chain_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
     });
   }
 });
 
 app.get("/api/options/whale-trades", async (req, res) => {
+  const requestedMinNotional = Number(req.query?.minNotional);
+  const minNotionalUsd = Number.isFinite(requestedMinNotional) && requestedMinNotional > 0
+    ? requestedMinNotional
+    : MIN_WHALE_NOTIONAL_USD;
+  const requestedSource = String(req.query?.source || "derive").trim().toLowerCase();
+  const sourceMode = requestedSource === "telegram" ? "telegram" : "derive";
+  const snapshotParams = { minNotionalUsd, source: sourceMode };
+  const cached = await readServiceSnapshot("options-whale-trades", snapshotParams);
   try {
-    const requestedMinNotional = Number(req.query?.minNotional);
-    const minNotionalUsd = Number.isFinite(requestedMinNotional) && requestedMinNotional > 0
-      ? requestedMinNotional
-      : MIN_WHALE_NOTIONAL_USD;
-
     const merged = [];
     const debugRawTradeCounts = Object.fromEntries(WHALE_CURRENCIES.map((currency) => [currency, 0]));
     const debugFallbackTradeCounts = Object.fromEntries(WHALE_CURRENCIES.map((currency) => [currency, 0]));
+    const includeDerive = sourceMode === "derive";
+    const includeTelegram = sourceMode === "telegram";
+    let telegramIngest = {
+      status: "skipped",
+      cached: false,
+      error: null,
+      trades: []
+    };
 
     const addTrades = (trades, currency) => {
       trades.forEach((trade) => {
@@ -2409,64 +2760,68 @@ app.get("/api/options/whale-trades", async (req, res) => {
       });
     };
 
-    const settled = await Promise.allSettled(
-      WHALE_CURRENCIES.map((currency) =>
-        safePost("/public/get_last_trades_by_currency", {
-          currency,
-          kind: "option",
-          count: 200
-        })
-      )
-    );
-
-    settled.forEach((result, idx) => {
-      const currency = WHALE_CURRENCIES[idx];
-      if (result.status !== "fulfilled") return;
-      const payload = result.value;
-      const trades = extractTradesFromPayload(payload);
-      debugRawTradeCounts[currency] = trades.length;
-      addTrades(trades, currency);
-    });
-
-    if (!merged.length) {
-      for (const currency of WHALE_CURRENCIES) {
-        try {
-          const instrumentsPayload = await safePost("/public/get_instruments", {
+    if (includeDerive) {
+      const settled = await Promise.allSettled(
+        WHALE_CURRENCIES.map((currency) =>
+          safePost("/public/get_last_trades_by_currency", {
             currency,
-            instrument_type: "option",
-            expired: false
-          });
-          const instruments = Array.isArray(instrumentsPayload?.result) ? instrumentsPayload.result : [];
-          const nearTerm = instruments
-            .slice()
-            .sort((a, b) => Number(a?.option_details?.expiry || 0) - Number(b?.option_details?.expiry || 0))
-            .slice(0, 14);
+            kind: "option",
+            count: 200
+          })
+        )
+      );
 
-          const perInstrument = await Promise.allSettled(
-            nearTerm.map((instrument) =>
-              safePost("/public/get_last_trades_by_instrument", {
-                instrument_name: instrument?.instrument_name,
-                count: 20,
-                include_old: true
-              })
-            )
-          );
+      settled.forEach((result, idx) => {
+        const currency = WHALE_CURRENCIES[idx];
+        if (result.status !== "fulfilled") return;
+        const payload = result.value;
+        const trades = extractTradesFromPayload(payload);
+        debugRawTradeCounts[currency] = trades.length;
+        addTrades(trades, currency);
+      });
 
-          perInstrument.forEach((result) => {
-            if (result.status !== "fulfilled") return;
-            const trades = extractTradesFromPayload(result.value);
-            debugFallbackTradeCounts[currency] += trades.length;
-            addTrades(trades, currency);
-          });
-        } catch (fallbackError) {
-          console.warn(`Whale fallback failed for ${currency}:`, fallbackError.message);
+      if (!merged.length) {
+        for (const currency of WHALE_CURRENCIES) {
+          try {
+            const instrumentsPayload = await safePost("/public/get_instruments", {
+              currency,
+              instrument_type: "option",
+              expired: false
+            });
+            const instruments = Array.isArray(instrumentsPayload?.result) ? instrumentsPayload.result : [];
+            const nearTerm = instruments
+              .slice()
+              .sort((a, b) => Number(a?.option_details?.expiry || 0) - Number(b?.option_details?.expiry || 0))
+              .slice(0, 14);
+
+            const perInstrument = await Promise.allSettled(
+              nearTerm.map((instrument) =>
+                safePost("/public/get_last_trades_by_instrument", {
+                  instrument_name: instrument?.instrument_name,
+                  count: 20,
+                  include_old: true
+                })
+              )
+            );
+
+            perInstrument.forEach((result) => {
+              if (result.status !== "fulfilled") return;
+              const trades = extractTradesFromPayload(result.value);
+              debugFallbackTradeCounts[currency] += trades.length;
+              addTrades(trades, currency);
+            });
+          } catch (fallbackError) {
+            console.warn(`Whale fallback failed for ${currency}:`, fallbackError.message);
+          }
         }
       }
     }
 
-    const telegramIngest = await fetchTelegramWhaleTrades();
-    if (Array.isArray(telegramIngest.trades) && telegramIngest.trades.length > 0) {
-      merged.push(...telegramIngest.trades);
+    if (includeTelegram) {
+      telegramIngest = await fetchTelegramWhaleTrades();
+      if (Array.isArray(telegramIngest.trades) && telegramIngest.trades.length > 0) {
+        merged.push(...telegramIngest.trades);
+      }
     }
 
     const whaleFiltered = merged.filter((t) => Number.isFinite(t.totalNotional) && t.totalNotional >= minNotionalUsd);
@@ -2479,10 +2834,10 @@ app.get("/api/options/whale-trades", async (req, res) => {
       .slice(0, 100);
 
     console.info("Whale trades raw counts by currency:", debugRawTradeCounts);
-
-    res.json({
+    const payload = {
       updatedAt: new Date().toISOString(),
       minNotionalUsd,
+      selectedSource: sourceMode,
       debug_raw_trade_counts: debugRawTradeCounts,
       debug_fallback_trade_counts: debugFallbackTradeCounts,
       debug_telegram_ingest: {
@@ -2492,11 +2847,27 @@ app.get("/api/options/whale-trades", async (req, res) => {
         trades: Array.isArray(telegramIngest.trades) ? telegramIngest.trades.length : 0,
         channel: TELEGRAM_CHANNEL_USERNAME
       },
-      trades
-    });
+      trades,
+      stale: false
+    };
+    await writeServiceSnapshot("options-whale-trades", snapshotParams, payload);
+    res.json(payload);
   } catch (error) {
     console.error("Whale options fetch failed:", error.message);
-    res.status(502).json({ error: "Failed to fetch whale options trades" });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "options_whale_fetch_failed"));
+    }
+    res.json({
+      updatedAt: new Date().toISOString(),
+      minNotionalUsd,
+      selectedSource: sourceMode,
+      trades: [],
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "options_whale_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 
@@ -2504,12 +2875,31 @@ app.get("/api/options/whale-trades", async (req, res) => {
 // Prediction Markets (Polymarket Gamma API)
 // ---------------------------------------------------------------------------
 app.get("/api/prediction/snapshot", async (_req, res) => {
+  const cached = await readServiceSnapshot("prediction-snapshot", { version: "v1" });
   try {
     const snapshot = await loadPredictionSnapshot();
-    res.json(snapshot);
+    const payload = {
+      ...snapshot,
+      stale: false
+    };
+    await writeServiceSnapshot("prediction-snapshot", { version: "v1" }, payload);
+    res.json(payload);
   } catch (error) {
     console.error("Prediction snapshot failed:", error.message);
-    res.status(502).json({ error: "Failed to fetch prediction markets snapshot" });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "prediction_snapshot_fetch_failed"));
+    }
+    res.json({
+      updatedAt: new Date().toISOString(),
+      refreshIntervalMs: PREDICTION_REFRESH_MS,
+      categories: Object.fromEntries(PREDICTION_CATEGORIES.map((category) => [category, []])),
+      whaleTransactions: [],
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "prediction_snapshot_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 
@@ -2518,6 +2908,8 @@ app.get("/api/prediction/market-details/:marketId", async (req, res) => {
   if (!marketId) {
     return res.status(400).json({ error: "marketId is required" });
   }
+  const snapshotParams = { marketId: String(marketId) };
+  const cached = await readServiceSnapshot("prediction-market-details", snapshotParams);
 
   try {
     const market = await fetchGammaJson(`/markets/${encodeURIComponent(marketId)}`);
@@ -2636,10 +3028,31 @@ app.get("/api/prediction/market-details/:marketId", async (req, res) => {
       }
     };
 
-    res.json(details);
+    const payload = {
+      ...details,
+      updatedAt: new Date().toISOString(),
+      stale: false
+    };
+    await writeServiceSnapshot("prediction-market-details", snapshotParams, payload);
+    res.json(payload);
   } catch (error) {
     console.error("Prediction market details failed:", error.message);
-    res.status(502).json({ error: "Failed to fetch prediction market details" });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "prediction_market_details_fetch_failed"));
+    }
+    res.json({
+      market: null,
+      holderDataAvailable: false,
+      holderDataNote: "No holder data returned for this market at the moment.",
+      holders: { yes: [], no: [] },
+      positions: { yes: [], no: [] },
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "prediction_market_details_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 
@@ -2690,11 +3103,32 @@ app.get("/api/prices", async (req, res) => {
 });
 
 app.get("/api/crypto-market", async (req, res) => {
+  const snapshotParams = { category: "crypto-market" };
+  const cached = await readServiceSnapshot("crypto-market", snapshotParams);
   try {
     const assets = await fetchCryptoMarketData();
-    res.json({ category: "crypto", assets });
+    const payload = {
+      category: "crypto",
+      assets: Array.isArray(assets) ? assets : [],
+      updatedAt: new Date().toISOString(),
+      stale: false
+    };
+    await writeServiceSnapshot("crypto-market", snapshotParams, payload);
+    res.json(payload);
   } catch (error) {
-    res.status(502).json({ error: error.message });
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "crypto_market_fetch_failed"));
+    }
+    res.json({
+      category: "crypto",
+      assets: [],
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "crypto_market_fetch_failed",
+      cache_updated_at: null,
+      stale_age_seconds: null
+    });
   }
 });
 

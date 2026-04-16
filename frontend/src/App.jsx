@@ -7,6 +7,7 @@ import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
 import { PredictionMarketModule } from "./components/PredictionMarketModule";
+import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const DEFAULT_STOCK_THEMES = [
@@ -76,6 +77,7 @@ function App() {
   const [homeMarketMovers, setHomeMarketMovers] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [watchlistStale, setWatchlistStale] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -406,7 +408,16 @@ useEffect(() => {
   useEffect(() => {
     if (!activeCategory) return;
 
-    setLoading(true);
+    const cacheParams = { category: activeCategory };
+    const cached = readResilientCache("watchlist-category", cacheParams);
+    const cachedAssets = Array.isArray(cached?.payload?.assets) ? cached.payload.assets : [];
+    if (cachedAssets.length > 0) {
+      setAssets((prev) => mergeAssetPrices(cachedAssets, prev));
+      setWatchlistStale(Boolean(cached?.payload?.stale || cached?.payload?.unavailable));
+    } else {
+      setWatchlistStale(false);
+    }
+    setLoading(cachedAssets.length === 0);
     setError(null);
 
     fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}`)
@@ -417,6 +428,12 @@ useEffect(() => {
       .then((data) => {
         const allAssets = Array.isArray(data) ? data : data.assets || [];
         setAssets((prev) => mergeAssetPrices(allAssets, prev));
+        setWatchlistStale(Boolean(data?.stale || data?.unavailable));
+        writeResilientCache("watchlist-category", cacheParams, {
+          category: activeCategory,
+          assets: allAssets,
+          stale: Boolean(data?.stale || data?.unavailable)
+        });
         setLoading(false);
 
         if (activeCategory !== "crypto" && allAssets.length > 0) {
@@ -432,6 +449,10 @@ useEffect(() => {
       })
       .catch((err) => {
         setError(err.message);
+        if (cachedAssets.length > 0) {
+          setAssets((prev) => mergeAssetPrices(cachedAssets, prev));
+        }
+        setWatchlistStale(true);
         setLoading(false);
       });
   }, [activeCategory]);
@@ -1052,7 +1073,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const fallback = {
       email: localStorage.getItem("zenin_email") || "user@zenin.app",
       pendingEmail: "",
+      pendingEmailCodeHash: "",
+      pendingEmailRequestedAt: null,
       emailVerified: true,
+      passwordHash: "",
       passwordChangedAt: null,
       twoFactorEnabled: false,
       twoFactorMethod: null,
@@ -1078,6 +1102,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const [profileForms, setProfileForms] = useState({
     newEmail: "",
     emailPassword: "",
+    emailVerificationCode: "",
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -1107,11 +1132,15 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const sanitized = {
       email: profileSecurity?.email || userEmail,
       pendingEmail: profileSecurity?.pendingEmail || "",
+      pendingEmailCodeHash: profileSecurity?.pendingEmailCodeHash || "",
+      pendingEmailRequestedAt: profileSecurity?.pendingEmailRequestedAt || null,
       emailVerified: !!profileSecurity?.emailVerified,
+      passwordHash: profileSecurity?.passwordHash || "",
       passwordChangedAt: profileSecurity?.passwordChangedAt || null,
       twoFactorEnabled: !!profileSecurity?.twoFactorEnabled,
       twoFactorMethod: profileSecurity?.twoFactorMethod || null,
       twoFactorProvider: profileSecurity?.twoFactorProvider || null,
+      twoFactorTarget: profileSecurity?.twoFactorTarget || "",
       twoFactorEnabledAt: profileSecurity?.twoFactorEnabledAt || null,
       passkeys: Array.isArray(profileSecurity?.passkeys)
         ? profileSecurity.passkeys.map((p) => ({
@@ -1121,7 +1150,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
           createdAt: p.createdAt
         }))
         : [],
-      backupCodes: []
+      backupCodes: Array.isArray(profileSecurity?.backupCodes)
+        ? profileSecurity.backupCodes.filter((code) => typeof code === "string" && code.trim())
+        : []
     };
     localStorage.setItem("zenin_profile_security", JSON.stringify(sanitized));
   }, [profileSecurity]);
@@ -1181,8 +1212,37 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const createBackupCodes = () =>
     Array.from({ length: 8 }, () => Math.random().toString(36).slice(2, 6).toUpperCase());
 
+  const createVerificationCode = () =>
+    String(Math.floor(100000 + Math.random() * 900000));
+
+  const hashSecret = (value) => {
+    const input = String(value || "");
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i += 1) {
+      hash ^= input.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `h${(hash >>> 0).toString(16)}`;
+  };
+
   const setProfileMessage = (section, type, text) => {
     setProfileFeedback((prev) => ({ ...prev, [section]: { type, text } }));
+  };
+
+  const verifyCurrentPassword = (password) => {
+    const candidate = String(password || "").trim();
+    if (candidate.length < 8) {
+      return { ok: false, message: "Current password must be at least 8 characters." };
+    }
+    const candidateHash = hashSecret(candidate);
+    const storedHash = String(profileSecurity?.passwordHash || "").trim();
+    if (!storedHash) {
+      return { ok: true, bootstrapHash: candidateHash };
+    }
+    if (storedHash !== candidateHash) {
+      return { ok: false, message: "Current password is incorrect." };
+    }
+    return { ok: true };
   };
 
   const requestEmailChange = () => {
@@ -1194,8 +1254,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       setProfileMessage("email", "error", "Enter a valid email address.");
       return;
     }
-    if (password.length < 8) {
-      setProfileMessage("email", "error", "Current password must be at least 8 characters.");
+    const passwordCheck = verifyCurrentPassword(password);
+    if (!passwordCheck.ok) {
+      setProfileMessage("email", "error", passwordCheck.message);
       return;
     }
     if (nextEmail === String(profileSecurity.email || "").toLowerCase()) {
@@ -1203,28 +1264,49 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       return;
     }
 
+    const verificationCode = createVerificationCode();
     setProfileSecurity((prev) => ({
       ...prev,
       pendingEmail: nextEmail,
-      emailVerified: false
+      pendingEmailCodeHash: hashSecret(verificationCode),
+      pendingEmailRequestedAt: new Date().toISOString(),
+      emailVerified: false,
+      passwordHash: prev.passwordHash || passwordCheck.bootstrapHash || ""
     }));
-    setProfileForms((prev) => ({ ...prev, newEmail: "", emailPassword: "" }));
-    setProfileMessage("email", "success", `Verification link sent to ${nextEmail}. Confirm it to apply the change.`);
+    setProfileForms((prev) => ({ ...prev, newEmail: "", emailPassword: "", emailVerificationCode: "" }));
+    setProfileMessage(
+      "email",
+      "success",
+      `Verification sent to ${nextEmail}. Demo code: ${verificationCode} (enter it below to confirm).`
+    );
   };
 
   const verifyPendingEmail = () => {
     const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
+    const expectedHash = String(profileSecurity.pendingEmailCodeHash || "").trim();
+    const typedCode = String(profileForms.emailVerificationCode || "").trim();
     if (!pendingEmail) {
       setProfileMessage("email", "error", "No pending email change to verify.");
+      return;
+    }
+    if (!/^\d{6}$/.test(typedCode)) {
+      setProfileMessage("email", "error", "Enter the 6-digit verification code.");
+      return;
+    }
+    if (!expectedHash || expectedHash !== hashSecret(typedCode)) {
+      setProfileMessage("email", "error", "Verification code is invalid.");
       return;
     }
     setProfileSecurity((prev) => ({
       ...prev,
       email: pendingEmail,
       pendingEmail: "",
+      pendingEmailCodeHash: "",
+      pendingEmailRequestedAt: null,
       emailVerified: true
     }));
     setUserEmail(pendingEmail);
+    setProfileForms((prev) => ({ ...prev, emailVerificationCode: "" }));
     setProfileMessage("email", "success", `Email updated to ${pendingEmail}.`);
   };
 
@@ -1233,8 +1315,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const newPassword = profileForms.newPassword.trim();
     const confirmPassword = profileForms.confirmPassword.trim();
 
-    if (currentPassword.length < 8) {
-      setProfileMessage("password", "error", "Current password must be at least 8 characters.");
+    const passwordCheck = verifyCurrentPassword(currentPassword);
+    if (!passwordCheck.ok) {
+      setProfileMessage("password", "error", passwordCheck.message);
       return;
     }
     if (newPassword.length < 10) {
@@ -1245,13 +1328,18 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       setProfileMessage("password", "error", "New password and confirmation do not match.");
       return;
     }
-    if (newPassword === currentPassword) {
+    if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      setProfileMessage("password", "error", "Use at least one letter and one number in your new password.");
+      return;
+    }
+    if (hashSecret(newPassword) === (profileSecurity.passwordHash || passwordCheck.bootstrapHash || hashSecret(currentPassword))) {
       setProfileMessage("password", "error", "Choose a password different from your current password.");
       return;
     }
 
     setProfileSecurity((prev) => ({
       ...prev,
+      passwordHash: hashSecret(newPassword),
       passwordChangedAt: new Date().toISOString()
     }));
     setProfileForms((prev) => ({
@@ -1266,7 +1354,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const enableTwoFactor = () => {
     const method = String(profileForms.twoFactorMethod || "authenticator");
     const code = profileForms.twoFactorCode.trim();
-    if (!/^\d{6}$/.test(code)) {
+    if (method !== "passkey" && !/^\d{6}$/.test(code)) {
       setProfileMessage("twofa", "error", "Enter a valid 6-digit verification code.");
       return;
     }
@@ -1309,6 +1397,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const recoveryEmail = profileForms.recoveryEmail.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recoveryEmail)) {
       setProfileMessage("twofa", "error", "Enter a valid recovery email for email OTP.");
+      return;
+    }
+    if (!profileSecurity.emailVerified) {
+      setProfileMessage("twofa", "error", "Verify your workspace email before enabling Email OTP.");
       return;
     }
     setProfileSecurity((prev) => ({
@@ -1355,6 +1447,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       setProfileMessage("twofa", "error", "Enable 2FA before generating backup codes.");
       return;
     }
+    if (!profileSecurity.twoFactorMethod) {
+      setProfileMessage("twofa", "error", "Select and enable a 2FA method first.");
+      return;
+    }
     setProfileSecurity((prev) => ({ ...prev, backupCodes: createBackupCodes() }));
     setProfileMessage("twofa", "success", "Backup codes regenerated.");
   };
@@ -1371,6 +1467,29 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     }));
     setProfileMessage("twofa", "info", "2FA disabled for this workspace profile.");
   };
+
+  const hasPendingEmail = Boolean(String(profileSecurity?.pendingEmail || "").trim());
+  const isEmailVerificationCodeValid = /^\d{6}$/.test(String(profileForms?.emailVerificationCode || "").trim());
+  const canSendEmailVerification = Boolean(
+    String(profileForms?.newEmail || "").trim() &&
+    String(profileForms?.emailPassword || "").trim()
+  );
+  const canConfirmEmailVerification = hasPendingEmail && isEmailVerificationCodeValid;
+  const canUpdatePassword = Boolean(
+    String(profileForms?.currentPassword || "").trim() &&
+    String(profileForms?.newPassword || "").trim() &&
+    String(profileForms?.confirmPassword || "").trim()
+  );
+  const canEnableTwoFactor = (() => {
+    const method = String(profileForms?.twoFactorMethod || "authenticator");
+    if (method === "passkey") {
+      return Boolean(String(profileForms?.passkeyName || "").trim());
+    }
+    if (!/^\d{6}$/.test(String(profileForms?.twoFactorCode || "").trim())) return false;
+    if (method === "sms") return String(profileForms?.phoneNumber || "").trim().length >= 8;
+    if (method === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(profileForms?.recoveryEmail || "").trim());
+    return true;
+  })();
 
   const sectionIcon = (section) => {
     if (section === "Home") {
@@ -1566,25 +1685,27 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
               )}
             </div>
 
-            {error ? (
-              <div className="error">Unable to load watchlist: {error}</div>
-            ) : (
-              <Watchlist
-                categories={categories}
-                activeCategory={activeCategory}
-                onCategorySelect={handleCategorySelect}
-                assets={assets}
-                watchlistAssets={watchlistAssets}
-                onAdd={setSelectedAsset}
-                loading={loading}
-                activeTheme={activeTheme}
-                onThemeSelect={setActiveTheme}
-                stockThemes={stockThemes}
-                isInWatchlist={isInWatchlist}
-                onToggleStar={toggleWatchlistStar}
-                onPageChange={handlePageChange}
-              />
-            )}
+            {watchlistStale ? (
+              <div className="stale-banner">
+                <span className="status-icon">⚠</span>
+                Showing last synced watchlist snapshot while refresh retries.
+              </div>
+            ) : null}
+            <Watchlist
+              categories={categories}
+              activeCategory={activeCategory}
+              onCategorySelect={handleCategorySelect}
+              assets={assets}
+              watchlistAssets={watchlistAssets}
+              onAdd={setSelectedAsset}
+              loading={loading}
+              activeTheme={activeTheme}
+              onThemeSelect={setActiveTheme}
+              stockThemes={stockThemes}
+              isInWatchlist={isInWatchlist}
+              onToggleStar={toggleWatchlistStar}
+              onPageChange={handlePageChange}
+            />
           </div>
         )}
 
@@ -1783,12 +1904,30 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                               placeholder="Enter current password"
                             />
                           </label>
+                          <label className="settings-field">
+                            <span>Verification Code</span>
+                            <input
+                              type="text"
+                              value={profileForms.emailVerificationCode}
+                              onChange={(e) => setProfileForms((prev) => ({
+                                ...prev,
+                                emailVerificationCode: e.target.value.replace(/\D/g, "").slice(0, 6)
+                              }))}
+                              placeholder="6-digit code"
+                            />
+                          </label>
                           <div className="settings-inline-actions">
-                            <button className="settings-primary-btn" onClick={requestEmailChange}>Send Verification</button>
+                            <button
+                              className="settings-primary-btn"
+                              onClick={requestEmailChange}
+                              disabled={!canSendEmailVerification}
+                            >
+                              Send Verification
+                            </button>
                             <button
                               className="settings-secondary-btn"
                               onClick={verifyPendingEmail}
-                              disabled={!profileSecurity.pendingEmail}
+                              disabled={!canConfirmEmailVerification}
                             >
                               Confirm Verification
                             </button>
@@ -1835,7 +1974,13 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                             />
                           </label>
                           <div className="settings-inline-actions">
-                            <button className="settings-primary-btn" onClick={updatePassword}>Update Password</button>
+                            <button
+                              className="settings-primary-btn"
+                              onClick={updatePassword}
+                              disabled={!canUpdatePassword}
+                            >
+                              Update Password
+                            </button>
                           </div>
                           {profileSecurity.passwordChangedAt ? (
                             <p className="settings-meta">
@@ -1961,9 +2106,21 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
                           <div className="settings-inline-actions">
                             {profileForms.twoFactorMethod === "passkey" ? (
-                              <button className="settings-primary-btn" onClick={registerPasskey}>Register Passkey</button>
+                              <button
+                                className="settings-primary-btn"
+                                onClick={registerPasskey}
+                                disabled={!canEnableTwoFactor}
+                              >
+                                Register Passkey
+                              </button>
                             ) : (
-                              <button className="settings-primary-btn" onClick={enableTwoFactor}>Enable 2FA</button>
+                              <button
+                                className="settings-primary-btn"
+                                onClick={enableTwoFactor}
+                                disabled={!canEnableTwoFactor}
+                              >
+                                Enable 2FA
+                              </button>
                             )}
                             <button
                               className="settings-secondary-btn"

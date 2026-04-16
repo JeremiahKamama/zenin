@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
+import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
@@ -15,11 +16,13 @@ export function OptionsModule() {
   const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState("");
+  const [optionsStale, setOptionsStale] = useState(false);
   const [whaleTrades, setWhaleTrades] = useState([]);
   const [whaleLoading, setWhaleLoading] = useState(false);
-  const [whaleError, setWhaleError] = useState("");
+  const [whaleStale, setWhaleStale] = useState(false);
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
+  const [whaleSource, setWhaleSource] = useState("derive");
 
  useEffect(() => {
   // fallback assets (Derive supports these)
@@ -50,6 +53,22 @@ useEffect(() => {
   };
 
   const fetchChain = async () => {
+      const cacheParams = { asset: activeAsset, expiry: activeExpiry || "latest" };
+      const cached = readResilientCache("options-chain", cacheParams);
+      if (cached?.payload) {
+        const cachedChain = Array.isArray(cached.payload?.chain) ? cached.payload.chain : [];
+        if (cachedChain.length > 0) {
+          setChain(cachedChain);
+          setAvailableExpiries(Array.isArray(cached.payload?.expiries) ? cached.payload.expiries : []);
+          if (!activeExpiry && cached.payload?.expiry) setActiveExpiry(cached.payload.expiry);
+          setMetrics(cached.payload?.market_metrics ? {
+            iv: parseFloat(cached.payload.market_metrics?.iv) || 0.42,
+            pcr: cached.payload.market_metrics?.p_c_ratio || 0.85,
+            skew: "Volatile"
+          } : { iv: 0.42, pcr: 0.85, skew: "Volatile" });
+          setOptionsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+        }
+      }
       setLoading(true);
       try {
         setOptionsError("");
@@ -105,18 +124,22 @@ useEffect(() => {
           pcr: data?.market_metrics?.p_c_ratio || 0.85,
           skew: "Volatile"
         });
+        setOptionsStale(Boolean(data?.stale || data?.unavailable));
+        writeResilientCache("options-chain", cacheParams, data);
         if (data.stale) {
           setOptionsError(`Using cached options data (${data.stale_age_seconds || 0}s old).`);
         }
       } else {
         console.warn("Invalid options response:", data);
-        setOptionsError("Options data is temporarily unavailable.");
+        setOptionsError("Options data is syncing.");
+        setOptionsStale(true);
       }
 
     } catch (err) {
       console.error("Error fetching crypto options:", err);
       if (isMounted) {
-        setOptionsError("Live options feed is temporarily unavailable. Showing last known data.");
+        setOptionsError("Showing previous options snapshot while refresh retries.");
+        setOptionsStale(true);
         const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
         if (!isMounted) return;
         if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
@@ -154,10 +177,18 @@ useEffect(() => {
 
   const fetchWhaleTrades = async () => {
     if (!isMounted) return;
+    const cacheParams = { minNotional: whaleMinNotional, source: whaleSource };
+    const cached = readResilientCache("options-whale-trades", cacheParams);
+    if (cached?.payload && Array.isArray(cached.payload?.trades)) {
+      setWhaleTrades(cached.payload.trades);
+      setWhaleStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+    }
     setWhaleLoading(true);
-    setWhaleError("");
     try {
-      const params = new URLSearchParams({ minNotional: String(whaleMinNotional) });
+      const params = new URLSearchParams({
+        minNotional: String(whaleMinNotional),
+        source: whaleSource
+      });
       const res = await fetch(`${BACKEND_URL}/options/whale-trades?${params.toString()}`);
       if (!res.ok) {
         const text = await res.text();
@@ -166,10 +197,12 @@ useEffect(() => {
       const data = await res.json();
       if (!isMounted) return;
       setWhaleTrades(Array.isArray(data?.trades) ? data.trades : []);
+      setWhaleStale(Boolean(data?.stale || data?.unavailable));
+      writeResilientCache("options-whale-trades", cacheParams, data || { trades: [] });
       setWhalePage(1);
     } catch (err) {
       if (!isMounted) return;
-      setWhaleError("Unable to load whale options trades.");
+      setWhaleStale(true);
     } finally {
       if (isMounted) setWhaleLoading(false);
     }
@@ -182,7 +215,7 @@ useEffect(() => {
     isMounted = false;
     clearInterval(interval);
   };
-}, [whaleMinNotional]);
+}, [whaleMinNotional, whaleSource]);
 
   const whalePageSize = 10;
   const whaleTotalPages = Math.max(1, Math.ceil(whaleTrades.length / whalePageSize));
@@ -194,6 +227,10 @@ useEffect(() => {
   useEffect(() => {
     if (whalePage > whaleTotalPages) setWhalePage(whaleTotalPages);
   }, [whalePage, whaleTotalPages]);
+
+  useEffect(() => {
+    setWhalePage(1);
+  }, [whaleMinNotional, whaleSource]);
 
   const formatDollar = (value) => {
     const n = Number(value || 0);
@@ -233,6 +270,10 @@ useEffect(() => {
     { label: "Above $750K", value: 750000 },
     { label: "Above $1M", value: 1000000 }
   ];
+  const whaleSourceOptions = [
+    { label: "Derive", value: "derive" },
+    { label: "Telegram", value: "telegram" }
+  ];
 
   return (
     <div className="view-container options-terminal">
@@ -258,7 +299,13 @@ useEffect(() => {
         <div className="section-header">
           <div className="header-left">
             <h2>{activeAsset} Option Chain <span className="live-pill">Live</span></h2>
-            <div className="asset-count">{chain.length} Strikes Available</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div className="asset-count">{chain.length} Strikes Available</div>
+              <span className={`data-health-badge ${loading ? "loading" : optionsStale ? "hazard" : "ok"}`} title={loading ? "Refreshing options chain" : optionsStale ? "Showing previous options snapshot" : "Options chain is up to date"}>
+                <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : optionsStale ? "⚠" : "✓"}</span>
+                Chain
+              </span>
+            </div>
           </div>
           
           <div className="asset-dropdown-container">
@@ -285,10 +332,10 @@ useEffect(() => {
           ))}
         </div>
 
-          {loading ? (
+          {chain.length === 0 && loading ? (
             <div className="loading-state">Syncing {activeAsset} with Lyra Protocol...</div>
           ) : chain.length === 0 ? (
-            <div className="loading-state">No options data available for {activeAsset}.</div>
+            <div className="loading-state">Waiting for options data for {activeAsset}.</div>
           ) : (
             <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto" }}>
               <table className="option-chain-table">
@@ -339,26 +386,44 @@ useEffect(() => {
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Whale Options Trades <span className="live-pill">Live</span></h2>
-            <div className="asset-count">BTC / ETH / SOL / HYPE</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div className="asset-count">BTC / ETH / SOL / HYPE</div>
+              <span className={`data-health-badge ${whaleLoading ? "loading" : whaleStale ? "hazard" : "ok"}`} title={whaleLoading ? "Refreshing whale trades" : whaleStale ? "Showing previous whale-trades snapshot" : "Whale trades are up to date"}>
+                <span className={`status-icon ${whaleLoading ? "spinner" : ""}`}>{whaleLoading ? "⟳" : whaleStale ? "⚠" : "✓"}</span>
+                Whale Flow
+              </span>
+            </div>
           </div>
-          <div className="asset-dropdown-container">
-            <select
-              value={whaleMinNotional}
-              onChange={(e) => setWhaleMinNotional(Number(e.target.value) || 100000)}
-            >
-              {whaleThresholdOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+          <div className="whale-options-controls">
+            <div className="search-type-buttons" style={{ marginLeft: 0 }}>
+              {whaleSourceOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`search-type-button ${whaleSource === opt.value ? "active" : ""}`}
+                  onClick={() => setWhaleSource(opt.value)}
+                >
+                  {opt.label}
+                </button>
               ))}
-            </select>
+            </div>
+            <div className="asset-dropdown-container">
+              <select
+                value={whaleMinNotional}
+                onChange={(e) => setWhaleMinNotional(Number(e.target.value) || 100000)}
+              >
+                {whaleThresholdOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
-        {whaleLoading ? (
+        {whaleLoading && whaleTrades.length === 0 ? (
           <div className="loading-state">Loading whale options trades...</div>
-        ) : whaleError ? (
-          <div className="loading-state">{whaleError}</div>
         ) : pagedWhaleTrades.length === 0 ? (
-          <div className="loading-state">No whale options trades available.</div>
+          <div className="loading-state">Waiting for {whaleSource === "telegram" ? "Telegram" : "Derive"} whale options trades...</div>
         ) : (
           <div className="table-scroll">
             <table className="option-chain-table whale-trades-table">

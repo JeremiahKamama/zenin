@@ -93,6 +93,16 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseJsonPayload(value, fallback = null) {
+  if (value == null) return fallback;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 function mapPortfolioRow(row) {
   return {
     id: row.id,
@@ -230,6 +240,14 @@ async function initializeDatabase() {
         breakevens TEXT,
         legs_json TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS service_snapshots (
+        snapshot_key TEXT PRIMARY KEY,
+        payload_json JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
@@ -1056,6 +1074,51 @@ const optionsCalculations = {
   }
 };
 
+const serviceSnapshots = {
+  get: async (snapshotKey) => {
+    const key = String(snapshotKey || "").trim();
+    if (!key) return null;
+    const result = await pool.query(`
+      SELECT
+        snapshot_key AS "snapshotKey",
+        payload_json AS payload,
+        updated_at AS "updatedAt"
+      FROM service_snapshots
+      WHERE snapshot_key = $1
+      LIMIT 1;
+    `, [key]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      snapshotKey: row.snapshotKey,
+      payload: parseJsonPayload(row.payload, null),
+      updatedAt: toIsoString(row.updatedAt)
+    };
+  },
+
+  set: async (snapshotKey, payload) => {
+    const key = String(snapshotKey || "").trim();
+    if (!key) throw new Error("snapshotKey is required");
+    const payloadJson = JSON.stringify(payload ?? {});
+    const result = await pool.query(`
+      INSERT INTO service_snapshots (snapshot_key, payload_json, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (snapshot_key)
+      DO UPDATE SET payload_json = EXCLUDED.payload_json, updated_at = NOW()
+      RETURNING
+        snapshot_key AS "snapshotKey",
+        payload_json AS payload,
+        updated_at AS "updatedAt";
+    `, [key, payloadJson]);
+    const row = result.rows[0];
+    return {
+      snapshotKey: row.snapshotKey,
+      payload: parseJsonPayload(row.payload, null),
+      updatedAt: toIsoString(row.updatedAt)
+    };
+  }
+};
+
 async function clearAllData() {
   await pool.query("DELETE FROM portfolio_holdings");
   await pool.query("DELETE FROM watchlist_assets");
@@ -1073,6 +1136,7 @@ module.exports = {
   portfolio,
   watchlist,
   optionsCalculations,
+  serviceSnapshots,
   tradeExecutions,
   trading,
   clearAllData,

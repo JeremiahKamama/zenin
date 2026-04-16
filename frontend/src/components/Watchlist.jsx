@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -61,11 +62,11 @@ export function Watchlist({
   const [earningsPage, setEarningsPage] = useState(1);
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
-  const [earningsError, setEarningsError] = useState("");
+  const [earningsStale, setEarningsStale] = useState(false);
   const [indicatorCountry, setIndicatorCountry] = useState("USA");
   const [macroSnapshot, setMacroSnapshot] = useState(null);
   const [macroLoading, setMacroLoading] = useState(false);
-  const [macroError, setMacroError] = useState("");
+  const [macroStale, setMacroStale] = useState(false);
   const [macroByCountry, setMacroByCountry] = useState({});
 
   const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
@@ -110,7 +111,7 @@ export function Watchlist({
     if (activeCategory !== "indicators") {
       setIndicatorCountry("USA");
       setMacroSnapshot(null);
-      setMacroError("");
+      setMacroStale(false);
     }
   }, [activeCategory]);
 
@@ -156,11 +157,14 @@ useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
     const now = Date.now();
-    const cachedEntry = macroByCountry[indicatorCountry];
-    if (cachedEntry?.data) {
-      setMacroSnapshot(cachedEntry.data);
-      setMacroError("");
-      if (now - Number(cachedEntry.cachedAt || 0) < MACRO_CLIENT_CACHE_TTL_MS) {
+    const stateCachedEntry = macroByCountry[indicatorCountry];
+    const storageCached = readResilientCache("macro-indicators", { country: indicatorCountry });
+    const cachedPayload = stateCachedEntry?.data || storageCached?.payload || null;
+    const cachedAt = Number(stateCachedEntry?.cachedAt || (storageCached?.updatedAt ? new Date(storageCached.updatedAt).getTime() : 0));
+    if (cachedPayload) {
+      setMacroSnapshot(cachedPayload);
+      setMacroStale(Boolean(cachedPayload?.stale || cachedPayload?.unavailable));
+      if (now - cachedAt < MACRO_CLIENT_CACHE_TTL_MS) {
         setMacroLoading(false);
         return () => {
           isMounted = false;
@@ -170,8 +174,7 @@ useEffect(() => {
     }
 
     const fetchMacro = async () => {
-      setMacroLoading(!cachedEntry?.data);
-      setMacroError("");
+      setMacroLoading(true);
       try {
         const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
           signal: controller.signal
@@ -190,6 +193,7 @@ useEffect(() => {
         const data = await res.json();
         if (!isMounted) return;
         setMacroSnapshot(data || null);
+        setMacroStale(Boolean(data?.stale || data?.unavailable));
         setMacroByCountry((prev) => ({
           ...prev,
           [indicatorCountry]: {
@@ -197,11 +201,12 @@ useEffect(() => {
             cachedAt: Date.now()
           }
         }));
+        writeResilientCache("macro-indicators", { country: indicatorCountry }, data || null);
       } catch (err) {
         if (err.name === "AbortError") return;
         if (!isMounted) return;
-        if (!cachedEntry?.data) setMacroSnapshot(null);
-        setMacroError(err?.message || "Unable to load macro indicators.");
+        if (!cachedPayload) setMacroSnapshot(null);
+        setMacroStale(true);
       } finally {
         if (isMounted) setMacroLoading(false);
       }
@@ -212,22 +217,27 @@ useEffect(() => {
       isMounted = false;
       controller.abort();
     };
-  }, [activeCategory, indicatorCountry, macroByCountry]);
+  }, [activeCategory, indicatorCountry]);
 
   useEffect(() => {
     if (activeCategory !== "stocks") return;
     if (!earningsSymbols.length) {
       setEarningsItems([]);
-      setEarningsError("");
+      setEarningsStale(false);
       return;
     }
 
     let isMounted = true;
     const controller = new AbortController();
+    const cacheParams = { symbols: earningsSymbols };
+    const cached = readResilientCache("earnings-calendar", cacheParams);
+    if (cached?.payload && Array.isArray(cached.payload?.items)) {
+      setEarningsItems(cached.payload.items);
+      setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+    }
 
     const fetchEarningsCalendar = async () => {
       setEarningsLoading(true);
-      setEarningsError("");
       try {
         const params = new URLSearchParams({
           symbols: earningsSymbols.join(","),
@@ -242,12 +252,15 @@ useEffect(() => {
         }
         const data = await res.json();
         if (!isMounted) return;
-        setEarningsItems(Array.isArray(data?.items) ? data.items : []);
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setEarningsItems(items);
+        setEarningsStale(Boolean(data?.stale || data?.unavailable));
+        writeResilientCache("earnings-calendar", cacheParams, data || { items });
       } catch (err) {
         if (err.name === "AbortError") return;
         if (!isMounted) return;
-        setEarningsItems([]);
-        setEarningsError("Unable to load earnings calendar.");
+        if (!cached?.payload?.items) setEarningsItems([]);
+        setEarningsStale(true);
       } finally {
         if (isMounted) setEarningsLoading(false);
       }
@@ -331,12 +344,16 @@ useEffect(() => {
               </button>
             ))}
           </div>
-          {macroLoading ? (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
+            <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
+              <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
+              Indicators
+            </span>
+          </div>
+          {macroLoading && (!Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0) ? (
             <div className="loading-state">Loading macro indicators...</div>
-          ) : macroError ? (
-            <div className="loading-state">{macroError}</div>
           ) : !Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0 ? (
-            <div className="loading-state">No macro indicators available.</div>
+            <div className="loading-state">Waiting for macro indicators...</div>
           ) : (
             <div style={{ display: "grid", gap: "10px" }}>
               <div className="table-scroll">
@@ -472,14 +489,18 @@ useEffect(() => {
         <section className="watchlist-panel glass" style={{ marginTop: "12px", padding: "12px 14px" }}>
           <div className="section-header" style={{ marginBottom: "8px" }}>
             <h2 style={{ margin: 0, fontSize: "14px" }}>Earnings</h2>
-            <div className="asset-count">Yahoo Finance</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div className="asset-count">Yahoo Finance</div>
+              <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
+                <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
+                Earnings
+              </span>
+            </div>
           </div>
-          {earningsLoading ? (
+          {earningsLoading && earningsItems.length === 0 ? (
             <div className="loading-state">Loading earnings calendar...</div>
-          ) : earningsError ? (
-            <div className="loading-state">{earningsError}</div>
           ) : earningsItems.length === 0 ? (
-            <div className="loading-state">No stock earnings found.</div>
+            <div className="loading-state">Waiting for earnings data...</div>
           ) : (
             <div style={{ display: "grid", gap: "8px" }}>
               {earningsItems.map((item) => (

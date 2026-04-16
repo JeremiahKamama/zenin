@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -7,12 +8,12 @@ const PREDICTION_REFRESH_MS = 21600000; // 6 hours
 export function PredictionMarketModule() {
   const [predictionSnapshot, setPredictionSnapshot] = useState(null);
   const [predictionLoading, setPredictionLoading] = useState(false);
-  const [predictionError, setPredictionError] = useState("");
+  const [predictionStale, setPredictionStale] = useState(false);
   const [predictionWhalePage, setPredictionWhalePage] = useState(1);
   const [selectedPredictionMarket, setSelectedPredictionMarket] = useState(null);
   const [marketDetails, setMarketDetails] = useState(null);
   const [marketDetailsLoading, setMarketDetailsLoading] = useState(false);
-  const [marketDetailsError, setMarketDetailsError] = useState("");
+  const [marketDetailsStale, setMarketDetailsStale] = useState(false);
   const [activeCategory, setActiveCategory] = useState("geopolitics");
   const [whaleMinSize, setWhaleMinSize] = useState(10000);
   const [whaleSort, setWhaleSort] = useState({ key: "transactionSize", direction: "desc" });
@@ -22,8 +23,12 @@ export function PredictionMarketModule() {
 
     const fetchPredictionSnapshot = async () => {
       if (!isMounted) return;
+      const cached = readResilientCache("prediction-snapshot", { scope: "default" });
+      if (cached?.payload && typeof cached.payload === "object") {
+        setPredictionSnapshot(cached.payload);
+        setPredictionStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+      }
       setPredictionLoading(true);
-      setPredictionError("");
       try {
         const res = await fetch(`${BACKEND_URL}/prediction/snapshot`);
         if (!res.ok) {
@@ -33,10 +38,12 @@ export function PredictionMarketModule() {
         const data = await res.json();
         if (!isMounted) return;
         setPredictionSnapshot(data || null);
+        setPredictionStale(Boolean(data?.stale || data?.unavailable));
+        writeResilientCache("prediction-snapshot", { scope: "default" }, data || null);
         setPredictionWhalePage(1);
       } catch {
         if (!isMounted) return;
-        setPredictionError("Unable to load prediction markets.");
+        setPredictionStale(true);
       } finally {
         if (isMounted) setPredictionLoading(false);
       }
@@ -55,7 +62,7 @@ export function PredictionMarketModule() {
     let isMounted = true;
     if (!selectedPredictionMarket?.id) {
       setMarketDetails(null);
-      setMarketDetailsError("");
+      setMarketDetailsStale(false);
       return () => {
         isMounted = false;
       };
@@ -63,8 +70,13 @@ export function PredictionMarketModule() {
 
     const fetchDetails = async () => {
       if (!isMounted) return;
+      const cacheParams = { marketId: selectedPredictionMarket.id };
+      const cached = readResilientCache("prediction-market-details", cacheParams);
+      if (cached?.payload && typeof cached.payload === "object") {
+        setMarketDetails(cached.payload);
+        setMarketDetailsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
+      }
       setMarketDetailsLoading(true);
-      setMarketDetailsError("");
       try {
         const res = await fetch(`${BACKEND_URL}/prediction/market-details/${encodeURIComponent(selectedPredictionMarket.id)}`);
         if (!res.ok) {
@@ -74,9 +86,11 @@ export function PredictionMarketModule() {
         const data = await res.json();
         if (!isMounted) return;
         setMarketDetails(data || null);
+        setMarketDetailsStale(Boolean(data?.stale || data?.unavailable));
+        writeResilientCache("prediction-market-details", cacheParams, data || null);
       } catch {
         if (!isMounted) return;
-        setMarketDetailsError("Unable to load market holder and position details.");
+        setMarketDetailsStale(true);
       } finally {
         if (isMounted) setMarketDetailsLoading(false);
       }
@@ -89,7 +103,11 @@ export function PredictionMarketModule() {
   }, [selectedPredictionMarket]);
 
   const predictionCategories = ["geopolitics", "crypto", "tech", "politics", "finance"];
-  const whaleThresholdOptions = [10000, 50000, 100000];
+  const whaleThresholdOptions = [
+    { value: 10000, label: "Above $10K" },
+    { value: 50000, label: "Above $50K" },
+    { value: 100000, label: "Above $100K" }
+  ];
   const predictionMarketsByCategory = predictionSnapshot?.categories || {};
   const predictionWhaleTransactions = Array.isArray(predictionSnapshot?.whaleTransactions)
     ? predictionSnapshot.whaleTransactions
@@ -268,8 +286,14 @@ export function PredictionMarketModule() {
             <h2>Prediction Markets</h2>
             <div className="asset-count">Top 5 markets per category · refreshes every 6 hours</div>
           </div>
-          <div className="asset-count">
-            {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div className="asset-count">
+              {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
+            </div>
+            <span className={`data-health-badge ${predictionLoading ? "loading" : predictionStale ? "hazard" : "ok"}`} title={predictionLoading ? "Refreshing prediction snapshot" : predictionStale ? "Showing previous prediction snapshot" : "Prediction snapshot is up to date"}>
+              <span className={`status-icon ${predictionLoading ? "spinner" : ""}`}>{predictionLoading ? "⟳" : predictionStale ? "⚠" : "✓"}</span>
+              Snapshot
+            </span>
           </div>
         </div>
         <div className="category-tabs" style={{ marginBottom: "12px" }}>
@@ -285,10 +309,10 @@ export function PredictionMarketModule() {
           ))}
         </div>
 
-        {predictionLoading ? (
+        {predictionLoading && !predictionSnapshot ? (
           <div className="loading-state">Loading prediction markets...</div>
-        ) : predictionError ? (
-          <div className="loading-state">{predictionError}</div>
+        ) : !predictionSnapshot ? (
+          <div className="loading-state">Waiting for prediction markets...</div>
         ) : (
           <div className="prediction-category-card">
             <h3>{getPredictionCategoryLabel(activeCategory)}</h3>
@@ -344,29 +368,34 @@ export function PredictionMarketModule() {
         <div className="section-header" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Whale Transactions</h2>
-            <div className="asset-count">Large prediction-market flow · {filteredPredictionWhales.length} matches</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div className="asset-count">Large prediction-market flow · {filteredPredictionWhales.length} matches</div>
+              <span className={`data-health-badge ${predictionLoading ? "loading" : predictionStale ? "hazard" : "ok"}`} title={predictionLoading ? "Refreshing whale transactions" : predictionStale ? "Showing previous whale snapshot" : "Whale transactions are up to date"}>
+                <span className={`status-icon ${predictionLoading ? "spinner" : ""}`}>{predictionLoading ? "⟳" : predictionStale ? "⚠" : "✓"}</span>
+                Whale Flow
+              </span>
+            </div>
+          </div>
+          <div className="asset-dropdown-container" style={{ display: "grid", gap: "4px", justifyItems: "end" }}>
+            <div className="asset-count" style={{ fontSize: "0.72rem" }}>Min Transaction Size</div>
+            <select
+              value={whaleMinSize}
+              onChange={(e) => setWhaleMinSize(Number(e.target.value) || 10000)}
+              aria-label="Minimum whale transaction size"
+            >
+              {whaleThresholdOptions.map((threshold) => (
+                <option key={threshold.value} value={threshold.value}>
+                  {threshold.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
-        <div className="asset-dropdown-container" style={{ marginBottom: "12px" }}>
-          <select
-            value={whaleMinSize}
-            onChange={(e) => setWhaleMinSize(Number(e.target.value) || 10000)}
-            aria-label="Minimum whale transaction size"
-          >
-            {whaleThresholdOptions.map((threshold) => (
-              <option key={threshold} value={threshold}>
-                {`>= ${formatDollar(threshold)}`}
-              </option>
-            ))}
-          </select>
-        </div>
 
-        {predictionLoading ? (
+        {predictionLoading && !predictionSnapshot ? (
           <div className="loading-state">Loading whale transactions...</div>
-        ) : predictionError ? (
-          <div className="loading-state">{predictionError}</div>
         ) : pagedPredictionWhales.length === 0 ? (
-          <div className="loading-state">No whale transactions available.</div>
+          <div className="loading-state">Waiting for whale transactions...</div>
         ) : (
           <div className="table-scroll">
             <table className="option-chain-table whale-trades-table">
@@ -438,13 +467,17 @@ export function PredictionMarketModule() {
                 <h2>{selectedPredictionMarket.question}</h2>
                 <div className="asset-count">Top holders and positions</div>
               </div>
+              <span className={`data-health-badge ${marketDetailsLoading ? "loading" : marketDetailsStale ? "hazard" : "ok"}`} title={marketDetailsLoading ? "Refreshing market details" : marketDetailsStale ? "Showing previous market-detail snapshot" : "Market details are up to date"}>
+                <span className={`status-icon ${marketDetailsLoading ? "spinner" : ""}`}>{marketDetailsLoading ? "⟳" : marketDetailsStale ? "⚠" : "✓"}</span>
+                Details
+              </span>
               <button className="close-btn" onClick={() => setSelectedPredictionMarket(null)}>&times;</button>
             </div>
 
-            {marketDetailsLoading ? (
+            {marketDetailsLoading && !marketDetails ? (
               <div className="loading-state">Loading market details...</div>
-            ) : marketDetailsError ? (
-              <div className="loading-state">{marketDetailsError}</div>
+            ) : !marketDetails ? (
+              <div className="loading-state">Waiting for market details...</div>
             ) : (
               <div className="prediction-modal-body">
                 {!marketDetails?.holderDataAvailable && (
