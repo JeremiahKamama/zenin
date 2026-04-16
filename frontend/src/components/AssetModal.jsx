@@ -17,12 +17,32 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
 
+  const normalizeAssetKind = (value) => {
+    const rawType = String(value?.type || "").trim().toLowerCase();
+    const rawCategory = String(value?.category || "").trim().toLowerCase();
+    const marketType = String(value?.marketType || "").trim().toLowerCase();
+    if (["stock", "stocks", "equity"].includes(rawType)) return "stock";
+    if (["etf", "etfs"].includes(rawType)) return "etf";
+    if (rawType === "crypto" || marketType === "spot" || marketType === "perp") return "crypto";
+    if (rawType === "indicator" || rawCategory === "indicators" || marketType === "macro") return "indicator";
+    if (rawType === "bond" || rawCategory === "bonds") return "bond";
+    if (["commodity", "commodities", "metal", "metals"].includes(rawType) || ["commodities", "metals"].includes(rawCategory)) return "commodity";
+    if (marketType === "equity") return "stock";
+    if (value?.theme || rawCategory === "stocks") return "stock";
+    return rawType || "stock";
+  };
+
   const normalizedMarketType = String(asset?.marketType || "").toLowerCase();
-  const isCryptoAsset = asset?.type === "crypto" || normalizedMarketType === "spot" || normalizedMarketType === "perp";
+  const normalizedAssetKind = normalizeAssetKind(asset);
+  const isCryptoAsset = normalizedAssetKind === "crypto";
   const isTradFi = Boolean(asset) && !isCryptoAsset;
   const assetSymbol = String(asset?.symbol || "").toUpperCase();
-  const assetType = asset?.type || (isCryptoAsset ? "crypto" : "stock");
-  const isStockResearchEligible = assetType === "stock";
+  const assetType = normalizedAssetKind === "stock" || normalizedAssetKind === "etf"
+    ? "stock"
+    : normalizedAssetKind === "crypto"
+      ? "crypto"
+      : asset?.type || normalizedAssetKind;
+  const isStockResearchEligible = normalizedAssetKind === "stock";
 
   const [chartType, setChartType] = useState("line");
 

@@ -4,6 +4,8 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
+const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
+const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
 export function OptionsModule() {
   const [activeAsset, setActiveAsset] = useState("BTC");
@@ -11,12 +13,15 @@ export function OptionsModule() {
   const [spotPrices, setSpotPrices] = useState({});
   const [spotSources, setSpotSources] = useState({});
   const [activeExpiry, setActiveExpiry] = useState(null);
-  const [allAssets, setAllAssets] = useState(["BTC", "ETH", "SOL"]);
+  const [allAssets, setAllAssets] = useState(SUPPORTED_OPTIONS_ASSETS);
   const [chain, setChain] = useState([]);
   const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState("");
   const [optionsStale, setOptionsStale] = useState(false);
+  const [marketStructure, setMarketStructure] = useState("orderbook");
+  const [marketStructureLabel, setMarketStructureLabel] = useState("Orderbook");
+  const [marketStructureNote, setMarketStructureNote] = useState("");
   const [whaleTrades, setWhaleTrades] = useState([]);
   const [whaleLoading, setWhaleLoading] = useState(false);
   const [whaleStale, setWhaleStale] = useState(false);
@@ -26,8 +31,7 @@ export function OptionsModule() {
   const [whaleSource, setWhaleSource] = useState("derive");
 
  useEffect(() => {
-  // fallback assets (Derive supports these)
-  setAllAssets(["BTC", "ETH", "SOL"]);
+  setAllAssets(SUPPORTED_OPTIONS_ASSETS);
 }, []);
 
   useEffect(() => {
@@ -36,12 +40,20 @@ export function OptionsModule() {
 
 useEffect(() => {
   let isMounted = true; // prevent state update after unmount
+  const controller = new AbortController();
+  const requestKey = `${String(activeAsset || "").trim().toUpperCase()}:${activeExpiry || "latest"}`;
+  const inferredMarketStructure = RFQ_OPTIONS_ASSETS.has(String(activeAsset || "").trim().toUpperCase()) ? "rfq" : "orderbook";
+  const inferredMarketStructureLabel = inferredMarketStructure === "rfq" ? "RFQ" : "Orderbook";
+  const inferredMarketStructureNote = inferredMarketStructure === "rfq"
+    ? "HYPE can be quoted via Derive RFQ, so the chain ladder may look sparse even when the market is live."
+    : "";
 
   const getHyperliquidFallbackSpot = async (assetSymbol) => {
     try {
-      const res = await fetch(`${BACKEND_URL}/crypto-market`);
+      const res = await fetch(`${BACKEND_URL}/crypto-market`, { signal: controller.signal });
       if (!res.ok) return null;
       const data = await res.json();
+      if (controller.signal.aborted) return null;
       const rows = Array.isArray(data?.assets) ? data.assets : [];
       const match = rows.find(
         (row) => String(row?.symbol || "").toUpperCase() === String(assetSymbol || "").toUpperCase()
@@ -58,6 +70,9 @@ useEffect(() => {
       const cached = readResilientCache("options-chain", cacheParams);
       if (cached?.payload) {
         const cachedChain = Array.isArray(cached.payload?.chain) ? cached.payload.chain : [];
+        setMarketStructure(cached.payload?.market_structure || inferredMarketStructure);
+        setMarketStructureLabel(cached.payload?.market_structure_label || inferredMarketStructureLabel);
+        setMarketStructureNote(cached.payload?.market_structure_note || inferredMarketStructureNote);
         if (cachedChain.length > 0) {
           setChain(cachedChain);
           setAvailableExpiries(Array.isArray(cached.payload?.expiries) ? cached.payload.expiries : []);
@@ -76,6 +91,7 @@ useEffect(() => {
         const res = await fetch(`${BACKEND_URL}/options/crypto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           currency: activeAsset || "BTC",
           expiry: activeExpiry || null
@@ -89,9 +105,14 @@ useEffect(() => {
 
       const data = await res.json();
 
-      if (!isMounted) return;
+      if (!isMounted || controller.signal.aborted) return;
+      const latestRequestKey = `${String(activeAsset || "").trim().toUpperCase()}:${activeExpiry || "latest"}`;
+      if (latestRequestKey !== requestKey) return;
 
       if (data && data.chain) {
+        setMarketStructure(data?.market_structure || inferredMarketStructure);
+        setMarketStructureLabel(data?.market_structure_label || inferredMarketStructureLabel);
+        setMarketStructureNote(data?.market_structure_note || inferredMarketStructureNote);
         setAvailableExpiries(Array.isArray(data.expiries) ? data.expiries : []);
 
         if (!activeExpiry && data.expiry) {
@@ -134,13 +155,20 @@ useEffect(() => {
         console.warn("Invalid options response:", data);
         setOptionsError("Options data is syncing.");
         setOptionsStale(true);
+        setMarketStructure(inferredMarketStructure);
+        setMarketStructureLabel(inferredMarketStructureLabel);
+        setMarketStructureNote(inferredMarketStructureNote);
       }
 
     } catch (err) {
+      if (controller.signal.aborted) return;
       console.error("Error fetching crypto options:", err);
       if (isMounted) {
         setOptionsError("Showing previous options snapshot while refresh retries.");
         setOptionsStale(true);
+        setMarketStructure(inferredMarketStructure);
+        setMarketStructureLabel(inferredMarketStructureLabel);
+        setMarketStructureNote(inferredMarketStructureNote);
         const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
         if (!isMounted) return;
         if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
@@ -168,6 +196,7 @@ useEffect(() => {
 
   return () => {
     isMounted = false;
+    controller.abort();
     clearInterval(interval);
   };
 
@@ -282,6 +311,11 @@ useEffect(() => {
   const telegramDebug = whaleMeta?.debug_telegram_ingest || null;
   const telegramChannels = Array.isArray(telegramDebug?.channels) ? telegramDebug.channels : [];
   const telegramSourceLabel = telegramChannels.length > 0 ? telegramChannels.map((channel) => `@${channel}`).join(", ") : "@derivetradetape";
+  const telegramTransportLabel = telegramDebug?.transport === "public_html"
+    ? "Public fallback"
+    : telegramDebug?.transport === "mtproto"
+      ? "MTProto"
+      : null;
   const whaleEmptyStateText = whaleSource === "telegram"
     ? (() => {
         if (telegramDebug?.status === "disabled") {
@@ -303,6 +337,13 @@ useEffect(() => {
         return `Waiting for Telegram whale options trades from ${telegramSourceLabel}...`;
       })()
     : "Waiting for Derive whale options trades...";
+  const activeUsesRfq = marketStructure === "rfq" || RFQ_OPTIONS_ASSETS.has(String(activeAsset || "").trim().toUpperCase());
+  const chainInventoryLabel = activeUsesRfq
+    ? (chain.length > 0 ? `${chain.length} Ladder Strikes Cached` : "RFQ market")
+    : `${chain.length} Strikes Available`;
+  const emptyChainText = activeUsesRfq
+    ? `${activeAsset} is currently exposed through ${marketStructureLabel} on Derive, so a full chain snapshot may be partial or unavailable here.`
+    : `Waiting for options data for ${activeAsset}.`;
 
   return (
     <div className="view-container options-terminal">
@@ -328,8 +369,11 @@ useEffect(() => {
         <div className="section-header">
           <div className="header-left">
             <h2>{activeAsset} Option Chain <span className="live-pill">Live</span></h2>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div className="asset-count">{chain.length} Strikes Available</div>
+            <div className="options-market-context">
+              <div className="asset-count">{chainInventoryLabel}</div>
+              <span className={`options-market-structure-pill ${activeUsesRfq ? "rfq" : "orderbook"}`}>
+                {marketStructureLabel}
+              </span>
               <span className={`data-health-badge ${loading ? "loading" : optionsStale ? "hazard" : "ok"}`} title={loading ? "Refreshing options chain" : optionsStale ? "Showing previous options snapshot" : "Options chain is up to date"}>
                 <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : optionsStale ? "⚠" : "✓"}</span>
                 Chain
@@ -340,7 +384,11 @@ useEffect(() => {
           <div className="asset-dropdown-container">
             <select 
               value={activeAsset}
-              onChange={(e) => setActiveAsset(e.target.value)}
+              onChange={(e) => {
+                const nextAsset = String(e.target.value || "").trim().toUpperCase();
+                setActiveExpiry(null);
+                setActiveAsset(nextAsset);
+              }}
             >
               {allAssets.map(asset => (
                 <option key={asset} value={asset}>{asset}</option>
@@ -360,11 +408,17 @@ useEffect(() => {
             </button>
           ))}
         </div>
+        {activeUsesRfq ? (
+          <div className="options-rfq-banner">
+            <strong>{activeAsset} uses {marketStructureLabel} mode on Derive.</strong>
+            <span>{marketStructureNote || "Full strike ladders can be sparse, so use this as a reference panel rather than a guaranteed complete chain."}</span>
+          </div>
+        ) : null}
 
           {chain.length === 0 && loading ? (
-            <div className="loading-state">Syncing {activeAsset} with Lyra Protocol...</div>
+            <div className="loading-state">{activeUsesRfq ? `Syncing ${activeAsset} RFQ references...` : `Syncing ${activeAsset} with Lyra Protocol...`}</div>
           ) : chain.length === 0 ? (
-            <div className="loading-state">Waiting for options data for {activeAsset}.</div>
+            <div className="loading-state">{emptyChainText}</div>
           ) : (
             <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto" }}>
               <table className="option-chain-table">
@@ -452,6 +506,7 @@ useEffect(() => {
         {whaleSource === "telegram" ? (
           <div style={{ marginBottom: "10px", fontSize: "12px", color: "#64748b" }}>
             Sources: {telegramSourceLabel}
+            {telegramTransportLabel ? ` · Transport: ${telegramTransportLabel}` : ""}
             {telegramDebug?.status && telegramDebug.status !== "ok" ? ` · Status: ${telegramDebug.status}` : ""}
           </div>
         ) : null}
@@ -517,6 +572,9 @@ useEffect(() => {
         assets={allAssets}
         chainData={chain}
         activeAsset={activeAsset}
+        marketStructure={marketStructure}
+        marketStructureLabel={marketStructureLabel}
+        marketStructureNote={marketStructureNote}
         onAssetChange={setActiveAsset}
         activeExpiry={activeExpiry}
       />

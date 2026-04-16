@@ -226,61 +226,29 @@ useEffect(() => {
   useEffect(() => {
     let isMounted = true;
 
-    const chunkSymbols = (symbols, size = 35) => {
-      const chunks = [];
-      for (let i = 0; i < symbols.length; i += size) {
-        chunks.push(symbols.slice(i, i + size));
-      }
-      return chunks;
-    };
-
     const fetchHomeMovers = async () => {
       try {
         const baseRes = await fetch(`${BACKEND_URL}/watchlist?category=stocks`);
         if (!baseRes.ok) return;
         const baseData = await baseRes.json();
-        const baseAssets = Array.isArray(baseData?.assets) ? baseData.assets : [];
-        const allSymbols = baseAssets.map((asset) => asset.symbol).filter(Boolean);
-        if (!allSymbols.length) {
+        const snapshotAssets = Array.isArray(baseData?.assets) ? baseData.assets : [];
+
+        const merged = snapshotAssets
+          .map((asset) => {
+            const price = Number(asset?.price);
+            const priceChangePercent = Number(asset?.priceChangePercent);
+            return {
+              ...asset,
+              price: Number.isFinite(price) ? price : null,
+              priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+            };
+          })
+          .filter((asset) => Number.isFinite(asset.price) && Number.isFinite(asset.priceChangePercent));
+
+        if (!merged.length) {
           if (isMounted) setHomeMarketMovers([]);
           return;
         }
-
-        const pricedBySymbol = new Map();
-        const symbolChunks = chunkSymbols(allSymbols);
-
-        for (const chunk of symbolChunks) {
-          const chunkSet = new Set(chunk);
-          const res = await fetch(
-            `${BACKEND_URL}/watchlist?category=stocks&symbols=${encodeURIComponent(chunk.join(","))}`
-          );
-          if (!res.ok) continue;
-          const data = await res.json();
-          const assetsChunk = Array.isArray(data?.assets) ? data.assets : [];
-          assetsChunk.forEach((asset) => {
-            if (!chunkSet.has(asset.symbol)) return;
-            const price = Number(asset?.price);
-            const priceChangePercent = Number(asset?.priceChangePercent);
-            if (!Number.isFinite(price) && !Number.isFinite(priceChangePercent)) return;
-            pricedBySymbol.set(asset.symbol, {
-              price: Number.isFinite(price) ? price : null,
-              priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
-            });
-          });
-        }
-
-        const merged = baseAssets
-          .map((asset) => {
-            const priced = pricedBySymbol.get(asset.symbol);
-            const price = priced?.price;
-            const priceChangePercent = priced?.priceChangePercent;
-            return {
-              ...asset,
-              price: Number.isFinite(price) ? price : asset.price,
-              priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : asset.priceChangePercent
-            };
-          })
-          .filter((asset) => Number.isFinite(Number(asset.priceChangePercent)) && Number.isFinite(Number(asset.price)));
 
         if (isMounted) setHomeMarketMovers(merged);
       } catch (error) {

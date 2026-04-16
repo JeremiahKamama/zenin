@@ -25,6 +25,38 @@ body {
   background: linear-gradient(180deg, #000000 0%, #0a0a0a 100%);
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+html.page-dark-theme,
+body.page-dark-theme,
+body.page-dark-theme #root {
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at top, rgba(14, 116, 144, 0.16), transparent 34%),
+    linear-gradient(180deg, #020617 0%, #000000 100%);
+}
+
+.page-shell {
+  width: 100%;
+  min-height: calc(100vh - 48px);
+}
+
+.page-shell-dark {
+  position: relative;
+  padding: 18px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.08), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.07), transparent 28%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.98), rgba(0, 0, 0, 0.96));
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+
 /* ── Global Dark Theme Enforcement ────────────────────────────────── */
 input:not([type="checkbox"]):not([type="radio"]),
 select,
@@ -982,6 +1014,19 @@ button {
   padding: 4px 0 14px;
 }
 
+.indicator-controls-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.indicator-country-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
 .theme-pill {
   padding: 5px 13px;
   border-radius: 999px;
@@ -1621,6 +1666,16 @@ button {
 .company-item-badge.badge-risk {
   background: rgba(239, 68, 68, 0.16);
   color: #fca5a5;
+}
+
+.company-item-badge.badge-strength {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.company-item-badge.badge-watch {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
 }
 
 .company-item-description {
@@ -3807,10 +3862,71 @@ button {
   gap: 8px;
 }
 
+.options-market-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.options-market-structure-pill,
+.options-calculator-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.options-market-structure-pill.orderbook,
+.options-calculator-mode-pill.orderbook {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.25);
+}
+
+.options-market-structure-pill.rfq,
+.options-calculator-mode-pill.rfq {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.options-rfq-banner {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.12), rgba(245, 158, 11, 0.08));
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  color: #f8fafc;
+}
+
+.options-rfq-banner strong {
+  font-size: 0.83rem;
+  color: #fde68a;
+}
+
+.options-rfq-banner span {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
 @media (max-width: 900px) {
   .whale-options-controls {
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+
+  .options-market-context {
+    justify-content: flex-start;
   }
 }
 
@@ -3947,10 +4063,12 @@ button {
 
 .indicator-toolbar {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .indicator-country-modal {
@@ -4034,6 +4152,11 @@ button {
 }
 
 @media (max-width: 768px) {
+  .indicator-controls-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .indicator-toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -4835,6 +4958,11 @@ button {
     padding: 18px;
   }
 
+  .page-shell-dark {
+    padding: 16px;
+    border-radius: 22px;
+  }
+
   .list-mode .asset-card-main {
     grid-template-columns: 90px 1fr 150px;
     gap: 14px;
@@ -4905,14 +5033,14 @@ button {
     min-height: 42px;
   }
 
-  .options-leg-row.two-col,
-  .options-leg-row.three-col {
-    grid-template-columns: 1fr;
+  .options-leg-row.two-col {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
 
+  .options-leg-row.three-col,
   .options-leg-label-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+    gap: 8px;
   }
 
   .options-calculator-greeks-grid {
@@ -4963,6 +5091,11 @@ button {
   .portfolio-panel {
     border-radius: 14px;
     padding: 14px;
+  }
+
+  .page-shell-dark {
+    padding: 14px;
+    border-radius: 18px;
   }
 
   .portfolio-analytics-row {
@@ -5029,7 +5162,6 @@ button {
     gap: 8px !important;
   }
 
-  .options-calculator-add-leg-btn,
   .options-calculator-action-btn {
     width: 100%;
   }
@@ -5061,6 +5193,11 @@ button {
   .portfolio-panel {
     padding: 12px;
     border-radius: 12px;
+  }
+
+  .page-shell-dark {
+    padding: 12px;
+    border-radius: 16px;
   }
 
   .section-header {
@@ -5127,30 +5264,33 @@ button {
     margin-bottom: 14px !important;
   }
 
-  .options-calculator-greeks-grid {
-    grid-template-columns: 1fr !important;
-  }
-
   .options-calculator-section-head {
-    align-items: stretch;
+    align-items: center;
   }
 
   .options-leg-card {
     border-radius: 18px;
-    padding: 12px;
+    padding: 13px;
   }
 
   .options-leg-header {
-    flex-direction: column;
     align-items: flex-start;
+    flex-wrap: wrap;
   }
 
-  .options-leg-header-actions,
-  .options-leg-segment {
-    width: 100%;
+  .options-leg-row.two-col {
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  }
+
+  .options-leg-row.three-col,
+  .options-leg-label-row,
+  .options-calculator-greeks-grid {
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)) !important;
   }
 
   .options-leg-header-actions {
+    margin-left: auto;
+    width: auto;
     justify-content: space-between;
     gap: 12px;
   }
@@ -5199,6 +5339,18 @@ button {
 }
 
 @media (max-width: 360px) {
+  .options-leg-row.two-col,
+  .options-leg-row.three-col,
+  .options-leg-label-row,
+  .options-calculator-greeks-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .options-leg-segment,
+  .options-leg-header-actions {
+    width: 100%;
+  }
+
   .company-page-stats {
     grid-template-columns: 1fr;
   }

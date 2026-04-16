@@ -440,29 +440,31 @@ useEffect(() => {
         <div className="loading-state">Loading market data...</div>
       ) : activeCategory === "indicators" ? (
         <div>
-          <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "12px" }}>
-            {G7_COUNTRIES.map((country) => (
+          <div className="indicator-controls-row">
+            <div className="theme-tabs indicator-country-tabs" style={{ paddingTop: 0, marginBottom: 0 }}>
+              {G7_COUNTRIES.map((country) => (
+                <button
+                  key={country.code}
+                  className={`theme-pill ${indicatorCountry === country.code ? "active" : ""}`}
+                  onClick={() => setIndicatorCountry(country.code)}
+                >
+                  {country.name}
+                </button>
+              ))}
+            </div>
+            <div className="indicator-toolbar">
               <button
-                key={country.code}
-                className={`theme-pill ${indicatorCountry === country.code ? "active" : ""}`}
-                onClick={() => setIndicatorCountry(country.code)}
+                className={`modal-action-btn ${isInWatchlist(activeIndicator) ? "active" : ""}`}
+                onClick={() => onToggleStar(activeIndicator)}
+                title={isInWatchlist(activeIndicator) ? "Remove from watchlist" : "Add to watchlist"}
               >
-                {country.name}
+                {isInWatchlist(activeIndicator) ? "Remove" : "Add"}
               </button>
-            ))}
-          </div>
-          <div className="indicator-toolbar">
-            <button
-              className={`modal-action-btn ${isInWatchlist(activeIndicator) ? "active" : ""}`}
-              onClick={() => onToggleStar(activeIndicator)}
-              title={isInWatchlist(activeIndicator) ? "Remove from watchlist" : "Add to watchlist"}
-            >
-              {isInWatchlist(activeIndicator) ? "Remove" : "Add"}
-            </button>
-            <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
-              <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
-              Indicators
-            </span>
+              <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
+                <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
+                Indicators
+              </span>
+            </div>
           </div>
           {macroLoading && (!Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0) ? (
             <div className="loading-state">Loading macro indicators...</div>

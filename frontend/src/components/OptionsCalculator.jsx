@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Chart from "react-apexcharts";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -90,7 +90,10 @@ export function OptionsCalculator({   spotPrice = 0,
   spotSource = "unavailable",
   chainData = [],
   activeAsset,
-  assets = [] }) {
+  assets = [],
+  marketStructure = "orderbook",
+  marketStructureLabel = "Orderbook",
+  marketStructureNote = "" }) {
   const [symbol, setSymbol] = useState(() => String(activeAsset || "").trim().toUpperCase() || "BTC");
   const [symbolSearch, setSymbolSearch] = useState(() => String(activeAsset || "").trim().toUpperCase() || "BTC");
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
@@ -104,7 +107,9 @@ export function OptionsCalculator({   spotPrice = 0,
   const [saveMsg, setSaveMsg] = useState("");
   const [saveMsgType, setSaveMsgType] = useState("success");
   const normalizedActiveAsset = String(activeAsset || "").trim().toUpperCase();
+  const previousActiveAssetRef = useRef(normalizedActiveAsset);
   const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+  const isRfqSymbol = normalizedSymbol === "HYPE";
   const isUsingActiveChainAsset = normalizedSymbol === normalizedActiveAsset;
   const filteredChainData = isUsingActiveChainAsset && Array.isArray(chainData) ? chainData : [];
   const deriveSpotFromChain = () => {
@@ -120,6 +125,7 @@ export function OptionsCalculator({   spotPrice = 0,
     ? Number(spotPrice)
     : (Number.isFinite(derivedSpot) ? Number(derivedSpot) : null);
   const hasCalculatorMarketData = isUsingActiveChainAsset && filteredChainData.length > 0 && Number.isFinite(effectiveSpot) && effectiveSpot > 0;
+  const isRfqMarket = marketStructure === "rfq" && isUsingActiveChainAsset;
   const S = hasCalculatorMarketData ? effectiveSpot : 0;
   const r = 0.0425;
 
@@ -128,6 +134,30 @@ export function OptionsCalculator({   spotPrice = 0,
     setActiveStrategy(null);
     setSavedCalculationsPage(1);
   }, [symbol]);
+
+  useEffect(() => {
+    const previousActiveAsset = String(previousActiveAssetRef.current || "").trim().toUpperCase();
+    if (!normalizedActiveAsset) {
+      previousActiveAssetRef.current = normalizedActiveAsset;
+      return;
+    }
+
+    setSymbol((prev) => {
+      const current = String(prev || "").trim().toUpperCase();
+      if (!current || current === previousActiveAsset) {
+        return normalizedActiveAsset;
+      }
+      return prev;
+    });
+    setSymbolSearch((prev) => {
+      const current = String(prev || "").trim().toUpperCase();
+      if (!current || current === previousActiveAsset) {
+        return normalizedActiveAsset;
+      }
+      return prev;
+    });
+    previousActiveAssetRef.current = normalizedActiveAsset;
+  }, [normalizedActiveAsset]);
 
   const normalizedSearch = String(symbolSearch || "").trim().toUpperCase();
   const filteredSymbols = assets.filter((s) =>
@@ -413,6 +443,11 @@ export function OptionsCalculator({   spotPrice = 0,
         <div className="options-calculator-side">
           <div className="watchlist-panel glass options-calculator-symbol-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
+            {isRfqSymbol ? (
+              <div className="options-calculator-mode-pill rfq" style={{ marginBottom: "10px" }}>
+                RFQ market
+              </div>
+            ) : null}
             <div style={{ position: "relative" }}>
               <input
                 value={symbolSearch}
@@ -482,10 +517,17 @@ export function OptionsCalculator({   spotPrice = 0,
               <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#64748b" }}>
                 Source: {spotSource === "lyra" ? "Lyra" : spotSource === "hyperliquid" ? "Hyperliquid (fallback)" : "Unavailable"}
               </p>
+              {isRfqMarket ? (
+                <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#fbbf24" }}>
+                  Market mode: {marketStructureLabel}. {marketStructureNote || "A full ladder snapshot may not be available for every quote."}
+                </p>
+              ) : null}
             </div>
             {!hasCalculatorMarketData ? (
               <p style={{ margin: "10px 0 0", fontSize: "11px", lineHeight: 1.45, color: "#f59e0b" }}>
-                No options market data is available for {normalizedSymbol || "this asset"} right now. Search another asset to continue calculations.
+                {isRfqSymbol
+                  ? `${normalizedSymbol} is currently exposed through RFQ on Derive, so prefilled strikes, IV, and premiums may be sparse here. Switch the chain asset to ${normalizedSymbol} or search another asset for a full ladder-driven calculation.`
+                  : `No options market data is available for ${normalizedSymbol || "this asset"} right now. Search another asset to continue calculations.`}
               </p>
             ) : null}
           </div>

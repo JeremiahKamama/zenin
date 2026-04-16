@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
 const {
@@ -139,6 +140,39 @@ function applyStaleMeta(payload = {}, snapshot = null, reason = "") {
     cache_updated_at: snapshot?.updatedAt || null,
     stale_age_seconds: snapshotAgeSeconds(snapshot?.updatedAt)
   };
+}
+
+const COMPANY_PROFILE_VOLATILE_KEYS = new Set([
+  "updatedAt",
+  "stale",
+  "unavailable",
+  "stale_reason",
+  "cache_updated_at",
+  "stale_age_seconds",
+  "companyProfileHash",
+  "snapshotCheckedAt",
+  "unchanged"
+]);
+
+function normalizeComparablePayloadValue(value, ignoredKeys = COMPANY_PROFILE_VOLATILE_KEYS) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeComparablePayloadValue(entry, ignoredKeys));
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((acc, key) => {
+        if (ignoredKeys?.has(key)) return acc;
+        acc[key] = normalizeComparablePayloadValue(value[key], ignoredKeys);
+        return acc;
+      }, {});
+  }
+  return value ?? null;
+}
+
+function buildComparablePayloadHash(payload = {}, ignoredKeys = COMPANY_PROFILE_VOLATILE_KEYS) {
+  const normalized = normalizeComparablePayloadValue(payload, ignoredKeys);
+  return crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
 function validatePortfolioHolding(req, res, next) {
@@ -1337,7 +1371,7 @@ app.get("/api/earnings", async (req, res) => {
 });
 
 app.get("/api/company-profile", async (req, res) => {
-  const { symbol, theme, category } = req.query;
+  const { symbol, theme, category, snapshotHash } = req.query;
   if (!symbol) return res.status(400).json({ error: "symbol required" });
 
   const safeSymbol = sanitizeSymbol(String(symbol || "").toUpperCase()).slice(0, 20);
@@ -1353,22 +1387,37 @@ app.get("/api/company-profile", async (req, res) => {
   const cached = await readServiceSnapshot("company-profile", snapshotParams);
   const stockMeta = selectPrimaryStockCatalogEntry(safeSymbol, preferredMeta);
   const peers = buildStockPeers(safeSymbol, stockMeta);
+  const requestedSnapshotHash = String(snapshotHash || "").trim() || null;
 
-  const enrichPayload = (payload = {}, stale = false) => ({
-    ...(payload || {}),
-    symbol: safeSymbol,
-    catalog: {
-      theme: stockMeta?.theme || null,
-      category: stockMeta?.category || null,
-      role: stockMeta?.role || null,
-      edge: stockMeta?.edge || null,
-      market: stockMeta?.market || null
-    },
-    peers,
-    manufacturing: buildManufacturingNotes(payload, stockMeta),
-    updatedAt: payload?.updatedAt || new Date().toISOString(),
-    stale: Boolean(stale)
-  });
+  const enrichPayload = (payload = {}, stale = false, options = {}) => {
+    const normalizedStale = Boolean(stale);
+    const nextPayload = {
+      ...(payload || {}),
+      symbol: safeSymbol,
+      catalog: {
+        theme: stockMeta?.theme || null,
+        category: stockMeta?.category || null,
+        role: stockMeta?.role || null,
+        edge: stockMeta?.edge || null,
+        market: stockMeta?.market || null
+      },
+      peers,
+      manufacturing: buildManufacturingNotes(payload, stockMeta),
+      updatedAt: payload?.updatedAt || new Date().toISOString(),
+      stale: normalizedStale,
+      unavailable: normalizedStale ? Boolean(payload?.unavailable) : false,
+      stale_reason: normalizedStale ? (payload?.stale_reason || null) : null,
+      cache_updated_at: normalizedStale ? (payload?.cache_updated_at ?? null) : null,
+      stale_age_seconds: normalizedStale ? (payload?.stale_age_seconds ?? null) : null,
+      snapshotCheckedAt: options.checkedAt || payload?.snapshotCheckedAt || null
+    };
+    const companyProfileHash = buildComparablePayloadHash(nextPayload);
+    return {
+      ...nextPayload,
+      companyProfileHash,
+      unchanged: Boolean(options.unchanged)
+    };
+  };
 
   return new Promise((resolve) => {
     let settled = false;
@@ -1423,12 +1472,29 @@ app.get("/api/company-profile", async (req, res) => {
             }, true));
           }
 
+          const checkedAt = new Date().toISOString();
           const payload = enrichPayload({
             ...(result || {}),
             symbol: safeSymbol,
-            updatedAt: new Date().toISOString(),
+            updatedAt: checkedAt,
             stale: false
-          }, false);
+          }, false, { checkedAt });
+          const cachedPayload = cached?.payload ? enrichPayload(cached.payload, Boolean(cached.payload?.stale), {
+            checkedAt: cached.payload?.snapshotCheckedAt || null
+          }) : null;
+          const cachedHash = cachedPayload?.companyProfileHash || null;
+
+          if ((requestedSnapshotHash && requestedSnapshotHash === payload.companyProfileHash) || (cachedHash && cachedHash === payload.companyProfileHash)) {
+            const unchangedPayload = cached?.payload
+              ? enrichPayload({
+                  ...cached.payload,
+                  updatedAt: cached.payload?.updatedAt || payload.updatedAt
+                }, false, { checkedAt, unchanged: true })
+              : { ...payload, unchanged: true };
+            await writeServiceSnapshot("company-profile", snapshotParams, unchangedPayload);
+            return finish(unchangedPayload);
+          }
+
           await writeServiceSnapshot("company-profile", snapshotParams, payload);
           finish(payload);
         } catch {
@@ -2071,7 +2137,8 @@ let telegramWhaleCache = {
   error: null,
   channels: TELEGRAM_CHANNEL_USERNAMES,
   messageCount: 0,
-  parsedCount: 0
+  parsedCount: 0,
+  transport: null
 };
 const PREDICTION_CATEGORY_TAGS = {
   geopolitics: "geopolitics",
@@ -2676,6 +2743,113 @@ function parseTelegramWhaleTradeText(text = "") {
   };
 }
 
+function decodeTelegramHtmlEntities(html = "") {
+  return String(html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const numeric = Number(code);
+      return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => {
+      const numeric = parseInt(code, 16);
+      return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
+    });
+}
+
+function stripTelegramHtmlToText(html = "") {
+  return decodeTelegramHtmlEntities(String(html || ""))
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTelegramPublicMessagesFromHtml(html = "", channel = "") {
+  const source = String(html || "");
+  if (!source) return [];
+  const blocks = source.split(/<div class="tgme_widget_message_wrap\b/i).slice(1);
+  return blocks.map((block) => {
+    const idMatch = block.match(/data-post="[^"\/]+\/(\d+)"/i);
+    const timeMatch = block.match(/<time[^>]+datetime="([^"]+)"/i);
+    const textMatch = block.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const rawHtml = textMatch?.[1] || "";
+    const text = stripTelegramHtmlToText(rawHtml);
+    return {
+      id: Number(idMatch?.[1] || 0) || 0,
+      timestamp: timeMatch?.[1] ? Date.parse(timeMatch[1]) : 0,
+      text,
+      channel
+    };
+  }).filter((message) => message.id > 0 && message.text);
+}
+
+async function fetchTelegramPublicChannelTrades() {
+  const fetch = await resolveFetch();
+  const settled = await Promise.allSettled(
+    TELEGRAM_CHANNEL_USERNAMES.map(async (channel) => {
+      const response = await fetch(`https://t.me/s/${encodeURIComponent(channel)}`);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`${channel}: HTTP ${response.status} ${text.slice(0, 120)}`);
+      }
+      const html = await response.text();
+      const messages = extractTelegramPublicMessagesFromHtml(html, channel).slice(0, TELEGRAM_FETCH_LIMIT);
+      return { channel, messages };
+    })
+  );
+
+  const channelErrors = [];
+  let messageCount = 0;
+  const parsedRows = settled
+    .flatMap((result) => {
+      if (result.status !== "fulfilled") {
+        channelErrors.push(result.reason?.message || "public channel fetch failed");
+        return [];
+      }
+      const { channel, messages } = result.value || {};
+      const safeMessages = Array.isArray(messages) ? messages : [];
+      messageCount += safeMessages.length;
+      return safeMessages
+        .map((msg) => {
+          const parsed = parseTelegramWhaleTradeText(msg?.text || "");
+          if (!parsed) return null;
+          const timestamp = toEpochMs(msg?.timestamp);
+          const idPart = Number(msg?.id || 0) || Math.abs(timestamp);
+          return {
+            ...parsed,
+            id: `tg-public-${channel}-${idPart}`,
+            timestamp,
+            source: "telegram",
+            sourceChannel: channel,
+            sourceLabel: `@${channel}`
+          };
+        })
+        .filter(Boolean);
+    })
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  const parsedCount = parsedRows.length;
+  const status = channelErrors.length
+    ? (parsedCount > 0 ? "partial" : "error")
+    : (parsedCount > 0 ? "ok" : "empty");
+
+  return {
+    trades: parsedRows,
+    status,
+    error: channelErrors.length ? channelErrors.join(" | ") : null,
+    channels: TELEGRAM_CHANNEL_USERNAMES,
+    messageCount,
+    parsedCount,
+    transport: "public_html",
+    cached: false
+  };
+}
+
 function isTelegramWhaleIngestionConfigured() {
   return Number.isFinite(TELEGRAM_API_ID) && TELEGRAM_API_ID > 0 && !!TELEGRAM_API_HASH && !!TELEGRAM_SESSION_STRING;
 }
@@ -2722,24 +2896,42 @@ async function fetchTelegramWhaleTrades() {
   }
 
   if (!isTelegramWhaleIngestionConfigured()) {
+    try {
+      const publicFallback = await fetchTelegramPublicChannelTrades();
     telegramWhaleCache = {
       fetchedAt: now,
-      trades: [],
-      status: "disabled",
-      error: "Missing Telegram MTProto credentials.",
-      channels: TELEGRAM_CHANNEL_USERNAMES,
-      messageCount: 0,
-      parsedCount: 0
-    };
-    return {
-      trades: [],
-      status: "disabled",
-      error: telegramWhaleCache.error,
-      channels: telegramWhaleCache.channels,
-      messageCount: 0,
-      parsedCount: 0,
-      cached: false
-    };
+      trades: publicFallback.trades,
+      status: publicFallback.status,
+      error: publicFallback.error,
+      channels: publicFallback.channels,
+      messageCount: publicFallback.messageCount,
+      parsedCount: publicFallback.parsedCount,
+      transport: publicFallback.transport
+      };
+      return publicFallback;
+    } catch (error) {
+      const errMsg = `Missing Telegram MTProto credentials. Public fallback failed: ${error?.message || "unknown error"}`;
+      telegramWhaleCache = {
+        fetchedAt: now,
+        trades: [],
+        status: "error",
+        error: errMsg,
+        channels: TELEGRAM_CHANNEL_USERNAMES,
+        messageCount: 0,
+        parsedCount: 0,
+        transport: "public_html"
+      };
+      return {
+        trades: [],
+        status: "error",
+        error: errMsg,
+        channels: TELEGRAM_CHANNEL_USERNAMES,
+        messageCount: 0,
+        parsedCount: 0,
+        transport: "public_html",
+        cached: false
+      };
+    }
   }
 
   try {
@@ -2815,6 +3007,7 @@ async function fetchTelegramWhaleTrades() {
       channels: TELEGRAM_CHANNEL_USERNAMES,
       messageCount,
       parsedCount,
+      transport: "mtproto",
       cached: false
     };
   } catch (error) {
@@ -2828,6 +3021,7 @@ async function fetchTelegramWhaleTrades() {
         channels: telegramWhaleCache.channels,
         messageCount: telegramWhaleCache.messageCount,
         parsedCount: telegramWhaleCache.parsedCount,
+        transport: telegramWhaleCache.transport || "mtproto",
         cached: true
       };
     }
@@ -2838,7 +3032,8 @@ async function fetchTelegramWhaleTrades() {
       error: errMsg,
       channels: TELEGRAM_CHANNEL_USERNAMES,
       messageCount: 0,
-      parsedCount: 0
+      parsedCount: 0,
+      transport: "mtproto"
     };
     return {
       trades: [],
@@ -2847,6 +3042,7 @@ async function fetchTelegramWhaleTrades() {
       channels: TELEGRAM_CHANNEL_USERNAMES,
       messageCount: 0,
       parsedCount: 0,
+      transport: "mtproto",
       cached: false
     };
   }
@@ -2902,9 +3098,15 @@ async function safePost(url, body, retries = 1) {
 // ---------------------------------------------------------------------------
 app.post("/api/options/crypto", async (req, res) => {
   const { currency = "BTC", expiry } = req.body;
-  const cacheKey = `${String(currency).toUpperCase()}:latest`;
+  const normalizedCurrency = String(currency || "BTC").toUpperCase();
+  const marketStructure = normalizedCurrency === "HYPE" ? "rfq" : "orderbook";
+  const marketStructureLabel = marketStructure === "rfq" ? "RFQ" : "Orderbook";
+  const marketStructureNote = marketStructure === "rfq"
+    ? "HYPE on Derive can be quoted through RFQ, so full strike ladders may appear sparse or be unavailable in snapshots."
+    : null;
+  const cacheKey = `${normalizedCurrency}:latest`;
   const snapshotParams = {
-    currency: String(currency || "BTC").toUpperCase(),
+    currency: normalizedCurrency,
     expiry: expiry == null ? "latest" : String(expiry)
   };
   const persistedSnapshot = await readServiceSnapshot("options-chain", snapshotParams);
@@ -2923,7 +3125,10 @@ app.post("/api/options/crypto", async (req, res) => {
       return res.json({
         chain: [],
         expiries: [],
-        market_metrics: { iv: 0, p_c_ratio: 0 }
+        market_metrics: { iv: 0, p_c_ratio: 0 },
+        market_structure: marketStructure,
+        market_structure_label: marketStructureLabel,
+        market_structure_note: marketStructureNote
       });
     }
 
@@ -2968,7 +3173,10 @@ app.post("/api/options/crypto", async (req, res) => {
       return res.json({
         chain: [],
         expiries,
-        market_metrics: { iv: 0, p_c_ratio: 0 }
+        market_metrics: { iv: 0, p_c_ratio: 0 },
+        market_structure: marketStructure,
+        market_structure_label: marketStructureLabel,
+        market_structure_note: marketStructureNote
       });
     }
 
@@ -3056,6 +3264,9 @@ app.post("/api/options/crypto", async (req, res) => {
       chain,
       spot,
       market_price: spot,
+      market_structure: marketStructure,
+      market_structure_label: marketStructureLabel,
+      market_structure_note: marketStructureNote,
       market_metrics: {
         iv: avgIv || 0,
         p_c_ratio: 0.85
@@ -3090,6 +3301,9 @@ app.post("/api/options/crypto", async (req, res) => {
       chain: [],
       spot: null,
       market_price: null,
+      market_structure: marketStructure,
+      market_structure_label: marketStructureLabel,
+      market_structure_note: marketStructureNote,
       market_metrics: {
         iv: 0,
         p_c_ratio: 0
@@ -3243,7 +3457,8 @@ app.get("/api/options/whale-trades", async (req, res) => {
         parsedCount: Number(telegramIngest.parsedCount || 0),
         messageCount: Number(telegramIngest.messageCount || 0),
         channels: Array.isArray(telegramIngest.channels) ? telegramIngest.channels : TELEGRAM_CHANNEL_USERNAMES,
-        primaryChannel: TELEGRAM_PRIMARY_CHANNEL_USERNAME
+        primaryChannel: TELEGRAM_PRIMARY_CHANNEL_USERNAME,
+        transport: telegramIngest.transport || null
       },
       trades,
       stale: false
