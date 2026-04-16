@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import Chart from "react-apexcharts";
 import { Watchlist } from "./components/Watchlist";
 import { PortfolioModule } from "./components/PortfolioModule";
 import { AssetModal } from "./components/AssetModal";
+import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
 import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
@@ -81,6 +81,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchHasSettled, setSearchHasSettled] = useState(false);
   const [searchType, setSearchType] = useState(null); // null, "tradfi", "crypto", or "indicator"
   const [customStockThemes, setCustomStockThemes] = useState(() => {
     try {
@@ -97,6 +98,7 @@ function App() {
   const searchSectionRef = useRef(null);
   const priceCacheRef = useRef(new Map());
   const portfolioRef = useRef([]);
+  const searchRequestSeqRef = useRef(0);
   const PRICE_CACHE_TTL_MS = 60000;
 
   const stockThemes = useMemo(() => {
@@ -284,15 +286,43 @@ useEffect(() => {
   useEffect(() => {
     if (!searchTerm.trim() || !searchType) {
       setSearchResults([]);
+      setSearchLoading(false);
+      setSearchHasSettled(false);
       return;
     }
 
+    const controller = new AbortController();
+    const requestId = searchRequestSeqRef.current + 1;
+    searchRequestSeqRef.current = requestId;
     setSearchLoading(true);
-    fetch(`${BACKEND_URL}/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`)
-      .then((res) => res.json())
-      .then((data) => setSearchResults(data.results || []))
-      .catch(() => setSearchResults([]))
-      .finally(() => setSearchLoading(false));
+    setSearchHasSettled(false);
+
+    fetch(`${BACKEND_URL}/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`, {
+      signal: controller.signal
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+        return data;
+      })
+      .then((data) => {
+        if (searchRequestSeqRef.current !== requestId) return;
+        setSearchResults(Array.isArray(data?.results) ? data.results : []);
+        setSearchHasSettled(true);
+      })
+      .catch(() => {
+        if (controller.signal.aborted || searchRequestSeqRef.current !== requestId) return;
+        setSearchResults([]);
+        setSearchHasSettled(true);
+      })
+      .finally(() => {
+        if (searchRequestSeqRef.current !== requestId) return;
+        setSearchLoading(false);
+      });
+
+    return () => controller.abort();
   }, [searchTerm, searchType]);
 
   useEffect(() => {
@@ -923,7 +953,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       }
       return "updated";
     } else {
-      if (searchType === "tradfi") {
+      if (normalizeAssetType(asset) === "stock") {
         openWatchlistPrompt(asset);
         return "prompt";
       }
@@ -1678,9 +1708,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                         );
                       })}
                     </div>
-                  ) : (
+                  ) : searchHasSettled ? (
                     <div className="search-no-results">No results found</div>
-                  )}
+                  ) : null}
                 </div>
               )}
             </div>
@@ -1759,15 +1789,24 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       </main>
 
       {selectedAsset && (
-        <AssetModal
-          asset={selectedAsset}
-          onClose={() => setSelectedAsset(null)}
-          onConfirm={addToPortfolio}
-          isInWatchlist={isInWatchlist}
-          onToggleStar={toggleWatchlistStar}
-          portfolio={portfolioWithEntry}
-          balance={balance}
-        />
+        normalizeAssetType(selectedAsset) === "indicator" ? (
+          <IndicatorCountryModal
+            asset={selectedAsset}
+            onClose={() => setSelectedAsset(null)}
+            isInWatchlist={isInWatchlist}
+            onToggleStar={toggleWatchlistStar}
+          />
+        ) : (
+          <AssetModal
+            asset={selectedAsset}
+            onClose={() => setSelectedAsset(null)}
+            onConfirm={addToPortfolio}
+            isInWatchlist={isInWatchlist}
+            onToggleStar={toggleWatchlistStar}
+            portfolio={portfolioWithEntry}
+            balance={balance}
+          />
+        )
       )}
 
       {tradeToast && (

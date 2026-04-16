@@ -3348,6 +3348,29 @@ button {
   gap: 10px;
 }
 
+.modal-action-btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.08);
+  color: #38bdf8;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.modal-action-btn:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.55);
+}
+
+.modal-action-btn.active {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+}
+
 .modal-remove-btn {
   padding: 7px 16px;
   border-radius: 8px;
@@ -3363,6 +3386,112 @@ button {
 .modal-remove-btn:hover {
   background: rgba(239, 68, 68, 0.18);
   border-color: #ef4444;
+}
+
+.indicator-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.indicator-country-modal {
+  max-width: 980px;
+}
+
+.indicator-country-content {
+  padding-top: 0;
+}
+
+.indicator-country-meta {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.indicator-metric-row {
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.indicator-metric-row:hover td {
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.indicator-metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.indicator-metric-cell small {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.indicator-detail-overlay {
+  z-index: 1450;
+}
+
+.indicator-metric-modal {
+  max-width: 920px;
+}
+
+.indicator-metric-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 32px 18px;
+}
+
+.indicator-metric-stat {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.32);
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.indicator-metric-stat span {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.indicator-metric-stat strong {
+  font-size: 1.05rem;
+  color: #f8fafc;
+}
+
+.indicator-metric-stat strong.positive {
+  color: #22c55e;
+}
+
+.indicator-metric-stat strong.negative {
+  color: #ef4444;
+}
+
+@media (max-width: 768px) {
+  .indicator-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .indicator-metric-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 20px 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .indicator-metric-summary {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Responsive Breakpoints ──────────────────────────────────────── */

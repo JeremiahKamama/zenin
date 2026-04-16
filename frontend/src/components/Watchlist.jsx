@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
+import { IndicatorMetricModal } from "./IndicatorMetricModal";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -44,12 +46,6 @@ export function Watchlist({
   onToggleStar,
   onPageChange,
 }) {
-  const formatMacroValue = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return "—";
-    return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
-  };
-
   const addCategoryText = (() => {
     const raw = String(activeCategory || "asset").trim();
     if (!raw) return "Add Asset";
@@ -68,6 +64,7 @@ export function Watchlist({
   const [macroLoading, setMacroLoading] = useState(false);
   const [macroStale, setMacroStale] = useState(false);
   const [macroByCountry, setMacroByCountry] = useState({});
+  const [selectedIndicatorMetric, setSelectedIndicatorMetric] = useState(null);
 
   const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
   const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
@@ -112,8 +109,13 @@ export function Watchlist({
       setIndicatorCountry("USA");
       setMacroSnapshot(null);
       setMacroStale(false);
+      setSelectedIndicatorMetric(null);
     }
   }, [activeCategory]);
+
+  useEffect(() => {
+    setSelectedIndicatorMetric(null);
+  }, [indicatorCountry]);
 
   useEffect(() => {
     setEarningsPage(1);
@@ -139,6 +141,19 @@ export function Watchlist({
   currentPage * itemsPerPage
 );
 const pageSymbols = pagedAssets.map((a) => a.symbol).join(",");
+
+  const activeIndicator = useMemo(() => {
+    const matched = G7_COUNTRIES.find((country) => country.code === indicatorCountry);
+    const countryName = matched?.name || indicatorCountry;
+    return {
+      symbol: indicatorCountry,
+      name: `${countryName} Macro Indicators`,
+      type: "indicator",
+      category: "indicators",
+      marketType: "macro",
+      market: "Macro"
+    };
+  }, [indicatorCountry]);
 
   const earningsAssets = activeCategory === "stocks" ? displayedAssets : [];
   const earningsPerPage = 5;
@@ -299,22 +314,24 @@ useEffect(() => {
         </div>
 
         {/* View Mode Toggle */}
-        <div className="view-mode-toggle">
-          <button
-            className={viewMode === "grid" ? "active" : ""}
-            onClick={() => setViewMode("grid")}
-            title="Grid View"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-          </button>
-          <button
-            className={viewMode === "list" ? "active" : ""}
-            onClick={() => setViewMode("list")}
-            title="List View"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-          </button>
-        </div>
+        {activeCategory !== "indicators" ? (
+          <div className="view-mode-toggle">
+            <button
+              className={viewMode === "grid" ? "active" : ""}
+              onClick={() => setViewMode("grid")}
+              title="Grid View"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            </button>
+            <button
+              className={viewMode === "list" ? "active" : ""}
+              onClick={() => setViewMode("list")}
+              title="List View"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+          </div>
+        ) : null}
       </header>
       {activeCategory === "stocks" && (
         <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "10px" }}>
@@ -344,7 +361,14 @@ useEffect(() => {
               </button>
             ))}
           </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
+          <div className="indicator-toolbar">
+            <button
+              className={`modal-action-btn ${isInWatchlist(activeIndicator.symbol, activeIndicator.marketType) ? "active" : ""}`}
+              onClick={() => onToggleStar(activeIndicator)}
+              title={isInWatchlist(activeIndicator.symbol, activeIndicator.marketType) ? "Remove from watchlist" : "Add to watchlist"}
+            >
+              {isInWatchlist(activeIndicator.symbol, activeIndicator.marketType) ? "Remove" : "Add"}
+            </button>
             <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
               <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
               Indicators
@@ -355,33 +379,15 @@ useEffect(() => {
           ) : !Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0 ? (
             <div className="loading-state">Waiting for macro indicators...</div>
           ) : (
-            <div style={{ display: "grid", gap: "10px" }}>
-              <div className="table-scroll">
-                <table className="option-chain-table" style={{ minWidth: "620px" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left" }}>Indicator</th>
-                      <th>Previous</th>
-                      <th>Current</th>
-                      <th>Expected</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {macroSnapshot.metrics.map((metric) => (
-                      <tr key={metric.key}>
-                        <td style={{ textAlign: "left", color: "#e2e8f0", fontWeight: 600 }}>{metric.label}</td>
-                        <td className="greek">{formatMacroValue(metric.previous)}</td>
-                        <td style={{ color: "#e2e8f0" }}>{formatMacroValue(metric.current)}</td>
-                        <td style={{ color: "#38bdf8" }}>{formatMacroValue(metric.expectation)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ fontSize: "11px", color: "#64748b" }}>
-                Source: {macroSnapshot?.source || "EODHD"}{macroSnapshot?.updatedAt ? ` · Updated ${new Date(macroSnapshot.updatedAt).toLocaleString()}` : ""}
-              </div>
-            </div>
+            <IndicatorMetricsTable
+              snapshot={macroSnapshot}
+              onSelectMetric={(metric) =>
+                setSelectedIndicatorMetric({
+                  countryName: macroSnapshot?.countryName || activeIndicator.name,
+                  metric
+                })
+              }
+            />
           )}
         </div>
       ) : (
@@ -547,6 +553,14 @@ useEffect(() => {
           )}
         </section>
       )}
+
+      {selectedIndicatorMetric ? (
+        <IndicatorMetricModal
+          countryName={selectedIndicatorMetric.countryName}
+          metric={selectedIndicatorMetric.metric}
+          onClose={() => setSelectedIndicatorMetric(null)}
+        />
+      ) : null}
     </>
 
   );

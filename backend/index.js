@@ -1369,7 +1369,8 @@ app.get("/api/macro-indicators", async (req, res) => {
       expectation: null,
       change: null,
       changePercent: null,
-      asOf: null
+      asOf: null,
+      series: []
     })),
     diagnostics: {
       reason: String(reason || "upstream_unavailable")
@@ -1827,7 +1828,15 @@ function buildMacroMetric(payload, config) {
     previous,
     current,
     expectation,
-    asOf: points[0]?.date || null
+    asOf: points[0]?.date || null,
+    series: points
+      .slice()
+      .reverse()
+      .map((point) => ({
+        date: point.date,
+        value: point.value,
+        ts: point.ts
+      }))
   };
 }
 
