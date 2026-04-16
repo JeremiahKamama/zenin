@@ -234,9 +234,12 @@ useEffect(() => {
           const assetsChunk = Array.isArray(data?.assets) ? data.assets : [];
           assetsChunk.forEach((asset) => {
             if (!chunkSet.has(asset.symbol)) return;
+            const price = Number(asset?.price);
+            const priceChangePercent = Number(asset?.priceChangePercent);
+            if (!Number.isFinite(price) && !Number.isFinite(priceChangePercent)) return;
             pricedBySymbol.set(asset.symbol, {
-              price: Number(asset.price),
-              priceChangePercent: Number(asset.priceChangePercent)
+              price: Number.isFinite(price) ? price : null,
+              priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
             });
           });
         }

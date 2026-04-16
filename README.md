@@ -1,184 +1,184 @@
 # Zenin
 
-A multi-asset portfolio and options dashboard with persistent PostgreSQL-backed data, market search, charting, and options analytics.
+Zenin is a multi-asset trading dashboard that combines portfolio management, options analytics, prediction-market tracking, and journal/reporting workflows with a PostgreSQL-backed backend.
 
-This README reflects the **current repository implementation** (frontend + backend code in this repo). If your deployed environment is older, some routes/features may be missing until redeployed.
+This README reflects the current implementation in this repository.
 
-## Project Status (April 2026)
+## What the web app can do
 
-The app is actively implemented across five main sections:
+### 1) Home
+- Account and balance summary cards
+- Portfolio performance chart with interval and mode controls
+- Top positions by value
+- Top movers (gainers/losers) with timeframe selector (`daily`, `weekly`, `quarterly`, `ytd`, `yearly`)
 
-- Home
-- Watchlist
-- Portfolio
-- Options
-- Journal
+### 2) Watchlist
+- Category-based asset browsing (stocks, crypto, bonds, metals, commodities, indicators)
+- Starred/watchlist-only views with ordering preserved from DB
+- TradFi/crypto/indicator search
+- Stock theme filters (default + custom themes)
+- Earnings calendar cards for stock watchlist symbols
+- Macro indicators view for G7 countries (USA, CAN, GBR, FRA, DEU, ITA, JPN)
 
-It also includes a user settings mini-window (General, Accounts, Layout, Notification) launched from the sidebar user section.
+### 3) Portfolio
+- Buy/sell via asset modal and persisted trade execution
+- Live holdings valuation and gain/loss metrics
+- Portfolio charts and performance snapshots
+- Per-position entry-price aware gain calculations
 
-## Active Features
+### 4) Options
+- Crypto options chain (Derive/Lyra-style provider route)
+- Spot price fallback via Hyperliquid when needed
+- Whale options trades table with min-notional filtering and pagination
+- Options calculator:
+  - multi-leg setup
+  - strategy presets
+  - Greeks and net P&L
+  - payoff chart
+  - saved calculations persisted to DB
 
-### Home
+### 5) Predictions
+- Prediction snapshot by category (`geopolitics`, `crypto`, `tech`, `politics`, `finance`)
+- Category market list with probability gauge
+- Whale transaction table with sort/filter/pagination
+- Market details modal (holders + position splits)
 
-- Portfolio summary cards
-- Portfolio performance chart with interval controls
-- Top positions
-- Top gainers / losers
+### 6) Journal
+- Recent execution history
+- Calendar PnL visualization with symbol filtering
+- Analytics cards (realized/unrealized/expectancy/win metrics)
+- Traded Assets Report with pagination and live price refresh support
 
-### Watchlist
+### 7) Settings & account panel
+- Profile and security controls (email/password/2FA/passkeys placeholders)
+- General preferences (timezone, refresh cadence, visibility controls)
+- Connected accounts modal (CEX/DEX/broker/prediction)
+- Notification + layout preference toggles
 
-- Category browsing (`stocks`, `crypto`, `bonds`, `metals`, etc. from seed data)
-- Grid/list modes
-- Search (TradFi and Crypto)
-- Theme filters for stocks
-- Earnings card below Themes with pagination (5 symbols per page)
-- Star toggle add/remove watchlist
+## Known limitations / In progress (as of April 16, 2026)
 
-### Portfolio
+- External data providers can fail or rate-limit. Features that depend on EODHD, Derive/Lyra routes, Hyperliquid, CoinGecko, Yahoo, or Polymarket may temporarily show empty/stale/error states.
+- Macro indicators require a valid `EODHD_API_TOKEN` with macro access. If the token is missing or plan-restricted, the indicators view cannot return fresh data.
+- Telegram whale ingestion is optional and best-effort. It is disabled without MTProto credentials and only parses messages that match supported text patterns.
+- Security/account settings are currently workspace-level UX state (stored in local browser storage), not full backend-authenticated account security.
+- Connected account entries are currently metadata only (not live exchange/broker API execution).
+- The persistence model is currently single-workspace/single-tenant (`user_balance` uses a fixed id and core tables are not user-scoped).
+- Cross-module equity/balance metrics are being unified to ensure Home, Portfolio, and Journal always use the same canonical computation path.
+- Top Movers and some derived analytics are being hardened to degrade more gracefully when upstream interval/performance fetches are partially unavailable.
 
-- Buy / sell flow through asset modal
-- Position quantity management
-- Persisted holdings in PostgreSQL
-- Portfolio value / gain calculations
-- Chart breakdowns and summary metrics
+## Data sources and integrations
 
-### Options
+- **Hyperliquid**
+  - crypto search/pricing contexts
+  - crypto candle snapshot support (history path)
+- **CoinGecko**
+  - fallback for crypto search/history/pricing
+- **Yahoo Finance via Python scripts (`yfinance`)**
+  - TradFi symbol search/history/earnings/fundamentals
+- **Derive/Lyra-style options API endpoints**
+  - options chain + recent trades used for whale flow
+- **Polymarket Gamma/Data API**
+  - prediction snapshot, market details, holder/position data
+- **Telegram MTProto (optional, for whale ingestion)**
+  - optional ingestion of channel text trade-tape rows into options whale trades endpoint
 
-- Crypto options chain for BTC/ETH/SOL via backend options route
-- Expiry tabs and market metrics (IV / put-call ratio / skew)
-- Options calculator with multi-leg setup, strategy presets, Greeks, and P&L diagram
-- Save/load calculations (PostgreSQL)
-- Whale options trades card (table + pagination, 10 rows/page)
-- Periodic refresh for chain and whale trades
-- Optional WebSocket subscription if `VITE_WS_URL` is configured
+## MTProto whale ingestion (implemented)
 
-### Journal
+The backend can optionally merge Telegram channel messages into `/api/options/whale-trades`.
 
-- Trade history
-- Calendar-oriented trade view controls and filters
+- Channel defaults to: `derivetradetape`
+- Parsed rows are normalized into existing whale table fields:
+  - `symbol`
+  - `expiration`
+  - `referencePrice`
+  - `strategy`
+  - `totalNotional`
+- Endpoint response includes `debug_telegram_ingest` metadata.
 
-### Settings Window
+### Required env for Telegram ingestion
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_SESSION_STRING`
 
-Launched by clicking the sidebar user avatar/email area.
+Optional:
+- `TELEGRAM_CHANNEL_USERNAME` (default `derivetradetape`)
+- `TELEGRAM_FETCH_LIMIT` (default `160`)
+- `TELEGRAM_CACHE_TTL_MS` (default `60000`)
 
-- General
-- General includes timezone preference (browser default supported), refresh frequency, and hide/show value controls
-- Accounts
-- Accounts includes connected CEX/DEX/broker entries and an add-account window with provider, username, and API key/ID inputs
-- Read-only API reminder is shown in the account connect flow
-- Layout
-- Layout preset selection is available
-- Notification
-- Notification includes email/browser channel toggles and event-type toggles
+### Generate a session string
+From `backend/`:
 
-## API Integrations (Current)
+```bash
+npm run telegram:session
+```
 
-### Hyperliquid API (Primary for crypto)
+This interactive script logs in and prints a `TELEGRAM_SESSION_STRING` value.
 
-Used via `POST https://api.hyperliquid.xyz/info` for:
+## Backend API surface (key routes)
 
-- Crypto search source
-- Crypto market mids and contexts for pricing
-
-### CoinGecko API (Fallback for crypto)
-
-Used when Hyperliquid does not return a searchable asset or pricing context:
-
-- Crypto search fallback
-- Missing-symbol price fallback
-- Crypto historical series source used by history endpoints
-
-### Yahoo Finance (via Python/yfinance)
-
-Used for TradFi workflows:
-
-- Symbol search enrichment
-- Historical price data
-- Earnings/fundamentals
-- Earnings calendar responses
-
-### Lyra/Derive-style Options Public API
-
-Backend options endpoints call provider public routes for:
-
-- Options chain (`/api/options/crypto`)
-- Whale options trades (`/api/options/whale-trades`)
-
-The backend includes provider failover logic across configured endpoints and stale-data behavior for resilience.
-
-## Persistence & Data Model
-
-Primary datastore: PostgreSQL (via `pg` in `backend/database.js`)
-
-Tables in use:
-
-- `portfolio_holdings`
-- `watchlist_assets`
-- `user_balance`
-- `options_calculations`
-- `trade_executions`
-
-Persisted entities include:
-
-- Portfolio holdings
-- Watchlist entries
-- User balance
-- Saved options calculations
-- Trade executions (journal)
-
-## Backend Routes (Key)
-
-Health and meta:
-
+### Health/meta
 - `GET /health`
 - `GET /api/categories`
 
-Search and market data:
-
+### Market/search/history
 - `GET /api/search`
 - `GET /api/watchlist`
 - `GET /api/prices`
 - `GET /api/crypto-market`
 - `GET /api/history`
 - `GET /api/interval-performance`
+- `GET /api/macro-indicators`
 
-Earnings:
-
+### Earnings
 - `GET /api/earnings`
 - `GET /api/earnings-calendar`
 
-Options:
-
+### Options
 - `POST /api/options/crypto`
 - `GET /api/options/whale-trades`
 - `GET /api/db/options-calculations`
 - `POST /api/db/options-calculations`
 
-Portfolio / watchlist persistence:
+### Predictions
+- `GET /api/prediction/snapshot`
+- `GET /api/prediction/market-details/:marketId`
 
+### Portfolio/watchlist/trades/balance persistence
 - `GET /api/db/portfolio`
 - `POST /api/db/portfolio`
 - `PUT /api/db/portfolio/:id`
 - `DELETE /api/db/portfolio/:id`
+- `GET /api/db/portfolio/symbol/:symbol`
 - `GET /api/db/watchlist`
 - `POST /api/db/watchlist`
 - `DELETE /api/db/watchlist/:symbol`
-
-Balance:
-
+- `GET /api/db/watchlist/check/:symbol`
+- `GET /api/db/trades`
+- `POST /api/db/trades`
+- `POST /api/db/execute-trade`
 - `GET /api/db/balance`
 - `POST /api/db/balance`
 
-## Local Development
+## Persistence
 
-### Prerequisites
+Primary datastore: PostgreSQL.
 
+Main tables used by the app:
+- `portfolio_holdings`
+- `watchlist_assets`
+- `user_balance`
+- `options_calculations`
+- `trade_executions`
+
+## Local development
+
+## Prerequisites
 - Node.js 18+
-- Python 3.9+
-- PostgreSQL 14+ (or managed Postgres with a connection URL)
 - npm
+- Python 3.9+
+- PostgreSQL (local or managed)
 
-### Install
+## Install
 
 Backend:
 
@@ -195,13 +195,13 @@ cd frontend
 npm install
 ```
 
-### Run
+## Run
 
 Backend:
 
 ```bash
 cd backend
-npm start
+npm run dev
 ```
 
 Frontend:
@@ -211,43 +211,38 @@ cd frontend
 npm run dev
 ```
 
-## Environment Variables
+## Environment variables
 
 ### Frontend
-
-- `VITE_API_URL` (optional)
-- Default: `https://zenin-mx6w.onrender.com/api`
-- `VITE_WS_URL` (optional)
-- If absent, options flow uses polling only
+- `VITE_API_URL` (optional, defaults to deployed API)
 
 ### Backend
+- `PORT` (default `4000`)
+- `FRONTEND_URL` (CORS allowlist origin)
+- `DATABASE_URL` (recommended)
+- `EODHD_API_TOKEN` (macro indicators)
+- `DERIVE_API_URL` (optional provider override)
 
-- `PORT` (optional, default `4000`)
-- `FRONTEND_URL` (for CORS allowlist)
-- `DERIVE_API_URL` (optional options provider override)
-- `EODHD_API_TOKEN` (required for Bonds → Indicators macro data)
-- `DATABASE_URL` (recommended, full Postgres connection string)
-- Or discrete Postgres vars: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
-- Optional for local non-SSL Postgres: `PGSSLMODE=disable`
+Optional Postgres discrete vars (if not using `DATABASE_URL`):
+- `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+- `PGSSLMODE=disable` for local non-SSL setups
 
-On backend start, schema creation/seeding runs automatically in `initializeDatabase()`.
+Telegram MTProto optional vars:
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_SESSION_STRING`
+- `TELEGRAM_CHANNEL_USERNAME`
+- `TELEGRAM_FETCH_LIMIT`
+- `TELEGRAM_CACHE_TTL_MS`
 
-Security note:
-- Keep API tokens only in backend environment variables.
-- Never place secrets in frontend `VITE_*` variables.
-- `.env` files are git-ignored; use `backend/.env.example` as a template.
+See `backend/.env.example` for template values.
 
-## Deployment Notes
+## Deployment
 
-- `render.yaml` is present for backend + static frontend deployment on Render
-- `vercel.json` is present for Vercel static frontend deployment
+- `render.yaml` includes backend + static frontend blueprint setup
+- `vercel.json` includes static frontend build/rewrite config
 
-## Operational Notes
-
-- If the frontend shows missing routes (for example whale-trades or earnings-calendar 404), your deployed backend is likely behind this repository state.
-- Options provider availability can be intermittent; backend resilience and stale fallbacks are included but not a guarantee of uninterrupted upstream data.
-
-## Repository Layout
+## Repository layout
 
 ```text
 backend/
@@ -258,6 +253,8 @@ backend/
   fetch_history.py
   fetch_earnings.py
   search_symbols.py
+  scripts/
+    telegram-session.js
   requirements.txt
   Dockerfile
 
@@ -271,6 +268,7 @@ frontend/
       PortfolioModule.jsx
       OptionsModule.jsx
       OptionsCalculator.jsx
+      PredictionMarketModule.jsx
       JournalModule.jsx
       AssetModal.jsx
 ```

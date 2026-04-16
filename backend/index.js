@@ -724,20 +724,24 @@ app.post("/api/db/balance", writeLimiter, async (req, res) => {
 
 // History
 // ---------------------------------------------------------------------------
-async function fetchHistoryFromBinance(symbol, interval) {
+const CRYPTO_HISTORY_INTERVALS = {
+  "4H": { days: 1, hyperInterval: "15m" },
+  "1D": { days: 1, hyperInterval: "15m" },
+  "1W": { days: 7, hyperInterval: "1h" },
+  "3M": { days: 90, hyperInterval: "4h" },
+  "1Y": { days: 365, hyperInterval: "1d" },
+  "YTD": { days: 365, hyperInterval: "1d" },
+  "MAX": { days: 2000, hyperInterval: "1d" },
+};
+
+function getCryptoHistoryConfig(interval) {
+  return CRYPTO_HISTORY_INTERVALS[interval] || CRYPTO_HISTORY_INTERVALS["1D"];
+}
+
+async function fetchHistoryFromCoinGecko(symbol, interval) {
   const fetch = await resolveFetch();
 
-  const intervalMap = {
-    "4H":  { days: 1 },
-    "1D":  { days: 1 },
-    "1W":  { days: 7 },
-    "3M":  { days: 90 },
-    "1Y":  { days: 365 },
-    "YTD": { days: 365 },
-    "MAX": { days: 2000 },
-  };
-
-  const { days } = intervalMap[interval] || intervalMap["1D"];
+  const { days } = getCryptoHistoryConfig(interval);
   const coinMap = {
     BTC: "bitcoin", ETH: "ethereum", BNB: "binancecoin",
     XRP: "ripple", ADA: "cardano", SOL: "solana",
@@ -764,6 +768,62 @@ async function fetchHistoryFromBinance(symbol, interval) {
     close: price,
     price: price
   }));
+}
+
+async function fetchHistoryFromHyperliquid(symbol, interval) {
+  const normalizedSymbol = String(symbol || "").toUpperCase();
+  if (!normalizedSymbol) return [];
+  const { days, hyperInterval } = getCryptoHistoryConfig(interval);
+  const endTime = Date.now();
+  const startTime = endTime - days * 24 * 60 * 60 * 1000;
+
+  const candlesRaw = await postHyperliquidInfo({
+    type: "candleSnapshot",
+    req: {
+      coin: normalizedSymbol,
+      interval: hyperInterval,
+      startTime,
+      endTime
+    }
+  });
+
+  const candles = Array.isArray(candlesRaw) ? candlesRaw : [];
+  return candles
+    .map((row) => {
+      const tsRaw = row?.t ?? row?.T ?? row?.time;
+      const ts = Number(tsRaw);
+      const open = Number(row?.o ?? row?.open);
+      const high = Number(row?.h ?? row?.high);
+      const low = Number(row?.l ?? row?.low);
+      const close = Number(row?.c ?? row?.close);
+      if (!Number.isFinite(ts) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+        return null;
+      }
+      return {
+        time: new Date(ts).toISOString(),
+        open,
+        high,
+        low,
+        close,
+        price: close
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+}
+
+async function fetchHistoryForCrypto(symbol, interval) {
+  try {
+    const hyperliquidHistory = await fetchHistoryFromHyperliquid(symbol, interval);
+    if (hyperliquidHistory.length > 1) {
+      return { history: hyperliquidHistory, source: "hyperliquid" };
+    }
+  } catch (error) {
+    console.warn(`Hyperliquid history failed for ${symbol}:`, error?.message || error);
+  }
+
+  const coinGeckoHistory = await fetchHistoryFromCoinGecko(symbol, interval);
+  return { history: coinGeckoHistory, source: "coingecko" };
 }
 
 function fetchHistoryFromYahoo(symbol, interval) {
@@ -817,16 +877,18 @@ app.get("/api/history", async (req, res) => {
   const { type, interval = "1D" } = req.query;
   const symbol = sanitizeSymbol(req.query.symbol || "");
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
- // if (!symbol) return res.status(400).json({ error: "Symbol required" });
 
   try {
     let history = [];
+    let source = "";
     if (type === "crypto") {
-      history = await fetchHistoryFromBinance(symbol, interval);
+      const cryptoHistory = await fetchHistoryForCrypto(symbol, interval);
+      history = cryptoHistory.history;
+      source = cryptoHistory.source;
     } else {
       history = await fetchHistoryFromYahoo(symbol, interval);
     }
-    res.json({ history });
+    res.json({ history, source });
   } catch (error) {
     res.status(502).json({ error: error.message });
   }
@@ -841,7 +903,8 @@ app.get("/api/interval-performance", async (req, res) => {
       try {
         let history = [];
         if (type === "crypto") {
-          history = await fetchHistoryFromBinance(symbol, int);
+          const cryptoHistory = await fetchHistoryForCrypto(symbol, int);
+          history = cryptoHistory.history;
         } else {
           history = await fetchHistoryFromYahoo(symbol, int);
         }
@@ -1149,7 +1212,7 @@ app.get("/api/macro-indicators", async (req, res) => {
         stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000)
       });
     }
-    res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
+    return res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
   }
 });
 
@@ -1208,12 +1271,12 @@ app.get("/api/watchlist", async (req, res) => {
 
   // Stocks — fetch prices inline (no separate /api/prices call needed)
   const requestedSymbols = req.query.symbols
-    ? req.query.symbols.split(",").map(s => s.trim())
+    ? req.query.symbols.split(",").map((s) => String(s || "").trim().toUpperCase()).filter(Boolean)
     : [];
 
   const pricedSymbols = requestedSymbols.length > 0
-    ? symbols.filter(s => requestedSymbols.includes(s))
-    : [];
+    ? symbols.filter((s) => requestedSymbols.includes(String(s || "").trim().toUpperCase()))
+    : symbols;
 
   const prices = pricedSymbols.length > 0
     ? await fetchYFinancePrices(pricedSymbols)
@@ -1354,11 +1417,24 @@ const optionsChainCache = new Map();
 
 const WHALE_CURRENCIES = ["BTC", "ETH", "SOL", "HYPE"];
 const MIN_WHALE_NOTIONAL_USD = 100000;
+const TELEGRAM_CHANNEL_USERNAME = String(process.env.TELEGRAM_CHANNEL_USERNAME || "derivetradetape").replace(/^@/, "").trim();
+const TELEGRAM_FETCH_LIMIT = Math.max(20, Math.min(300, Number(process.env.TELEGRAM_FETCH_LIMIT || 160)));
+const TELEGRAM_CACHE_TTL_MS = Math.max(15000, Number(process.env.TELEGRAM_CACHE_TTL_MS || 60000));
+const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 0);
+const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
+const TELEGRAM_SESSION_STRING = String(process.env.TELEGRAM_SESSION_STRING || "").trim();
 const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 const PREDICTION_REFRESH_MS = 6 * 60 * 60 * 1000; // 6 hours
 const PREDICTION_CATEGORIES = ["geopolitics", "crypto", "tech", "politics", "finance"];
 const predictionSnapshotCache = new Map();
+let telegramClientPromise = null;
+let telegramWhaleCache = {
+  fetchedAt: 0,
+  trades: [],
+  status: "disabled",
+  error: null
+};
 const PREDICTION_CATEGORY_TAGS = {
   geopolitics: "geopolitics",
   crypto: "crypto",
@@ -1914,6 +1990,156 @@ function deriveStrategy(direction, optionType) {
   return "Option Trade";
 }
 
+function parseDollarNumber(value) {
+  const n = Number(String(value || "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function toEpochMs(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n >= 1e12 ? Math.trunc(n) : Math.trunc(n * 1000);
+}
+
+function parseTelegramWhaleTradeText(text = "") {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return null;
+
+  const match = clean.match(
+    /^([A-Z0-9]+)\s+(\d{1,2}\s+[A-Za-z]{3}\s+\d{2})\s+([\d,]+)\s+(Call|Put)\s+(?:[\d.]+x\s+)?\((?:\$)?([\d,]+(?:\.\d+)?)\)\s+(BOUGHT|SOLD)\s+@\s+\$?([\d,]+(?:\.\d+)?)(?:,\s*Spot Price\s+\$?([\d,]+(?:\.\d+)?))?/i
+  );
+  if (!match) return null;
+
+  const symbol = String(match[1] || "").toUpperCase();
+  const expiration = String(match[2] || "").trim();
+  const optionType = String(match[4] || "").toLowerCase() === "put" ? "put" : "call";
+  const direction = String(match[6] || "").toUpperCase() === "SOLD" ? "sell" : "buy";
+  const strategy = deriveStrategy(direction, optionType);
+  const totalNotional = parseDollarNumber(match[5]);
+  const premium = parseDollarNumber(match[7]);
+  const spot = parseDollarNumber(match[8]);
+  const referencePrice = spot > 0 ? spot : premium;
+
+  if (!symbol || !expiration || totalNotional <= 0) return null;
+  return {
+    symbol,
+    expiration,
+    referencePrice: Number.isFinite(referencePrice) ? referencePrice : 0,
+    strategy,
+    totalNotional
+  };
+}
+
+function isTelegramWhaleIngestionConfigured() {
+  return Number.isFinite(TELEGRAM_API_ID) && TELEGRAM_API_ID > 0 && !!TELEGRAM_API_HASH && !!TELEGRAM_SESSION_STRING;
+}
+
+async function getTelegramWhaleClient() {
+  if (!isTelegramWhaleIngestionConfigured()) return null;
+  if (telegramClientPromise) return telegramClientPromise;
+
+  telegramClientPromise = (async () => {
+    const { TelegramClient } = require("telegram");
+    const { StringSession } = require("telegram/sessions");
+    const client = new TelegramClient(
+      new StringSession(TELEGRAM_SESSION_STRING),
+      TELEGRAM_API_ID,
+      TELEGRAM_API_HASH,
+      { connectionRetries: 4 }
+    );
+    await client.connect();
+    const authorized = await client.checkAuthorization();
+    if (!authorized) {
+      throw new Error("Telegram MTProto session is not authorized.");
+    }
+    return client;
+  })().catch((error) => {
+    telegramClientPromise = null;
+    throw error;
+  });
+
+  return telegramClientPromise;
+}
+
+async function fetchTelegramWhaleTrades() {
+  const now = Date.now();
+  if (now - Number(telegramWhaleCache.fetchedAt || 0) < TELEGRAM_CACHE_TTL_MS) {
+    return {
+      trades: telegramWhaleCache.trades,
+      status: telegramWhaleCache.status,
+      error: telegramWhaleCache.error,
+      cached: true
+    };
+  }
+
+  if (!isTelegramWhaleIngestionConfigured()) {
+    telegramWhaleCache = {
+      fetchedAt: now,
+      trades: [],
+      status: "disabled",
+      error: "Missing Telegram MTProto credentials."
+    };
+    return {
+      trades: [],
+      status: "disabled",
+      error: telegramWhaleCache.error,
+      cached: false
+    };
+  }
+
+  try {
+    const client = await getTelegramWhaleClient();
+    if (!client) {
+      return { trades: [], status: "disabled", error: "Telegram client unavailable.", cached: false };
+    }
+
+    const messages = await client.getMessages(TELEGRAM_CHANNEL_USERNAME, {
+      limit: TELEGRAM_FETCH_LIMIT
+    });
+    const parsedRows = (Array.isArray(messages) ? messages : [])
+      .map((msg) => {
+        const parsed = parseTelegramWhaleTradeText(msg?.message || "");
+        if (!parsed) return null;
+        const timestamp = toEpochMs(msg?.date);
+        const idPart = Number(msg?.id || 0) || Math.abs(timestamp);
+        return {
+          ...parsed,
+          id: `tg-${idPart}`,
+          timestamp,
+          source: "telegram"
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.timestamp - a.timestamp);
+
+    telegramWhaleCache = {
+      fetchedAt: now,
+      trades: parsedRows,
+      status: "ok",
+      error: null
+    };
+    return { trades: parsedRows, status: "ok", error: null, cached: false };
+  } catch (error) {
+    const errMsg = error?.message || "Telegram MTProto fetch failed.";
+    console.warn("Telegram whale ingestion failed:", errMsg);
+    if (telegramWhaleCache.trades.length > 0) {
+      return {
+        trades: telegramWhaleCache.trades,
+        status: "stale",
+        error: errMsg,
+        cached: true
+      };
+    }
+    telegramWhaleCache = {
+      fetchedAt: now,
+      trades: [],
+      status: "error",
+      error: errMsg
+    };
+    return { trades: [], status: "error", error: errMsg, cached: false };
+  }
+}
+
 function computeTradeNotionalUsd(trade = {}) {
   const amount = Number(trade.amount || trade.contracts || trade.size || trade.quantity || 0);
   const optionPrice = Number(trade.price || trade.mark_price || trade.trade_price || 0);
@@ -2167,15 +2393,18 @@ app.get("/api/options/whale-trades", async (req, res) => {
         const optionType = normalizeOptionType(trade.option_type, instrument);
         const strategy = deriveStrategy(direction, optionType);
         const totalNotional = computeTradeNotionalUsd(trade);
+        const timestamp = toEpochMs(trade.timestamp || trade.created_at || trade.date || 0);
+        const tradeId = trade.trade_id || trade.id || instrument || `derive-${currency}`;
 
         merged.push({
-          id: `${trade.trade_id || instrument}-${trade.timestamp || Date.now()}`,
+          id: `derive-${tradeId}-${timestamp || Date.now()}`,
           symbol,
           expiration,
           referencePrice: Number.isFinite(referencePrice) ? referencePrice : 0,
           strategy,
           totalNotional: Number.isFinite(totalNotional) ? totalNotional : 0,
-          timestamp: Number(trade.timestamp || 0)
+          timestamp,
+          source: "derive"
         });
       });
     };
@@ -2235,6 +2464,11 @@ app.get("/api/options/whale-trades", async (req, res) => {
       }
     }
 
+    const telegramIngest = await fetchTelegramWhaleTrades();
+    if (Array.isArray(telegramIngest.trades) && telegramIngest.trades.length > 0) {
+      merged.push(...telegramIngest.trades);
+    }
+
     const whaleFiltered = merged.filter((t) => Number.isFinite(t.totalNotional) && t.totalNotional >= minNotionalUsd);
     const source = whaleFiltered.length > 0 ? whaleFiltered : merged
       .sort((a, b) => b.totalNotional - a.totalNotional)
@@ -2251,6 +2485,13 @@ app.get("/api/options/whale-trades", async (req, res) => {
       minNotionalUsd,
       debug_raw_trade_counts: debugRawTradeCounts,
       debug_fallback_trade_counts: debugFallbackTradeCounts,
+      debug_telegram_ingest: {
+        status: telegramIngest.status,
+        cached: !!telegramIngest.cached,
+        error: telegramIngest.error || null,
+        trades: Array.isArray(telegramIngest.trades) ? telegramIngest.trades.length : 0,
+        channel: TELEGRAM_CHANNEL_USERNAME
+      },
       trades
     });
   } catch (error) {

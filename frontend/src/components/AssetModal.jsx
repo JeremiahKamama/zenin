@@ -8,24 +8,25 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeInterval, setActiveInterval] = useState("1D");
+  const [historySource, setHistorySource] = useState("");
   const [orderType, setOrderType] = useState(() => asset?._forceSell ? "sell" : "buy");
   const [earnings, setEarnings] = useState(null);
   const [earningsLoading, setEarningsLoading] = useState(false);
 
   const isTradFi = asset && asset.type !== "crypto" && !asset.marketType;
+  const assetSymbol = String(asset?.symbol || "").toUpperCase();
+  const assetType = asset?.type || (asset?.marketType ? "crypto" : "stock");
 
-// ✅ ADD THIS (missing state causing crash)
-const [chartType, setChartType] = useState("line");
+  const [chartType, setChartType] = useState("line");
 
-
-const [quantity, setQuantity] = useState(() =>  {
+  const [quantity, setQuantity] = useState(() =>  {
     if (!asset?._forceSell) return 1;
     const holding = (portfolio || []).find(
       p => p.symbol === asset?.symbol &&
       (p.marketType || "spot") === (asset?.marketType || "spot")
     );
     return holding?.quantity || 1;
-  }); // 'line' or 'candlestick'
+  });
 
   const [performanceMap, setPerformanceMap] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -33,51 +34,92 @@ const [quantity, setQuantity] = useState(() =>  {
   const [showConfetti, setShowConfetti] = useState(false);
   const [showFireworks, setShowFireworks] = useState(false);
 
-useEffect(() => {
+  useEffect(() => {
+    let cancelled = false;
+    const fetchHistory = async () => {
+      if (!assetSymbol) return;
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          symbol: assetSymbol,
+          type: assetType,
+          interval: activeInterval
+        });
+        const res = await fetch(`${BACKEND_URL}/history?${params.toString()}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setHistory(Array.isArray(data?.history) ? data.history : []);
+        setHistorySource(String(data?.source || ""));
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to fetch history:", err);
+        setHistory([]);
+        setHistorySource("");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
     fetchHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeInterval, assetSymbol, assetType]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPerformance = async () => {
+      if (!assetSymbol) return;
+      try {
+        const params = new URLSearchParams({ symbol: assetSymbol, type: assetType });
+        const res = await fetch(`${BACKEND_URL}/interval-performance?${params.toString()}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setPerformanceMap(data?.performance || {});
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to fetch performance summary:", err);
+        setPerformanceMap({});
+      }
+    };
+
     fetchPerformance();
-    if (isTradFi) fetchEarnings();
-  }, [activeInterval, asset]);
+    return () => {
+      cancelled = true;
+    };
+  }, [assetSymbol, assetType]);
 
-  const fetchEarnings = async () => {
-    setEarningsLoading(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/earnings?symbol=${encodeURIComponent(asset.symbol)}`);
-      const data = await res.json();
-      if (!data.error) setEarnings(data);
-    } catch (err) {
-      console.error("Failed to fetch earnings:", err);
-    } finally {
+  useEffect(() => {
+    if (!isTradFi || !assetSymbol) {
+      setEarnings(null);
       setEarningsLoading(false);
+      return;
     }
-  };
+    const controller = new AbortController();
+    const fetchEarnings = async () => {
+      setEarningsLoading(true);
+      try {
+        const params = new URLSearchParams({ symbol: assetSymbol });
+        const res = await fetch(`${BACKEND_URL}/earnings?${params.toString()}`, { signal: controller.signal });
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+        if (!res.ok || data?.error) {
+          setEarnings(null);
+          return;
+        }
+        setEarnings(data);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        console.error("Failed to fetch earnings:", err);
+        setEarnings(null);
+      } finally {
+        if (!controller.signal.aborted) setEarningsLoading(false);
+      }
+    };
 
-  const fetchHistory = async () => {
-    setLoading(true);
-    try {
-      const type = asset.type || (asset.marketType ? "crypto" : "stock");
-      const res = await fetch(
-        `${BACKEND_URL}/history?symbol=${asset.symbol}&type=${type}&interval=${activeInterval}`
-      );
-      const data = await res.json();
-      setHistory(data.history || []);
-    } catch (err) {
-      console.error("Failed to fetch history:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchPerformance = async () => {
-    try {
-      const type = asset.type || (asset.marketType ? "crypto" : "stock");
-      const res = await fetch(`${BACKEND_URL}/interval-performance?symbol=${asset.symbol}&type=${type}`);
-      const data = await res.json();
-      setPerformanceMap(data.performance || {});
-    } catch (err) {
-      console.error("Failed to fetch performance summary:", err);
-    }
-  };
+    fetchEarnings();
+    return () => controller.abort();
+  }, [isTradFi, assetSymbol]);
 
   const totalValue = (asset.price || 0) * (quantity || 0);
   const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
@@ -284,6 +326,11 @@ useEffect(() => {
               <span className={`change ${asset.priceChangePercent >= 0 ? "positive" : "negative"}`}>
                 {asset.priceChangePercent >= 0 ? "+" : ""}{asset.priceChangePercent?.toFixed(2)}%
               </span>
+              {assetType === "crypto" && historySource ? (
+                <span className="chart-source-chip">
+                  Source: {historySource === "hyperliquid" ? "Hyperliquid" : historySource === "coingecko" ? "CoinGecko (fallback)" : historySource}
+                </span>
+              ) : null}
             </div>
             <div className="chart-type-toggle">
               <button className={chartType === 'line' ? 'active' : ''} onClick={() => setChartType('line')}>Line</button>

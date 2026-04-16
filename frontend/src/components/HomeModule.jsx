@@ -159,7 +159,9 @@ export function HomeModule({
     const perf = moversPerformanceByKey[key];
     const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
     const value = Number(perf?.[intervalCode]);
-    return Number.isFinite(value) ? value : null;
+    if (Number.isFinite(value)) return value;
+    const fallbackDaily = Number(asset?.priceChangePercent);
+    return Number.isFinite(fallbackDaily) ? fallbackDaily : null;
   };
 
   const moversWithChange = moversUniverse
@@ -210,7 +212,9 @@ export function HomeModule({
       return trade.side === "sell" ? cash + trade.notional : cash - trade.notional;
     }, initialBalance);
   }, [tradeTimeline]);
-  const liveAvailableBalance = Number.isFinite(Number(balance)) ? Number(balance) : inferredCashBalance;
+  const liveAvailableBalance = Number.isFinite(inferredCashBalance)
+    ? Number(inferredCashBalance)
+    : (Number.isFinite(Number(balance)) ? Number(balance) : initialBalance);
   const totalAccountEquity = liveAvailableBalance + portfolioValue;
   const isTreasuryAsset = (asset) => {
     const symbol = (asset?.symbol || "").toUpperCase();
@@ -326,7 +330,7 @@ export function HomeModule({
 
         <div className="metric-card glass">
           <label>Available Balance</label>
-          <div className="value">${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className="value">${liveAvailableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
         </div>
       </div>
 

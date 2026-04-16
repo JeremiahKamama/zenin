@@ -89,6 +89,7 @@ export function PredictionMarketModule() {
   }, [selectedPredictionMarket]);
 
   const predictionCategories = ["geopolitics", "crypto", "tech", "politics", "finance"];
+  const whaleThresholdOptions = [10000, 50000, 100000];
   const predictionMarketsByCategory = predictionSnapshot?.categories || {};
   const predictionWhaleTransactions = Array.isArray(predictionSnapshot?.whaleTransactions)
     ? predictionSnapshot.whaleTransactions
@@ -346,17 +347,18 @@ export function PredictionMarketModule() {
             <div className="asset-count">Large prediction-market flow · {filteredPredictionWhales.length} matches</div>
           </div>
         </div>
-        <div className="category-tabs" style={{ marginBottom: "12px" }}>
-          {[10000, 50000, 100000].map((threshold) => (
-            <button
-              key={threshold}
-              type="button"
-              className={whaleMinSize === threshold ? "active" : ""}
-              onClick={() => setWhaleMinSize(threshold)}
-            >
-              {`>${formatDollar(threshold)}`}
-            </button>
-          ))}
+        <div className="asset-dropdown-container" style={{ marginBottom: "12px" }}>
+          <select
+            value={whaleMinSize}
+            onChange={(e) => setWhaleMinSize(Number(e.target.value) || 10000)}
+            aria-label="Minimum whale transaction size"
+          >
+            {whaleThresholdOptions.map((threshold) => (
+              <option key={threshold} value={threshold}>
+                {`>= ${formatDollar(threshold)}`}
+              </option>
+            ))}
+          </select>
         </div>
 
         {predictionLoading ? (

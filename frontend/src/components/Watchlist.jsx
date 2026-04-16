@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 
 const G7_COUNTRIES = [
   { code: "USA", name: "United States" },
