@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import Chart from "react-apexcharts";
+import { OptionsStrategySimulator } from "./OptionsStrategySimulator";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -693,19 +694,31 @@ export function OptionsCalculator({   spotPrice = 0,
             ))}
           </div>
 
-          <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
-            <button type="button" onClick={saveCalculation} className="options-calculator-action-btn primary">
-              Save Calculation
-            </button>
-            <button
-              type="button"
-              onClick={() => setSavedCalculationsOpen(true)}
-              className="options-calculator-action-btn secondary"
-            >
-              View Calculations
-            </button>
-            {saveMsg && <span className={`options-calculator-save-message ${saveMsgType === "error" ? "error" : "success"}`}>{saveMsg}</span>}
-          </div>
+          <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <button type="button" onClick={saveCalculation} className="options-calculator-action-btn primary">
+                Save Calculation
+              </button>
+              <button
+                type="button"
+                onClick={() => setSavedCalculationsOpen(true)}
+                className="options-calculator-action-btn secondary"
+              >
+                View Calculations
+              </button>
+            
+              {/* ── Strategy Simulator ───────────────────────────────────────────── */}
+              <OptionsStrategySimulator
+                spotPrice={effectiveSpot}
+                activeAsset={normalizedSymbol || normalizedActiveAsset || "BTC"}
+              />
+            
+              {saveMsg && (
+                <span className={`options-calculator-save-message ${saveMsgType === "error" ? "error" : "success"}`}>
+                  {saveMsg}
+                </span>
+              )}
+            </div>
+
         </div>
       </div>
 
