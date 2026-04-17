@@ -1498,9 +1498,16 @@ button {
   gap: 12px;
 }
 
+.company-page-briefing {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
 .company-stat-card,
 .company-earnings-card,
-.company-page-framework {
+.company-page-framework,
+.company-page-briefing-card {
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 20px;
   background: rgba(2, 6, 23, 0.8);
@@ -1527,6 +1534,92 @@ button {
 
 .company-page-framework {
   padding: 18px;
+}
+
+.company-page-briefing-card {
+  padding: 18px;
+}
+
+.company-page-briefing-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.company-page-briefing-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: #f8fafc;
+}
+
+.company-page-source-list,
+.company-page-filing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.company-page-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.66);
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.company-page-source-pill:hover {
+  border-color: rgba(125, 211, 252, 0.35);
+  color: #e2e8f0;
+}
+
+.company-page-filing-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #cbd5e1;
+}
+
+.company-page-filing-row span {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.company-page-filing-row strong {
+  color: #f8fafc;
+  font-size: 0.88rem;
+}
+
+.company-page-filing-row em {
+  color: #cbd5e1;
+  font-style: normal;
+  font-size: 0.84rem;
+}
+
+.company-page-filing-row a {
+  color: #7dd3fc;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.company-page-filing-row a:hover {
+  color: #bae6fd;
 }
 
 .company-page-tabs {
@@ -1789,6 +1882,11 @@ button {
   .company-page-health {
     min-width: 0;
     width: 100%;
+  }
+
+  .company-page-filing-row {
+    grid-template-columns: 1fr;
+    justify-items: flex-start;
   }
 
   .company-section-item {
@@ -3096,7 +3194,8 @@ button {
   .prediction-market-panel,
   .prediction-whale-panel,
   .company-page-framework,
-  .company-earnings-card {
+  .company-earnings-card,
+  .company-page-briefing-card {
     padding: 12px !important;
   }
 
@@ -3156,7 +3255,8 @@ button {
 
   .company-page-header,
   .company-page-framework,
-  .company-earnings-card {
+  .company-earnings-card,
+  .company-page-briefing-card {
     border-radius: 16px;
   }
 

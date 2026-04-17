@@ -78,6 +78,13 @@ function compactBullets(items, fallback) {
   return cleaned.length ? cleaned : [fallback];
 }
 
+function mergeBullets(groups, fallback) {
+  return compactBullets(
+    (Array.isArray(groups) ? groups : []).flatMap((group) => (Array.isArray(group) ? group : [group])),
+    fallback
+  );
+}
+
 function buildItem(title, badge, bullets, description, fallback) {
   return {
     title,
@@ -101,12 +108,68 @@ function buildFrameworkContext(profile, displayMeta) {
   const peers = Array.isArray(profile?.peers) ? profile.peers : [];
   const earningsHistory = Array.isArray(profile?.earningsHistory) ? profile.earningsHistory : [];
   const manufacturing = profile?.manufacturing || {};
+  const filings = profile?.filings || {};
+  const research = profile?.research || {};
+  const sources = Array.isArray(profile?.sources) ? profile.sources : [];
   const location = [profile?.city, profile?.state, profile?.country].filter(Boolean).join(", ");
+  const latestAnnualReport = filings?.latestAnnualReport || null;
+  const latestQuarterlyReport = filings?.latestQuarterlyReport || null;
+  const latestCurrentReport = filings?.latestCurrentReport || null;
+  const secFacts = filings?.facts || {};
+  const sourceSummary = compactBullets(
+    sources.map((source) => {
+      const usedFor = Array.isArray(source?.usedFor) ? source.usedFor.join(", ") : "";
+      return [source?.label, source?.status ? `status: ${formatLabel(source.status)}` : null, usedFor ? `used for ${usedFor}` : null]
+        .filter(Boolean)
+        .join(" • ");
+    }),
+    "Source-level attribution is not available in the current company profile snapshot."
+  );
+
+  const filingBullets = mergeBullets([
+    research?.overview,
+    latestAnnualReport?.filingDate ? `Latest annual filing: Form ${latestAnnualReport.form} filed ${formatDate(latestAnnualReport.filingDate)}` : null,
+    latestQuarterlyReport?.filingDate ? `Latest quarterly filing: Form ${latestQuarterlyReport.form} filed ${formatDate(latestQuarterlyReport.filingDate)}` : null,
+    latestCurrentReport?.filingDate ? `Latest current filing: Form ${latestCurrentReport.form} filed ${formatDate(latestCurrentReport.filingDate)}` : null,
+    filings?.sicDescription ? `SEC SIC: ${filings.sicDescription}${filings?.sic ? ` (${filings.sic})` : ""}` : null,
+    filings?.fiscalYearEnd ? `SEC fiscal year end: ${filings.fiscalYearEnd}` : null,
+    filings?.stateOfIncorporation ? `State of incorporation: ${filings.stateOfIncorporation}` : null
+  ], "SEC filing context is not available in the current public snapshot.");
+
+  const regulatoryBullets = mergeBullets([
+    research?.regulatory,
+    sources.length ? sourceSummary.slice(0, 4) : null
+  ], "Regulatory source coverage is limited in the current public snapshot.");
+
+  const capitalSourceBullets = mergeBullets([
+    research?.capitalAllocation,
+    secFacts?.capitalExpenditures?.value != null
+      ? `SEC capex proxy: ${formatMoney(secFacts.capitalExpenditures.value)}`
+      : null,
+    secFacts?.sharesOutstanding?.value != null
+      ? `SEC shares outstanding: ${formatNumber(secFacts.sharesOutstanding.value)}`
+      : null
+  ], "Capital-allocation detail is limited in the current public snapshot.");
+
+  const operationsResearchBullets = mergeBullets([
+    research?.operations,
+    manufacturing?.factoryFootprint,
+    manufacturing?.efficiencySignals
+  ], "Operational and production disclosures are limited in the current public snapshot.");
+
+  const customersResearchBullets = mergeBullets([
+    research?.customers,
+    manufacturing?.customerFulfillment
+  ], "Customer-timeline and fulfillment disclosures are not available in structured form.");
+
   return {
     leadership,
     peers,
     earningsHistory,
     manufacturing,
+    filings,
+    research,
+    sources,
     location,
     peerSummary: compactBullets(
       peers.slice(0, 6).map((peer) => [peer.symbol, peer.name, peer.theme, peer.category].filter(Boolean).join(" • ")),
@@ -125,6 +188,7 @@ function buildFrameworkContext(profile, displayMeta) {
       "Recent quarterly EPS performance is not available from the current public snapshot."
     ),
     snapshotBullets: compactBullets([
+      ...filingBullets,
       location ? `Headquarters: ${location}` : null,
       profile?.sector ? `Sector: ${profile.sector}` : null,
       profile?.industry ? `Industry: ${profile.industry}` : null,
@@ -132,14 +196,15 @@ function buildFrameworkContext(profile, displayMeta) {
       displayMeta?.theme ? `Tracked theme: ${displayMeta.theme}` : null,
       displayMeta?.category ? `Tracked category: ${displayMeta.category}` : null
     ], "Company identity and footprint data is limited in the current public snapshot."),
-    businessBullets: compactBullets([
+    businessBullets: mergeBullets([
+      research?.businessModel,
       displayMeta?.role ? `Role in theme: ${displayMeta.role}` : null,
       displayMeta?.edge ? `Edge: ${displayMeta.edge}` : null,
       profile?.website ? `Website: ${profile.website}` : null,
       profile?.exchange ? `Primary exchange: ${profile.exchange}` : null,
       profile?.currency ? `Reporting currency: ${profile.currency}` : null
     ], "Product-line detail is inferred from the public company summary and the stock catalog."),
-    financialGrowthBullets: compactBullets([
+    financialGrowthBullets: mergeBullets([
       `Revenue: ${formatMoney(profile?.totalRevenue)}`,
       `Revenue growth: ${formatPercent(profile?.revenueGrowth)}`,
       `Earnings growth: ${formatPercent(profile?.earningsGrowth)}`,
@@ -151,12 +216,12 @@ function buildFrameworkContext(profile, displayMeta) {
       `EBITDA margin: ${formatPercent(profile?.ebitdaMargins)}`,
       `Profit margin: ${formatPercent(profile?.profitMargins)}`
     ], "Margin disclosures are limited in the current public snapshot."),
-    cashflowBullets: compactBullets([
+    cashflowBullets: mergeBullets([
       `Operating cash flow: ${formatMoney(profile?.operatingCashflow)}`,
       `Free cash flow: ${formatMoney(profile?.freeCashflow)}`,
       `Enterprise value: ${formatMoney(profile?.enterpriseValue)}`
     ], "Cash-flow quality fields are limited in the current public snapshot."),
-    balanceSheetBullets: compactBullets([
+    balanceSheetBullets: mergeBullets([
       `Total cash: ${formatMoney(profile?.totalCash)}`,
       `Total debt: ${formatMoney(profile?.totalDebt)}`,
       `Debt to equity: ${formatDecimal(profile?.debtToEquity, 1)}`,
@@ -174,28 +239,38 @@ function buildFrameworkContext(profile, displayMeta) {
       `Beta: ${formatDecimal(profile?.beta, 2)}`,
       `52-week range: ${formatMoney(profile?.fiftyTwoWeekLow)} to ${formatMoney(profile?.fiftyTwoWeekHigh)}`
     ], "Return and market-sensitivity fields are limited in the current public snapshot."),
-    governanceBullets: compactBullets([
+    governanceBullets: mergeBullets([
+      research?.governance,
       profile?.risk?.overallRisk != null ? `Overall risk score: ${profile.risk.overallRisk}` : null,
       profile?.risk?.auditRisk != null ? `Audit risk score: ${profile.risk.auditRisk}` : null,
       profile?.risk?.shareHolderRightsRisk != null ? `Shareholder rights risk: ${profile.risk.shareHolderRightsRisk}` : null,
       profile?.analystRating ? `Street rating: ${formatLabel(profile.analystRating)}` : null
     ], "Structured governance risk fields were not available in the current public snapshot."),
-    operationsBullets: compactBullets(manufacturing?.factoryFootprint, "Detailed plant or asset-footprint disclosures are not available in structured form."),
-    efficiencyBullets: compactBullets(manufacturing?.efficiencySignals, "Operational efficiency metrics are limited in the current public snapshot."),
-    customerBullets: compactBullets(manufacturing?.customerFulfillment, "Customer-timeline and fulfillment disclosures are not available in structured form."),
+    operationsBullets: operationsResearchBullets,
+    efficiencyBullets: mergeBullets([
+      research?.operations,
+      manufacturing?.efficiencySignals
+    ], "Operational efficiency metrics are limited in the current public snapshot."),
+    customerBullets: customersResearchBullets,
     inputBullets: compactBullets(manufacturing?.inputExposure, "Input-cost and throughput disclosures are not available in structured form."),
-    catalystBullets: compactBullets([
+    catalystBullets: mergeBullets([
+      research?.catalysts,
       profile?.earnings?.nextEarnings ? `Next earnings date: ${formatDate(profile.earnings.nextEarnings)}` : null,
       profile?.targetMeanPrice ? `Consensus target price: ${formatMoney(profile.targetMeanPrice)}` : null,
       displayMeta?.theme ? `Theme tailwind: ${displayMeta.theme}` : null,
       displayMeta?.edge ? `Execution edge: ${displayMeta.edge}` : null
     ], "Forward catalyst disclosures are limited in the current public snapshot."),
-    riskBullets: compactBullets([
+    riskBullets: mergeBullets([
+      research?.risks,
       `Debt load: ${formatMoney(profile?.totalDebt)}`,
       `Debt to equity: ${formatDecimal(profile?.debtToEquity, 1)}`,
       profile?.risk?.overallRisk != null ? `Overall governance risk score: ${profile.risk.overallRisk}` : null,
       profile?.stale ? "This page is currently showing a cached snapshot because the latest upstream refresh was unavailable." : null
-    ], "Key risk factors are only partially available from the current structured snapshot.")
+    ], "Key risk factors are only partially available from the current structured snapshot."),
+    filingBullets,
+    sourceSummary,
+    regulatoryBullets,
+    capitalSourceBullets
   };
 }
 
@@ -269,16 +344,16 @@ function buildFrameworkSections(profile, displayMeta) {
         ])
       ]),
       buildSection("capex", "CapEx profile & asset quality", "Asset intensity", [
-        buildItem("Balance sheet capacity", "Quantitative", ctx.balanceSheetBullets)
+        buildItem("Balance sheet capacity", "Quantitative", ctx.capitalSourceBullets)
       ]),
       buildSection("cyclicality", "Cyclicality & end-market dynamics", "Demand sensitivity", [
         buildItem("Market cycle sensitivity", "Quantitative", ctx.returnsBullets)
       ]),
       buildSection("regulatory", "Regulatory & trade compliance", "Jurisdictional map", [
         buildItem("Listing & geography", "Context", [
+          ...ctx.regulatoryBullets,
           profile?.exchange ? `Exchange: ${profile.exchange}` : null,
-          profile?.country ? `Primary country disclosure: ${profile.country}` : null,
-          "Detailed compliance and export-control disclosures are not available in structured form from the current snapshot."
+          profile?.country ? `Primary country disclosure: ${profile.country}` : null
         ])
       ]),
       buildSection("growth", "Growth strategy & value levers", "What can re-rate the stock", [
@@ -339,7 +414,7 @@ function buildFrameworkSections(profile, displayMeta) {
           buildItem("Customer timelines and fulfillment", "Context", ctx.customerBullets)
         ]),
         buildSection("capital-allocation", "Capital Allocation", "Balance sheet choices", [
-          buildItem("Cash, debt, and shareholder posture", "Quantitative", [...ctx.balanceSheetBullets, ...ctx.valuationBullets])
+          buildItem("Cash, debt, and shareholder posture", "Quantitative", [...ctx.capitalSourceBullets, ...ctx.valuationBullets])
         ]),
         buildSection("competitive-position", "Competitive Position", "Strategic moat", [
           buildItem("Peer map and sector standing", "Context", ctx.peerSummary),
@@ -351,9 +426,9 @@ function buildFrameworkSections(profile, displayMeta) {
         ]),
         buildSection("regulatory", "Regulatory, Security, and Compliance", "Policy exposure", [
           buildItem("Listing, geography, and compliance limits", "Risk", [
+            ...ctx.regulatoryBullets,
             profile?.exchange ? `Exchange: ${profile.exchange}` : null,
-            profile?.country ? `Primary country disclosure: ${profile.country}` : null,
-            "Detailed security-clearance, export-control, and classified-program disclosures are not available in structured form."
+            profile?.country ? `Primary country disclosure: ${profile.country}` : null
           ])
         ]),
         buildSection("deep-analytics", "Deep Dive Analytics", "Budget and execution lens", [
@@ -407,7 +482,7 @@ function buildFrameworkSections(profile, displayMeta) {
         buildSection("capital-allocation", "Capital Allocation", "Cash return and reinvestment", [
           buildItem("Dividend, debt, and valuation posture", "Quantitative", [
             `Dividend yield: ${formatPercent(profile?.dividendYield)}`,
-            ...ctx.balanceSheetBullets,
+            ...ctx.capitalSourceBullets,
             ...ctx.valuationBullets
           ])
         ]),
@@ -420,9 +495,9 @@ function buildFrameworkSections(profile, displayMeta) {
         ]),
         buildSection("regulatory", "Regulatory, Safety, and Sustainability", "Policy and transition", [
           buildItem("Geography, regulation, and sustainability watchpoints", "Risk", [
-            profile?.country ? `Primary country disclosure: ${profile.country}` : null,
             profile?.exchange ? `Exchange: ${profile.exchange}` : null,
-            "Detailed emissions, permitting, and safety disclosures are not available in structured form from the current snapshot."
+            profile?.country ? `Primary country disclosure: ${profile.country}` : null,
+            ...ctx.regulatoryBullets
           ])
         ]),
         buildSection("investor-takeaways", "Investor Takeaways Summary", "What matters most", [
@@ -483,7 +558,7 @@ function buildFrameworkSections(profile, displayMeta) {
         buildSection("regulatory", "Regulatory, Safety, and Compliance", "Approval and quality risk", [
           buildItem("Safety and regulatory exposure", "Risk", [
             profile?.country ? `Primary country disclosure: ${profile.country}` : null,
-            "Detailed patent cliffs, inspection outcomes, and reimbursement data are not available in structured form."
+            ...ctx.regulatoryBullets
           ])
         ]),
         buildSection("management", "Management and Governance", "Capital stewards", [
@@ -531,7 +606,7 @@ function buildFrameworkSections(profile, displayMeta) {
       ],
       deep: [
         buildSection("capital-allocation", "Capital Allocation and Asset Intensity", "Fleet and reinvestment", [
-          buildItem("Balance sheet and reinvestment posture", "Quantitative", [...ctx.balanceSheetBullets, ...ctx.valuationBullets])
+          buildItem("Balance sheet and reinvestment posture", "Quantitative", [...ctx.capitalSourceBullets, ...ctx.valuationBullets])
         ]),
         buildSection("competitive-position", "Competitive Position", "Network moat", [
           buildItem("Customer stickiness and network density", "Context", [
@@ -545,7 +620,7 @@ function buildFrameworkSections(profile, displayMeta) {
         buildSection("regulatory", "Regulatory, Safety, and Sustainability", "Compliance layer", [
           buildItem("Geography and safety watchpoints", "Risk", [
             profile?.country ? `Primary country disclosure: ${profile.country}` : null,
-            "Detailed safety incident, fuel-cost, and emissions disclosures are not available in structured form."
+            ...ctx.regulatoryBullets
           ])
         ]),
         buildSection("investor-takeaways", "Investor Takeaways Summary", "What matters most", [
@@ -589,7 +664,7 @@ function buildFrameworkSections(profile, displayMeta) {
       ],
       deep: [
         buildSection("program-spend", "Capital Intensity and Program Spend", "Hardware and mission economics", [
-          buildItem("Balance sheet capacity and asset spend", "Quantitative", [...ctx.balanceSheetBullets, ...ctx.valuationBullets])
+          buildItem("Balance sheet capacity and asset spend", "Quantitative", [...ctx.capitalSourceBullets, ...ctx.valuationBullets])
         ]),
         buildSection("competitive-position", "Competitive Position", "Technical moat", [
           buildItem("Peer map and differentiation", "Context", [
@@ -599,9 +674,9 @@ function buildFrameworkSections(profile, displayMeta) {
         ]),
         buildSection("policy", "Regulatory, Policy, and Security Exposure", "Jurisdiction and mission risk", [
           buildItem("Policy and compliance watchpoints", "Risk", [
-            profile?.country ? `Primary country disclosure: ${profile.country}` : null,
             profile?.exchange ? `Exchange: ${profile.exchange}` : null,
-            "Detailed launch licensing, export control, and spectrum-regulation disclosures are not available in structured form."
+            profile?.country ? `Primary country disclosure: ${profile.country}` : null,
+            ...ctx.regulatoryBullets
           ])
         ]),
         buildSection("risks", "Risks", "Execution and concentration", [
@@ -673,7 +748,7 @@ function buildFrameworkSections(profile, displayMeta) {
         buildSection("robotics-safety", "Safety, liability & regulatory risk", "Human-machine risk layer", [
           buildItem("Safety and regulatory exposure", "Risk", [
             profile?.country ? `Primary country disclosure: ${profile.country}` : null,
-            "Detailed incident, insurance, and robotics-specific regulatory disclosures are not available in structured form."
+            ...ctx.regulatoryBullets
           ])
         ]),
         buildSection("robotics-trends", "Long-cycle structural trends", "What's driving the 10-year thesis", [
@@ -737,7 +812,7 @@ function buildFrameworkSections(profile, displayMeta) {
         buildSection("ai-regulation", "Safety, policy & model risk", "Regulatory exposure", [
           buildItem("AI governance and policy watchpoints", "Risk", [
             profile?.country ? `Primary country disclosure: ${profile.country}` : null,
-            "Detailed model-risk, copyright, and AI-regulation disclosures are not available in structured form."
+            ...ctx.regulatoryBullets
           ])
         ]),
         buildSection("ai-trends", "Long-cycle structural trends", "What's driving the thesis", [
@@ -870,6 +945,12 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
     { label: "Next earnings", value: formatDate(profile?.earnings?.nextEarnings) },
     { label: "Analyst target", value: formatMoney(profile?.targetMeanPrice) }
   ];
+  const latestFilings = [
+    { label: "Latest annual", filing: profile?.filings?.latestAnnualReport },
+    { label: "Latest quarterly", filing: profile?.filings?.latestQuarterlyReport },
+    { label: "Latest current", filing: profile?.filings?.latestCurrentReport }
+  ].filter((entry) => entry?.filing?.filingDate);
+  const sourceLinks = Array.isArray(profile?.sources) ? profile.sources.filter((source) => source?.label) : [];
 
   const toggleSection = (key) => {
     setOpenSections((prev) => {
@@ -913,6 +994,61 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
           </div>
         ))}
       </div>
+
+      {(sourceLinks.length > 0 || latestFilings.length > 0) && (
+        <div className="company-page-briefing">
+          {sourceLinks.length > 0 && (
+            <div className="company-page-briefing-card">
+              <div className="company-page-briefing-head">
+                <h2>Source coverage</h2>
+              </div>
+              <div className="company-page-source-list">
+                {sourceLinks.map((source) => (
+                  source?.url ? (
+                    <a
+                      key={`${source.label}-${source.url}`}
+                      className="company-page-source-pill"
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {source.label}
+                      {source?.status ? ` • ${formatLabel(source.status)}` : ""}
+                    </a>
+                  ) : (
+                    <span key={`${source.label}-${source.status || "source"}`} className="company-page-source-pill">
+                      {source.label}
+                      {source?.status ? ` • ${formatLabel(source.status)}` : ""}
+                    </span>
+                  )
+                ))}
+              </div>
+            </div>
+          )}
+
+          {latestFilings.length > 0 && (
+            <div className="company-page-briefing-card">
+              <div className="company-page-briefing-head">
+                <h2>Latest filings</h2>
+              </div>
+              <div className="company-page-filing-list">
+                {latestFilings.map(({ label, filing }) => (
+                  <div key={`${label}-${filing?.filingDate || "filing"}`} className="company-page-filing-row">
+                    <span>{label}</span>
+                    <strong>{filing?.form || "Filing"}</strong>
+                    <em>{formatDate(filing?.filingDate)}</em>
+                    {filing?.url ? (
+                      <a href={filing.url} target="_blank" rel="noreferrer">
+                        Open filing
+                      </a>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="company-page-framework">
         <div className="company-page-tabs">

@@ -1562,7 +1562,11 @@ app.get("/api/company-profile", async (req, res) => {
         }, true));
       });
 
-      child.stdin.write(JSON.stringify({ symbol: safeSymbol }));
+      child.stdin.write(JSON.stringify({
+        symbol: safeSymbol,
+        theme: preferredMeta.theme,
+        category: preferredMeta.category
+      }));
       child.stdin.end();
 
       timeoutId = setTimeout(() => {

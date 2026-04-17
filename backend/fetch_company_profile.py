@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 import json
 import math
+import os
+import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
+import requests
 import yfinance as yf
+
+REQUEST_TIMEOUT_SECONDS = 12
+SEC_RECENT_FORMS_LIMIT = 12
+REGULATOR_BULLET_LIMIT = 4
+DEFAULT_SEC_USER_AGENT = "Zenin Company Profile support@localhost"
+HTTP_HEADERS = {
+    "User-Agent": os.environ.get("SEC_USER_AGENT") or os.environ.get("COMPANY_PROFILE_USER_AGENT") or DEFAULT_SEC_USER_AGENT,
+    "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
+}
 
 
 def _normalize_date_str(value):
@@ -174,7 +186,682 @@ def _extract_leadership(info):
     return leadership
 
 
-def fetch_company_profile(symbol):
+def _http_get_json(url, params=None, headers=None):
+    merged_headers = {**HTTP_HEADERS, **(headers or {})}
+    response = requests.get(url, params=params, headers=merged_headers, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.json()
+
+
+def _http_post_json(url, payload=None, headers=None):
+    merged_headers = {**HTTP_HEADERS, **(headers or {})}
+    response = requests.post(url, json=payload or {}, headers=merged_headers, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.json()
+
+
+def _compact_unique_strings(values, fallback=None, limit=None):
+    seen = set()
+    result = []
+    for raw in values or []:
+        text = _clean_text(raw)
+        if not text:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if limit and len(result) >= limit:
+            break
+    if result:
+        return result
+    return [fallback] if fallback else []
+
+
+def _format_money(value):
+    numeric = _safe_number(value)
+    if numeric is None:
+        return None
+    absolute = abs(float(numeric))
+    if absolute >= 1e12:
+        return f"${numeric / 1e12:.2f}T"
+    if absolute >= 1e9:
+        return f"${numeric / 1e9:.2f}B"
+    if absolute >= 1e6:
+        return f"${numeric / 1e6:.2f}M"
+    if absolute >= 1e3:
+        return f"${numeric / 1e3:.2f}K"
+    if float(numeric).is_integer():
+        return f"${int(numeric):,}"
+    return f"${numeric:,.2f}"
+
+
+def _format_number(value):
+    numeric = _safe_number(value)
+    if numeric is None:
+        return None
+    if float(numeric).is_integer():
+        return f"{int(numeric):,}"
+    return f"{numeric:,.2f}"
+
+
+def _format_ratio(value, digits=1):
+    numeric = _safe_number(value)
+    if numeric is None:
+        return None
+    return f"{numeric:.{digits}f}"
+
+
+def _format_percent(value):
+    numeric = _safe_number(value)
+    if numeric is None:
+        return None
+    return f"{numeric * 100:.1f}%"
+
+
+def _normalize_company_name_for_search(name):
+    text = _clean_text(name)
+    if not text:
+        return None
+    text = re.sub(
+        r"\b(the|incorporated|inc|corp|corporation|co|company|holdings|holding|group|plc|ltd|limited|sa|ag|nv|llc)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"[^A-Za-z0-9& ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or _clean_text(name)
+
+
+def _token_overlap_score(candidate, target):
+    candidate_tokens = {part for part in re.split(r"[^a-z0-9]+", str(candidate or "").lower()) if part}
+    target_tokens = {part for part in re.split(r"[^a-z0-9]+", str(target or "").lower()) if part}
+    if not candidate_tokens or not target_tokens:
+        return 0
+    return len(candidate_tokens & target_tokens)
+
+
+def _pick_best_named_record(records, target_name):
+    best = None
+    best_score = -1
+    for record in records or []:
+        candidate_name = (
+            record.get("recipient_name")
+            or record.get("name")
+            or record.get("title")
+            or record.get("sponsor_name")
+            or record.get("company_name")
+            or ""
+        )
+        score = _token_overlap_score(candidate_name, target_name)
+        if score > best_score:
+            best = record
+            best_score = score
+    return best
+
+
+def _push_source(target, source_id, label, category, url, used_for, status="used"):
+    if not target:
+        return
+    normalized = {
+        "id": source_id,
+        "label": label,
+        "category": category,
+        "url": url,
+        "usedFor": used_for,
+        "status": status,
+    }
+    already = {source.get("id") for source in target if isinstance(source, dict)}
+    if source_id not in already:
+        target.append(normalized)
+
+
+def _build_empty_research():
+    return {
+        "overview": [],
+        "businessModel": [],
+        "operations": [],
+        "customers": [],
+        "regulatory": [],
+        "governance": [],
+        "capitalAllocation": [],
+        "catalysts": [],
+        "risks": [],
+    }
+
+
+def _fetch_sec_mapping(symbol):
+    try:
+        payload = _http_get_json("https://www.sec.gov/files/company_tickers.json")
+    except Exception:
+        return None
+
+    for record in (payload or {}).values():
+        if str(record.get("ticker") or "").upper() == str(symbol or "").upper():
+            return record
+    return None
+
+
+def _extract_latest_fact(company_facts, taxonomy, tags):
+    facts = (((company_facts or {}).get("facts") or {}).get(taxonomy) or {})
+    best = None
+
+    for tag in tags:
+        tag_payload = facts.get(tag) or {}
+        units = tag_payload.get("units") or {}
+        for unit, rows in units.items():
+            for row in rows or []:
+                value = _safe_number(row.get("val"))
+                if value is None:
+                    continue
+                row_date = row.get("fy") or row.get("end") or row.get("filed")
+                normalized_date = _normalize_date_str(row_date)
+                sort_key = normalized_date or "0000-00-00"
+                candidate = {
+                    "tag": tag,
+                    "label": tag_payload.get("label"),
+                    "description": tag_payload.get("description"),
+                    "value": value,
+                    "unit": unit,
+                    "form": row.get("form"),
+                    "fy": row.get("fy"),
+                    "filed": _normalize_date_str(row.get("filed")),
+                    "end": _normalize_date_str(row.get("end")),
+                    "_sort": sort_key,
+                }
+                if not best or candidate["_sort"] > best["_sort"]:
+                    best = candidate
+    if best:
+        best.pop("_sort", None)
+    return best
+
+
+def _build_sec_filing_entry(cik_plain, forms, dates, accession_numbers, primary_documents, report_dates, descriptions, index):
+    form = _clean_text(forms[index] if index < len(forms) else None)
+    filing_date = _normalize_date_str(dates[index] if index < len(dates) else None)
+    accession_number = _clean_text(accession_numbers[index] if index < len(accession_numbers) else None)
+    primary_document = _clean_text(primary_documents[index] if index < len(primary_documents) else None)
+    report_date = _normalize_date_str(report_dates[index] if index < len(report_dates) else None)
+    description = _clean_text(descriptions[index] if index < len(descriptions) else None)
+    filing_url = None
+    if cik_plain and accession_number and primary_document:
+        filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik_plain}/{accession_number.replace('-', '')}/{primary_document}"
+    return {
+        "form": form,
+        "filingDate": filing_date,
+        "reportDate": report_date,
+        "accessionNumber": accession_number,
+        "primaryDocument": primary_document,
+        "primaryDescription": description,
+        "url": filing_url,
+    }
+
+
+def _find_first_form(recent, cik_plain, target_forms):
+    target_forms = {str(form).upper() for form in (target_forms or [])}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    accession_numbers = recent.get("accessionNumber") or []
+    primary_documents = recent.get("primaryDocument") or []
+    report_dates = recent.get("reportDate") or []
+    descriptions = recent.get("primaryDocDescription") or []
+
+    for idx, raw_form in enumerate(forms):
+        if str(raw_form or "").upper() in target_forms:
+            return _build_sec_filing_entry(
+                cik_plain,
+                forms,
+                dates,
+                accession_numbers,
+                primary_documents,
+                report_dates,
+                descriptions,
+                idx,
+            )
+    return None
+
+
+def _build_recent_sec_forms(recent, cik_plain):
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    accession_numbers = recent.get("accessionNumber") or []
+    primary_documents = recent.get("primaryDocument") or []
+    report_dates = recent.get("reportDate") or []
+    descriptions = recent.get("primaryDocDescription") or []
+    result = []
+    for idx in range(min(len(forms), SEC_RECENT_FORMS_LIMIT)):
+        result.append(
+            _build_sec_filing_entry(
+                cik_plain,
+                forms,
+                dates,
+                accession_numbers,
+                primary_documents,
+                report_dates,
+                descriptions,
+                idx,
+            )
+        )
+    return result
+
+
+def _count_recent_forms(entries, form_name, lookback_days=365):
+    cutoff = date.today() - timedelta(days=lookback_days)
+    count = 0
+    for entry in entries or []:
+        if str(entry.get("form") or "").upper() != str(form_name or "").upper():
+            continue
+        filing_date = _normalize_date_str(entry.get("filingDate"))
+        if not filing_date:
+            continue
+        try:
+            if datetime.fromisoformat(filing_date).date() >= cutoff:
+                count += 1
+        except Exception:
+            continue
+    return count
+
+
+def _fetch_sec_profile(symbol):
+    mapping = _fetch_sec_mapping(symbol)
+    if not mapping:
+        return None
+
+    cik_plain = str(mapping.get("cik_str") or "").strip()
+    if not cik_plain:
+        return None
+    cik_padded = cik_plain.zfill(10)
+
+    submissions = _http_get_json(f"https://data.sec.gov/submissions/CIK{cik_padded}.json")
+    company_facts = None
+    try:
+        company_facts = _http_get_json(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json")
+    except Exception:
+        company_facts = None
+
+    recent = ((submissions.get("filings") or {}).get("recent") or {})
+    recent_forms = _build_recent_sec_forms(recent, cik_plain)
+
+    return {
+        "cik": cik_padded,
+        "companyName": _clean_text(submissions.get("name") or mapping.get("title")),
+        "entityType": _clean_text(submissions.get("entityType")),
+        "sic": _clean_text(submissions.get("sic")),
+        "sicDescription": _clean_text(submissions.get("sicDescription")),
+        "fiscalYearEnd": _clean_text(submissions.get("fiscalYearEnd")),
+        "description": _clean_text(submissions.get("description")),
+        "stateOfIncorporation": _clean_text(submissions.get("stateOfIncorporation")),
+        "tickers": _compact_unique_strings(submissions.get("tickers") or [mapping.get("ticker")]),
+        "exchanges": _compact_unique_strings(submissions.get("exchanges") or []),
+        "formerNames": [
+            {
+                "name": _clean_text(item.get("name")),
+                "from": _normalize_date_str(item.get("from")),
+                "to": _normalize_date_str(item.get("to")),
+            }
+            for item in (submissions.get("formerNames") or [])[:5]
+            if isinstance(item, dict) and _clean_text(item.get("name"))
+        ],
+        "latestAnnualReport": _find_first_form(recent, cik_plain, {"10-K", "10-K/A", "20-F", "40-F"}),
+        "latestQuarterlyReport": _find_first_form(recent, cik_plain, {"10-Q", "10-Q/A", "6-K"}),
+        "latestCurrentReport": _find_first_form(recent, cik_plain, {"8-K", "8-K/A", "6-K"}),
+        "recentForms": recent_forms,
+        "recent8KCount": _count_recent_forms(recent_forms, "8-K", 365),
+        "facts": {
+            "sharesOutstanding": _extract_latest_fact(company_facts, "dei", ["EntityCommonStockSharesOutstanding"]),
+            "rAndDExpense": _extract_latest_fact(company_facts, "us-gaap", ["ResearchAndDevelopmentExpense"]),
+            "capitalExpenditures": _extract_latest_fact(
+                company_facts,
+                "us-gaap",
+                ["PaymentsToAcquirePropertyPlantAndEquipment", "CapitalExpendituresIncurredButNotYetPaid"],
+            ),
+        },
+        "sourceUrl": f"https://www.sec.gov/edgar/browse/?CIK={cik_padded}&owner=exclude&action=getcompany",
+    }
+
+
+def _fetch_fda_profile(company_name):
+    cleaned_name = _clean_text(company_name)
+    search_name = _normalize_company_name_for_search(cleaned_name)
+    if not search_name:
+        return None
+
+    last_error = None
+    data = None
+    queries = [cleaned_name, search_name]
+    for candidate in queries:
+        if not candidate:
+            continue
+        try:
+            data = _http_get_json(
+                "https://api.fda.gov/drug/drugsfda.json",
+                params={
+                    "search": f'sponsor_name:"{candidate}"',
+                    "limit": REGULATOR_BULLET_LIMIT,
+                },
+            )
+            if data:
+                break
+        except Exception as exc:
+            last_error = exc
+
+    if not data:
+        if last_error:
+            return None
+        return None
+
+    results = data.get("results") or []
+    if not results:
+        return None
+
+    latest_submissions = []
+    product_names = []
+    application_types = []
+    sponsor_names = []
+
+    for record in results:
+        sponsor_names.append(record.get("sponsor_name"))
+        application_types.append(record.get("application_number"))
+        for product in record.get("products") or []:
+            if isinstance(product, dict):
+                product_names.append(product.get("brand_name"))
+        for submission in record.get("submissions") or []:
+            if not isinstance(submission, dict):
+                continue
+            latest_submissions.append({
+                "submissionType": _clean_text(submission.get("submission_type")),
+                "submissionStatus": _clean_text(submission.get("submission_status")),
+                "date": _normalize_date_str(submission.get("submission_status_date")),
+            })
+
+    latest_submissions.sort(key=lambda row: row.get("date") or "", reverse=True)
+    match_name = _clean_text(results[0].get("sponsor_name")) or cleaned_name
+
+    return {
+        "matchName": match_name,
+        "applicationCount": _safe_number((((data.get("meta") or {}).get("results") or {}).get("total")) or len(results)),
+        "sampleProducts": _compact_unique_strings(product_names, limit=REGULATOR_BULLET_LIMIT),
+        "latestSubmissions": latest_submissions[:REGULATOR_BULLET_LIMIT],
+        "applicationNumbers": _compact_unique_strings(application_types, limit=REGULATOR_BULLET_LIMIT),
+        "sourceUrl": "https://open.fda.gov/apis/drug/drugsfda/",
+    }
+
+
+def _fetch_usaspending_profile(company_name):
+    cleaned_name = _clean_text(company_name)
+    search_name = _normalize_company_name_for_search(cleaned_name)
+    if not search_name:
+        return None
+
+    try:
+        data = _http_post_json(
+            "https://api.usaspending.gov/api/v2/autocomplete/recipient/",
+            {"search_text": cleaned_name, "limit": REGULATOR_BULLET_LIMIT},
+        )
+    except Exception:
+        return None
+
+    results = data.get("results") or []
+    if not isinstance(results, list) or not results:
+        return None
+
+    best = _pick_best_named_record(results, cleaned_name) or results[0]
+    return {
+        "matchName": _clean_text(best.get("recipient_name") or best.get("name") or best.get("title")),
+        "uei": _clean_text(best.get("uei")),
+        "recipientId": _clean_text(best.get("id") or best.get("recipient_id") or best.get("internal_id")),
+        "candidateCount": len(results),
+        "sourceUrl": "https://api.usaspending.gov/docs/endpoints",
+    }
+
+
+def _build_sector_source_hints(theme, category):
+    raw = f"{theme or ''} {category or ''}".strip().lower()
+    sources = []
+
+    if "pharma" in raw or "medicine" in raw or "drug" in raw or "biotech" in raw:
+        sources.append({
+            "id": "fda",
+            "label": "FDA openFDA",
+            "category": "regulator",
+            "url": "https://open.fda.gov/apis/drug/drugsfda/",
+            "usedFor": ["drug approvals", "sponsor-level product and submission data"],
+            "status": "used",
+        })
+    if "defense" in raw:
+        sources.append({
+            "id": "usaspending",
+            "label": "USAspending",
+            "category": "regulator",
+            "url": "https://api.usaspending.gov/docs/endpoints",
+            "usedFor": ["federal awards", "recipient matching", "contract research"],
+            "status": "used",
+        })
+    if "energy" in raw:
+        sources.extend([
+            {
+                "id": "eia",
+                "label": "U.S. Energy Information Administration",
+                "category": "industry",
+                "url": "https://www.eia.gov/opendata/documentation.php",
+                "usedFor": ["energy market and operating datasets"],
+                "status": "available",
+            },
+            {
+                "id": "ferc",
+                "label": "Federal Energy Regulatory Commission",
+                "category": "regulator",
+                "url": "https://mbrwebapi.ferc.gov/Help",
+                "usedFor": ["market-based rate and market structure filings"],
+                "status": "available",
+            },
+        ])
+    if "transport" in raw:
+        sources.append({
+            "id": "bts",
+            "label": "Bureau of Transportation Statistics",
+            "category": "industry",
+            "url": "https://data.transportation.gov/",
+            "usedFor": ["carrier and transportation operating datasets"],
+            "status": "available",
+        })
+    if "space" in raw:
+        sources.extend([
+            {
+                "id": "faa",
+                "label": "Federal Aviation Administration",
+                "category": "regulator",
+                "url": "https://www.faa.gov/aircraft",
+                "usedFor": ["aircraft certification and registry resources"],
+                "status": "available",
+            },
+            {
+                "id": "fcc",
+                "label": "Federal Communications Commission",
+                "category": "regulator",
+                "url": "https://publicfiles.fcc.gov/developer",
+                "usedFor": ["license and spectrum datasets"],
+                "status": "available",
+            },
+        ])
+    return sources
+
+
+def _build_research_and_sources(payload, theme=None, category=None):
+    research = _build_empty_research()
+    sources = []
+    symbol = _clean_text(payload.get("symbol"))
+    company_name = _clean_text(payload.get("name")) or symbol
+
+    if symbol:
+        _push_source(
+            sources,
+            "yahoo-finance",
+            "Yahoo Finance",
+            "market",
+            f"https://finance.yahoo.com/quote/{symbol}",
+            [
+                "basic company profile",
+                "headline financials",
+                "valuation multiples",
+                "earnings calendar",
+            ],
+        )
+
+    sec_profile = None
+    try:
+        sec_profile = _fetch_sec_profile(symbol)
+    except Exception:
+        sec_profile = None
+
+    if sec_profile:
+        payload["filings"] = sec_profile
+        _push_source(
+            sources,
+            "sec-edgar",
+            "SEC EDGAR",
+            "filings",
+            sec_profile.get("sourceUrl"),
+            [
+                "company filings",
+                "recent form history",
+                "company facts and governance disclosures",
+            ],
+        )
+
+        if sec_profile.get("cik"):
+            research["overview"].append(f"SEC registrant CIK: {sec_profile['cik']}.")
+        if sec_profile.get("sicDescription"):
+            sic_code = sec_profile.get("sic")
+            research["overview"].append(
+                f"SEC industry classification: {sec_profile['sicDescription']}" +
+                (f" (SIC {sic_code})." if sic_code else ".")
+            )
+        if sec_profile.get("fiscalYearEnd"):
+            research["capitalAllocation"].append(f"Fiscal year end on SEC profile: {sec_profile['fiscalYearEnd']}.")
+        if sec_profile.get("stateOfIncorporation"):
+            research["governance"].append(f"State of incorporation: {sec_profile['stateOfIncorporation']}.")
+        if sec_profile.get("latestAnnualReport", {}).get("filingDate"):
+            latest_annual = sec_profile["latestAnnualReport"]
+            research["overview"].append(
+                f"Latest annual filing: Form {latest_annual.get('form')} filed {latest_annual.get('filingDate')}."
+            )
+            research["catalysts"].append(
+                f"Management's full-year strategy, risk, and segment update is anchored to the {latest_annual.get('form')} filed {latest_annual.get('filingDate')}."
+            )
+        if sec_profile.get("latestQuarterlyReport", {}).get("filingDate"):
+            latest_quarterly = sec_profile["latestQuarterlyReport"]
+            research["businessModel"].append(
+                f"Latest quarterly filing: Form {latest_quarterly.get('form')} filed {latest_quarterly.get('filingDate')}."
+            )
+        if sec_profile.get("recent8KCount") is not None:
+            research["catalysts"].append(
+                f"Current-report cadence: {sec_profile['recent8KCount']} Form 8-K filings in the last 12 months."
+            )
+
+        shares_outstanding = ((sec_profile.get("facts") or {}).get("sharesOutstanding") or {}).get("value")
+        if shares_outstanding is not None:
+            research["capitalAllocation"].append(
+                f"SEC shares outstanding (latest available XBRL fact): {_format_number(shares_outstanding)}."
+            )
+
+        rnd_fact = (sec_profile.get("facts") or {}).get("rAndDExpense") or {}
+        if rnd_fact.get("value") is not None:
+            context_suffix = f", filed {rnd_fact.get('filed')}" if rnd_fact.get("filed") else ""
+            research["operations"].append(
+                f"SEC-reported R&D expense (latest available): {_format_money(rnd_fact.get('value'))}{context_suffix}."
+            )
+
+        capex_fact = (sec_profile.get("facts") or {}).get("capitalExpenditures") or {}
+        if capex_fact.get("value") is not None:
+            context_suffix = f", filed {capex_fact.get('filed')}" if capex_fact.get("filed") else ""
+            research["capitalAllocation"].append(
+                f"SEC-reported capital expenditure proxy (latest available): {_format_money(capex_fact.get('value'))}{context_suffix}."
+            )
+
+    raw_sector = f"{theme or ''} {category or ''}".strip().lower()
+
+    if "pharma" in raw_sector or "medicine" in raw_sector or "drug" in raw_sector or "biotech" in raw_sector:
+        fda_profile = _fetch_fda_profile(company_name)
+        if fda_profile:
+            payload["regulators"] = {**(payload.get("regulators") or {}), "fda": fda_profile}
+            _push_source(
+                sources,
+                "fda",
+                "FDA openFDA",
+                "regulator",
+                fda_profile.get("sourceUrl"),
+                ["approved product and submission history"],
+            )
+            if fda_profile.get("applicationCount") is not None:
+                research["regulatory"].append(
+                    f"FDA Drugs@FDA sponsor match count: {_format_number(fda_profile['applicationCount'])} applications for {fda_profile.get('matchName') or company_name}."
+                )
+            if fda_profile.get("sampleProducts"):
+                research["businessModel"].append(
+                    f"Sample marketed or approved products from FDA data: {', '.join(fda_profile['sampleProducts'])}."
+                )
+            if fda_profile.get("latestSubmissions"):
+                latest_submission = fda_profile["latestSubmissions"][0]
+                research["catalysts"].append(
+                    "Latest FDA submission in the current snapshot: " +
+                    " • ".join(
+                        item
+                        for item in [
+                            latest_submission.get("date"),
+                            latest_submission.get("submissionType"),
+                            latest_submission.get("submissionStatus"),
+                        ]
+                        if item
+                    ) +
+                    "."
+                )
+
+    if "defense" in raw_sector:
+        usaspending_profile = _fetch_usaspending_profile(company_name)
+        if usaspending_profile:
+            payload["regulators"] = {**(payload.get("regulators") or {}), "usaspending": usaspending_profile}
+            _push_source(
+                sources,
+                "usaspending",
+                "USAspending",
+                "regulator",
+                usaspending_profile.get("sourceUrl"),
+                ["recipient matching for federal award and contract research"],
+            )
+            recipient_bits = [usaspending_profile.get("matchName")]
+            if usaspending_profile.get("uei"):
+                recipient_bits.append(f"UEI {usaspending_profile['uei']}")
+            research["customers"].append(
+                "USAspending recipient match: " + " • ".join(bit for bit in recipient_bits if bit) + "."
+            )
+            if usaspending_profile.get("candidateCount") is not None:
+                research["regulatory"].append(
+                    f"USAspending returned {_format_number(usaspending_profile['candidateCount'])} recipient candidates for the company-name match."
+                )
+
+    for source in _build_sector_source_hints(theme, category):
+        _push_source(
+            sources,
+            source.get("id"),
+            source.get("label"),
+            source.get("category"),
+            source.get("url"),
+            source.get("usedFor"),
+            status=source.get("status") or "available",
+        )
+
+    payload["research"] = {
+        key: _compact_unique_strings(values)
+        for key, values in research.items()
+        if _compact_unique_strings(values)
+    }
+    payload["sources"] = sources
+    return payload
+
+
+def fetch_company_profile(symbol, theme=None, category=None):
     ticker = yf.Ticker(symbol)
     info = ticker.info or {}
     calendar = ticker.calendar
@@ -267,7 +954,8 @@ def fetch_company_profile(symbol):
         },
     }
 
-    return _normalize_json(payload)
+    enriched = _build_research_and_sources(payload, theme=theme, category=category)
+    return _normalize_json(enriched)
 
 
 if __name__ == "__main__":
@@ -275,9 +963,11 @@ if __name__ == "__main__":
         raw = sys.stdin.read().strip()
         data = json.loads(raw or "{}")
         symbol = str(data.get("symbol") or "").strip()
+        theme = _clean_text(data.get("theme"))
+        category = _clean_text(data.get("category"))
         if not symbol:
             print(json.dumps({"error": "No symbol provided"}))
             sys.exit(0)
-        print(json.dumps(fetch_company_profile(symbol)))
+        print(json.dumps(fetch_company_profile(symbol, theme=theme, category=category)))
     except Exception as exc:
         print(json.dumps({"error": str(exc)}))
