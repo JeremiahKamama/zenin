@@ -570,7 +570,7 @@ useEffect(() => {
           setAssets((prev) => mergeAssetPrices(cachedAssets, prev));
         }
         setWatchlistStale(true);
-        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Showing the last saved snapshot while refresh retries.");
+        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
         setLoading(false);
       });
   }, [activeCategory]);
@@ -1910,10 +1910,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
               )}
             </div>
 
-            {watchlistStale ? (
+            {watchlistStale && watchlistNotice ? (
               <div className="stale-banner">
                 <span className="status-icon">⚠</span>
-                {watchlistNotice || "Showing the last saved watchlist snapshot while refresh retries."}
+                {watchlistNotice}
               </div>
             ) : null}
             <Watchlist

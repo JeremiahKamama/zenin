@@ -127,6 +127,21 @@ def fetch_earnings(symbol: str) -> dict:
         target_price = info.get("targetMeanPrice")
         analyst_count = info.get("numberOfAnalystOpinions")
 
+        valuation = {
+            "trailingPe": info.get("trailingPE"),
+            "forwardPe": info.get("forwardPE"),
+            "priceToSales": info.get("priceToSalesTrailing12Months"),
+            "enterpriseToEbitda": info.get("enterpriseToEbitda")
+        }
+
+        profile = {
+            "beta": info.get("beta"),
+            "dividendYield": info.get("dividendYield"),
+            "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
+            "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
+            "averageVolume": info.get("averageVolume")
+        }
+
         return {
             "marketCap": market_cap,
             "eps": {
@@ -141,6 +156,8 @@ def fetch_earnings(symbol: str) -> dict:
             "analystRating": recommend,
             "targetPrice": target_price,
             "analystCount": analyst_count,
+            "valuation": valuation,
+            "profile": profile,
         }
 
     except Exception as e:

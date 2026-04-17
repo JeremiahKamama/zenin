@@ -304,7 +304,7 @@ useEffect(() => {
         if (!isMounted) return;
         if (!cachedPayload) setMacroSnapshot(null);
         setMacroStale(true);
-        setMacroNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+        setMacroNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "");
       } finally {
         if (isMounted) setMacroLoading(false);
       }
@@ -370,7 +370,7 @@ useEffect(() => {
         if (!isMounted) return;
         if (!cached?.payload?.items) setEarningsItems([]);
         setEarningsStale(true);
-        setEarningsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+        setEarningsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
       } finally {
         if (isMounted) setEarningsLoading(false);
       }

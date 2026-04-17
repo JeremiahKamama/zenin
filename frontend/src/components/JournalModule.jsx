@@ -466,14 +466,32 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
         return a.symbol.localeCompare(b.symbol);
       });
 
-    const unrealizedPnl = (portfolio || []).reduce((sum, holding) => {
-      const price = safeNum(holding.price);
-      const qty = safeNum(holding.quantity);
-      const chgPct = safeNum(holding.priceChangePercent);
-      if (price <= 0 || qty <= 0) return sum;
-      const prevPrice = chgPct !== 0 ? price / (1 + chgPct / 100) : price;
-      return sum + ((price - prevPrice) * qty);
+    const unrealizedFromOpenLots = [...lotsByAsset.entries()].reduce((sum, [symbol, lots]) => {
+      const currentPrice =
+        safeNum(livePriceBySymbol[symbol]) ||
+        portfolioPriceMap.get(symbol) ||
+        0;
+      if (currentPrice <= 0) return sum;
+      return sum + lots.reduce((lotSum, lot) => {
+        const lotQty = Math.max(0, safeNum(lot.qty));
+        const lotEntry = safeNum(lot.price);
+        if (lotQty <= eps || lotEntry <= 0) return lotSum;
+        return lotSum + ((currentPrice - lotEntry) * lotQty);
+      }, 0);
     }, 0);
+
+    const openLotSymbols = new Set([...lotsByAsset.keys()]);
+    const unrealizedFromPortfolioFallback = (portfolio || []).reduce((sum, holding) => {
+      const symbol = normalizeSymbol(holding.symbol);
+      if (openLotSymbols.has(symbol)) return sum;
+      const currentPrice = safeNum(holding.price);
+      const qty = safeNum(holding.quantity);
+      const entryPrice = safeNum(holding.entryPrice);
+      if (currentPrice <= 0 || qty <= 0 || entryPrice <= 0) return sum;
+      return sum + ((currentPrice - entryPrice) * qty);
+    }, 0);
+
+    const unrealizedPnl = unrealizedFromOpenLots + unrealizedFromPortfolioFallback;
     const totalGainLoss = realizedGainLoss + unrealizedPnl;
 
     return {
@@ -485,6 +503,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       winRate: decisiveTrades ? (wins.length / decisiveTrades) * 100 : 0,
       breakevenRate: totalRealizedTrades ? (breakevens.length / totalRealizedTrades) * 100 : 0,
       totalGainLoss,
+      realizedPnl: realizedGainLoss,
       unrealizedPnl,
       tradeExpectancy: realized.length ? realizedGainLoss / realized.length : 0,
       avgDailyGain: totalGainLoss / activeDays,
@@ -527,6 +546,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
   const statsRows = [
     { label: "Total Gain/Loss", value: analytics.totalGainLoss, currency: true },
+    { label: "Realized PnL", value: analytics.realizedPnl, currency: true },
     { label: "Unrealized PnL", value: analytics.unrealizedPnl, currency: true },
     { label: "Trade Expectancy", value: analytics.tradeExpectancy, currency: true },
     { label: "Avg Daily Gain", value: analytics.avgDailyGain, currency: true },

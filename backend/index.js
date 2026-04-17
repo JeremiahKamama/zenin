@@ -1126,12 +1126,12 @@ async function fetchHistoryForCrypto(symbol, interval) {
 }
 
 function fetchHistoryFromYahoo(symbol, interval) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     // interval mapping for yfinance (period, interval)
     const mapping = {
       "4H": { period: "1d", interval: "15m" },
       "1D": { period: "1d", interval: "5m" },
-      "1W": { period: "7d", interval: "1h" },
+      "1W": { period: "7d", interval: "60m" },
       "3M": { period: "3mo", interval: "1d" },
       "1Y": { period: "1y", interval: "1d" },
       "YTD": { period: "ytd", interval: "1d" },
@@ -1142,18 +1142,44 @@ function fetchHistoryFromYahoo(symbol, interval) {
 
     const child = spawn("python3", ["fetch_history.py"], { cwd: __dirname });
     let stdout = "";
+    let stderr = "";
     child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
     child.on("close", (code) => {
-      if (code !== 0) { resolve([]); return; }
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (e) {
-        resolve([]);
+      if (code !== 0) {
+        reject(new Error(stderr || `history_fetch_exit_${code}`));
+        return;
       }
+      try {
+        const parsed = JSON.parse(stdout || "{}");
+        if (parsed?.error) {
+          reject(new Error(parsed.error));
+          return;
+        }
+        resolve({
+          history: Array.isArray(parsed?.history) ? parsed.history : [],
+          source: String(parsed?.source || "yahoo"),
+          meta: parsed?.meta || null
+        });
+      } catch (e) {
+        reject(new Error("history_parse_failed"));
+      }
+    });
+
+    child.on("error", (error) => {
+      reject(error);
     });
 
     child.stdin.write(JSON.stringify({ symbol: yfSymbol, period, interval: yfInterval }));
     child.stdin.end();
+
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("history_fetch_timeout"));
+    }, 30000);
+
+    child.on("close", () => clearTimeout(timer));
+    child.on("error", () => clearTimeout(timer));
   });
 }
 
@@ -1191,7 +1217,9 @@ app.get("/api/history", async (req, res) => {
       history = cryptoHistory.history;
       source = cryptoHistory.source;
     } else {
-      history = await fetchHistoryFromYahoo(symbol, interval);
+      const stockHistory = await fetchHistoryFromYahoo(symbol, interval);
+      history = stockHistory.history;
+      source = stockHistory.source || "yahoo";
     }
     const payload = {
       history: Array.isArray(history) ? history : [],
@@ -1239,7 +1267,8 @@ app.get("/api/interval-performance", async (req, res) => {
           const cryptoHistory = await fetchHistoryForCrypto(cleanSymbol, int);
           history = cryptoHistory.history;
         } else {
-          history = await fetchHistoryFromYahoo(cleanSymbol, int);
+          const stockHistory = await fetchHistoryFromYahoo(cleanSymbol, int);
+          history = stockHistory.history;
         }
         
         if (history && history.length > 1) {
@@ -1344,6 +1373,20 @@ app.get("/api/earnings", async (req, res) => {
       }
       try {
         const result = JSON.parse(stdout);
+        if (result?.error) {
+          if (cached?.payload) {
+            return finish(applyStaleMeta(cached.payload, cached, result.error));
+          }
+          return finish({
+            symbol: safeSymbol.toUpperCase(),
+            updatedAt: new Date().toISOString(),
+            stale: true,
+            unavailable: true,
+            stale_reason: result.error,
+            cache_updated_at: null,
+            stale_age_seconds: null
+          });
+        }
         const payload = {
           ...(result || {}),
           symbol: safeSymbol.toUpperCase(),

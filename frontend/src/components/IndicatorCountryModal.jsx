@@ -56,7 +56,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
         if (error.name === "AbortError" || !isMounted) return;
         if (!cachedPayload) setSnapshot(null);
         setStale(true);
-        setNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+        setNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "");
       } finally {
         if (isMounted) setLoading(false);
       }

@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import Chart from "react-apexcharts";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
@@ -11,14 +10,12 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyStale, setHistoryStale] = useState(false);
-  const [historyNotice, setHistoryNotice] = useState("");
   const [activeInterval, setActiveInterval] = useState("1D");
   const [historySource, setHistorySource] = useState("");
   const [orderType, setOrderType] = useState(() => asset?._forceSell ? "sell" : "buy");
   const [earnings, setEarnings] = useState(null);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
-  const [earningsNotice, setEarningsNotice] = useState("");
 
   const normalizeAssetKind = (value) => {
     const rawType = String(value?.type || "").trim().toLowerCase();
@@ -82,7 +79,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           setHistory(cachedHistory);
           setHistorySource(String(cached.payload?.source || ""));
           setHistoryStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
-          setHistoryNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
           setLoading(false);
         }
       } else {
@@ -103,7 +99,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         setHistory(nextHistory);
         setHistorySource(nextSource);
         setHistoryStale(Boolean(data?.stale || data?.unavailable));
-        setHistoryNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("asset-history", cacheParams, data || {
           history: nextHistory,
           source: nextSource
@@ -117,9 +112,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
             setHistory(cachedHistory);
             setHistorySource(String(cached.payload?.source || ""));
           }
-          setHistoryNotice(getSnapshotFallbackMessage(cached.payload));
-        } else {
-          setHistoryNotice("Rate limit hit. Showing the last saved snapshot. Try later.");
         }
         setHistoryStale(true);
       } finally {
@@ -177,7 +169,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       if (cached?.payload && typeof cached.payload === "object") {
         setEarnings(cached.payload);
         setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
-        setEarningsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
         if (cacheIsFresh && !cached.payload?.stale && !cached.payload?.unavailable) {
           setEarningsLoading(false);
           return;
@@ -195,7 +186,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         if (data && typeof data === "object") {
           setEarnings(data);
           setEarningsStale(Boolean(data?.stale || data?.unavailable));
-          setEarningsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
           writeResilientCache("asset-fundamentals", cacheParams, data);
           return;
         }
@@ -204,9 +194,6 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         console.error("Failed to fetch earnings:", err);
         if (cached?.payload && typeof cached.payload === "object") {
           setEarnings(cached.payload);
-          setEarningsNotice(getSnapshotFallbackMessage(cached.payload));
-        } else {
-          setEarningsNotice("Rate limit hit. Showing the last saved snapshot. Try later.");
         }
         setEarningsStale(true);
       } finally {
@@ -378,13 +365,56 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     }
   };
 
+  const formatCompactNumber = (value, digits = 2) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "—";
+    const absolute = Math.abs(numeric);
+    if (absolute >= 1e12) return `${(numeric / 1e12).toFixed(digits)}T`;
+    if (absolute >= 1e9) return `${(numeric / 1e9).toFixed(digits)}B`;
+    if (absolute >= 1e6) return `${(numeric / 1e6).toFixed(digits)}M`;
+    if (absolute >= 1e3) return `${(numeric / 1e3).toFixed(digits)}K`;
+    return numeric.toFixed(digits);
+  };
+
+  const formatCompactMoney = (value, digits = 2) => {
+    const formatted = formatCompactNumber(value, digits);
+    return formatted === "—" ? formatted : `$${formatted}`;
+  };
+
+  const formatMultiple = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `${numeric.toFixed(2)}x` : "—";
+  };
+
+  const formatRatioPercent = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(2)}%` : "—";
+  };
+
+  const fundamentalsDetails = [
+    { label: "Trailing P/E", value: formatMultiple(earnings?.valuation?.trailingPe) },
+    { label: "Forward P/E", value: formatMultiple(earnings?.valuation?.forwardPe) },
+    { label: "Price / Sales", value: formatMultiple(earnings?.valuation?.priceToSales) },
+    { label: "EV / EBITDA", value: formatMultiple(earnings?.valuation?.enterpriseToEbitda) },
+    { label: "Beta", value: Number.isFinite(Number(earnings?.profile?.beta)) ? Number(earnings.profile.beta).toFixed(2) : "—" },
+    { label: "Dividend Yield", value: formatRatioPercent(earnings?.profile?.dividendYield) },
+    {
+      label: "52W Range",
+      value: Number.isFinite(Number(earnings?.profile?.fiftyTwoWeekLow)) && Number.isFinite(Number(earnings?.profile?.fiftyTwoWeekHigh))
+        ? `$${Number(earnings.profile.fiftyTwoWeekLow).toFixed(2)} - $${Number(earnings.profile.fiftyTwoWeekHigh).toFixed(2)}`
+        : "—"
+    },
+    { label: "Avg Volume", value: formatCompactNumber(earnings?.profile?.averageVolume, 1) }
+  ];
+  const hasDetailedFundamentals = fundamentalsDetails.some((item) => item.value !== "—");
+
   if (!asset) return null;
     const cleanAsset = { ...asset };
     delete cleanAsset._forceSell;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className={`modal-content ${shake ? "modal-shake" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`modal-content asset-modal-window ${shake ? "modal-shake" : ""}`} onClick={(e) => e.stopPropagation()}>
         {showConfetti && (
           <div className="trade-effect-layer confetti-layer">
             {confettiPieces.map((idx) => (
@@ -416,7 +446,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           </div>
         </header>
 
-        <div className="chart-section">
+        <div className="chart-section asset-modal-body">
           <div className="chart-header-controls">
             <div className="asset-price-mini">
               <span className="price">${asset.price?.toFixed(2)}</span>
@@ -428,7 +458,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                   Source: {historySource === "hyperliquid" ? "Hyperliquid" : historySource === "coingecko" ? "CoinGecko (fallback)" : historySource}
                 </span>
               ) : null}
-              <span className={`data-health-badge ${loading ? "loading" : historyStale ? "hazard" : "ok"}`} title={loading ? "Refreshing chart data" : historyStale ? "Showing previous chart snapshot" : "Chart is up to date"}>
+              <span className={`data-health-badge ${loading ? "loading" : historyStale ? "hazard" : "ok"}`} title={loading ? "Refreshing chart data" : historyStale ? "Chart data may be delayed" : "Chart is up to date"}>
                 <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : historyStale ? "⚠" : "✓"}</span>
                 Chart
               </span>
@@ -441,22 +471,20 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
           <div className="chart-container">
             {history.length > 0 ? (
-              <Chart options={chartOptions} series={getChartData()} type={chartType} height="400" width="100%" />
+              <Chart options={chartOptions} series={getChartData()} type={chartType} height={280} width="100%" />
             ) : loading ? (
-              <div className="chart-loading">Loading market data...</div>
+              <div className="asset-modal-loader" aria-label="Loading chart data">
+                <span className="status-icon spinner">⟳</span>
+              </div>
             ) : (
-              <div className="chart-no-data">Waiting for chart data...</div>
+              <div className="chart-no-data">No chart data available.</div>
             )}
             {loading && history.length > 0 ? (
               <div className="chart-refresh-overlay">
                 <span className="status-icon spinner">⟳</span>
-                Updating...
               </div>
             ) : null}
           </div>
-          {historyStale && historyNotice ? (
-            <div className="snapshot-inline-note" style={{ marginTop: "10px" }}>{historyNotice}</div>
-          ) : null}
 
           <div className="interval-toggle-bottom">
             <div className="interval-toggle">
@@ -482,8 +510,8 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           </div>
 
 {isTradFi && (
-            <div style={{ padding: "0 32px 16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+            <div className="asset-modal-fundamentals">
+              <div className="asset-modal-section-head">
                 {isStockResearchEligible ? (
                   <button
                     type="button"
@@ -495,17 +523,17 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 ) : (
                   <span />
                 )}
-                <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing fundamentals data" : earningsStale ? "Showing previous fundamentals snapshot" : "Fundamentals are up to date"}>
+                <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing fundamentals data" : earningsStale ? "Fundamentals may be delayed" : "Fundamentals are up to date"}>
                   <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
                   Fundamentals
                 </span>
               </div>
               {earningsLoading && !earnings ? (
-                <div style={{ fontSize: "12px", color: "#64748b", textAlign: "center", padding: "8px" }}>
-                  Loading fundamentals...
+                <div className="asset-modal-loader asset-modal-loader-compact" aria-label="Loading fundamentals">
+                  <span className="status-icon spinner">⟳</span>
                 </div>
               ) : earnings ? (
-                <div style={{ border: "1px solid rgba(148,163,184,0.12)", borderRadius: "10px", overflow: "hidden" }}>
+                <div className="asset-modal-fundamentals-card">
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                     <thead>
                       <tr style={{ background: "rgba(148,163,184,0.06)" }}>
@@ -528,23 +556,19 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                         <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Revenue</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
                           {earnings.revenue?.consensus != null
-                            ? `$${(Number(earnings.revenue.consensus) / 1e9).toFixed(2)}B`
+                            ? formatCompactMoney(earnings.revenue.consensus)
                             : "—"}
                         </td>
                         <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8" }}>
                           {earnings.revenue?.previous != null
-                            ? `$${(Number(earnings.revenue.previous) / 1e9).toFixed(2)}B`
+                            ? formatCompactMoney(earnings.revenue.previous)
                             : "—"}
                         </td>
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
                         <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Market Cap</td>
                         <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
-                          {earnings.marketCap != null
-                            ? earnings.marketCap >= 1e12
-                              ? `$${(earnings.marketCap / 1e12).toFixed(2)}T`
-                              : `$${(earnings.marketCap / 1e9).toFixed(2)}B`
-                            : "—"}
+                          {earnings.marketCap != null ? formatCompactMoney(earnings.marketCap) : "—"}
                         </td>
                       </tr>
                       {earnings.targetPrice != null && (
@@ -575,15 +599,22 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                       )}
                     </tbody>
                   </table>
+                  {hasDetailedFundamentals ? (
+                    <div className="asset-modal-fundamentals-grid">
+                      {fundamentalsDetails.map((item) => (
+                        <div key={item.label} className="asset-modal-fundamentals-stat">
+                          <span className="asset-modal-fundamentals-label">{item.label}</span>
+                          <strong className="asset-modal-fundamentals-value">{item.value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
-                <div style={{ fontSize: "12px", color: "#64748b", textAlign: "center", padding: "8px" }}>
-                  Waiting for fundamentals...
+                <div className="chart-no-data asset-modal-empty-copy">
+                  No fundamentals available.
                 </div>
               )}
-              {earningsStale && earningsNotice ? (
-                <div className="snapshot-inline-note" style={{ marginTop: "10px" }}>{earningsNotice}</div>
-              ) : null}
             </div>
           )}
 
@@ -600,26 +631,19 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
             const holdingQty = holding?.quantity || 0;
             const holdingValue = holdingQty * (asset.price || 0);
             return holdingQty > 0 ? (
-              <div style={{ padding: "8px 0", fontSize: "13px", color: "var(--color-text-secondary)" }}>
+              <div className="asset-modal-position-note">
                 Your position: <strong style={{ color: "var(--color-text-primary)" }}>
                   {holdingQty} {asset.symbol}
                 </strong> <span>(${holdingValue.toFixed(2)})</span>
-                {" · "}Max sell: <strong style={{ color: "var(--color-text-danger)" }}>{holdingQty}</strong>
               </div>
             ) : (
-              <div style={{ padding: "8px 0", fontSize: "13px", color: "var(--color-text-danger)" }}>
+              <div className="asset-modal-position-note asset-modal-position-note-danger">
                 You don't hold any {asset.symbol}.
               </div>
             );
           })()}
         {orderType === "buy" && (
-          <div
-            style={{
-              padding: "8px 0",
-              fontSize: "13px",
-              color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-secondary)"
-            }}
-          >
+          <div className={`asset-modal-position-note ${insufficientBalance ? "asset-modal-position-note-danger" : ""}`}>
             Available balance: <strong style={{ color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
               ${availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </strong>

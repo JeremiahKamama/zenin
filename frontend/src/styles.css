@@ -1357,14 +1357,13 @@ button {
   right: 10px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
   border: 1px solid rgba(56, 189, 248, 0.35);
   background: rgba(2, 6, 23, 0.82);
   color: #67e8f9;
-  font-size: 0.72rem;
-  font-weight: 600;
 }
 
 .asset-modal-more-link {
@@ -2020,6 +2019,13 @@ button {
   flex-direction: column;
 }
 
+.asset-modal-window {
+  width: min(860px, 100%);
+  max-width: min(860px, calc(100vw - 32px));
+  max-height: min(88vh, 840px);
+  overflow-y: auto;
+}
+
 .modal-content,
 .prediction-modal-window,
 .watchlist-add-modal,
@@ -2033,7 +2039,7 @@ button {
 }
 
 .modal-header {
-  padding: 24px 32px;
+  padding: 20px 24px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -2042,7 +2048,7 @@ button {
 
 .modal-header .asset-info h2 {
   margin: 0;
-  font-size: 1.8rem;
+  font-size: 1.65rem;
   color: #f8fafc;
 }
 
@@ -2078,7 +2084,9 @@ button {
 }
 
 .chart-section {
-  padding: 24px 0;
+  padding: 16px clamp(16px, 2vw, 24px);
+  display: grid;
+  gap: 14px;
 }
 
 .interval-toggle {
@@ -2110,14 +2118,17 @@ button {
 }
 
 .chart-container {
-  height: 400px;
+  min-height: 220px;
+  height: clamp(220px, 32vh, 300px);
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(10, 10, 10, 0.8);
-  margin: 10px 0;
+  margin: 0;
   position: relative;
   z-index: 1;
+  border-radius: 18px;
+  overflow: hidden;
 }
 
 .chart-loading,
@@ -2126,13 +2137,39 @@ button {
   font-size: 0.9rem;
 }
 
+.asset-modal-loader {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: rgba(15, 23, 42, 0.48);
+  color: #67e8f9;
+  font-size: 1.2rem;
+}
+
+.asset-modal-loader-compact {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto;
+}
+
 .modal-footer {
-  padding: 24px 32px;
+  padding: 18px 24px;
   background: rgba(148, 163, 184, 0.03);
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
   border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.asset-modal-window .modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  backdrop-filter: blur(10px);
 }
 
 .quantity-input {
@@ -2156,7 +2193,7 @@ button {
   padding: 12px 16px;
   color: #f8fafc;
   font-size: 1.1rem;
-  width: 150px;
+  width: 136px;
 }
 
 .quantity-input input:focus {
@@ -2191,18 +2228,18 @@ button {
 .order-type-toggle {
   display: flex;
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 8px;
   justify-content: center;
-  padding: 0 32px;
+  padding: 0;
 }
 
 .order-type-toggle button {
   flex: 1;
   max-width: 200px;
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: 12px;
   font-weight: 700;
-  font-size: 1rem;
+  font-size: 0.95rem;
   border: 1px solid rgba(148, 163, 184, 0.1);
   background: rgba(148, 163, 184, 0.05);
   color: #94a3b8;
@@ -2258,9 +2295,10 @@ button {
 .chart-header-controls {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding: 0 32px;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 0;
+  padding: 0;
 }
 
 .chart-type-toggle {
@@ -2291,7 +2329,7 @@ button {
 /* ── Modal Footer Layout ──────────────────────────────────────────── */
 .footer-left {
   display: flex;
-  gap: 32px;
+  gap: 20px;
   align-items: center;
 }
 
@@ -2316,7 +2354,7 @@ button {
   padding: 12px 16px;
   display: flex;
   align-items: center;
-  min-width: 150px;
+  min-width: 136px;
   transition: all 0.2s;
 }
 
@@ -2364,12 +2402,13 @@ button {
 /* ── Asset Modal Refinement ───────────────────────────────────────── */
 .asset-price-mini {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
 .asset-price-mini .price {
-  font-size: 1.6rem;
+  font-size: 1.45rem;
   font-weight: 700;
   color: #f8fafc;
 }
@@ -2398,9 +2437,120 @@ button {
 }
 
 .interval-toggle-bottom {
-  margin-top: 20px;
+  margin-top: 0;
   display: flex;
   justify-content: center;
+}
+
+.asset-modal-fundamentals {
+  display: grid;
+  gap: 8px;
+}
+
+.asset-modal-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.asset-modal-fundamentals-card {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.asset-modal-fundamentals-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.asset-modal-fundamentals-stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.4);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.asset-modal-fundamentals-label {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.asset-modal-fundamentals-value {
+  color: #f8fafc;
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.asset-modal-empty-copy {
+  text-align: center;
+  padding: 12px;
+}
+
+.asset-modal-position-note {
+  padding: 0 24px 4px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 1366px), (max-height: 900px) {
+  .asset-modal-window {
+    width: min(780px, 100%);
+    max-width: min(780px, calc(100vw - 24px));
+    max-height: min(86vh, 760px);
+  }
+
+  .modal-header {
+    padding: 18px 22px;
+  }
+
+  .modal-header .asset-info h2 {
+    font-size: 1.5rem;
+  }
+
+  .chart-section {
+    padding: 14px 20px;
+    gap: 12px;
+  }
+
+  .chart-container {
+    min-height: 200px;
+    height: min(28vh, 250px);
+  }
+
+  .asset-price-mini .price {
+    font-size: 1.3rem;
+  }
+
+  .order-type-toggle {
+    margin-top: 4px;
+  }
+
+  .modal-footer {
+    padding: 16px 20px;
+  }
+
+  .footer-left {
+    gap: 16px;
+  }
+
+  .asset-modal-position-note {
+    padding: 0 20px 4px;
+  }
+}
+
+.asset-modal-position-note-danger {
+  color: var(--color-text-danger);
 }
 
 
@@ -4404,6 +4554,11 @@ button {
     margin: 0 8px;
   }
 
+  .asset-modal-window {
+    max-width: min(860px, calc(100vw - 24px));
+    max-height: 90vh;
+  }
+
   .modal-footer {
     flex-direction: column;
     gap: 12px;
@@ -4433,8 +4588,16 @@ button {
     gap: 8px;
   }
 
+  .asset-modal-window .chart-header-controls {
+    padding: 0;
+  }
+
   .order-type-toggle {
     padding: 0 16px;
+  }
+
+  .asset-modal-position-note {
+    padding: 0 20px 8px;
   }
 
   .modal-header {
@@ -4572,6 +4735,10 @@ button {
     font-size: 1.2rem;
   }
 
+  .asset-modal-window {
+    max-width: 100%;
+  }
+
   .interval-toggle {
     gap: 3px;
     flex-wrap: wrap;
@@ -4586,6 +4753,18 @@ button {
 
   .chart-container {
     height: 260px;
+  }
+
+  .asset-modal-fundamentals-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .asset-modal-section-head {
+    flex-wrap: wrap;
+  }
+
+  .asset-modal-position-note {
+    padding: 0 16px 8px;
   }
 
   .option-chain-table {

@@ -49,7 +49,7 @@ export function PredictionMarketModule() {
       } catch {
         if (!isMounted) return;
         setPredictionStale(true);
-        setPredictionNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+        setPredictionNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
       } finally {
         if (isMounted) setPredictionLoading(false);
       }
@@ -99,7 +99,7 @@ export function PredictionMarketModule() {
       } catch {
         if (!isMounted) return;
         setMarketDetailsStale(true);
-        setMarketDetailsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+        setMarketDetailsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
       } finally {
         if (isMounted) setMarketDetailsLoading(false);
       }

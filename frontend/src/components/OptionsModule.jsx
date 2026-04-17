@@ -160,7 +160,7 @@ useEffect(() => {
         console.warn("Invalid options response:", data);
         setOptionsError("Options data is syncing.");
         setOptionsStale(true);
-        setOptionsNotice("Rate limit hit. Showing the last saved snapshot. Try later.");
+        setOptionsNotice("");
         setMarketStructure(inferredMarketStructure);
         setMarketStructureLabel(inferredMarketStructureLabel);
         setMarketStructureNote(inferredMarketStructureNote);
@@ -170,9 +170,9 @@ useEffect(() => {
       if (controller.signal.aborted) return;
       console.error("Error fetching crypto options:", err);
       if (isMounted) {
-        setOptionsError("Showing previous options snapshot while refresh retries.");
+        setOptionsError("");
         setOptionsStale(true);
-        setOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+        setOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
         setMarketStructure(inferredMarketStructure);
         setMarketStructureLabel(inferredMarketStructureLabel);
         setMarketStructureNote(inferredMarketStructureNote);
@@ -245,7 +245,7 @@ useEffect(() => {
       if (!isMounted) return;
       setWhaleStale(true);
       setWhaleMeta((prev) => prev || {});
-      setWhaleNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Rate limit hit. Showing the last saved snapshot. Try later.");
+      setWhaleNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
     } finally {
       if (isMounted) setWhaleLoading(false);
     }
