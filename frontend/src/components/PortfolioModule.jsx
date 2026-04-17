@@ -17,6 +17,12 @@ export function PortfolioModule({
   const [chartInterval, setChartInterval] = useState("1D");
   const [showDiversificationModal, setShowDiversificationModal] = useState(false);
   const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
+  const totalOptionsValue = activeOptionsTrades.reduce((acc, trade) => {
+    const liveMark = getLiveOptionMarkFromDerive(trade); // Fetch from your chain state
+    return acc + (liveMark * trade.qty * (trade.legs.direction === "short" ? -1 : 1));
+}, 0);
+
+const totalAccountEquity = liveAvailableBalance + portfolioValue + totalOptionsValue;
   const portfolioValue = calculatePortfolioValue();
   const derivedAccountMetrics = useMemo(
     () => calculateAccountSnapshot({

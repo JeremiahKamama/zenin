@@ -762,6 +762,36 @@ function StrategyCard({ strategy, viewAccent, index }) {
       )}
     </div>
   );
+
+  return (
+    <div className="strategy-card">
+      {/* ... existing UI ... */}
+      
+      {expanded && (
+        <div className="strategy-expanded-details">
+          {/* ... existing details ... */}
+          
+          {/* New Execution Section */}
+          <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "10px" }}>
+             <p style={{ fontSize: "11px", color: "#94a3b8", marginBottom: "8px" }}>Simulated Greeks profile based on current chain:</p>
+             <div style={{ display: "flex", gap: "10px", marginBottom: "12px" }}>
+                <span style={{ fontSize: "11px", color: "#22c55e" }}>Δ: +0.24</span>
+                <span style={{ fontSize: "11px", color: "#94a3b8" }}>Γ: 0.01</span>
+                <span style={{ fontSize: "11px", color: "#38bdf8" }}>Θ: +$2.40/day</span>
+                <span style={{ fontSize: "11px", color: "#a78bfa" }}>V: -$1.12</span>
+             </div>
+             
+             <button 
+                onClick={() => onExecute(strategy)}
+                style={{ background: "#22c55e", color: "#fff", padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", width: "100%" }}
+             >
+                Execute {strategy.name}
+             </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────

@@ -41,6 +41,25 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
     setReportPage(1);
   }, [trades]);
 
+  const handleCloseOption = (tradeId) => {
+  const tradeToClose = activeOptionsTrades.find(t => t.id === tradeId);
+  const closingMark = getLiveOptionMarkFromDerive(tradeToClose);
+  
+  const closedRecord = {
+    id: `opt_close_${Date.now()}`,
+    asset: tradeToClose.asset,
+    type: tradeToClose.legs.direction === "short" ? "BUY" : "SELL", // Closing transaction
+    quantity: tradeToClose.qty,
+    price: closingMark,
+    executedAt: new Date().toISOString(),
+    notional: closingMark * tradeToClose.qty,
+    marketType: "Options"
+  };
+
+  setTrades(prev => [...prev, closedRecord]);
+  setActiveOptionsTrades(prev => prev.filter(t => t.id !== tradeId));
+};
+
   useEffect(() => {
     if (reportSymbols.length === 0) {
       setLivePriceBySymbol({});

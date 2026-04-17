@@ -33,6 +33,14 @@ export function OptionsModule() {
   const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
   const [whaleSource, setWhaleSource] = useState("derive");
 
+  const calculateOptionPnL = (trade) => {
+     // Here you would match trade.legs with the live `chain` data fetched from Derive
+     // PnL = (Current Mark Price - netPremiumAtEntry) * Qty * Direction
+     // For mock purposes, returning a static format:
+     return { currentMark: 0.85, pnl: 0.15 };
+
+  };
+
  useEffect(() => {
   setAllAssets(SUPPORTED_OPTIONS_ASSETS);
 }, []);
@@ -374,7 +382,65 @@ useEffect(() => {
           <div className="change positive">+14.2</div>
         </div>
       </div>
+    return (
+    <div className="view-container options-terminal">
+      {/* ... top metrics ... */}
 
+      {/* NEW: Active Options Trades Card */}
+      {activeOptionsTrades && activeOptionsTrades.length > 0 && (
+        <div className="watchlist-panel glass" style={{ marginBottom: "16px", padding: "16px" }}>
+          <div className="section-header">
+            <h2>Active Options Trades</h2>
+          </div>
+          <table className="option-chain-table">
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Asset</th>
+                <th>Exp</th>
+                <th>Entry Premium</th>
+                <th>Live Mark (Derive)</th>
+                <th>Delta</th>
+                <th>Theta</th>
+                <th>Unrealized PnL</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeOptionsTrades.map(trade => {
+                const { currentMark, pnl } = calculateOptionPnL(trade);
+                const isProfit = pnl >= 0;
+                return (
+                  <tr key={trade.id}>
+                    <td>{trade.strategy}</td>
+                    <td>{trade.asset}</td>
+                    <td>{trade.legs.expiry}</td>
+                    <td>${trade.netPremiumAtEntry.toFixed(4)}</td>
+                    <td>${currentMark.toFixed(4)}</td>
+                    <td className="greek">+0.15</td> {/* Map from live chain */}
+                    <td className="greek">+$1.20</td> {/* Map from live chain */}
+                    <td style={{ color: isProfit ? "#22c55e" : "#ef4444", fontWeight: "bold" }}>
+                      {isProfit ? "+" : ""}${pnl.toFixed(2)}
+                    </td>
+                    <td>
+                      <button 
+                        onClick={() => closeOptionTrade(trade.id)}
+                        style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer" }}
+                      >
+                        Close
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ... Option Chain Panel ... */}
+    </div>
+  );
       <div className="watchlist-panel glass">
         <div className="section-header">
           <div className="header-left">
