@@ -664,31 +664,6 @@ useEffect(() => {
                   </tr>
                 </thead>
                 <tbody>
-      {strategies.slice(0, maxVisible).map((s) => (
-        <tr key={s.id || s.name}>
-          <td>{s.name}</td>
-          <td>{(s.probability * 100).toFixed(1)}%</td>
-          <td>{s.payoffLabel}</td>
-          <td>
-            <button
-              onClick={() => onStrategyChosen && onStrategyChosen(s)}
-              style={{
-                background: "rgba(56,189,248,0.16)",
-                color: "#7dd3fc",
-                borderRadius: 4,
-                border: "none",
-                padding: "4px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              Execute
-            </button>
-          </td>
-        </tr>
-      ))}
-    </tbody>
-                <tbody>
                   {chain.map((row) => (
                     <tr key={row.strike}>
                       <td className="greek">{formatIv(row.call?.iv)}</td>

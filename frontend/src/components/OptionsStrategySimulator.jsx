@@ -1158,7 +1158,7 @@ const tierGroups = [
                       </>
                     )}
                     <span style={{ marginLeft: "auto", fontSize: "11px", color: "#64748b" }}>
-                      {availableStrategies.length} strategies matched
+                      {strategies.length} strategies matched
                     </span>
                   </div>
 
@@ -1182,7 +1182,7 @@ const tierGroups = [
                     </div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-                      {tierGroups.map(({ tierKey, availableStrategies: tierStrategies }) => {
+                      {tierGroups.map(({ tierKey, strategies: tierStrategies }) => {
                         const meta = TIER_META[tierKey];
                         return (
                           <div key={tierKey}>
