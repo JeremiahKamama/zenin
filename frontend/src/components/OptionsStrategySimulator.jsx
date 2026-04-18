@@ -840,13 +840,23 @@ onStrategyChosen,
     });
   };
 
-  const strategies = getStrategies();
+const availableStrategies = getStrategies();
 
-  const tierGroups = [
-    { tierKey: "high", strategies: strategies.filter((s) => s.tier === "high") },
-    { tierKey: "medium", strategies: strategies.filter((s) => s.tier === "medium") },
-    { tierKey: "speculative", strategies: strategies.filter((s) => s.tier === "speculative") },
-  ].filter((g) => g.strategies.length > 0);
+const tierGroups = [
+  {
+    tierKey: "high",
+    strategies: availableStrategies.filter((s) => s.tier === "high"),
+  },
+  {
+    tierKey: "medium",
+    strategies: availableStrategies.filter((s) => s.tier === "medium"),
+  },
+  {
+    tierKey: "speculative",
+    strategies: availableStrategies.filter((s) => s.tier === "speculative"),
+  },
+].filter((g) => g.strategies.length > 0);
+
 
   const BTN_BASE = {
     padding: "9px 18px",
