@@ -705,13 +705,7 @@ export function OptionsCalculator({   spotPrice = 0,
               >
                 View Calculations
               </button>
-            
-              {/* ── Strategy Simulator ───────────────────────────────────────────── */}
-              <OptionsStrategySimulator
-                spotPrice={effectiveSpot}
-                activeAsset={normalizedSymbol || normalizedActiveAsset || "BTC"}
-              />
-            
+        
               {saveMsg && (
                 <span className={`options-calculator-save-message ${saveMsgType === "error" ? "error" : "success"}`}>
                   {saveMsg}
