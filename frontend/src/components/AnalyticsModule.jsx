@@ -1,12 +1,860 @@
-// AnalyticsModule.jsx
-import React from "react";
+// src/components/AnalyticsModule.jsx
+import { useEffect, useMemo, useState } from "react";
+
+const CATEGORY_TABS = [
+  { id: "crypto", label: "Crypto", description: "Hyperliquid + Dune analytics" },
+  { id: "options", label: "Options", description: "Binance + Derive + Deribit analytics" },
+];
+
+const EMPTY_CRYPTO = {
+  updatedAt: null,
+  perpMetrics: [],
+  kimchiPremium: null,
+  etfInflows: [],
+  perpVolumeByProtocol: [],
+  revenueByProtocol: [],
+  optionsVolumeByAsset: [],
+  optionsMaxPain: [],
+};
+
+const EMPTY_OPTIONS = {
+  updatedAt: null,
+  totalOptionsOpenInterestUsd: null,
+  optionsVolumeByAsset: [],
+  optionsMaxPain: [],
+  volumeByExchangeRoute: [],
+};
+
+function formatMoney(value, digits = 2) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `$${amount.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}`;
+}
+
+function formatCompactMoney(value, digits = 2) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: digits,
+  }).format(amount);
+}
+
+function formatPercent(value, digits = 2) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `${amount >= 0 ? "+" : ""}${amount.toFixed(digits)}%`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function normalizeCryptoPayload(payload) {
+  return {
+    updatedAt: payload?.updatedAt || payload?.asOf || null,
+    perpMetrics: Array.isArray(payload?.perpMetrics)
+      ? payload.perpMetrics
+      : Array.isArray(payload?.oiAndFunding)
+      ? payload.oiAndFunding
+      : [],
+    kimchiPremium: payload?.kimchiPremium || null,
+    etfInflows: Array.isArray(payload?.etfInflows) ? payload.etfInflows : [],
+    perpVolumeByProtocol: Array.isArray(payload?.perpVolumeByProtocol)
+      ? payload.perpVolumeByProtocol
+      : [],
+    revenueByProtocol: Array.isArray(payload?.revenueByProtocol)
+      ? payload.revenueByProtocol
+      : Array.isArray(payload?.revenuePerProtocol)
+      ? payload.revenuePerProtocol
+      : [],
+    optionsVolumeByAsset: Array.isArray(payload?.optionsVolumeByAsset)
+      ? payload.optionsVolumeByAsset
+      : Array.isArray(payload?.optionsVolume)
+      ? payload.optionsVolume
+      : [],
+    optionsMaxPain: Array.isArray(payload?.optionsMaxPain)
+      ? payload.optionsMaxPain
+      : [],
+  };
+}
+
+function normalizeOptionsPayload(payload) {
+  return {
+    updatedAt: payload?.updatedAt || payload?.asOf || null,
+    totalOptionsOpenInterestUsd:
+      payload?.totalOptionsOpenInterestUsd ?? payload?.totalOptionsOI ?? null,
+    optionsVolumeByAsset: Array.isArray(payload?.optionsVolumeByAsset)
+      ? payload.optionsVolumeByAsset
+      : Array.isArray(payload?.optionsVolume)
+      ? payload.optionsVolume
+      : [],
+    optionsMaxPain: Array.isArray(payload?.optionsMaxPain)
+      ? payload.optionsMaxPain
+      : [],
+    volumeByExchangeRoute: Array.isArray(payload?.volumeByExchangeRoute)
+      ? payload.volumeByExchangeRoute
+      : Array.isArray(payload?.optionsVolumeByExchangeRoute)
+      ? payload.optionsVolumeByExchangeRoute
+      : [],
+  };
+}
+
+function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" }) {
+  const toneMap = {
+    neutral: { border: "rgba(148,163,184,0.18)", color: "#e2e8f0" },
+    positive: { border: "rgba(34,197,94,0.28)", color: "#86efac" },
+    negative: { border: "rgba(239,68,68,0.28)", color: "#fca5a5" },
+    info: { border: "rgba(56,189,248,0.24)", color: "#7dd3fc" },
+  };
+  const chosen = toneMap[tone] || toneMap.neutral;
+
+  return (
+    <div
+      style={{
+        background: "rgba(15, 23, 42, 0.72)",
+        border: `1px solid ${chosen.border}`,
+        borderRadius: 14,
+        padding: 16,
+        minHeight: 110,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "#94a3b8",
+            }}
+          >
+            {title}
+          </div>
+          <div
+            style={{
+              marginTop: 10,
+              fontSize: 24,
+              fontWeight: 700,
+              color: chosen.color,
+            }}
+          >
+            {value}
+          </div>
+          {subvalue ? (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#cbd5e1" }}>
+              {subvalue}
+            </div>
+          ) : null}
+        </div>
+        {source ? (
+          <div>
+            <span
+              style={{
+                padding: "4px 8px",
+                borderRadius: 999,
+                border: "1px solid rgba(148,163,184,0.18)",
+                fontSize: 10,
+                color: "#94a3b8",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {source}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsTableCard({ title, subtitle, columns, rows, emptyText }) {
+  return (
+    <div
+      style={{
+        background: "rgba(15, 23, 42, 0.72)",
+        border: "1px solid rgba(148,163,184,0.16)",
+        borderRadius: 14,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>
+            {title}
+          </div>
+          {subtitle ? (
+            <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>
+              {subtitle}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div style={{ padding: "18px 6px 6px", fontSize: 13, color: "#94a3b8" }}>
+          {emptyText}
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              minWidth: 420,
+            }}
+          >
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th
+                    key={column.key}
+                    style={{
+                      textAlign: column.align || "left",
+                      padding: "0 0 10px",
+                      fontSize: 11,
+                      color: "#64748b",
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      borderBottom: "1px solid rgba(148,163,184,0.14)",
+                    }}
+                  >
+                    {column.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, idx) => (
+                <tr key={row.id || `${title}-${idx}`}>
+                  {columns.map((column) => (
+                    <td
+                      key={column.key}
+                      style={{
+                        padding: "12px 0",
+                        fontSize: 13,
+                        color: "#e2e8f0",
+                        textAlign: column.align || "left",
+                        borderBottom:
+                          idx === rows.length - 1
+                            ? "none"
+                            : "1px solid rgba(148,163,184,0.08)",
+                      }}
+                    >
+                      {column.render
+                        ? column.render(row[column.key], row)
+                        : row[column.key] ?? "—"}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function AnalyticsModule({ backendUrl }) {
+  const [activeTab, setActiveTab] = useState("crypto");
+  const [cryptoData, setCryptoData] = useState(EMPTY_CRYPTO);
+  const [optionsData, setOptionsData] = useState(EMPTY_OPTIONS);
+  const [loading, setLoading] = useState({ crypto: false, options: false });
+  const [errors, setErrors] = useState({ crypto: "", options: "" });
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function load() {
+      setLoading((prev) => ({ ...prev, [activeTab]: true }));
+      setErrors((prev) => ({ ...prev, [activeTab]: "" }));
+
+      try {
+        const res = await fetch(`${backendUrl}/analytics/${activeTab}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const payload = await res.json();
+        if (cancelled) return;
+
+        if (activeTab === "crypto") {
+          setCryptoData(normalizeCryptoPayload(payload));
+        } else {
+          setOptionsData(normalizeOptionsPayload(payload));
+        }
+      } catch (err) {
+        if (cancelled || err?.name === "AbortError") return;
+        setErrors((prev) => ({
+          ...prev,
+          [activeTab]:
+            "Analytics endpoint is not returning data yet. Wire the backend route and refresh.",
+        }));
+      } finally {
+        if (!cancelled) {
+          setLoading((prev) => ({ ...prev, [activeTab]: false }));
+        }
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeTab, backendUrl]);
+
+  const cryptoPerps = useMemo(() => {
+    const preferredOrder = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
+    const bySymbol = new Map(
+      (cryptoData.perpMetrics || []).map((row) => [
+        String(row.symbol || "").toUpperCase(),
+        row,
+      ])
+    );
+    return preferredOrder
+      .map((symbol) => {
+        const row = bySymbol.get(symbol);
+        return {
+          id: symbol,
+          symbol,
+          openInterestUsd:
+            row?.openInterestUsd ?? row?.oiUsd ?? row?.openInterest ?? null,
+          fundingRate: row?.fundingRate ?? row?.funding ?? null,
+          exchange: row?.exchange || "Hyperliquid",
+        };
+      })
+      .filter((row) => row.openInterestUsd != null && row.fundingRate != null);
+  }, [cryptoData]);
+
+  const cryptoTotalOi = useMemo(
+    () =>
+      cryptoPerps.reduce(
+        (sum, row) => sum + (Number(row.openInterestUsd) || 0),
+        0
+      ),
+    [cryptoPerps]
+  );
+
+  const optionsTotalVolume = useMemo(
+    () =>
+      (optionsData.optionsVolumeByAsset || []).reduce(
+        (sum, row) => sum + (Number(row.volumeUsd ?? row.volume) || 0),
+        0
+      ),
+    [optionsData]
+  );
+
+  const currentUpdatedAt =
+    activeTab === "crypto" ? cryptoData.updatedAt : optionsData.updatedAt;
+  const currentError = errors[activeTab];
+  const currentLoading = loading[activeTab];
+
   return (
-    <div style={{ padding: 24, color: "#e2e8f0" }}>
-      <h2>Analytics placeholder</h2>
-      <p>backendUrl: {backendUrl}</p>
-      <p>If you see this, the Analytics section is wired correctly.</p>
+    <div className="view-container" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Header */}
+      <section
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 12,
+              letterSpacing: "0.09em",
+              textTransform: "uppercase",
+              color: "#64748b",
+            }}
+          >
+            Analytics
+          </div>
+          <h2
+            style={{
+              margin: "6px 0 0",
+              fontSize: 24,
+              fontWeight: 700,
+              color: "#f8fafc",
+            }}
+          >
+            Cross-market dashboards
+          </h2>
+          <p
+            style={{
+              margin: "8px 0 0",
+              maxWidth: 760,
+              fontSize: 13,
+              lineHeight: 1.55,
+              color: "#94a3b8",
+            }}
+          >
+            Switch between Crypto and Options analytics. The module is structured
+            for Hyperliquid + Dune on crypto and Binance + Derive + Deribit on options.
+          </p>
+        </div>
+        <div style={{ fontSize: 12, color: "#94a3b8", paddingTop: 6 }}>
+          Last update: {formatDateTime(currentUpdatedAt)}
+        </div>
+      </section>
+
+      {/* Tabs */}
+      <section>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {CATEGORY_TABS.map((tab) => {
+            const active = tab.id === activeTab;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  borderRadius: 999,
+                  border: active
+                    ? "1px solid rgba(56,189,248,0.38)"
+                    : "1px solid rgba(148,163,184,0.16)",
+                  background: active
+                    ? "rgba(56,189,248,0.12)"
+                    : "rgba(15,23,42,0.78)",
+                  color: active ? "#7dd3fc" : "#cbd5e1",
+                  padding: "12px 16px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  minWidth: 220,
+                }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{tab.label}</div>
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontSize: 12,
+                    color: active ? "#bae6fd" : "#94a3b8",
+                  }}
+                >
+                  {tab.description}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Loading / error */}
+      {currentLoading && (
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 14,
+            background: "rgba(15,23,42,0.72)",
+            border: "1px solid rgba(148,163,184,0.16)",
+            color: "#cbd5e1",
+          }}
+        >
+          Loading {activeTab} analytics...
+        </div>
+      )}
+
+      {currentError && !currentLoading && (
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 14,
+            background: "rgba(15,23,42,0.72)",
+            border: "1px solid rgba(245,158,11,0.22)",
+            color: "#fbbf24",
+          }}
+        >
+          {currentError}
+        </div>
+      )}
+
+      {/* Content */}
+      {!currentLoading && !currentError && (
+        <>
+          {activeTab === "crypto" ? (
+            <>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <AnalyticsStatCard
+                  title="Tracked OI"
+                  value={formatCompactMoney(cryptoTotalOi)}
+                  subvalue="BTC, ETH, SOL, HYPE, BNB perpetual open interest"
+                  source="HL"
+                  tone="info"
+                />
+                <AnalyticsStatCard
+                  title="Kimchi Premium"
+                  value={formatPercent(
+                    cryptoData.kimchiPremium?.valuePct ??
+                      cryptoData.kimchiPremium?.value
+                  )}
+                  subvalue={cryptoData.kimchiPremium?.market || "KR vs global spread"}
+                  source="Dune"
+                  tone={
+                    (cryptoData.kimchiPremium?.valuePct ??
+                      cryptoData.kimchiPremium?.value ??
+                      0) >= 0
+                      ? "positive"
+                      : "negative"
+                  }
+                />
+                <AnalyticsStatCard
+                  title="ETF Inflows"
+                  value={formatCompactMoney(
+                    (cryptoData.etfInflows || []).reduce(
+                      (sum, row) =>
+                        sum +
+                        (Number(row.netUsd ?? row.netFlowUsd ?? 0) || 0),
+                      0
+                    )
+                  )}
+                  subvalue="Summed from latest ETF inflow rows"
+                  source="Dune"
+                  tone="positive"
+                />
+                <AnalyticsStatCard
+                  title="Options Volume"
+                  value={formatCompactMoney(
+                    (cryptoData.optionsVolumeByAsset || []).reduce(
+                      (sum, row) =>
+                        sum +
+                        (Number(row.volumeUsd ?? row.volume ?? 0) || 0),
+                      0
+                    )
+                  )}
+                  subvalue="Across available crypto option assets"
+                  source="Dune"
+                  tone="info"
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <AnalyticsTableCard
+                  title="Perpetual OI & funding"
+                  subtitle="BTC, ETH, SOL, HYPE and BNB from Hyperliquid"
+                  emptyText="No Hyperliquid perp context rows returned yet."
+                  columns={[
+                    { key: "symbol", label: "Asset" },
+                    {
+                      key: "openInterestUsd",
+                      label: "Open Interest",
+                      align: "right",
+                      render: (v) => formatMoney(v),
+                    },
+                    {
+                      key: "fundingRate",
+                      label: "Funding Rate",
+                      align: "right",
+                      render: (v) => formatPercent(Number(v) * 100),
+                    },
+                    { key: "exchange", label: "Venue", align: "right" },
+                  ]}
+                  rows={cryptoPerps}
+                />
+
+                <AnalyticsTableCard
+                  title="ETF inflows"
+                  subtitle="Latest inflow rows from Dune"
+                  emptyText="No ETF inflow rows returned yet."
+                  columns={[
+                    { key: "date", label: "Date" },
+                    { key: "ticker", label: "Ticker" },
+                    {
+                      key: "netUsd",
+                      label: "Net Flow",
+                      align: "right",
+                      render: (v, row) =>
+                        formatMoney(v ?? row.netFlowUsd ?? null),
+                    },
+                  ]}
+                  rows={(cryptoData.etfInflows || []).map((row, idx) => ({
+                    id: row.id || `etf-${idx}`,
+                    date: row.date,
+                    ticker: row.ticker,
+                    netUsd: row.netUsd ?? row.netFlowUsd,
+                  }))}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <AnalyticsTableCard
+                  title="Perp volume by protocol"
+                  subtitle="Dune aggregation for perp protocols"
+                  emptyText="No perp volume rows returned yet."
+                  columns={[
+                    { key: "protocol", label: "Protocol" },
+                    {
+                      key: "volumeUsd",
+                      label: "Volume",
+                      align: "right",
+                      render: (v, row) =>
+                        formatMoney(v ?? row.volume ?? null),
+                    },
+                  ]}
+                  rows={(cryptoData.perpVolumeByProtocol || []).map(
+                    (row, idx) => ({
+                      id: row.id || `perp-vol-${idx}`,
+                      protocol: row.protocol,
+                      volumeUsd: row.volumeUsd ?? row.volume,
+                    })
+                  )}
+                />
+
+                <AnalyticsTableCard
+                  title="Revenue per protocol"
+                  subtitle="Protocol revenue sourced from Dune"
+                  emptyText="No revenue rows returned yet."
+                  columns={[
+                    { key: "protocol", label: "Protocol" },
+                    {
+                      key: "revenueUsd",
+                      label: "Revenue",
+                      align: "right",
+                      render: (v, row) =>
+                        formatMoney(v ?? row.revenue ?? null),
+                    },
+                  ]}
+                  rows={(cryptoData.revenueByProtocol || []).map(
+                    (row, idx) => ({
+                      id: row.id || `rev-${idx}`,
+                      protocol: row.protocol,
+                      revenueUsd: row.revenueUsd ?? row.revenue,
+                    })
+                  )}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <AnalyticsTableCard
+                  title="Options volume per asset"
+                  subtitle="Cross-asset options volume for available crypto underlyings"
+                  emptyText="No options volume rows returned yet."
+                  columns={[
+                    { key: "asset", label: "Asset" },
+                    { key: "exchange", label: "Route" },
+                    {
+                      key: "volumeUsd",
+                      label: "Volume",
+                      align: "right",
+                      render: (v, row) =>
+                        formatMoney(v ?? row.volume ?? null),
+                    },
+                  ]}
+                  rows={(cryptoData.optionsVolumeByAsset || []).map(
+                    (row, idx) => ({
+                      id: row.id || `opt-vol-${idx}`,
+                      asset: row.asset,
+                      exchange: row.exchange,
+                      volumeUsd: row.volumeUsd ?? row.volume,
+                    })
+                  )}
+                />
+
+                <AnalyticsTableCard
+                  title="Options max pain"
+                  subtitle="Max pain by asset & expiry"
+                  emptyText="No max pain rows returned yet."
+                  columns={[
+                    { key: "asset", label: "Asset" },
+                    { key: "expiry", label: "Expiry" },
+                    {
+                      key: "maxPain",
+                      label: "Max Pain",
+                      align: "right",
+                      render: (v) => formatMoney(v, 0),
+                    },
+                    { key: "exchange", label: "Route", align: "right" },
+                  ]}
+                  rows={(cryptoData.optionsMaxPain || []).map((row, idx) => ({
+                    id: row.id || `maxpain-${idx}`,
+                    asset: row.asset,
+                    expiry: row.expiry,
+                    maxPain: row.maxPain,
+                    exchange: row.exchange,
+                  }))}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <AnalyticsStatCard
+                  title="Total Options OI"
+                  value={formatCompactMoney(
+                    optionsData.totalOptionsOpenInterestUsd
+                  )}
+                  subvalue="Aggregated from Binance, Derive and Deribit"
+                  source="Multi-venue"
+                  tone="info"
+                />
+                <AnalyticsStatCard
+                  title="Tracked Options Volume"
+                  value={formatCompactMoney(optionsTotalVolume)}
+                  subvalue="Volume per available asset"
+                  source="Binance + Derive + Deribit"
+                  tone="positive"
+                />
+                <AnalyticsStatCard
+                  title="Venue Count"
+                  value={String(
+                    new Set(
+                      (optionsData.volumeByExchangeRoute || [])
+                        .map((row) => row.exchange)
+                        .filter(Boolean)
+                    ).size || 0
+                  )}
+                  subvalue="Distinct exchange routes in the payload"
+                  source="Routes"
+                  tone="neutral"
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <AnalyticsTableCard
+                  title="Options volume per asset"
+                  subtitle="By asset, with exchange route where available"
+                  emptyText="No options volume rows returned yet."
+                  columns={[
+                    { key: "asset", label: "Asset" },
+                    { key: "exchange", label: "Exchange" },
+                    { key: "route", label: "Route" },
+                    {
+                      key: "volumeUsd",
+                      label: "Volume",
+                      align: "right",
+                      render: (v, row) =>
+                        formatMoney(v ?? row.volume ?? null),
+                    },
+                  ]}
+                  rows={(optionsData.optionsVolumeByAsset || []).map(
+                    (row, idx) => ({
+                      id: row.id || `opt-asset-${idx}`,
+                      asset: row.asset,
+                      exchange: row.exchange,
+                      route: row.route,
+                      volumeUsd: row.volumeUsd ?? row.volume,
+                    })
+                  )}
+                />
+
+                <AnalyticsTableCard
+                  title="Options max pain"
+                  subtitle="By exchange, asset and expiry"
+                  emptyText="No options max pain rows returned yet."
+                  columns={[
+                    { key: "exchange", label: "Exchange" },
+                    { key: "asset", label: "Asset" },
+                    { key: "expiry", label: "Expiry" },
+                    {
+                      key: "maxPain",
+                      label: "Max Pain",
+                      align: "right",
+                      render: (v) => formatMoney(v, 0),
+                    },
+                  ]}
+                  rows={(optionsData.optionsMaxPain || []).map((row, idx) => ({
+                    id: row.id || `opt-maxpain-${idx}`,
+                    exchange: row.exchange,
+                    asset: row.asset,
+                    expiry: row.expiry,
+                    maxPain: row.maxPain,
+                  }))}
+                />
+
+                <AnalyticsTableCard
+                  title="Options volume by exchange route"
+                  subtitle="Aggregated route table requested for Binance, Derive and Deribit"
+                  emptyText="No exchange-route rows returned yet."
+                  columns={[
+                    { key: "exchange", label: "Exchange" },
+                    { key: "route", label: "Route" },
+                    { key: "asset", label: "Asset" },
+                    {
+                      key: "volumeUsd",
+                      label: "Volume",
+                      align: "right",
+                      render: (v, row) =>
+                        formatMoney(v ?? row.volume ?? null),
+                    },
+                  ]}
+                  rows={(optionsData.volumeByExchangeRoute || []).map(
+                    (row, idx) => ({
+                      id: row.id || `opt-route-${idx}`,
+                      exchange: row.exchange,
+                      route: row.route,
+                      asset: row.asset,
+                      volumeUsd: row.volumeUsd ?? row.volume,
+                    })
+                  )}
+                />
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
