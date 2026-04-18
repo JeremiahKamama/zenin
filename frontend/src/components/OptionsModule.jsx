@@ -112,37 +112,53 @@ const StrategySimulatorCard = ({
   activeAsset,
   allAssets,
   onChangeAsset,
-  onStrategyChosen={handleStrategyChosen},
+  onStrategyChosen = handleStrategyChosen,
 }) => {
-  const assetOptions = Array.isArray(allAssets) && allAssets.length
-    ? allAssets
-    : ["BTC", "ETH", "SOL", "HYPE"];
-  
+  const assetOptions =
+    Array.isArray(allAssets) && allAssets.length
+      ? allAssets
+      : ["BTC", "ETH", "SOL", "HYPE"];
+
   return (
-    <div className="strategy-card">
-      <div className="strategy-card-header">
-        <h3>Strategy simulator</h3>
-        <select
-          value={activeAsset}
-          onChange={(e) => onChangeAsset && onChangeAsset(e.target.value)}
-        >
-          {assetOptions.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
+    <div className="options-trades-card glass">
+      <div className="card-header">
+        <div className="card-header-main">
+          <h3>Strategy simulator</h3>
+          <p className="card-subtitle">
+            Generate option structures from BTC / ETH / SOL / HYPE flow.
+          </p>
+        </div>
+
+        <div className="card-header-controls">
+          <label className="asset-select-label">
+            Underlying
+            <select
+              value={activeAsset}
+              onChange={(e) =>
+                onChangeAsset && onChangeAsset(e.target.value)
+              }
+              className="asset-select"
+            >
+              {assetOptions.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
+
+      <div className="card-body">
         <OptionsStrategySimulator
           underlying={activeAsset}
           maxVisible={5}
-          onStrategyChosen={handleStrategyChosen}
+          onStrategyChosen={onStrategyChosen}
         />
       </div>
+    </div>
   );
 };
-
-
 
  useEffect(() => {
   setAllAssets(SUPPORTED_OPTIONS_ASSETS);
