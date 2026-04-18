@@ -112,6 +112,29 @@ function App() {
   const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
   const WATCHLIST_CATEGORY_REFRESH_TTL_MS = 5 * 60 * 1000;
 
+  const [activeOptionsTrades, setActiveOptionsTrades] = useState([
+    {
+      id: "simtrade1",
+      asset: "BTC",
+      strategy: "Short Put",
+      status: "OPEN",
+      executedAt: new Date().toISOString(),
+      legs: [
+        {
+          type: "put",
+          direction: "short",
+          strike: 85000,
+          qty: 1,
+          premium: 1.0,
+          iv: 23.0,
+          expiry: "2026-05-07",
+        },
+      ],
+      netPremiumAtEntry: 1.0,
+      qty: 1,
+    },
+  ]);
+
   const stockThemes = useMemo(() => {
     const seen = new Set();
     const derivedThemes = [
@@ -1982,7 +2005,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
 
         {activeSection === "Options" && (
-          <OptionsModule />
+          <OptionsModule activeOptionsTrades={activeOptionsTrades} />
         )}
 
         {activeSection === "Predictions" && (

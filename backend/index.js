@@ -3992,25 +3992,6 @@ app.get("/api/crypto-market", async (req, res) => {
   }
 });
 
-// In your main App or Context
-const [activeOptionsTrades, setActiveOptionsTrades] = useState([
-  // Injecting your requested simulation as the default state
-  {
-    id: "sim_trade_1",
-    asset: "BTC",
-    strategy: "Short Put",
-    status: "OPEN",
-    executedAt: new Date().toISOString(),
-    legs: [
-      { type: "put", direction: "short", strike: 85000, qty: 1, premium: 1.0, iv: 23.0, expiry: "2026-05-07" }
-    ],
-    netPremiumAtEntry: 1.0, 
-    qty: 1
-  }
-]);
-
-// Pass this down to OptionsModule, PortfolioModule, HomeModule, and JournalModule
-
 // ---------------------------------------------------------------------------
 // Portfolio Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
