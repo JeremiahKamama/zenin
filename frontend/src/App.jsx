@@ -1999,7 +1999,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
        {activeSection === "Analytics" && (
         <div className="view-container">
-          <AnalyticsModule backendUrl={BACKENDURL} />
+          <AnalyticsModule backendUrl={BACKEND_URL} />
         </div>
       )}
 
