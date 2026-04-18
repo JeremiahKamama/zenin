@@ -9,7 +9,7 @@ export function PortfolioModule({
   accountMetrics = null,
   calculatePortfolioValue,
   calculatePortfolioGain,
-  setActiveOptionsTrades,
+  activeOptionsTrades = [],
   onRemove,
   onSellAsset,
   onSelectAsset
@@ -23,26 +23,53 @@ export function PortfolioModule({
     return acc + (liveMark * trade.qty * (trade.legs.direction === "short" ? -1 : 1));
 }, 0);
 
-const totalAccountEquity = liveAvailableBalance + portfolioValue + totalOptionsValue;
-  const portfolioValue = calculatePortfolioValue();
-  const derivedAccountMetrics = useMemo(
-    () => calculateAccountSnapshot({
+// ✅ 1) compute portfolioValue first
+const portfolioValue = calculatePortfolioValue();
+
+// ✅ 2) compute metrics next
+const derivedAccountMetrics = useMemo(
+  () =>
+    calculateAccountSnapshot({
       trades,
       portfolioValue,
-      balance
+      balance,
     }),
-    [trades, portfolioValue, balance]
-  );
-  const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
-  const initialBalance = Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
-  const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline) ? activeAccountMetrics.tradeTimeline : [];
-  const liveAvailableBalance = Number.isFinite(Number(activeAccountMetrics?.liveAvailableBalance))
-    ? Number(activeAccountMetrics.liveAvailableBalance)
-    : initialBalance;
-  const currentAccountEquity = Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
-    ? Number(activeAccountMetrics.totalAccountEquity)
-    : (liveAvailableBalance + portfolioValue);
-  const isProfitable = currentAccountEquity >= initialBalance;
+  [trades, portfolioValue, balance]
+);
+
+const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
+const initialBalance =
+  Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
+
+const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline)
+  ? activeAccountMetrics.tradeTimeline
+  : [];
+
+// ✅ 3) now liveAvailableBalance exists
+const liveAvailableBalance = Number.isFinite(
+  Number(activeAccountMetrics?.liveAvailableBalance)
+)
+  ? Number(activeAccountMetrics.liveAvailableBalance)
+  : initialBalance;
+
+// ✅ 4) compute totalOptionsValue safely (NO undefined helpers)
+const totalOptionsValue = (Array.isArray(activeOptionsTrades)
+  ? activeOptionsTrades
+  : []
+).reduce((acc, trade) => {
+  // Prefer pnl/unrealizedPnl stored on the trade until you wire live marks in Portfolio
+  const value = Number(trade?.unrealizedPnl ?? trade?.pnl ?? 0);
+  return acc + (Number.isFinite(value) ? value : 0);
+}, 0);
+
+// ✅ 5) now totalAccountEquity is safe
+const totalAccountEquity =
+  liveAvailableBalance + portfolioValue + totalOptionsValue;
+
+// keep your existing name
+const currentAccountEquity = totalAccountEquity;
+
+const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "#22c55e" : "#ef4444") : "#38bdf8";
 
   const chartData = useMemo(() => {
