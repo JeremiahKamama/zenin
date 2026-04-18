@@ -5655,3 +5655,30 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Strategy simulator card – align with other options cards */
+.strategy-simulator-panel {
+  margin-bottom: 16px;
+  /* padding is already coming from .watchlist-panel / .glass
+     and will be responsive via existing media queries */
+}
+
+/* Scroll area for the strategy list */
+.strategy-simulator-list {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Optional: make inner labels match other options text */
+.strategy-simulator-panel h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.strategy-simulator-panel p,
+.strategy-simulator-panel span {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary, #94a3b8);
+}
