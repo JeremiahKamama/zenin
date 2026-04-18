@@ -796,7 +796,7 @@ function StrategyCard({ strategy, viewAccent, index, onExecute }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function OptionsStrategySimulator({   underlying,
+export default function OptionsStrategySimulator({   underlying,
   maxVisible = 5,
   onStrategyChosen, }) {
   const [open, setOpen] = useState(false);
@@ -1119,7 +1119,7 @@ export function OptionsStrategySimulator({   underlying,
                     borderRadius: "9px",
                     marginBottom: "16px",
                     flexWrap: "wrap",
-                    gap: "8px",
+                    // gap: "8px",
                   }}>
                     <span style={{ fontSize: "11px", color: "#64748b" }}>Showing strategies for:</span>
                     {viewMeta && (
