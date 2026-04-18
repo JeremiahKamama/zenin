@@ -797,9 +797,10 @@ function StrategyCard({ strategy, viewAccent, index, onExecute }) {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function OptionsStrategySimulator({
-  underlying,
-  maxVisible = 5,
-  onStrategyChosen, }) {
+underlying,
+maxVisible = 5,
+onStrategyChosen,
+}) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(1);
   const [selectedView, setSelectedView] = useState(null);
