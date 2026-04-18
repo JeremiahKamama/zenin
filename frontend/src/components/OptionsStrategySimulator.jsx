@@ -638,7 +638,7 @@ function PnlSparkline({ tier }) {
 
 // ─── Strategy Card ────────────────────────────────────────────────────────────
 
-function StrategyCard({ strategy, viewAccent, index }) {
+function StrategyCard({ strategy, viewAccent, index, onExecute }) {
   const [expanded, setExpanded] = useState(false);
   const tier = TIER_META[strategy.tier] || TIER_META.medium;
 
@@ -796,7 +796,9 @@ function StrategyCard({ strategy, viewAccent, index }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function OptionsStrategySimulator({ spotPrice = 0, activeAsset = "BTC" }) {
+export function OptionsStrategySimulator({   underlying,
+  maxVisible = 5,
+  onStrategyChosen, }) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(1);
   const [selectedView, setSelectedView] = useState(null);
@@ -1188,6 +1190,10 @@ export function OptionsStrategySimulator({ spotPrice = 0, activeAsset = "BTC" })
                                   strategy={s}
                                   viewAccent={viewMeta?.accent}
                                   index={i}
+                                  onExecute={(s) => {
+    // This should eventually invoke onStrategyChosen passed into OptionsStrategySimulator
+    if (onStrategyChosen) onStrategyChosen(s);
+  }}
                                 />
                               ))}
                             </div>

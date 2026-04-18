@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
+import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -35,6 +36,13 @@ export function OptionsModule({activeOptionsTrades,
   const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
   const [whaleSource, setWhaleSource] = useState("derive");
   
+const [strategyTradeModal, setStrategyTradeModal] = useState(null);
+// shape: { asset, strategy, probability, description }
+const [strategyAmount, setStrategyAmount] = useState("");
+const [strategySubmitting, setStrategySubmitting] = useState(false);
+const [strategyError, setStrategyError] = useState("");
+
+
   const closeOptionTrade = (id) => {
     if (!setActiveOptionsTrades) return;
     setActiveOptionsTrades((prev) => prev.filter((t) => t.id !== id));
@@ -46,6 +54,135 @@ export function OptionsModule({activeOptionsTrades,
      return { currentMark: 0.85, pnl: 0.15 };
 
   };
+
+
+const handleStrategyChosen = (strategy) => {
+  // `strategy` can include whatever OptionsStrategySimulator returns:
+  // { name, probability, legs, notes, ... }
+  setStrategyError("");
+  setStrategyAmount("");
+  setStrategyTradeModal({
+    asset: activeAsset,
+    strategy,
+  });
+};
+
+const handleConfirmStrategyTrade = async () => {
+  if (!strategyTradeModal) return;
+  const notional = Number(strategyAmount);
+  if (!Number.isFinite(notional) || notional <= 0) {
+    setStrategyError("Enter a valid notional amount greater than zero.");
+    return;
+  }
+
+  setStrategySubmitting(true);
+  try {
+    const base = strategyTradeModal.strategy;
+    const id = `sim-${Date.now()}`;
+
+    const newTrade = {
+      id,
+      asset: strategyTradeModal.asset,
+      strategy: base.name || base.label || "Strategy",
+      status: "OPEN",
+      executedAt: new Date().toISOString(),
+      legs: base.legs || [],
+      netPremiumAtEntry: base.netPremiumAtEntry ?? 1.0,
+      qty: base.qty ?? 1,
+      totalNotional: notional,
+    };
+
+    // Push into active options trades
+    setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
+
+    // Optional: here you could POST to your backend /api/db/execute-strategy
+
+    setStrategyTradeModal(null);
+    setStrategyAmount("");
+    setStrategyError("");
+  } catch (err) {
+    console.error("Failed to execute strategy", err);
+    setStrategyError("Failed to execute strategy. Please try again.");
+  } finally {
+    setStrategySubmitting(false);
+  }
+};
+
+const StrategySimulatorCard = ({
+  activeAsset,
+  allAssets,
+  onChangeAsset,
+  onStrategyChosen,
+}) => {
+  const assetOptions = Array.isArray(allAssets) && allAssets.length
+    ? allAssets
+    : ["BTC", "ETH", "SOL", "HYPE"];
+
+  return (
+    <div
+      className="watchlist-panel glass"
+      style={{
+        marginBottom: 16,
+        padding: 16,
+        background: "rgba(15, 23, 42, 0.92)",
+        borderRadius: 12,
+        border: "1px solid rgba(15,23,42,0.9)",
+      }}
+    >
+      <div className="section-header" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2>Strategy Simulator</h2>
+        <div className="asset-dropdown-container">
+          <label
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              color: "#94a3b8",
+              marginRight: 8,
+            }}
+          >
+            Underlying
+          </label>
+          <select
+            value={activeAsset}
+            onChange={(e) => onChangeAsset(e.target.value)}
+            style={{
+              background: "rgba(15,23,42,0.9)",
+              color: "#e2e8f0",
+              borderRadius: 999,
+              border: "1px solid rgba(148,163,184,0.4)",
+              padding: "4px 10px",
+              fontSize: 12,
+            }}
+          >
+            {assetOptions.map((sym) => (
+              <option key={sym} value={sym}>
+                {sym}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Scrollable strategy list: show ~5 rows worth of height */}
+      <div
+        className="strategy-list"
+        style={{
+          maxHeight: 220, // about 5 rows
+          overflowY: "auto",
+          paddingRight: 4,
+        }}
+      >
+        <OptionsStrategySimulator
+          underlying={activeAsset}
+          maxVisible={5}
+          onStrategyChosen={onStrategyChosen}
+        />
+      </div>
+    </div>
+  );
+};
+
+
 
  useEffect(() => {
   setAllAssets(SUPPORTED_OPTIONS_ASSETS);
@@ -442,6 +579,12 @@ useEffect(() => {
           </table>
         </div>
       )}
+    <StrategySimulatorCard
+  activeAsset={activeAsset}
+  allAssets={allAssets}
+  onChangeAsset={setActiveAsset}
+  onStrategyChosen={handleStrategyChosen}
+/>
 
       {/* ... Option Chain Panel ... */}
     </div>
@@ -520,6 +663,31 @@ useEffect(() => {
                     <th>IV</th>
                   </tr>
                 </thead>
+                <tbody>
+      {strategies.slice(0, maxVisible).map((s) => (
+        <tr key={s.id || s.name}>
+          <td>{s.name}</td>
+          <td>{(s.probability * 100).toFixed(1)}%</td>
+          <td>{s.payoffLabel}</td>
+          <td>
+            <button
+              onClick={() => onStrategyChosen && onStrategyChosen(s)}
+              style={{
+                background: "rgba(56,189,248,0.16)",
+                color: "#7dd3fc",
+                borderRadius: 4,
+                border: "none",
+                padding: "4px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              Execute
+            </button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
                 <tbody>
                   {chain.map((row) => (
                     <tr key={row.strike}>
@@ -665,6 +833,139 @@ useEffect(() => {
         activeExpiry={activeExpiry}
       />
 
+    {strategyTradeModal && (
+  <div
+    className="connect-account-overlay"
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(15,23,42,0.85)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 50,
+    }}
+    onClick={() => !strategySubmitting && setStrategyTradeModal(null)}
+  >
+    <div
+      className="connect-account-window"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        width: 420,
+        maxWidth: "90vw",
+        background: "rgba(15,23,42,0.98)",
+        borderRadius: 16,
+        border: "1px solid rgba(51,65,85,0.8)",
+        padding: 20,
+        color: "#e2e8f0",
+      }}
+    >
+      <div
+        className="settings-window-header"
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}
+      >
+        <h2 style={{ fontSize: 16, fontWeight: 600 }}>
+          Execute Strategy
+        </h2>
+        <button
+          onClick={() => !strategySubmitting && setStrategyTradeModal(null)}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: "#94a3b8",
+            cursor: "pointer",
+            fontSize: 18,
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 12 }}>
+        {strategyTradeModal.strategy.name || "Selected strategy"} on{" "}
+        <strong>{strategyTradeModal.asset}</strong>.
+      </p>
+
+      <label
+        className="settings-field"
+        style={{ display: "block", marginBottom: 12, fontSize: 13 }}
+      >
+        <span style={{ display: "block", marginBottom: 4, color: "#cbd5e1" }}>
+          Notional amount (USD)
+        </span>
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={strategyAmount}
+          onChange={(e) => setStrategyAmount(e.target.value)}
+          style={{
+            width: "100%",
+            background: "#020617",
+            borderRadius: 8,
+            border: "1px solid rgba(51,65,85,0.9)",
+            padding: "8px 10px",
+            color: "#e2e8f0",
+            fontSize: 13,
+          }}
+          placeholder="e.g. 1000"
+        />
+      </label>
+
+      {strategyError && (
+        <p
+          style={{
+            color: "#f97373",
+            fontSize: 12,
+            marginBottom: 8,
+          }}
+        >
+          {strategyError}
+        </p>
+      )}
+
+      <div
+        className="settings-inline-actions"
+        style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}
+      >
+        <button
+          className="settings-secondary-btn"
+          onClick={() => !strategySubmitting && setStrategyTradeModal(null)}
+          style={{
+            borderRadius: 8,
+            border: "1px solid rgba(51,65,85,0.8)",
+            background: "transparent",
+            color: "#cbd5e1",
+            padding: "6px 10px",
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+          disabled={strategySubmitting}
+        >
+          Cancel
+        </button>
+        <button
+          className="settings-primary-btn"
+          onClick={handleConfirmStrategyTrade}
+          disabled={strategySubmitting}
+          style={{
+            borderRadius: 8,
+            border: "none",
+            background: "#22c55e",
+            color: "#020617",
+            padding: "6px 14px",
+            fontSize: 13,
+            fontWeight: 500,
+            cursor: "pointer",
+            opacity: strategySubmitting ? 0.8 : 1,
+          }}
+        >
+          {strategySubmitting ? "Placing…" : "Execute Trade"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }
