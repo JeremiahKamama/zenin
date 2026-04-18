@@ -2005,7 +2005,9 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
 
         {activeSection === "Options" && (
-          <OptionsModule activeOptionsTrades={activeOptionsTrades} />
+          <OptionsModule
+  activeOptionsTrades={activeOptionsTrades}
+  setActiveOptionsTrades={setActiveOptionsTrades} />
         )}
 
         {activeSection === "Predictions" && (

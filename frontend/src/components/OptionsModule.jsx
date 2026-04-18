@@ -8,7 +8,9 @@ const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
-export function OptionsModule() {
+export function OptionsModule({activeOptionsTrades,
+  setActiveOptionsTrades,
+}) {
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
   const [spotPrices, setSpotPrices] = useState({});
@@ -32,7 +34,11 @@ export function OptionsModule() {
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
   const [whaleSource, setWhaleSource] = useState("derive");
-
+  
+  const closeOptionTrade = (id) => {
+    if (!setActiveOptionsTrades) return;
+    setActiveOptionsTrades((prev) => prev.filter((t) => t.id !== id));
+  };
   const calculateOptionPnL = (trade) => {
      // Here you would match trade.legs with the live `chain` data fetched from Derive
      // PnL = (Current Mark Price - netPremiumAtEntry) * Qty * Direction
