@@ -539,6 +539,12 @@ useEffect(() => {
           </table>
         </div>
       )}
+      <StrategySimulatorCard
+        activeAsset={activeAsset}
+        allAssets={allAssets}
+        onChangeAsset={setActiveAsset}
+        onStrategyChosen={handleStrategyChosen}
+      />
 
       {/* ... Option Chain Panel ... */}
     </div>
