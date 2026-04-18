@@ -9,6 +9,7 @@ export function PortfolioModule({
   accountMetrics = null,
   calculatePortfolioValue,
   calculatePortfolioGain,
+  setActiveOptionsTrades,
   onRemove,
   onSellAsset,
   onSelectAsset

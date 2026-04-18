@@ -1974,6 +1974,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
                 accountMetrics={accountMetrics}
                 calculatePortfolioValue={calculatePortfolioValue}
                 calculatePortfolioGain={calculatePortfolioGain}
+                activeOptionsTrades={activeOptionsTrades}
+                setActiveOptionsTrades={setActiveOptionsTrades}
                 onRemove={removeFromPortfolio}
                 onSelectAsset={(asset) => {
                   const enriched = {
