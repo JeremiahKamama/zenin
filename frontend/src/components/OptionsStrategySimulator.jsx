@@ -855,7 +855,7 @@ const tierGroups = [
     tierKey: "speculative",
     strategies: availableStrategies.filter((s) => s.tier === "speculative"),
   },
-].filter((g) => g.availableStrategies.length > 0);
+].filter((g) => g.strategies.length > 0);
 
 
   const BTN_BASE = {
