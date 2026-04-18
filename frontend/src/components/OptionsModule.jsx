@@ -139,7 +139,6 @@ const StrategySimulatorCard = ({
           onStrategyChosen={handleStrategyChosen}
         />
       </div>
-    </div>
   );
 };
 
@@ -904,4 +903,4 @@ useEffect(() => {
 )}
     </div>
   );
-};
+}
