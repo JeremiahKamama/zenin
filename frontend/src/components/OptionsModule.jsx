@@ -112,70 +112,31 @@ const StrategySimulatorCard = ({
   activeAsset,
   allAssets,
   onChangeAsset,
-  onStrategyChosen,
+  onStrategyChosen={handleStrategyChosen},
 }) => {
   const assetOptions = Array.isArray(allAssets) && allAssets.length
     ? allAssets
     : ["BTC", "ETH", "SOL", "HYPE"];
-
+  
   return (
-    <div
-      className="watchlist-panel glass"
-      style={{
-        marginBottom: 16,
-        padding: 16,
-        background: "rgba(15, 23, 42, 0.92)",
-        borderRadius: 12,
-        border: "1px solid rgba(15,23,42,0.9)",
-      }}
-    >
-      <div className="section-header" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2>Strategy Simulator</h2>
-        <div className="asset-dropdown-container">
-          <label
-            style={{
-              fontSize: 11,
-              textTransform: "uppercase",
-              color: "#94a3b8",
-              marginRight: 8,
-            }}
-          >
-            Underlying
-          </label>
-          <select
-            value={activeAsset}
-            onChange={(e) => onChangeAsset(e.target.value)}
-            style={{
-              background: "rgba(15,23,42,0.9)",
-              color: "#e2e8f0",
-              borderRadius: 999,
-              border: "1px solid rgba(148,163,184,0.4)",
-              padding: "4px 10px",
-              fontSize: 12,
-            }}
-          >
-            {assetOptions.map((sym) => (
-              <option key={sym} value={sym}>
-                {sym}
-              </option>
-            ))}
-          </select>
-        </div>
+    <div className="strategy-card">
+      <div className="strategy-card-header">
+        <h3>Strategy simulator</h3>
+        <select
+          value={activeAsset}
+          onChange={(e) => onChangeAsset && onChangeAsset(e.target.value)}
+        >
+          {assetOptions.map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </select>
       </div>
-
-      {/* Scrollable strategy list: show ~5 rows worth of height */}
-      <div
-        className="strategy-list"
-        style={{
-          maxHeight: 220, // about 5 rows
-          overflowY: "auto",
-          paddingRight: 4,
-        }}
-      >
         <OptionsStrategySimulator
           underlying={activeAsset}
           maxVisible={5}
-          onStrategyChosen={onStrategyChosen}
+          onStrategyChosen={handleStrategyChosen}
         />
       </div>
     </div>
@@ -943,4 +904,4 @@ useEffect(() => {
 )}
     </div>
   );
-}
+};

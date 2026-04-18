@@ -796,12 +796,18 @@ function StrategyCard({ strategy, viewAccent, index, onExecute }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function OptionsStrategySimulator({
-underlying,
-maxVisible = 5,
-onStrategyChosen,
-}) {
-  const [open, setOpen] = useState(false);
+export default function OptionsStrategySimulator({ underlying, maxVisible = 5, onStrategyChosen }) {
+  // state + logic ...
+
+  return (
+    <div /* simulator container */>
+      {/* step 1: choose view */}
+      {/* step 2: choose horizon */}
+      {/* step 3: show strategies + details */}
+    </div>
+  );
+}{
+  const [open, setOpen] = useState(true);
   const [step, setStep] = useState(1);
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
