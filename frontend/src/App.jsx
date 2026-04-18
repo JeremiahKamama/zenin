@@ -6,6 +6,7 @@ import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
 import { OptionsModule } from "./components/OptionsModule";
 import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
+import { AnalyticsModule } from './components/AnalyticsModule';
 import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
@@ -1196,7 +1197,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Portfolio", "Watchlist", "Options", "Predictions", "Journal"];
+  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Options", "Predictions", "Journal"];
   const [activeSection, setActiveSection] = useState(() => {
     const saved = localStorage.getItem("zenin_active_section");
     return sections.includes(saved) ? saved : "Home";
@@ -1724,6 +1725,13 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         </svg>
       );
     }
+    if (section === "Analytics") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 17h16M4 12h16M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
     if (section === "Watchlist") {
       return (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1965,6 +1973,13 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
           </div>
         )}
+
+       {activeSection === 'Analytics' && (
+        <div className="view-container">
+          <AnalyticsModule backendUrl={BACKENDURL} />
+        </div>
+      )}
+
 
         {activeSection === "Options" && (
           <OptionsModule />

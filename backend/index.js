@@ -4154,6 +4154,32 @@ app.get("/api/db/watchlist/check/:symbol", async (req, res) => {
   }
 });
 
+app.get('/api/analytics/crypto', async (req, res) => {
+  // TODO: Wire to HL + Dune
+  res.json({
+    updatedAt: new Date().toISOString(),
+    perpMetrics: [],
+    kimchiPremium: null,
+    etfInflows: [],
+    perpVolumeByProtocol: [],
+    revenueByProtocol: [],
+    optionsVolumeByAsset: [],
+    optionsMaxPain: [],
+  });
+});
+
+app.get('/api/analytics/options', async (req, res) => {
+  // TODO: Wire to Binance / Deribit
+  res.json({
+    updatedAt: new Date().toISOString(),
+    totalOptionsOpenInterestUsd: null,
+    optionsVolumeByAsset: [],
+    optionsMaxPain: [],
+    volumeByExchangeRoute: [],
+  });
+});
+
+
 // ---------------------------------------------------------------------------
 // Atomic trade execution (portfolio + balance + trade journal)
 // ---------------------------------------------------------------------------
