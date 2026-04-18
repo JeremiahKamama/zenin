@@ -108,48 +108,50 @@ const handleConfirmStrategyTrade = async () => {
   }
 };
 
+// OptionsModule.jsx
+
 const StrategySimulatorCard = ({
   activeAsset,
   allAssets,
   onChangeAsset,
-  onStrategyChosen = handleStrategyChosen,
+  onStrategyChosen,
 }) => {
-  const assetOptions =
-    Array.isArray(allAssets) && allAssets.length
-      ? allAssets
-      : ["BTC", "ETH", "SOL", "HYPE"];
+  const assetOptions = Array.isArray(allAssets) && allAssets.length
+    ? allAssets
+    : ["BTC", "ETH", "SOL", "HYPE"];
 
   return (
-    <div className="options-trades-card glass">
-      <div className="card-header">
-        <div className="card-header-main">
-          <h3>Strategy simulator</h3>
-          <p className="card-subtitle">
+    <div className="watchlist-panel glass strategy-simulator-panel">
+      <div className="section-header">
+        <div className="header-left">
+          <h2>Strategy simulator</h2>
+          <span className="asset-count">
             Generate option structures from BTC / ETH / SOL / HYPE flow.
-          </p>
+          </span>
         </div>
-
-        <div className="card-header-controls">
-          <label className="asset-select-label">
+        <div className="asset-dropdown-container">
+          <label
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              color: "#94a3b8",
+              marginRight: 8,
+            }}
+          >
             Underlying
-            <select
-              value={activeAsset}
-              onChange={(e) =>
-                onChangeAsset && onChangeAsset(e.target.value)
-              }
-              className="asset-select"
-            >
-              {assetOptions.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
           </label>
+          <select value={activeAsset} onChange={(e) => onChangeAsset(e.target.value)}>
+            {assetOptions.map((sym) => (
+              <option key={sym} value={sym}>
+                {sym}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
-      <div className="card-body">
+      {/* Scrollable strategy list */}
+      <div className="strategy-simulator-list">
         <OptionsStrategySimulator
           underlying={activeAsset}
           maxVisible={5}
