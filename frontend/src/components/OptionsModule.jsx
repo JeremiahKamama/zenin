@@ -388,7 +388,6 @@ useEffect(() => {
           <div className="change positive">+14.2</div>
         </div>
       </div>
-    return (
     <div className="view-container options-terminal">
       {/* ... top metrics ... */}
 
@@ -446,7 +445,6 @@ useEffect(() => {
 
       {/* ... Option Chain Panel ... */}
     </div>
-  );
       <div className="watchlist-panel glass">
         <div className="section-header">
           <div className="header-left">
