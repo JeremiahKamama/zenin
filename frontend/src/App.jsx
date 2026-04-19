@@ -9,6 +9,7 @@ import { HomeModule } from "./components/HomeModule";
 import { AnalyticsModule } from './components/AnalyticsModule';
 import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
+import { TaxEstimator } from "./components/TaxEstimator";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
@@ -1330,13 +1331,26 @@ const handleOptionTradeClosed = async (tradeId) => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Options", "Predictions", "Journal"];
+  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
   const [activeSection, setActiveSection] = useState(() => {
     const saved = localStorage.getItem("zenin_active_section");
     return sections.includes(saved) ? saved : "Home";
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
+
+  const [themeMode, setThemeMode] = useState(() => localStorage.getItem("zenin_global_theme") || "dark");
+
+  useEffect(() => {
+    localStorage.setItem("zenin_global_theme", themeMode);
+    if (themeMode === "light") {
+      document.documentElement.classList.add("light-theme-active");
+    } else {
+      document.documentElement.classList.remove("light-theme-active");
+    }
+  }, [themeMode]);
+
+  const toggleTheme = () => setThemeMode((prev) => prev === "dark" ? "light" : "dark");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
@@ -1938,6 +1952,22 @@ const handleOptionTradeClosed = async (tradeId) => {
           ))}
         </nav>
 
+        <div style={{ padding: '0 16px', marginBottom: '8px', display: 'flex', justifyContent: isSidebarCollapsed ? 'center' : 'flex-start' }}>
+          <button 
+            onClick={toggleTheme}
+            style={{ 
+              background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)', 
+              color: '#e2e8f0', borderRadius: '8px', padding: '8px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '8px', width: isSidebarCollapsed ? 'auto' : '100%',
+              justifyContent: isSidebarCollapsed ? 'center' : 'flex-start'
+            }}
+            title={themeMode === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+          >
+            {themeMode === "dark" ? '☀️' : '🌙'}
+            {!isSidebarCollapsed && <span>{themeMode === "dark" ? "Light Mode" : "Dark Mode"}</span>}
+          </button>
+        </div>
+
         <button
           className="sidebar-footer settings-launcher"
           onClick={() => setIsSettingsOpen(true)}
@@ -2145,6 +2175,10 @@ const handleOptionTradeClosed = async (tradeId) => {
             balance={accountMetrics.liveAvailableBalance}
             accountEquity={accountMetrics.totalAccountEquity}
           />
+        )}
+
+        {activeSection === "Tax Estimator" && (
+          <TaxEstimator />
         )}
           </>
         )}

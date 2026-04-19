@@ -4485,11 +4485,19 @@ button {
   .indicator-controls-row {
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
   }
 
   .indicator-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .indicator-toolbar .modal-action-btn {
+    padding: 6px 12px;
+    font-size: 0.8rem;
   }
 
   .indicator-metric-summary {
@@ -5903,4 +5911,22 @@ button {
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+html.light-theme-active {
+  filter: invert(1) hue-rotate(180deg);
+  background: white !important;
+}
+
+html.light-theme-active img,
+html.light-theme-active video,
+html.light-theme-active .chart-container,
+html.light-theme-active iframe,
+html.light-theme-active svg {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+html.light-theme-active .positive,
+html.light-theme-active .negative {
+  filter: invert(1) hue-rotate(180deg);
 }

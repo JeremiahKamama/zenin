@@ -1096,6 +1096,9 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
       {finvizEntries.length > 0 && (
         <div className="company-page-finviz-card">
           <div className="company-page-briefing-head">
