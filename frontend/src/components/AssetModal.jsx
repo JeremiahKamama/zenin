@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import Chart from "react-apexcharts";
+import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
@@ -279,17 +279,24 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const getChartData = () => {
     if (chartType === "candlestick") {
       return [{
+        name: "Price",
+        type: "candlestick",
         data: history.map(h => ({
-          x: new Date(h.time),
-          y: [h.open, h.high, h.low, h.close]
+          time: Math.floor(new Date(h.time).getTime() / 1000),
+          open: Number(h.open),
+          high: Number(h.high),
+          low: Number(h.low),
+          close: Number(h.close)
         }))
       }];
     }
     return [{
       name: "Price",
+      type: "area",
+      color: "#38bdf8",
       data: history.map(h => ({
-        x: new Date(h.time),
-        y: h.close || h.price
+        time: Math.floor(new Date(h.time).getTime() / 1000),
+        value: Number(h.close || h.price)
       }))
     }];
   };
@@ -417,16 +424,44 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       <div className={`modal-content asset-modal-window ${shake ? "modal-shake" : ""}`} onClick={(e) => e.stopPropagation()}>
         {showConfetti && (
           <div className="trade-effect-layer confetti-layer">
-            {confettiPieces.map((idx) => (
-              <span key={`confetti-${idx}`} className="confetti-piece" style={{ "--i": idx }} />
-            ))}
+            {confettiPieces.map((idx) => {
+              const xValue = (idx % 13) * 7.5;
+              const delayValue = (idx % 7) * 0.03;
+              const hue = (idx * 27) % 360;
+              return (
+                <span 
+                  key={`confetti-${idx}`} 
+                  className="confetti-piece" 
+                  style={{ 
+                    "--x": `${xValue}%`,
+                    "--delay": `${delayValue}s`,
+                    "--bg": `hsl(${hue}, 90%, 60%)`
+                  }} 
+                />
+              );
+            })}
           </div>
         )}
         {showFireworks && (
           <div className="trade-effect-layer fireworks-layer">
-            {fireworkBursts.map((idx) => (
-              <span key={`fire-${idx}`} className="firework-burst" style={{ "--i": idx }} />
-            ))}
+            {fireworkBursts.map((idx) => {
+              const xValue = 18 + (idx % 6) * 13;
+              const yValue = 16 + (idx % 3) * 23;
+              const delayValue = (idx % 5) * 0.04;
+              const hue = (idx * 32) % 360;
+              return (
+                <span 
+                  key={`fire-${idx}`} 
+                  className="firework-burst" 
+                  style={{ 
+                    "--x": `${xValue}%`, 
+                    "--y": `${yValue}%`,
+                    "--delay": `${delayValue}s`,
+                    "--bg": `hsl(${hue}, 95%, 62%)`
+                  }} 
+                />
+              );
+            })}
           </div>
         )}
         <header className="modal-header">
@@ -471,7 +506,11 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
           <div className="chart-container">
             {history.length > 0 ? (
-              <Chart options={chartOptions} series={getChartData()} type={chartType} height={280} width="100%" />
+              <TradingViewChart 
+                series={getChartData()}
+                height={280}
+                width="100%"
+              />
             ) : loading ? (
               <div className="asset-modal-loader" aria-label="Loading chart data">
                 <span className="status-icon spinner">⟳</span>

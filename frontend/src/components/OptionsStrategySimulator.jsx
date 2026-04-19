@@ -226,29 +226,10 @@ export default function OptionsStrategySimulator({
   return (
     <div
       style={{
-        borderRadius: 12,
-        border: "1px solid rgba(148,163,184,0.15)",
-        background: "#000000",
-        padding: 16,
         color: "#e5e7eb",
-        fontSize: 13,
+        fontSize: "0.85rem",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          alignItems: "baseline",
-          marginBottom: 12,
-        }}
-      >
-        <h3 style={{ fontSize: 14, fontWeight: 600 }}>
-          Strategy simulator for {underlying}
-        </h3>
-        <span style={{ fontSize: 11, color: "#9ca3af" }}>
-          Express your view → pick a play
-        </span>
-      </div>
 
       {/* Step 1: View */}
       <div style={{ marginBottom: 12 }}>
@@ -256,19 +237,15 @@ export default function OptionsStrategySimulator({
           style={{
             display: "flex",
             justifyContent: "space-between",
-            marginBottom: 6,
+            marginBottom: 8,
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 500, color: "#e5e7eb" }}>
+          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             1. What is your view?
           </span>
           {selectedView && (
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>
-              Selected:{" "}
-              {
-                VIEWS.find((v) => v.id === selectedView)?.label ??
-                selectedView
-              }
+            <span style={{ fontSize: "0.75rem", color: "#38bdf8" }}>
+              Active: {VIEWS.find((v) => v.id === selectedView)?.label}
             </span>
           )}
         </div>
@@ -322,19 +299,15 @@ export default function OptionsStrategySimulator({
           style={{
             display: "flex",
             justifyContent: "space-between",
-            marginBottom: 6,
+            marginBottom: 8,
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 500, color: "#e5e7eb" }}>
+          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             2. Time horizon
           </span>
           {selectedHorizon && (
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>
-              Selected:{" "}
-              {
-                TIME_HORIZONS.find((h) => h.id === selectedHorizon)?.label ??
-                selectedHorizon
-              }
+            <span style={{ fontSize: "0.75rem", color: "#38bdf8" }}>
+              Active: {TIME_HORIZONS.find((h) => h.id === selectedHorizon)?.label}
             </span>
           )}
         </div>
@@ -392,15 +365,15 @@ export default function OptionsStrategySimulator({
           style={{
             display: "flex",
             justifyContent: "space-between",
-            marginBottom: 6,
+            marginBottom: 8,
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 500, color: "#e5e7eb" }}>
+          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             3. Suggested strategies
           </span>
           {selectedView && selectedHorizon && (
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>
-              Ranked by probability and payoff profile
+            <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+              Ranked by probability
             </span>
           )}
         </div>
@@ -432,26 +405,14 @@ export default function OptionsStrategySimulator({
             different horizon or view.
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 12,
-                minWidth: 480,
-              }}
-            >
+          <div className="table-scroll">
+            <table className="option-chain-table">
               <thead>
-                <tr
-                  style={{
-                    textAlign: "left",
-                    background: "rgba(15,23,42,0.9)",
-                  }}
-                >
-                  <th style={thStyle}>Strategy</th>
-                  <th style={thStyle}>Tier</th>
-                  <th style={thStyle}>Est. prob.</th>
-                  <th style={thStyle}>Payoff profile</th>
+                <tr>
+                  <th style={{ textAlign: "left" }}>Strategy</th>
+                  <th style={{ textAlign: "left" }}>Tier</th>
+                  <th style={{ textAlign: "left" }}>Est. prob.</th>
+                  <th style={{ textAlign: "left" }}>Payoff profile</th>
                 </tr>
               </thead>
               <tbody>
@@ -463,12 +424,9 @@ export default function OptionsStrategySimulator({
                       onClick={() =>
                         onStrategyChosen && onStrategyChosen(s)
                       }
-                      style={{
-                        cursor: "pointer",
-                        background: "rgba(15,23,42,0.85)",
-                      }}
+                      style={{ cursor: "pointer" }}
                     >
-                      <td style={tdStyle}>
+                      <td>
                         <div
                           style={{
                             display: "flex",
@@ -478,24 +436,24 @@ export default function OptionsStrategySimulator({
                         >
                           <span
                             style={{
-                              fontSize: 12,
-                              fontWeight: 500,
-                              color: "#e5e7eb",
+                              fontSize: "0.85rem",
+                              fontWeight: 600,
+                              color: "#e2e8f0",
                             }}
                           >
                             {s.name}
                           </span>
                           <span
                             style={{
-                              fontSize: 11,
-                              color: "#9ca3af",
+                              fontSize: "0.75rem",
+                              color: "#94a3b8",
                             }}
                           >
                             {s.summary}
                           </span>
                         </div>
                       </td>
-                      <td style={tdStyle}>
+                      <td>
                         <span
                           style={{
                             display: "inline-flex",
@@ -503,27 +461,22 @@ export default function OptionsStrategySimulator({
                             gap: 4,
                             borderRadius: 999,
                             padding: "2px 8px",
-                            fontSize: 11,
+                            fontSize: "0.7rem",
                             background: tier.bg,
                             color: tier.color,
                             border: `1px solid ${tier.border}`,
+                            textTransform: "uppercase",
+                            fontWeight: 700,
+                            letterSpacing: "0.02em"
                           }}
                         >
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: "999px",
-                              background: tier.color,
-                            }}
-                          />
                           {tier.label}
                         </span>
                       </td>
-                      <td style={tdStyle}>
-                        {(s.probability * 100).toFixed(1)}%
+                      <td style={{ fontWeight: 600, color: "#38bdf8" }}>
+                        {(s.probability * 100).toFixed(0)}%
                       </td>
-                      <td style={tdStyle}>{s.payoffLabel}</td>
+                      <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>
                     </tr>
                   );
                 })}

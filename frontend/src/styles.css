@@ -2654,16 +2654,15 @@ button {
 }
 
 .confetti-piece {
-  --x: calc((var(--i) % 13) * 7.5%);
   position: absolute;
   left: var(--x);
   top: -10px;
   width: 8px;
   height: 14px;
   border-radius: 2px;
-  background: hsl(calc((var(--i) * 27) % 360), 90%, 60%);
+  background: var(--bg);
   animation: confettiDrop 0.95s ease-out forwards;
-  animation-delay: calc((var(--i) % 7) * 0.03s);
+  animation-delay: var(--delay);
 }
 
 @keyframes confettiDrop {
@@ -2673,25 +2672,23 @@ button {
 }
 
 .firework-burst {
-  --x: calc(18% + (var(--i) % 6) * 13%);
-  --y: calc(16% + (var(--i) % 3) * 23%);
   position: absolute;
   left: var(--x);
   top: var(--y);
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: hsl(calc((var(--i) * 32) % 360), 95%, 62%);
+  background: var(--bg);
   box-shadow: 0 0 0 rgba(255,255,255,0.7);
   animation: fireworkPop 0.9s ease-out forwards;
-  animation-delay: calc((var(--i) % 5) * 0.04s);
+  animation-delay: var(--delay);
 }
 
 @keyframes fireworkPop {
   0% { transform: scale(0.5); opacity: 0; box-shadow: 0 0 0 rgba(255,255,255,0.7); }
   30% { opacity: 1; }
   100% {
-    transform: scale(1.2) translate(calc((var(--i) - 9) * 3px), calc((var(--i) - 9) * -2px));
+    transform: scale(1.2) translate(0, 0);
     opacity: 0;
     box-shadow: 0 0 28px rgba(255,255,255,0.45);
   }
@@ -4382,16 +4379,29 @@ button {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  padding: 0 32px 18px;
+  padding: 16px 24px;
+}
+
+.indicator-metric-controls {
+  padding: 0 24px 16px;
+  display: flex;
+  justify-content: center;
 }
 
 .indicator-metric-stat {
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.32);
-  padding: 12px 14px;
-  display: grid;
-  gap: 6px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.4) 0%, rgba(15, 23, 42, 0.1) 100%);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.indicator-metric-stat:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.25);
 }
 
 .indicator-metric-stat span {
@@ -5655,10 +5665,9 @@ button {
      and will be responsive via existing media queries */
 }
 
-/* Scroll area for the strategy list */
-.strategy-simulator-list {
-  max-height: 220px;
-  overflow-y: auto;
+/* Scroll area for the strategy list - now expanded */
+.strategy-simulator-list,
+.strategy-simulator-body {
   padding-right: 4px;
 }
 

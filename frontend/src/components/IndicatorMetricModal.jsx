@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import Chart from "react-apexcharts";
+import { TradingViewChart } from "./TradingViewChart";
 
 const HORIZONS = [
   { key: "1Y", label: "1Y", years: 1 },
@@ -27,7 +27,9 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
         const value = Number(point?.value);
         if (!Number.isFinite(ts) || !Number.isFinite(value)) return null;
         return {
-          x: ts,
+          time: Math.floor(ts / 1000),
+          value: value,
+          x: ts, // keep x/y for trend calculations below
           y: value,
           date: point?.date || new Date(ts).toISOString()
         };
@@ -57,62 +59,31 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
 
   const chartOptions = useMemo(
     () => ({
-      chart: {
-        type: "area",
-        toolbar: { show: false },
-        zoom: { enabled: false },
-        background: "transparent",
-        animations: { enabled: true }
+      layout: {
+        background: { type: 'solid', color: 'transparent' },
+        textColor: '#94a3b8',
       },
-      theme: { mode: "dark" },
+      rightPriceScale: {
+        borderVisible: false,
+      },
+      timeScale: {
+        borderVisible: false,
+      },
       grid: {
-        borderColor: "rgba(148, 163, 184, 0.12)",
-        strokeDashArray: 4
-      },
-      dataLabels: { enabled: false },
-      stroke: {
-        curve: "smooth",
-        width: 2,
-        colors: ["#38bdf8"]
-      },
-      fill: {
-        type: "gradient",
-        gradient: {
-          shadeIntensity: 0.25,
-          opacityFrom: 0.32,
-          opacityTo: 0.02,
-          stops: [0, 95, 100]
-        },
-        colors: ["#38bdf8"]
-      },
-      xaxis: {
-        type: "datetime",
-        labels: {
-          style: { colors: "#94a3b8", fontSize: "11px" }
-        }
-      },
-      yaxis: {
-        labels: {
-          style: { colors: "#94a3b8", fontSize: "11px" },
-          formatter: (value) => formatMetricValue(value, metric?.unit)
-        }
-      },
-      tooltip: {
-        theme: "dark",
-        x: { format: "dd MMM yyyy" },
-        y: {
-          formatter: (value) => formatMetricValue(value, metric?.unit)
-        }
+        vertLines: { color: 'rgba(148, 163, 184, 0.08)' },
+        horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
       }
     }),
-    [metric]
+    []
   );
 
   const chartSeries = useMemo(
     () => [
       {
         name: metric?.label || "Indicator",
-        data: filteredSeries
+        data: filteredSeries,
+        type: "area",
+        color: "#38bdf8"
       }
     ],
     [filteredSeries, metric]
@@ -155,7 +126,7 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
             </div>
           </div>
 
-          <div className="interval-toggle-bottom" style={{ marginTop: 0, marginBottom: "12px" }}>
+          <div className="indicator-metric-controls">
             <div className="interval-toggle">
               {HORIZONS.map((entry) => (
                 <button
@@ -171,7 +142,7 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
 
           <div className="chart-container">
             {filteredSeries.length > 0 ? (
-              <Chart options={chartOptions} series={chartSeries} type="area" height="400" width="100%" />
+              <TradingViewChart options={chartOptions} series={chartSeries} height={400} width="100%" />
             ) : (
               <div className="chart-no-data">Waiting for {String(metric?.label || "indicator")} history...</div>
             )}

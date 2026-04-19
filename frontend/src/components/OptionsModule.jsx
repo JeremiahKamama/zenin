@@ -124,15 +124,15 @@ const StrategySimulatorCard = ({
     <div className="watchlist-panel glass strategy-simulator-panel">
       <div className="section-header">
         <div className="header-left">
-          <h2>Strategy simulator</h2>
+          <h2>Strategy simulator for {activeAsset}</h2>
           <span className="asset-count">
-            Generate option structures from BTC / ETH / SOL / HYPE flow.
+            Express your view → pick a play. Generated from {activeAsset} flow.
           </span>
         </div>
         <div className="asset-dropdown-container">
           <label
             style={{
-              fontSize: 11,
+              fontSize: "0.75rem",
               textTransform: "uppercase",
               color: "#94a3b8",
               marginRight: 8,
@@ -150,11 +150,10 @@ const StrategySimulatorCard = ({
         </div>
       </div>
 
-      {/* Scrollable strategy list */}
-      <div className="strategy-simulator-list">
+      <div className="strategy-simulator-body">
         <OptionsStrategySimulator
           underlying={activeAsset}
-          maxVisible={5}
+          maxVisible={20}
           onStrategyChosen={onStrategyChosen}
         />
       </div>

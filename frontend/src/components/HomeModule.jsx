@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import Chart from "react-apexcharts";
+import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -275,7 +275,10 @@ export function HomeModule({
         anchorIdx += 1;
       }
       const equity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
-      return [Math.round(t), Number(toSeriesValue(equity).toFixed(2))];
+      return {
+        time: Math.floor(t / 1000),
+        value: Number(toSeriesValue(equity).toFixed(2))
+      };
     });
   }, [chartInterval, chartMode, tradeTimeline, totalAccountEquity]);
   const isProfitable = totalAccountEquity >= initialBalance;
@@ -356,10 +359,13 @@ export function HomeModule({
             ))}
           </div>
         </div>
-        <Chart
-          options={chartOptions}
-          series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", data: chartData }]}
-          type="area"
+        <TradingViewChart 
+          series={[{ 
+            name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", 
+            data: chartData,
+            type: "area",
+            color: "#38bdf8"
+          }]}
           height={220}
           width="100%"
         />
