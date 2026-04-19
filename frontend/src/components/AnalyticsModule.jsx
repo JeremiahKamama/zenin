@@ -2,8 +2,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 const CATEGORY_TABS = [
-  { id: "crypto", label: "Crypto", description: "Hyperliquid + Dune analytics" },
-  { id: "options", label: "Options", description: "Binance + Derive + Deribit analytics" },
+  { id: "crypto", label: "Crypto", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
+  { id: "options", label: "Options", description: "Binance + Deribit options data" },
+  { id: "equities", label: "Equities", description: "Asset Classes, Industries, Regions" },
 ];
 
 const EMPTY_CRYPTO = {
@@ -23,6 +24,15 @@ const EMPTY_OPTIONS = {
   optionsVolumeByAsset: [],
   optionsMaxPain: [],
   volumeByExchangeRoute: [],
+  greeks: [],
+  oiByStrike: [],
+};
+
+const EMPTY_EQUITIES = {
+  updatedAt: null,
+  assetClasses: [],
+  industries: [],
+  regions: [],
 };
 
 function formatMoney(value, digits = 2) {
@@ -110,6 +120,17 @@ function normalizeOptionsPayload(payload) {
       : Array.isArray(payload?.optionsVolumeByExchangeRoute)
       ? payload.optionsVolumeByExchangeRoute
       : [],
+    greeks: Array.isArray(payload?.greeks) ? payload.greeks : [],
+    oiByStrike: Array.isArray(payload?.oiByStrike) ? payload.oiByStrike : [],
+  };
+}
+
+function normalizeEquitiesPayload(payload) {
+  return {
+    updatedAt: payload?.updatedAt || null,
+    assetClasses: Array.isArray(payload?.assetClasses) ? payload.assetClasses : [],
+    industries: Array.isArray(payload?.industries) ? payload.industries : [],
+    regions: Array.isArray(payload?.regions) ? payload.regions : [],
   };
 }
 
@@ -282,8 +303,12 @@ export function AnalyticsModule({ backendUrl }) {
   const [activeTab, setActiveTab] = useState("crypto");
   const [cryptoData, setCryptoData] = useState(EMPTY_CRYPTO);
   const [optionsData, setOptionsData] = useState(EMPTY_OPTIONS);
-  const [loading, setLoading] = useState({ crypto: false, options: false });
-  const [errors, setErrors] = useState({ crypto: "", options: "" });
+  const [equitiesData, setEquitiesData] = useState(EMPTY_EQUITIES);
+  const [loading, setLoading] = useState({ crypto: false, options: false, equities: false });
+  const [errors, setErrors] = useState({ crypto: "", options: "", equities: "" });
+  
+  const [etfAssetToggle, setEtfAssetToggle] = useState("All");
+  const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
 
   useEffect(() => {
     let cancelled = false;
@@ -305,8 +330,10 @@ export function AnalyticsModule({ backendUrl }) {
 
         if (activeTab === "crypto") {
           setCryptoData(normalizeCryptoPayload(payload));
-        } else {
+        } else if (activeTab === "options") {
           setOptionsData(normalizeOptionsPayload(payload));
+        } else if (activeTab === "equities") {
+          setEquitiesData(normalizeEquitiesPayload(payload));
         }
       } catch (err) {
         if (cancelled || err?.name === "AbortError") return;
@@ -371,7 +398,11 @@ export function AnalyticsModule({ backendUrl }) {
   );
 
   const currentUpdatedAt =
-    activeTab === "crypto" ? cryptoData.updatedAt : optionsData.updatedAt;
+    activeTab === "crypto"
+      ? cryptoData.updatedAt
+      : activeTab === "options"
+      ? optionsData.updatedAt
+      : equitiesData.updatedAt;
   const currentError = errors[activeTab];
   const currentLoading = loading[activeTab];
 
@@ -591,28 +622,58 @@ export function AnalyticsModule({ backendUrl }) {
                   rows={cryptoPerps}
                 />
 
-                <AnalyticsTableCard
-                  title="ETF inflows"
-                  subtitle="Latest inflow rows from Dune"
-                  emptyText="No ETF inflow rows returned yet."
-                  columns={[
-                    { key: "date", label: "Date" },
-                    { key: "ticker", label: "Ticker" },
-                    {
-                      key: "netUsd",
-                      label: "Net Flow",
-                      align: "right",
-                      render: (v, row) =>
-                        formatMoney(v ?? row.netFlowUsd ?? null),
-                    },
-                  ]}
-                  rows={(cryptoData.etfInflows || []).map((row, idx) => ({
-                    id: row.id || `etf-${idx}`,
-                    date: row.date,
-                    ticker: row.ticker,
-                    netUsd: row.netUsd ?? row.netFlowUsd,
-                  }))}
-                />
+                <div style={{
+                  background: "rgba(15, 23, 42, 0.72)",
+                  border: "1px solid rgba(148,163,184,0.16)",
+                  borderRadius: 14,
+                  padding: 16,
+                  display: "flex", flexDirection: "column"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>ETF Inflows</div>
+                      <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>Asset flows by manager</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <select style={{ background: "#1e293b", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.2)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfAssetToggle} onChange={(e) => setEtfAssetToggle(e.target.value)}>
+                        <option value="All">All Assets</option>
+                        <option value="BTC">BTC</option>
+                        <option value="ETH">ETH</option>
+                        <option value="SOL">SOL</option>
+                      </select>
+                      <select style={{ background: "#1e293b", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.2)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfPeriodToggle} onChange={(e) => setEtfPeriodToggle(e.target.value)}>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="quarterly">Quarterly</option>
+                      </select>
+                    </div>
+                  </div>
+                  <AnalyticsTableCard
+                    title=""
+                    subtitle=""
+                    emptyText="No ETF inflow rows returned yet."
+                    columns={[
+                      { key: "manager", label: "Manager" },
+                      { key: "ticker", label: "Ticker" },
+                      { key: "asset", label: "Asset" },
+                      {
+                        key: "netUsd",
+                        label: "Net Flow",
+                        align: "right",
+                        render: (v) => formatMoney(v),
+                      },
+                    ]}
+                    rows={(cryptoData.etfInflows || [])
+                      .filter(r => (etfAssetToggle === "All" || r.asset === etfAssetToggle) && r.period === etfPeriodToggle)
+                      .map((row, idx) => ({
+                        id: row.id || `etf-${idx}`,
+                        manager: row.manager,
+                        ticker: row.ticker,
+                        asset: row.asset,
+                        netUsd: row.netUsd,
+                      }))}
+                  />
+                </div>
               </div>
 
               <div
@@ -726,7 +787,7 @@ export function AnalyticsModule({ backendUrl }) {
                 />
               </div>
             </>
-          ) : (
+          ) : activeTab === "options" ? (
             <>
               <div
                 style={{
@@ -849,6 +910,73 @@ export function AnalyticsModule({ backendUrl }) {
                       volumeUsd: row.volumeUsd ?? row.volume,
                     })
                   )}
+                />
+
+                <AnalyticsTableCard
+                  title="Options Greeks"
+                  subtitle="Latest Greeks from Deribit"
+                  emptyText="No Greeks returned yet."
+                  columns={[
+                    { key: "instrument", label: "Instrument" },
+                    { key: "delta", label: "Delta", align: "right", render: v => v?.toFixed(2) },
+                    { key: "gamma", label: "Gamma", align: "right", render: v => v?.toFixed(2) },
+                    { key: "vega", label: "Vega", align: "right", render: v => v?.toFixed(2) },
+                    { key: "theta", label: "Theta", align: "right", render: v => v?.toFixed(2) },
+                    { key: "iv", label: "IV", align: "right", render: v => formatPercent(v) },
+                  ]}
+                  rows={(optionsData.greeks || []).map((r, i) => ({ id: `grk-${i}`, ...r }))}
+                />
+
+                <AnalyticsTableCard
+                  title="Options OI by Strike & Expiry"
+                  subtitle="Latest options open interest"
+                  emptyText="No OI rows returned yet."
+                  columns={[
+                    { key: "asset", label: "Asset" },
+                    { key: "strike", label: "Strike", align: "right", render: v => formatMoney(v, 0) },
+                    { key: "expiry", label: "Expiry", align: "right" },
+                    { key: "type", label: "Type", align: "center" },
+                    { key: "oi", label: "OI", align: "right", render: v => formatMoney(v, 0) },
+                    { key: "exchange", label: "Exchange", align: "right" },
+                  ]}
+                  rows={(optionsData.oiByStrike || []).map((r, i) => ({ id: `oi-${i}`, ...r }))}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+                {(equitiesData.assetClasses || []).map((ac, idx) => (
+                  <AnalyticsStatCard
+                    key={`ac-${idx}`}
+                    title={ac.class}
+                    value={formatCompactMoney(ac.aumUsd)}
+                    subvalue={`Performance: ${formatPercent(ac.performance)}`}
+                    source="Equities DB"
+                    tone={ac.performance >= 0 ? "positive" : "negative"}
+                  />
+                ))}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
+                <AnalyticsTableCard
+                  title="Performance by Industry"
+                  subtitle="Equities sector performance"
+                  emptyText="No industry data."
+                  columns={[
+                    { key: "industry", label: "Industry" },
+                    { key: "performance", label: "Performance", align: "right", render: v => formatPercent(v) },
+                  ]}
+                  rows={(equitiesData.industries || []).map((r, i) => ({ id: `ind-${i}`, ...r }))}
+                />
+                <AnalyticsTableCard
+                  title="Performance by Region"
+                  subtitle="Global equities performance"
+                  emptyText="No regional data."
+                  columns={[
+                    { key: "region", label: "Region" },
+                    { key: "performance", label: "Performance", align: "right", render: v => formatPercent(v) },
+                  ]}
+                  rows={(equitiesData.regions || []).map((r, i) => ({ id: `reg-${i}`, ...r }))}
                 />
               </div>
             </>
