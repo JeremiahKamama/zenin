@@ -199,7 +199,7 @@ function validatePortfolioHolding(req, res, next) {
   if (typeof quantity !== "number" || !isFinite(quantity)) {
     return res.status(400).json({ error: "Invalid quantity" });
   }
-  if (!["stock", "crypto", "bond", "commodity", "etf"].includes((type || "").toLowerCase())) {
+  if (!["stock", "crypto", "bond", "commodity", "etf", "options"].includes((type || "").toLowerCase())) {
     return res.status(400).json({ error: "Invalid type" });
   }
   if (!["buy", "sell"].includes(orderType)) {

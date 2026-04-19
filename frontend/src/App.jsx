@@ -1952,19 +1952,18 @@ const handleOptionTradeClosed = async (tradeId) => {
           ))}
         </nav>
 
-        <div style={{ padding: '0 16px', marginBottom: '8px', display: 'flex', justifyContent: isSidebarCollapsed ? 'center' : 'flex-start' }}>
+        <div style={{ padding: '0 16px', marginBottom: '8px', display: 'flex', justifyContent: 'center' }}>
           <button 
             onClick={toggleTheme}
             style={{ 
               background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)', 
-              color: '#e2e8f0', borderRadius: '8px', padding: '8px', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '8px', width: isSidebarCollapsed ? 'auto' : '100%',
-              justifyContent: isSidebarCollapsed ? 'center' : 'flex-start'
+              color: '#e2e8f0', borderRadius: '50%', width: '40px', height: '40px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem',
+              transition: 'all 0.2s'
             }}
             title={themeMode === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
           >
             {themeMode === "dark" ? '☀️' : '🌙'}
-            {!isSidebarCollapsed && <span>{themeMode === "dark" ? "Light Mode" : "Dark Mode"}</span>}
           </button>
         </div>
 

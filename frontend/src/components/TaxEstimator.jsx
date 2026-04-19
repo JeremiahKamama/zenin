@@ -12,16 +12,18 @@ const TAX_RULES = {
   Nigeria: { name: 'Nigeria', currency: 'NGN', logic: 'Capital Gains Tax: 10%' }
 };
 
-const ASSET_CLASSES = ['Equities', 'Bonds', 'Special Funds', 'MMFs'];
+const ASSET_CLASSES = ['Equities', 'Bonds', 'Special Funds', 'MMFs', 'Crypto'];
 
 export function TaxEstimator() {
   const [jurisdictions, setJurisdictions] = useState(['USA']);
-  const [taxYear, setTaxYear] = useState('2024');
+  const [jurisdictionSearch, setJurisdictionSearch] = useState('');
+  const [taxYear, setTaxYear] = useState('2025');
   const [gains, setGains] = useState({
     Equities: { shortTerm: 0, longTerm: 0 },
     Bonds: { standard: 0 },
     'Special Funds': { standard: 0 },
-    MMFs: { standard: 0 }
+    MMFs: { standard: 0 },
+    Crypto: { shortTerm: 0, longTerm: 0 }
   });
   const [results, setResults] = useState([]);
   const [savedEstimates, setSavedEstimates] = useState([]);
@@ -66,36 +68,40 @@ export function TaxEstimator() {
       if (j === 'USA') {
         details['Equities STCG'] = calcGain(gains.Equities.shortTerm, 0.37);
         details['Equities LTCG'] = calcGain(gains.Equities.longTerm, 0.15);
+        details['Crypto STCG'] = calcGain(gains.Crypto.shortTerm, 0.37);
+        details['Crypto LTCG'] = calcGain(gains.Crypto.longTerm, 0.15);
         details['Bonds'] = calcGain(gains.Bonds.standard, 0.37);
         details['Special Funds'] = calcGain(gains['Special Funds'].standard, 0.15);
         details['MMFs'] = calcGain(gains.MMFs.standard, 0.37);
       } else if (j === 'UK') {
         const rate = 0.24; 
         details['Equities Total'] = calcGain(gains.Equities.shortTerm + gains.Equities.longTerm, rate);
+        details['Crypto Total'] = calcGain(gains.Crypto.shortTerm + gains.Crypto.longTerm, rate);
         details['Bonds'] = calcGain(gains.Bonds.standard, rate);
         details['Special Funds/MMFs'] = calcGain(gains['Special Funds'].standard + gains.MMFs.standard, rate);
       } else if (j === 'India') {
         details['Equities STCG'] = calcGain(gains.Equities.shortTerm, 0.20);
         details['Equities LTCG'] = calcGain(Math.max(0, gains.Equities.longTerm - 125000), 0.125); 
+        details['Crypto Fixed'] = calcGain(gains.Crypto.shortTerm + gains.Crypto.longTerm, 0.30);
         details['Bonds'] = calcGain(gains.Bonds.standard, 0.30); 
         details['Fixed Income / MMFs'] = calcGain(gains['Special Funds'].standard + gains.MMFs.standard, 0.30);
       } else if (j === 'UAE' || j === 'SaudiArabia') {
         details['Total Tax Liability'] = 0; 
       } else if (j === 'SouthAfrica') {
         const effectiveRate = 0.40 * 0.45; 
-        const totalUnexemptGains = Math.max(0, (gains.Equities.shortTerm + gains.Equities.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard) - 40000);
+        const totalUnexemptGains = Math.max(0, (gains.Equities.shortTerm + gains.Equities.longTerm + gains.Crypto.shortTerm + gains.Crypto.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard) - 40000);
         details['Aggregated CGT'] = totalUnexemptGains * effectiveRate;
       } else if (j === 'Germany') {
         const rate = 0.26375;
-        const totalGains = gains.Equities.shortTerm + gains.Equities.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard;
+        const totalGains = gains.Equities.shortTerm + gains.Equities.longTerm + gains.Crypto.shortTerm + gains.Crypto.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard;
         details['Abgeltungsteuer (Flat)'] = calcGain(totalGains, rate);
       } else if (j === 'Brazil') {
         const rate = 0.15;
-        const totalGains = gains.Equities.shortTerm + gains.Equities.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard;
+        const totalGains = gains.Equities.shortTerm + gains.Equities.longTerm + gains.Crypto.shortTerm + gains.Crypto.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard;
         details['Flat CGT (Base)'] = calcGain(totalGains, rate);
       } else if (j === 'Nigeria') {
         const rate = 0.10;
-        const totalGains = gains.Equities.shortTerm + gains.Equities.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard;
+        const totalGains = gains.Equities.shortTerm + gains.Equities.longTerm + gains.Crypto.shortTerm + gains.Crypto.longTerm + gains.Bonds.standard + gains['Special Funds'].standard + gains.MMFs.standard;
         details['Capital Gains Fixed'] = calcGain(totalGains, rate);
       }
 
@@ -159,7 +165,8 @@ export function TaxEstimator() {
         Equities: { shortTerm: Math.floor(Math.random() * 50000), longTerm: Math.floor(Math.random() * 200000) },
         Bonds: { standard: Math.floor(Math.random() * 15000) },
         'Special Funds': { standard: Math.floor(Math.random() * 8000) },
-        MMFs: { standard: Math.floor(Math.random() * 5000) }
+        MMFs: { standard: Math.floor(Math.random() * 5000) },
+        Crypto: { shortTerm: Math.floor(Math.random() * 10000), longTerm: Math.floor(Math.random() * 60000) }
       });
       alert(`Imported ${file.name} successfully. Gains have been mapped automatically.`);
     }, 600);
@@ -181,8 +188,17 @@ export function TaxEstimator() {
           
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600, fontSize: '0.9rem' }}>Jurisdictions (Select Multiple)</label>
+            <input 
+              type="text" 
+              placeholder="Search jurisdictions..." 
+              value={jurisdictionSearch} 
+              onChange={(e) => setJurisdictionSearch(e.target.value)}
+              style={{ width: '100%', padding: '10px', borderRadius: '8px', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(148,163,184,0.3)', color: '#fff', marginBottom: '12px' }}
+            />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-              {Object.entries(TAX_RULES).map(([key, info]) => (
+              {Object.entries(TAX_RULES)
+                .filter(([_, info]) => info.name.toLowerCase().includes(jurisdictionSearch.toLowerCase()) || _.toLowerCase().includes(jurisdictionSearch.toLowerCase()))
+                .map(([key, info]) => (
                 <button
                   key={key}
                   onClick={() => toggleJurisdiction(key)}
@@ -212,6 +228,7 @@ export function TaxEstimator() {
               onChange={(e) => setTaxYear(e.target.value)}
               style={{ width: '100%', padding: '10px', borderRadius: '8px', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(148,163,184,0.3)', color: '#fff' }}
             >
+              <option value="2025">2025 (Latest)</option>
               <option value="2024">2024</option>
               <option value="2023">2023</option>
             </select>
@@ -264,12 +281,26 @@ export function TaxEstimator() {
                 </div>
               </div>
 
-               <div style={{ background: 'rgba(15,23,42,0.4)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(148,163,184,0.1)', gridColumn: '1 / -1' }}>
-                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Special Funds & Structured Assets</h4>
-                <div>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Total Recognized Gains</label>
-                   <input type="number" value={gains['Special Funds'].standard} onChange={(e) => handleGainChange('Special Funds', 'standard', e.target.value)} style={{ width: '100%', background: 'transparent', border: '1px solid #475569', borderRadius: '4px', color: '#fff', padding: '6px' }} />
+              <div style={{ background: 'rgba(15,23,42,0.4)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Digital Assets / Crypto</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Short Term (&lt; 1 Year)</label>
+                    <input type="number" value={gains.Crypto.shortTerm} onChange={(e) => handleGainChange('Crypto', 'shortTerm', e.target.value)} style={{ width: '100%', background: 'transparent', border: '1px solid #475569', borderRadius: '4px', color: '#fff', padding: '6px' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Long Term (&gt; 1 Year)</label>
+                    <input type="number" value={gains.Crypto.longTerm} onChange={(e) => handleGainChange('Crypto', 'longTerm', e.target.value)} style={{ width: '100%', background: 'transparent', border: '1px solid #475569', borderRadius: '4px', color: '#fff', padding: '6px' }} />
+                  </div>
                 </div>
+              </div>
+            </div>
+
+            <div style={{ background: 'rgba(15,23,42,0.4)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(148,163,184,0.1)', marginTop: '16px' }}>
+              <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Special Funds & Structured Assets</h4>
+              <div>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Total Recognized Gains</label>
+                 <input type="number" value={gains['Special Funds'].standard} onChange={(e) => handleGainChange('Special Funds', 'standard', e.target.value)} style={{ width: '100%', background: 'transparent', border: '1px solid #475569', borderRadius: '4px', color: '#fff', padding: '6px' }} />
               </div>
             </div>
 

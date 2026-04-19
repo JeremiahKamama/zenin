@@ -162,7 +162,7 @@ const StrategySimulatorCard = ({
     <div className="watchlist-panel glass strategy-simulator-panel">
       <div className="section-header">
         <div className="header-left">
-          <h2>Strategy simulator for {activeAsset}</h2>
+          <h2>Strategy Simulator for {activeAsset}</h2>
           <span className="asset-count">
             Express your view → pick a play. Generated from {activeAsset} flow.
           </span>

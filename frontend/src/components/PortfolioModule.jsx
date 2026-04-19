@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { TradingViewChart } from "./TradingViewChart";
+import ReactApexChart from "react-apexcharts";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 
 export function PortfolioModule({
@@ -113,10 +113,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
         anchorIdx += 1;
       }
       const equity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
-      return {
-        time: Math.floor(t / 1000),
-        value: Number(toSeriesValue(equity).toFixed(2))
-      };
+      return [
+        t, // timestamp in ms for ApexCharts datetime axis
+        Number(toSeriesValue(equity).toFixed(2))
+      ];
     });
   }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity]);
   const yFormatter = (val) => {
@@ -156,7 +156,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const pieOptions = {
     chart: { type: "donut", background: "transparent" },
     theme: { mode: "dark" },
-    labels: themeLabels,
+    labels: categoryLabels,
     stroke: { show: false },
     legend: { position: "right", fontSize: "11px", labels: { colors: "#94a3b8" } },
     dataLabels: { enabled: true, style: { fontSize: "11px" } },
@@ -400,15 +400,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
               }}>{label}</button>
             ))}
           </div>
-          <TradingViewChart 
-            series={[{ 
-              name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", 
-              data: chartData,
-              type: "area",
-              color: chartColor
-            }]}
+          <ReactApexChart
+            type="area"
             height={200}
-            width="100%"
+            series={[{ name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", data: chartData }]}
+            options={chartOptions}
+            key={`${chartMode}-${chartInterval}`}
           />
           <div style={{ display: "flex", gap: "6px", marginTop: "8px", justifyContent: "center", flexWrap: "wrap" }}>
             {INTERVALS.map(int => (
