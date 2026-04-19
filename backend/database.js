@@ -115,6 +115,8 @@ function mapPortfolioRow(row) {
     type: row.type,
     marketType: row.marketType || row.market_type || "spot",
     orderType: row.orderType || row.order_type || "buy",
+    strategyName: row.strategyName || row.strategy_name || null,
+    legsJson: parseJsonPayload(row.legsJson || row.legs_json),
     date_added: toIsoString(row.date_added)
   };
 }
@@ -157,7 +159,9 @@ function mapTradeRow(row) {
     accountEquityAfter: row.accountEquityAfter == null ? null : toNumber(row.accountEquityAfter),
     account_equity_after: row.accountEquityAfter == null ? null : toNumber(row.accountEquityAfter),
     positionAfter: row.positionAfter == null ? null : toNumber(row.positionAfter),
-    position_after: row.positionAfter == null ? null : toNumber(row.positionAfter)
+    position_after: row.positionAfter == null ? null : toNumber(row.positionAfter),
+    strategyName: row.strategyName || row.strategy_name || null,
+    legsJson: parseJsonPayload(row.legsJson || row.legs_json)
   };
 }
 
@@ -187,14 +191,37 @@ async function initializeDatabase() {
         type TEXT NOT NULL,
         market_type TEXT NOT NULL,
         order_type TEXT NOT NULL,
+        strategy_name TEXT,
+        legs_json JSONB,
         date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE(symbol, market_type)
+        UNIQUE(symbol, market_type, strategy_name)
       );
     `);
 
     await client.query(`
       ALTER TABLE portfolio_holdings
       ADD COLUMN IF NOT EXISTS entry_price DOUBLE PRECISION;
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
+      ADD COLUMN IF NOT EXISTS strategy_name TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
+      ADD COLUMN IF NOT EXISTS legs_json JSONB;
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
+      DROP CONSTRAINT IF EXISTS portfolio_holdings_symbol_market_type_key;
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
+      ADD CONSTRAINT portfolio_holdings_symbol_market_type_strategy_name_key 
+      UNIQUE (symbol, market_type, strategy_name);
     `);
 
     await client.query(`
@@ -297,8 +324,20 @@ async function initializeDatabase() {
         balance_after DOUBLE PRECISION,
         portfolio_value_after DOUBLE PRECISION,
         account_equity_after DOUBLE PRECISION,
-        position_after DOUBLE PRECISION
+        position_after DOUBLE PRECISION,
+        strategy_name TEXT,
+        legs_json JSONB
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE trade_executions
+      ADD COLUMN IF NOT EXISTS strategy_name TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE trade_executions
+      ADD COLUMN IF NOT EXISTS legs_json JSONB;
     `);
 
     const countResult = await client.query("SELECT COUNT(*)::int AS count FROM watchlist_assets");
@@ -515,6 +554,8 @@ const portfolio = {
         type,
         market_type AS "marketType",
         order_type AS "orderType",
+        strategy_name AS "strategyName",
+        legs_json AS "legsJson",
         date_added
       FROM portfolio_holdings
       WHERE quantity > $1
@@ -532,6 +573,8 @@ const portfolio = {
     const price = toNumber(holding.price);
     const dateAdded = holding.date_added || new Date().toISOString();
     const name = String(holding.name || symbol || "Unknown");
+    const strategyName = holding.strategyName || holding.strategy_name || null;
+    const legsJson = parseJsonPayload(holding.legsJson || holding.legs_json);
     const isSell = orderType === "sell";
 
     const client = await pool.connect();
@@ -552,9 +595,9 @@ const portfolio = {
           order_type AS "orderType",
           date_added
         FROM portfolio_holdings
-        WHERE symbol = $1 AND market_type = $2
+        WHERE symbol = $1 AND market_type = $2 AND (strategy_name IS NOT DISTINCT FROM $3)
         FOR UPDATE;
-      `, [symbol, marketType]);
+      `, [symbol, marketType, strategyName]);
 
       const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
 
@@ -585,8 +628,8 @@ const portfolio = {
 
         const updatedResult = await client.query(`
           UPDATE portfolio_holdings
-          SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8
-          WHERE id = $9
+          SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
+          WHERE id = $10
           RETURNING
             id,
             symbol,
@@ -598,8 +641,10 @@ const portfolio = {
             type,
             market_type AS "marketType",
             order_type AS "orderType",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson",
             date_added;
-        `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, existing.id]);
+        `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id]);
 
         await client.query("COMMIT");
         return mapPortfolioRow(updatedResult.rows[0]);
@@ -610,8 +655,8 @@ const portfolio = {
       }
 
       const insertedResult = await client.query(`
-        INSERT INTO portfolio_holdings (symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, date_added)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO portfolio_holdings (symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING
           id,
           symbol,
@@ -623,8 +668,10 @@ const portfolio = {
           type,
           market_type AS "marketType",
           order_type AS "orderType",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson",
           date_added;
-      `, [symbol, name, price, quantity, price, dateAdded, type, marketType, orderType, dateAdded]);
+      `, [symbol, name, price, quantity, price, dateAdded, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
 
       await client.query("COMMIT");
       return mapPortfolioRow(insertedResult.rows[0]);
@@ -686,9 +733,9 @@ const portfolio = {
         order_type AS "orderType",
         date_added
       FROM portfolio_holdings
-      WHERE symbol = $1 AND market_type = $2
+      WHERE symbol = $1 AND market_type = $2 AND (strategy_name IS NOT DISTINCT FROM $3)
       ORDER BY date_added DESC;
-    `, [cleanSymbol, cleanMarketType]);
+    `, [cleanSymbol, cleanMarketType, (holding?.strategyName || holding?.strategy_name || null)]);
     return result.rows.map(mapPortfolioRow);
   }
 };
@@ -714,7 +761,9 @@ const tradeExecutions = {
         balance_after AS "balanceAfter",
         portfolio_value_after AS "portfolioValueAfter",
         account_equity_after AS "accountEquityAfter",
-        position_after AS "positionAfter"
+        position_after AS "positionAfter",
+        strategy_name AS "strategyName",
+        legs_json AS "legsJson"
       FROM trade_executions
       ORDER BY COALESCE(executed_at, date::timestamptz) DESC, id DESC
       LIMIT $1;
@@ -739,16 +788,19 @@ const tradeExecutions = {
       balance_after: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
       portfolio_value_after: Number.isFinite(Number(trade.portfolioValueAfter)) ? Number(trade.portfolioValueAfter) : null,
       account_equity_after: Number.isFinite(Number(trade.accountEquityAfter)) ? Number(trade.accountEquityAfter) : null,
-      position_after: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null
+      position_after: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null,
+      strategy_name: trade.strategyName || trade.strategy_name || null,
+      legs_json: parseJsonPayload(trade.legsJson || trade.legs_json)
     };
 
     try {
       const result = await pool.query(`
         INSERT INTO trade_executions (
           client_id, date, executed_at, asset, name, type, side, market_type, status,
-          quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after
+          quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after,
+          strategy_name, legs_json
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING
           id,
           client_id AS "clientId",
@@ -766,7 +818,9 @@ const tradeExecutions = {
           balance_after AS "balanceAfter",
           portfolio_value_after AS "portfolioValueAfter",
           account_equity_after AS "accountEquityAfter",
-          position_after AS "positionAfter";
+          position_after AS "positionAfter",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson";
       `, [
         normalized.client_id,
         normalized.date,
@@ -783,7 +837,9 @@ const tradeExecutions = {
         normalized.balance_after,
         normalized.portfolio_value_after,
         normalized.account_equity_after,
-        normalized.position_after
+        normalized.position_after,
+        normalized.strategy_name,
+        JSON.stringify(normalized.legs_json)
       ]);
 
       return mapTradeRow(result.rows[0]);
@@ -833,6 +889,8 @@ const trading = {
     const executionTimestamp = payload.executedAt || new Date().toISOString();
     const executionDate = toDateString(payload.date || executionTimestamp) || new Date().toISOString().slice(0, 10);
     const clientId = payload.clientId || null;
+    const strategyName = payload.strategyName || payload.strategy_name || null;
+    const legsJson = parseJsonPayload(payload.legsJson || payload.legs_json);
 
     if (!symbol) throw new Error("Invalid symbol");
     if (!Number.isFinite(quantity) || quantity <= QTY_EPSILON) throw new Error("Invalid quantity");
@@ -874,9 +932,9 @@ const trading = {
           order_type AS "orderType",
           date_added
         FROM portfolio_holdings
-        WHERE symbol = $1 AND market_type = $2
+        WHERE symbol = $1 AND market_type = $2 AND (strategy_name IS NOT DISTINCT FROM $3)
         FOR UPDATE;
-      `, [symbol, marketType]);
+      `, [symbol, marketType, strategyName]);
 
       const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
       let positionAfter = 0;
@@ -906,10 +964,10 @@ const trading = {
 
           const updated = await client.query(`
             UPDATE portfolio_holdings
-            SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8
-            WHERE id = $9
+            SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
+            WHERE id = $10
             RETURNING quantity;
-          `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, existing.id]);
+          `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id]);
           positionAfter = toNumber(updated.rows[0]?.quantity, 0);
         }
       } else {
@@ -919,10 +977,10 @@ const trading = {
           throw err;
         }
         const inserted = await client.query(`
-          INSERT INTO portfolio_holdings (symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, date_added)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          INSERT INTO portfolio_holdings (symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING quantity;
-        `, [symbol, name, price, quantity, price, executionTimestamp, type, marketType, orderType, dateAdded]);
+        `, [symbol, name, price, quantity, price, executionTimestamp, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
         positionAfter = toNumber(inserted.rows[0]?.quantity, 0);
       }
 
@@ -951,9 +1009,10 @@ const trading = {
       const tradeResult = await client.query(`
         INSERT INTO trade_executions (
           client_id, date, executed_at, asset, name, type, side, market_type, status,
-          quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after
+          quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after,
+          strategy_name, legs_json
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING
           id,
           client_id AS "clientId",
@@ -971,7 +1030,9 @@ const trading = {
           balance_after AS "balanceAfter",
           portfolio_value_after AS "portfolioValueAfter",
           account_equity_after AS "accountEquityAfter",
-          position_after AS "positionAfter";
+          position_after AS "positionAfter",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson";
       `, [
         clientId,
         executionDate,
@@ -988,7 +1049,9 @@ const trading = {
         nextBalance,
         portfolioValueAfter,
         nextBalance + portfolioValueAfter,
-        positionAfter
+        positionAfter,
+        strategyName,
+        JSON.stringify(legsJson)
       ]);
 
       await client.query("COMMIT");

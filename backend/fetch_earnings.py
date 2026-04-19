@@ -1,8 +1,68 @@
 #!/usr/bin/env python3
 import sys
 import json
+import re
+import requests
 from datetime import datetime, date
 import yfinance as yf
+
+def _safe_number(value):
+    try:
+        if value is None: return None
+        import math
+        numeric = float(value)
+        if math.isnan(numeric) or math.isinf(numeric): return None
+        if numeric.is_integer(): return int(numeric)
+        return numeric
+    except:
+        return None
+
+def _get_top_analyst_target(ratings):
+    TOP_TIER_AGENCIES = {
+        "goldman sachs", "ms", "morgan stanley", "jp morgan", "jpmorgan", "bofA", "bank of america", "citi", "barclays",
+        "wells fargo", "rbc", "bmo", "piper sandler", "wedbush", "oppenheimer", "bernstein", "evercore", "mizuho",
+        "stifel", "raymond james", "jefferies", "keybanc", "canaccord", "cowen", "wolfe research", "hsbc", "ubs",
+        "deutsche bank", "normura", "socgen", "bnp paribas"
+    }
+    if not ratings or not isinstance(ratings, list): return None, None
+    reputable = []
+    for r in ratings:
+        analyst = str(r.get("analyst") or "").lower()
+        if any(tier in analyst for tier in TOP_TIER_AGENCIES):
+            reputable.append(r)
+    if not reputable: return None, None
+    top = reputable[0]
+    try:
+        val_str = top.get("price_target").replace("$", "").split("→")[-1].strip()
+        return _safe_number(val_str), top.get("analyst")
+    except:
+        return None, None
+
+def _fetch_finviz_raw(symbol):
+    url = f"https://finviz.com/quote.ashx?t={symbol.upper()}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        return resp.text if resp.status_code == 200 else None
+    except: return None
+
+def _parse_finviz_data(html):
+    data = {"summary": {}, "ratings": []}
+    if not html: return data
+    summary_match = re.search(r'<table class="snapshot-table2".*?>(.*?)</table>', html, re.S)
+    if summary_match:
+        pairs = re.findall(r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>', summary_match.group(1), re.S)
+        for l_raw, v_raw in pairs:
+            l = re.sub(r'<.*?>', '', l_raw).strip()
+            v = re.sub(r'<.*?>', '', v_raw).strip()
+            if l == "Earnings": data["summary"]["earnings"] = v
+            elif l == "Target Price": data["summary"]["target_price"] = v
+    ratings_match = re.search(r'<table class="fullview-ratings-outer".*?>(.*?)</table>', html, re.S)
+    if ratings_match:
+        rows = re.findall(r'<tr.*?>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?</tr>', ratings_match.group(1), re.S)
+        for r in rows:
+            data["ratings"].append({"analyst": re.sub(r'<.*?>', '', r[2]).strip(), "price_target": re.sub(r'<.*?>', '', r[4]).strip()})
+    return data
 
 def _normalize_date_str(value):
     if value is None:
@@ -81,7 +141,13 @@ def _extract_next_earnings(calendar):
 def fetch_earnings(symbol: str) -> dict:
     try:
         ticker = yf.Ticker(symbol)
-        info = ticker.info
+        info = ticker.info or {}
+
+        # 1. Fetch Finviz data for high-accuracy fields
+        finviz_raw = _fetch_finviz_raw(symbol)
+        finviz_data = _parse_finviz_data(finviz_raw)
+        top_target, top_agency = _get_top_analyst_target(finviz_data.get("ratings", []))
+        finviz_earnings = finviz_data.get("summary", {}).get("earnings")
 
         # Market cap
         market_cap = info.get("marketCap")
@@ -119,12 +185,14 @@ def fetch_earnings(symbol: str) -> dict:
             except Exception:
                 pass
 
-        # Next upcoming earnings date (future-only)
+        # Next upcoming earnings date
         next_earnings = _extract_next_earnings(calendar)
+        if finviz_earnings and finviz_earnings != "-":
+            next_earnings = finviz_earnings
 
         # Analyst recommendations summary
         recommend = info.get("recommendationKey", "")
-        target_price = info.get("targetMeanPrice")
+        consensus_target = info.get("targetMeanPrice")
         analyst_count = info.get("numberOfAnalystOpinions")
 
         valuation = {
@@ -154,7 +222,10 @@ def fetch_earnings(symbol: str) -> dict:
             },
             "nextEarnings": next_earnings,
             "analystRating": recommend,
-            "targetPrice": target_price,
+            "targetPrice": top_target or consensus_target,
+            "topAnalystTarget": top_target,
+            "topAnalystAgency": top_agency,
+            "consensusTarget": consensus_target,
             "analystCount": analyst_count,
             "valuation": valuation,
             "profile": profile,

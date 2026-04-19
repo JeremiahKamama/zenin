@@ -576,20 +576,6 @@ export function AnalyticsModule({ backendUrl }) {
                   source="Dune"
                   tone="positive"
                 />
-                <AnalyticsStatCard
-                  title="Options Volume"
-                  value={formatCompactMoney(
-                    (cryptoData.optionsVolumeByAsset || []).reduce(
-                      (sum, row) =>
-                        sum +
-                        (Number(row.volumeUsd ?? row.volume ?? 0) || 0),
-                      0
-                    )
-                  )}
-                  subvalue="Across available crypto option assets"
-                  source="Dune"
-                  tone="info"
-                />
               </div>
 
               <div
@@ -728,8 +714,6 @@ export function AnalyticsModule({ backendUrl }) {
                     })
                   )}
                 />
-              </div>
-
               </div>
             </>
           ) : activeTab === "options" ? (

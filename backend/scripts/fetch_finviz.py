@@ -62,7 +62,31 @@ def fetch_finviz_data(symbol: str) -> dict:
                     "sec_form_4": re.sub(r'<.*?>', '', r[8]).strip(),
                 })
 
-    # 3. News
+    # 3. Main Summary Table (Market Cap, P/E, Earnings, Target Price)
+    # The table has class "snapshot-table2"
+    data["summary"] = {}
+    summary_match = re.search(r'<table class="snapshot-table2".*?>(.*?)</table>', html, re.S)
+    if summary_match:
+        # Find all label-value pairs: <td class="snapshot-td2-cp">Label</td><td class="snapshot-td2">Value</td>
+        pairs = re.findall(r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>', summary_match.group(1), re.S)
+        for label_raw, value_raw in pairs:
+            label = re.sub(r'<.*?>', '', label_raw).strip()
+            value = re.sub(r'<.*?>', '', value_raw).strip()
+            
+            if label:
+                data["summary"][label] = value
+                
+            key_lower = label.lower()
+            if key_lower == "earnings":
+                data["summary"]["earnings"] = value
+            elif key_lower == "target price":
+                data["summary"]["target_price"] = value
+            elif key_lower == "market cap":
+                data["summary"]["market_cap"] = value
+            elif key_lower == "p/e":
+                data["summary"]["pe"] = value
+
+    # 4. News
     # table.fullview-news-outer
     news_match = re.search(r'<table class="fullview-news-outer".*?>(.*?)</table>', html, re.S)
     if news_match:

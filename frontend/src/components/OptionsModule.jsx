@@ -11,6 +11,8 @@ const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
 export function OptionsModule({activeOptionsTrades,
   setActiveOptionsTrades,
+  onOptionTradeExecuted,
+  onOptionTradeClosed,
 }) {
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
@@ -41,15 +43,52 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
 
 
   const closeOptionTrade = (id) => {
+    if (onOptionTradeClosed) {
+      onOptionTradeClosed(id);
+      return;
+    }
     if (!setActiveOptionsTrades) return;
     setActiveOptionsTrades((prev) => prev.filter((t) => t.id !== id));
   };
   const calculateOptionPnL = (trade) => {
-     // Here you would match trade.legs with the live `chain` data fetched from Derive
-     // PnL = (Current Mark Price - netPremiumAtEntry) * Qty * Direction
-     // For mock purposes, returning a static format:
-     return { currentMark: 0.85, pnl: 0.15 };
+    if (trade.asset !== activeAsset || !chain || chain.length === 0) {
+      return { currentMark: null, pnl: null, delta: null, theta: null, isStale: true };
+    }
 
+    let totalMark = 0;
+    let totalDelta = 0;
+    let totalTheta = 0;
+
+    (trade.legs || []).forEach(leg => {
+      if (leg.type === 'spot') {
+        const spot = spotPrices[activeAsset] || leg.strike || 0;
+        totalMark += leg.side === 'long' ? spot : -spot;
+        totalDelta += leg.side === 'long' ? 1 : -1;
+      } else {
+        const row = chain.find(r => Math.abs(r.strike - leg.strike) < 0.01);
+        if (row) {
+          const instr = leg.type === 'call' ? row.call : row.put;
+          if (instr) {
+            const mark = (Number(instr.bid || 0) + Number(instr.ask || 0)) / 2 || Number(instr.mark) || 0;
+            const delta = Number(instr.delta) || 0;
+            const theta = Number(instr.theta) || 0;
+            
+            if (leg.side === 'long') {
+              totalMark += mark;
+              totalDelta += delta;
+              totalTheta += theta;
+            } else {
+              totalMark -= mark;
+              totalDelta -= delta;
+              totalTheta -= theta;
+            }
+          }
+        }
+      }
+    });
+
+    const pnl = (totalMark - (trade.netPremiumAtEntry || 0)) * (trade.qty || 1);
+    return { currentMark: totalMark, pnl, delta: totalDelta, theta: totalTheta, isStale: false };
   };
 
 
@@ -59,6 +98,25 @@ const handleStrategyChosen = async (tradePayload) => {
   
   setStrategySubmitting(true);
   try {
+    // Calculate initial net premium from chain if legs provided
+    let entryPremium = 0;
+    if (tradePayload.legs && chain.length > 0) {
+      tradePayload.legs.forEach(leg => {
+        if (leg.type === 'spot') {
+          entryPremium += (leg.side === 'long' ? spotPrices[activeAsset] : -spotPrices[activeAsset]) || 0;
+        } else {
+          const row = chain.find(r => Math.abs(r.strike - leg.strike) < 0.01);
+          if (row) {
+            const instr = leg.type === 'call' ? row.call : row.put;
+            if (instr) {
+              const mark = (Number(instr.bid || 0) + Number(instr.ask || 0)) / 2 || Number(instr.mark) || 0;
+              entryPremium += (leg.side === 'long' ? mark : -mark);
+            }
+          }
+        }
+      });
+    }
+
     const id = `sim-${Date.now()}`;
     const newTrade = {
       id,
@@ -67,13 +125,18 @@ const handleStrategyChosen = async (tradePayload) => {
       status: "OPEN",
       executedAt: new Date().toISOString(),
       legs: tradePayload.legs || [],
-      netPremiumAtEntry: tradePayload.netPremiumAtEntry ?? 1.0,
+      netPremiumAtEntry: entryPremium || tradePayload.netPremiumAtEntry || 0,
       qty: tradePayload.qty ?? 1,
       totalNotional: tradePayload.notional,
     };
 
-    // Push into active options trades
-    setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
+    // Record into global state/backend
+    if (onOptionTradeExecuted) {
+      await onOptionTradeExecuted(newTrade);
+    } else {
+      // Fallback to local only for simulation if no handler
+      setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
+    }
   } catch (err) {
     console.error("Failed to execute strategy", err);
   } finally {
@@ -128,6 +191,8 @@ const StrategySimulatorCard = ({
       <div className="strategy-simulator-body">
         <OptionsStrategySimulator
           underlying={activeAsset}
+          chain={chain}
+          spotPrice={spotPrices[activeAsset]}
           maxVisible={20}
           onStrategyChosen={onStrategyChosen}
         />
@@ -486,8 +551,6 @@ useEffect(() => {
           <div className="change positive">+14.2</div>
         </div>
       </div>
-    <div className="view-container options-terminal">
-      {/* ... top metrics ... */}
 
       {/* NEW: Active Options Trades Card */}
       {activeOptionsTrades && activeOptionsTrades.length > 0 && (
@@ -511,24 +574,30 @@ useEffect(() => {
             </thead>
             <tbody>
               {activeOptionsTrades.map(trade => {
-                const { currentMark, pnl } = calculateOptionPnL(trade);
+                const metrics = calculateOptionPnL(trade);
+                const { currentMark, pnl, delta, theta, isStale } = metrics;
                 const isProfit = pnl >= 0;
+                
                 return (
                   <tr key={trade.id}>
                     <td>{trade.strategy}</td>
                     <td>{trade.asset}</td>
-                    <td>{trade.legs.expiry}</td>
-                    <td>${trade.netPremiumAtEntry.toFixed(4)}</td>
-                    <td>${currentMark.toFixed(4)}</td>
-                    <td className="greek">+0.15</td> {/* Map from live chain */}
-                    <td className="greek">+$1.20</td> {/* Map from live chain */}
-                    <td style={{ color: isProfit ? "#22c55e" : "#ef4444", fontWeight: "bold" }}>
-                      {isProfit ? "+" : ""}${pnl.toFixed(2)}
+                    <td>{trade.legs?.[0]?.expiry || trade.legs?.expiry || "—"}</td>
+                    <td style={{ color: "#94a3b8" }}>{trade.netPremiumAtEntry ? `$${trade.netPremiumAtEntry.toFixed(2)}` : "—"}</td>
+                    <td>{isStale ? <span style={{ color: "#64748b", fontSize: "0.75rem" }}>Switch to {trade.asset}</span> : `$${(currentMark || 0).toFixed(2)}`}</td>
+                    <td className="greek" style={{ color: (delta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
+                      {isStale ? "—" : (delta || 0).toFixed(3)}
+                    </td>
+                    <td className="greek" style={{ color: (theta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
+                      {isStale ? "—" : (theta || 0).toFixed(3)}
+                    </td>
+                    <td style={{ color: isStale ? "#64748b" : (isProfit ? "#22c55e" : "#ef4444"), fontWeight: "bold" }}>
+                      {isStale ? "Stale" : `${isProfit ? "+" : ""}$${(pnl || 0).toFixed(2)}`}
                     </td>
                     <td>
                       <button 
                         onClick={() => closeOptionTrade(trade.id)}
-                        style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer" }}
+                        style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "0.75rem" }}
                       >
                         Close
                       </button>
@@ -547,8 +616,6 @@ useEffect(() => {
         onStrategyChosen={handleStrategyChosen}
       />
 
-      {/* ... Option Chain Panel ... */}
-    </div>
       <div className="watchlist-panel glass">
         <div className="section-header">
           <div className="header-left">

@@ -454,6 +454,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
                         <div className="portfolio-left">
                           <div>
                             <strong>{item.symbol}</strong>
+                            {item.marketType === "options" && (
+                              <span style={{ fontSize: "11px", color: "var(--color-text-secondary)", marginLeft: "6px" }}>
+                                {item.strategyName || item.name}
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="portfolio-center">

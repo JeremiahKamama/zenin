@@ -161,10 +161,15 @@ button {
   display: flex;
   flex-direction: column;
   gap: 32px;
-  padding-top: 12px;
+  padding: 24px 20px;
   position: sticky;
   top: 24px;
   height: calc(100vh - 48px);
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 24px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
   transition: width 0.25s ease;
 }
 
@@ -1506,11 +1511,54 @@ button {
 .company-stat-card,
 .company-earnings-card,
 .company-page-framework,
-.company-page-briefing-card {
+.company-page-briefing-card,
+.company-page-finviz-card {
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 20px;
   background: rgba(2, 6, 23, 0.8);
   box-shadow: 0 14px 30px rgba(2, 6, 23, 0.18);
+}
+
+.company-page-finviz-card {
+  margin-bottom: 24px;
+}
+
+.company-finviz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1px;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 16px;
+}
+
+.company-finviz-cell {
+  background: rgba(2, 6, 23, 0.95);
+  padding: 6px 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.finviz-label {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.finviz-value {
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .company-stat-card {
@@ -1527,8 +1575,17 @@ button {
 }
 
 .company-stat-card strong {
+  display: block;
   color: #f8fafc;
   font-size: 1.25rem;
+}
+
+.company-stat-subtext {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-style: normal;
 }
 
 .company-page-framework {

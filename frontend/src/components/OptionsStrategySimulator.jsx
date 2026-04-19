@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 
 // ─── Config / Data ─────────────────────────────────────────────────────────────
 
@@ -270,6 +270,8 @@ function tierProbability(tier) {
 
 export default function OptionsStrategySimulator({
   underlying,
+  chain = [],
+  spotPrice = null,
   maxVisible = 10,
   onStrategyChosen,
 }) {
@@ -310,9 +312,58 @@ export default function OptionsStrategySimulator({
     }
     setIsSubmitting(true);
     try {
+      // Map heuristic strategy to real strikes in the chain
+      const sorted = [...chain].sort((a, b) => a.strike - b.strike);
+      const atmIdx = sorted.findIndex(r => r.strike >= spotPrice);
+      const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
+      const atm = sorted[safeAtmIdx];
+
+      let structuredLegs = [];
+      const sName = selectedStrategy.name;
+
+      if (atm) {
+        if (sName === "Long Call") {
+          structuredLegs = [{ type: 'call', side: 'long', strike: atm.strike, qty: 1, expiry: atm.call?.expiry }];
+        } else if (sName === "Long Put") {
+          structuredLegs = [{ type: 'put', side: 'long', strike: atm.strike, qty: 1, expiry: atm.put?.expiry }];
+        } else if (sName === "Covered Call") {
+          structuredLegs = [
+            { type: 'spot', side: 'long', strike: spotPrice, qty: 1 },
+            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: atm.call?.expiry }
+          ];
+        } else if (sName === "Bull Put Spread") {
+          structuredLegs = [
+            { type: 'put', side: 'short', strike: atm.strike, qty: 1, expiry: atm.put?.expiry },
+            { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 3)].strike, qty: 1, expiry: atm.put?.expiry }
+          ];
+        } else if (sName === "Bull Call Spread") {
+          structuredLegs = [
+            { type: 'call', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike, qty: 1, expiry: atm.call?.expiry },
+            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: atm.call?.expiry }
+          ];
+        } else if (sName === "Bear Call Spread") {
+          structuredLegs = [
+            { type: 'call', side: 'short', strike: atm.strike, qty: 1, expiry: atm.call?.expiry },
+            { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 3)].strike, qty: 1, expiry: atm.call?.expiry }
+          ];
+        } else if (sName === "Iron Condor") {
+          structuredLegs = [
+            { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 5)].strike, qty: 1, expiry: atm.put?.expiry },
+            { type: 'put', side: 'short', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike, qty: 1, expiry: atm.put?.expiry },
+            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: atm.call?.expiry },
+            { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 5)].strike, qty: 1, expiry: atm.call?.expiry }
+          ];
+        } else {
+          // Default fallback for other strategies
+          structuredLegs = [{ type: 'call', side: 'long', strike: atm.strike, qty: 1, expiry: atm.call?.expiry }];
+        }
+      }
+
       await onStrategyChosen({
         ...selectedStrategy,
-        notional: amt
+        notional: amt,
+        legs: structuredLegs,
+        netPremiumAtEntry: 1.0, // Mock for now, OptionsModule will calculate from real prices
       });
       setSelectedStrategyId(null);
       setTradeAmount("");
@@ -508,146 +559,145 @@ export default function OptionsStrategySimulator({
               <thead>
                 <tr>
                   <th style={{ textAlign: "left" }}>Strategy</th>
-                 {visible.map((s) => {
+                  <th style={{ textAlign: "left" }}>Tier</th>
+                  <th style={{ textAlign: "left" }}>Est. prob.</th>
+                  <th style={{ textAlign: "left" }}>Payoff profile</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((s) => {
                   const tier = TIER_META[s.tier] || TIER_META.medium;
                   const isSelected = s.id === selectedStrategyId;
                   return (
                     <React.Fragment key={s.id}>
-                    <tr
-                      onClick={() =>
-                        setSelectedStrategyId(prev => prev === s.id ? null : s.id)
-                      }
-                      style={{ cursor: "pointer", background: isSelected ? "rgba(56,189,248,0.1)" : "" }}
-                    >
-                      <td>
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 2,
-                          }}
-                        >
-                          <span
+                      <tr
+                        onClick={() =>
+                          setSelectedStrategyId(prev => prev === s.id ? null : s.id)
+                        }
+                        style={{ cursor: "pointer", background: isSelected ? "rgba(56,189,248,0.1)" : "" }}
+                      >
+                        <td>
+                          <div
                             style={{
-                              fontSize: "0.85rem",
-                              fontWeight: 600,
-                              color: isSelected ? "#38bdf8" : "#e2e8f0",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 2,
                             }}
                           >
-                            {s.name}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: "0.75rem",
-                              color: "#94a3b8",
-                            }}
-                          >
-                            {s.summary}
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 4,
-                            borderRadius: 999,
-                            padding: "2px 8px",
-                            fontSize: "0.7rem",
-                            background: tier.bg,
-                            color: tier.color,
-                            border: `1px solid ${tier.border}`,
-                            textTransform: "uppercase",
-                            fontWeight: 700,
-                            letterSpacing: "0.02em"
-                          }}
-                        >
-                          {tier.label}
-                        </span>
-                      </td>
-                      <td style={{ fontWeight: 600, color: "#38bdf8" }}>
-                        {(s.probability * 100).toFixed(0)}%
-                      </td>
-                      <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>
-                    </tr>
-                    {isSelected && (
-                      <tr key={`${s.id}-details`} className="strategy-details-row">
-                        <td colSpan="4" style={{ padding: "16px", background: "rgba(15,23,42,0.4)", borderBottom: "1px solid rgba(56,189,248,0.2)" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
-                            {/* Greeks */}
-                            <div>
-                              <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Strategy Greeks</div>
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
-                                <div className="greek-box">
-                                  <label>Delta</label>
-                                  <strong>{s.greeks?.delta}</strong>
-                                </div>
-                                <div className="greek-box">
-                                  <label>Gamma</label>
-                                  <strong>{s.greeks?.gamma}</strong>
-                                </div>
-                                <div className="greek-box">
-                                  <label>Theta</label>
-                                  <strong>{s.greeks?.theta}</strong>
-                                </div>
-                                <div className="greek-box">
-                                  <label>Vega</label>
-                                  <strong>{s.greeks?.vega}</strong>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Execution */}
-                            <div>
-                              <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Trade Execution</div>
-                              <div style={{ display: "flex", gap: "8px" }}>
-                                <input 
-                                  type="number"
-                                  placeholder="Amount (USD)"
-                                  value={tradeAmount}
-                                  onChange={(e) => setTradeAmount(e.target.value)}
-                                  style={{
-                                    flex: 1,
-                                    background: "rgba(15,23,42,0.6)",
-                                    border: "1px solid rgba(148,163,184,0.3)",
-                                    borderRadius: "6px",
-                                    padding: "8px",
-                                    color: "#fff",
-                                    fontSize: "0.85rem"
-                                  }}
-                                />
-                                <button
-                                  onClick={handleExecute}
-                                  disabled={isSubmitting}
-                                  style={{
-                                    background: "var(--color-primary, #38bdf8)",
-                                    color: "#000",
-                                    border: "none",
-                                    borderRadius: "6px",
-                                    padding: "0 16px",
-                                    fontWeight: "600",
-                                    fontSize: "0.85rem",
-                                    cursor: "pointer",
-                                    transition: "opacity 0.2s"
-                                  }}
-                                >
-                                  {isSubmitting ? "..." : "Execute"}
-                                </button>
-                              </div>
-                            </div>
+                            <span
+                              style={{
+                                fontSize: "0.85rem",
+                                fontWeight: 600,
+                                color: isSelected ? "#38bdf8" : "#e2e8f0",
+                              }}
+                            >
+                              {s.name}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "0.75rem",
+                                color: "#94a3b8",
+                              }}
+                            >
+                              {s.summary}
+                            </span>
                           </div>
                         </td>
+                        <td>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              borderRadius: 999,
+                              padding: "2px 8px",
+                              fontSize: "0.7rem",
+                              background: tier.bg,
+                              color: tier.color,
+                              border: `1px solid ${tier.border}`,
+                              textTransform: "uppercase",
+                              fontWeight: 700,
+                              letterSpacing: "0.02em"
+                            }}
+                          >
+                            {tier.label}
+                          </span>
+                        </td>
+                        <td style={{ fontWeight: 600, color: "#38bdf8" }}>
+                          {(s.probability * 100).toFixed(0)}%
+                        </td>
+                        <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>
                       </tr>
-                    )}
+                      {isSelected && (
+                        <tr key={`${s.id}-details`} className="strategy-details-row">
+                          <td colSpan="4" style={{ padding: "16px", background: "rgba(15,23,42,0.4)", borderBottom: "1px solid rgba(56,189,248,0.2)" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+                              {/* Greeks */}
+                              <div>
+                                <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Strategy Greeks</div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
+                                  <div className="greek-box">
+                                    <label>Delta</label>
+                                    <strong>{s.greeks?.delta}</strong>
+                                  </div>
+                                  <div className="greek-box">
+                                    <label>Gamma</label>
+                                    <strong>{s.greeks?.gamma}</strong>
+                                  </div>
+                                  <div className="greek-box">
+                                    <label>Theta</label>
+                                    <strong>{s.greeks?.theta}</strong>
+                                  </div>
+                                  <div className="greek-box">
+                                    <label>Vega</label>
+                                    <strong>{s.greeks?.vega}</strong>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Execution */}
+                              <div>
+                                <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Trade Execution</div>
+                                <div style={{ display: "flex", gap: "8px" }}>
+                                  <input 
+                                    type="number"
+                                    placeholder="Amount (USD)"
+                                    value={tradeAmount}
+                                    onChange={(e) => setTradeAmount(e.target.value)}
+                                    style={{
+                                      flex: 1,
+                                      background: "rgba(15,23,42,0.6)",
+                                      border: "1px solid rgba(148,163,184,0.3)",
+                                      borderRadius: "6px",
+                                      padding: "8px",
+                                      color: "#fff",
+                                      fontSize: "0.85rem"
+                                    }}
+                                  />
+                                  <button
+                                    onClick={handleExecute}
+                                    disabled={isSubmitting}
+                                    style={{
+                                      background: "var(--color-primary, #38bdf8)",
+                                      color: "#000",
+                                      border: "none",
+                                      borderRadius: "6px",
+                                      padding: "0 16px",
+                                      fontWeight: "600",
+                                      fontSize: "0.85rem",
+                                      cursor: "pointer",
+                                      transition: "opacity 0.2s"
+                                    }}
+                                  >
+                                    {isSubmitting ? "..." : "Execute"}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
                     </React.Fragment>
-                  );
-                })}
-ontWeight: 600, color: "#38bdf8" }}>
-                        {(s.probability * 100).toFixed(0)}%
-                      </td>
-                      <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>
-                    </tr>
                   );
                 })}
               </tbody>

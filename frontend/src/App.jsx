@@ -112,28 +112,7 @@ function App() {
   const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
   const WATCHLIST_CATEGORY_REFRESH_TTL_MS = 5 * 60 * 1000;
 
-  const [activeOptionsTrades, setActiveOptionsTrades] = useState([
-    {
-      id: "simtrade1",
-      asset: "BTC",
-      strategy: "Short Put",
-      status: "OPEN",
-      executedAt: new Date().toISOString(),
-      legs: [
-        {
-          type: "put",
-          direction: "short",
-          strike: 85000,
-          qty: 1,
-          premium: 1.0,
-          iv: 23.0,
-          expiry: "2026-05-07",
-        },
-      ],
-      netPremiumAtEntry: 1.0,
-      qty: 1,
-    },
-  ]);
+  const [activeOptionsTrades, setActiveOptionsTrades] = useState([]);
 
   const stockThemes = useMemo(() => {
     const seen = new Set();
@@ -183,7 +162,25 @@ useEffect(() => {
   useEffect(() => {
     fetch(`${BACKEND_URL}/db/portfolio`)
       .then((res) => res.json())
-      .then((data) => setPortfolio(data.holdings || []))
+      .then((data) => {
+        const holdings = data.holdings || [];
+        setPortfolio(holdings);
+        
+        // Hydrate activeOptionsTrades from portfolio
+        const optionTrades = holdings
+          .filter(h => String(h.marketType || "").toLowerCase() === "options")
+          .map(h => ({
+            ...h,
+            id: `opt-${h.id}`,
+            dbId: h.id,
+            strategy: h.strategyName || h.name || "Strategy",
+            asset: h.symbol,
+            legs: h.legsJson || [],
+            status: "OPEN",
+            pnl: 0 // Will be recalculated by OptionsModule
+          }));
+        setActiveOptionsTrades(optionTrades);
+      })
       .catch((err) => console.error("Failed to load portfolio:", err));
   }, []);
 
@@ -889,6 +886,119 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   showTradeToast(`${orderType === "buy" ? "Bought" : "Sold"} ${normalizedQuantity} ${normalizedSymbol} successfully.`, "success");
   return { ok: true, action: orderType, symbol: normalizedSymbol };
+};
+
+const handleOptionTradeExecuted = async (tradePayload) => {
+  try {
+    const atomicPayload = {
+      symbol: tradePayload.asset || tradePayload.symbol,
+      name: tradePayload.strategy || tradePayload.name || "Strategy",
+      type: "options",
+      marketType: "options",
+      orderType: "buy",
+      quantity: tradePayload.qty || 1,
+      price: tradePayload.netPremiumAtEntry || 0,
+      strategyName: tradePayload.strategy || tradePayload.name,
+      legsJson: tradePayload.legs || [],
+      executedAt: new Date().toISOString()
+    };
+
+    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(atomicPayload)
+    });
+
+    if (!response.ok) {
+      const errData = await response.json();
+      throw new Error(errData.error || "Failed to execute option strategy");
+    }
+
+    const data = await response.json();
+    setBalance(data.balance ?? balance);
+    setPortfolio(data.holdings || []);
+    
+    // Sync local activeOptionsTrades
+    const newHolding = (data.holdings || []).find(h => 
+      h.symbol === atomicPayload.symbol && 
+      h.marketType === "options" && 
+      h.strategyName === atomicPayload.strategyName
+    );
+    
+    if (newHolding) {
+       setActiveOptionsTrades(prev => [
+         {
+           ...newHolding,
+           id: `opt-${newHolding.id}`,
+           dbId: newHolding.id,
+           strategy: newHolding.strategyName,
+           asset: newHolding.symbol,
+           legs: newHolding.legsJson || [],
+           status: "OPEN"
+         },
+         ...prev
+       ]);
+    }
+
+    const savedTrade = data?.trade ? normalizeTradeRecord(data.trade, 0) : null;
+    if (savedTrade) {
+      setTrades(prev => [savedTrade, ...prev]);
+    }
+    
+    showTradeToast(`Executed ${atomicPayload.strategyName} on ${atomicPayload.symbol}`, "success");
+  } catch (err) {
+    console.error("Option trade failed:", err);
+    showTradeToast(err.message, "error");
+  }
+};
+
+const handleOptionTradeClosed = async (tradeId) => {
+  try {
+    const tradeObj = activeOptionsTrades.find(t => t.id === tradeId || t.dbId === tradeId);
+    if (!tradeObj) return;
+
+    const dbId = tradeObj.dbId || (typeof tradeId === 'string' ? tradeId.replace("opt-", "") : tradeId);
+    
+    const atomicPayload = {
+      symbol: tradeObj.asset,
+      name: tradeObj.strategy,
+      type: "options",
+      marketType: "options",
+      orderType: "sell",
+      quantity: tradeObj.quantity || 1,
+      price: tradeObj.currentMark || 0,
+      strategyName: tradeObj.strategy,
+      legsJson: tradeObj.legs || [],
+      executedAt: new Date().toISOString()
+    };
+
+    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(atomicPayload)
+    });
+
+    if (!response.ok) {
+       const errData = await response.json();
+       throw new Error(errData.error || "Failed to close option position");
+    }
+
+    const data = await response.json();
+    setBalance(data.balance ?? balance);
+    setPortfolio(data.holdings || []);
+    
+    setActiveOptionsTrades(prev => prev.filter(t => t.id !== tradeId && t.dbId !== dbId));
+
+    const savedTrade = data?.trade ? normalizeTradeRecord(data.trade, 0) : null;
+    if (savedTrade) {
+      setTrades(prev => [savedTrade, ...prev]);
+    }
+
+    showTradeToast(`Closed ${tradeObj.strategy} on ${tradeObj.asset}`, "success");
+  } catch (err) {
+    console.error("Failed to close option:", err);
+    showTradeToast(err.message, "error");
+  }
 };
 
   const removeFromPortfolio = async (id) => {
@@ -2018,7 +2128,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
         {activeSection === "Options" && (
           <OptionsModule
   activeOptionsTrades={activeOptionsTrades}
-  setActiveOptionsTrades={setActiveOptionsTrades} />
+  setActiveOptionsTrades={setActiveOptionsTrades}
+  onOptionTradeExecuted={handleOptionTradeExecuted}
+  onOptionTradeClosed={handleOptionTradeClosed}
+/>
         )}
 
         {activeSection === "Predictions" && (

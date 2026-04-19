@@ -971,7 +971,11 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
     { label: "Market cap", value: formatMoney(profile?.marketCap) },
     { label: "Revenue", value: formatMoney(profile?.totalRevenue) },
     { label: "Next earnings", value: formatDate(profile?.earnings?.nextEarnings) },
-    { label: "Analyst target", value: formatMoney(profile?.targetMeanPrice) }
+    { 
+      label: "Analyst target", 
+      value: formatMoney(profile?.topAnalystTarget || profile?.targetMeanPrice),
+      subtext: profile?.topAnalystAgency || (profile?.topAnalystTarget ? "Top Analyst" : "Consensus")
+    }
   ];
   const latestFilings = [
     { label: "Latest annual", filing: profile?.filings?.latestAnnualReport },
@@ -979,6 +983,10 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
     { label: "Latest current", filing: profile?.filings?.latestCurrentReport }
   ].filter((entry) => entry?.filing?.filingDate);
   const sourceLinks = Array.isArray(profile?.sources) ? profile.sources.filter((source) => source?.label) : [];
+
+  const finvizEntries = Object.entries(profile?.finvizMetrics || {}).filter(
+    ([key]) => key !== "earnings" && key !== "target_price" && key !== "market_cap" && key !== "pe"
+  );
 
   const toggleSection = (key) => {
     setOpenSections((prev) => {
@@ -1002,7 +1010,19 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
             {primaryTag ? <span>{primaryTag}</span> : null}
           </div>
           <p>
-            {profile?.summary || "Public company profile information will appear here once the stock snapshot loads."}
+            {(() => {
+              const fullText = profile?.summary;
+              if (!fullText) return "Public company profile information will appear here once the stock snapshot loads.";
+              
+              // Extract first two sentences or first 280 chars
+              const firstTwo = fullText.match(/^[^.!?]+[.!?]\s*[^.!?]+[.!?]/);
+              if (firstTwo) return firstTwo[0];
+              
+              const firstOne = fullText.match(/^[^.!?]+[.!?]/);
+              if (firstOne) return firstOne[0];
+
+              return fullText.length > 280 ? fullText.substring(0, 277) + "..." : fullText;
+            })()}
           </p>
           {profile?.stale && profile?.statusMessage ? (
             <p className="company-page-fallback-note">{getSnapshotFallbackMessage(profile, profile.statusMessage)}</p>
@@ -1019,6 +1039,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
           <div className="company-stat-card" key={card.label}>
             <span>{card.label}</span>
             <strong>{card.value}</strong>
+            {card.subtext && <em className="company-stat-subtext">{card.subtext}</em>}
           </div>
         ))}
       </div>
@@ -1075,10 +1096,24 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
               </div>
             </div>
           )}
+      {finvizEntries.length > 0 && (
+        <div className="company-page-finviz-card">
+          <div className="company-page-briefing-head">
+            <h2>Financial Performance</h2>
+          </div>
+          <div className="company-finviz-grid">
+            {finvizEntries.map(([label, value]) => (
+              <div key={label} className="company-finviz-cell">
+                <span className="finviz-label">{label}</span>
+                <span className="finviz-value" style={{ color: value?.includes('-') ? '#f87171' : value?.includes('%') && parseFloat(value) > 0 ? '#4ade80' : '#f8fafc' }}>{value}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       <div className="company-page-framework">
+
         <div className="company-page-tabs">
           <button
             type="button"

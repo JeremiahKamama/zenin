@@ -322,12 +322,17 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
     const symbolStats = new Map();
     const bumpSymbolExecution = (trade) => {
-      const key = normalizeSymbol(trade.asset);
+      const isOption = String(trade.marketType || trade.market_type || "").toLowerCase() === "options";
+      const strat = trade.strategyName || trade.strategy || "";
+      const key = isOption ? `${normalizeSymbol(trade.asset)} (${strat})` : normalizeSymbol(trade.asset);
       const type = (trade.type || "").toUpperCase();
       const qty = Math.max(0, safeNum(trade.quantity));
       const price = safeNum(trade.price);
       const row = symbolStats.get(key) || {
         symbol: key,
+        asset: normalizeSymbol(trade.asset),
+        strategy: strat,
+        isOption,
         executionCount: 0,
         realizedCount: 0,
         wins: 0,
@@ -360,9 +365,14 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
     }
 
     for (const r of realized) {
-      const key = r.asset || "UNKNOWN";
+      const isOption = String(r.marketType || r.market_type || "").toLowerCase() === "options";
+      const strat = r.strategyName || r.strategy || "";
+      const key = isOption ? `${normalizeSymbol(r.asset)} (${strat})` : (r.asset || "UNKNOWN");
       const row = symbolStats.get(key) || {
         symbol: key,
+        asset: normalizeSymbol(r.asset),
+        strategy: strat,
+        isOption,
         executionCount: 0,
         realizedCount: 0,
         wins: 0,
@@ -467,6 +477,9 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
         return {
           symbol: row.symbol,
+          asset: row.asset || row.symbol,
+          strategy: row.strategy || "",
+          isOption: !!row.isOption,
           tradeCount: row.executionCount,
           tradedNotional: row.tradedNotional,
           netPosition: portfolioPositionMap.has(row.symbol)
@@ -906,7 +919,14 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
                 <tbody>
                   {pagedReportRows.map((row) => (
                     <tr key={row.symbol}>
-                      <td>{row.symbol}</td>
+                      <td>
+                        {row.symbol}
+                        {row.isOption && row.strategy && (
+                          <div style={{ fontSize: "10px", color: "var(--color-text-secondary)", opacity: 0.8 }}>
+                            {row.strategy}
+                          </div>
+                        )}
+                      </td>
                       <td>{row.tradeCount}</td>
                       <td>{formatValue(row.tradedNotional, true)}</td>
                       <td>{Number(row.netPosition || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>

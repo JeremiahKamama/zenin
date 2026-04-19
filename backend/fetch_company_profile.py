@@ -113,6 +113,89 @@ def _clean_text(value):
     return text or None
 
 
+def _get_top_analyst_target(ratings):
+    """
+    Identifies the price target from the 'highest rated' reputable analyst agency.
+    """
+    TOP_TIER_AGENCIES = {
+        "goldman sachs", "ms", "morgan stanley", "jp morgan", "jpmorgan", "bofA", "bank of america", "citi", "barclays",
+        "wells fargo", "rbc", "bmo", "piper sandler", "wedbush", "oppenheimer", "bernstein", "evercore", "mizuho",
+        "stifel", "raymond james", "jefferies", "keybanc", "canaccord", "cowen", "wolfe research", "hsbc", "ubs",
+        "deutsche bank", "normura", "socgen", "bnp paribas"
+    }
+    
+    if not ratings or not isinstance(ratings, list):
+        return None, None
+
+    # Filter for reputable ones
+    reputable = []
+    for r in ratings:
+        analyst = str(r.get("analyst") or "").lower()
+        if any(tier in analyst for tier in TOP_TIER_AGENCIES):
+            reputable.append(r)
+    
+    if not reputable:
+        return None, None
+        
+    # Pick the most recent one. Ratings are usually sorted by date descending in Finviz
+    # If same date, pick the one with highest target
+    top = reputable[0]
+    top_target = _safe_number(top.get("price_target").replace("$", "").split("→")[-1].strip())
+    top_agency = top.get("analyst")
+    
+    return top_target, top_agency
+
+
+def _fetch_finviz_raw(symbol):
+    url = f"https://finviz.com/quote.ashx?t={symbol.upper()}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.text
+    except:
+        pass
+    return None
+
+
+def _parse_finviz_data(html):
+    data = {"summary": {}, "ratings": []}
+    if not html: return data
+    
+    # 1. Summary table (Earnings, Target Price)
+    summary_match = re.search(r'<table class="snapshot-table2".*?>(.*?)</table>', html, re.S)
+    if summary_match:
+        pairs = re.findall(r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>', summary_match.group(1), re.S)
+        for label_raw, value_raw in pairs:
+            label = re.sub(r'<.*?>', '', label_raw).strip()
+            value = re.sub(r'<.*?>', '', value_raw).strip()
+            
+            if label:
+                data["summary"][label] = value
+                
+            key_lower = label.lower()
+            if key_lower == "earnings":
+                data["summary"]["earnings"] = value
+            elif key_lower == "target price":
+                data["summary"]["target_price"] = value
+
+    # 2. Ratings
+    ratings_match = re.search(r'<table class="fullview-ratings-outer".*?>(.*?)</table>', html, re.S)
+    if ratings_match:
+        rows = re.findall(r'<tr.*?>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?<td.*?>(.*?)</td>.*?</tr>', ratings_match.group(1), re.S)
+        for r in rows:
+            data["ratings"].append({
+                "date": re.sub(r'<.*?>', '', r[0]).strip(),
+                "action": re.sub(r'<.*?>', '', r[1]).strip(),
+                "analyst": re.sub(r'<.*?>', '', r[2]).strip(),
+                "rating": re.sub(r'<.*?>', '', r[3]).strip(),
+                "price_target": re.sub(r'<.*?>', '', r[4]).strip(),
+            })
+    return data
+
+
 def _normalize_json(value):
     if value is None:
         return None
@@ -866,6 +949,12 @@ def fetch_company_profile(symbol, theme=None, category=None):
     info = ticker.info or {}
     calendar = ticker.calendar
 
+    # 1. Fetch Finviz data for high-accuracy fields (Stock only)
+    finviz_raw = _fetch_finviz_raw(symbol)
+    finviz_data = _parse_finviz_data(finviz_raw)
+    top_target, top_agency = _get_top_analyst_target(finviz_data.get("ratings", []))
+    finviz_earnings = finviz_data.get("summary", {}).get("earnings")
+
     calendar_dict = {}
     try:
         if hasattr(calendar, "to_dict"):
@@ -882,7 +971,17 @@ def fetch_company_profile(symbol, theme=None, category=None):
     if isinstance(revenue_consensus, list):
         revenue_consensus = revenue_consensus[0] if revenue_consensus else None
 
+    # Merge Accurate Earnings Date
+    # Finviz date is like "Apr 30 AMC" or "May 02 BMO"
+    # We prefer this over yfinance if it looks valid
+    next_earnings = _extract_next_earnings(calendar)
+    if finviz_earnings and finviz_earnings != "-":
+        next_earnings = finviz_earnings
+
     payload = {
+        "topAnalystTarget": top_target,
+        "topAnalystAgency": top_agency,
+        "finvizMetrics": finviz_data.get("summary", {}),
         "symbol": str(symbol or "").upper(),
         "name": info.get("longName") or info.get("shortName") or str(symbol or "").upper(),
         "shortName": info.get("shortName"),
@@ -933,7 +1032,7 @@ def fetch_company_profile(symbol, theme=None, category=None):
         "analystRating": info.get("recommendationKey"),
         "analystCount": info.get("numberOfAnalystOpinions"),
         "earnings": {
-            "nextEarnings": _extract_next_earnings(calendar),
+            "nextEarnings": next_earnings,
             "eps": {
                 "consensus": eps_consensus or info.get("forwardEps"),
                 "previous": info.get("trailingEps"),
