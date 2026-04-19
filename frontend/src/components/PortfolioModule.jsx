@@ -140,15 +140,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
     markers: { size: 0 }
   };
 
-  // Theme breakdown for pie chart
-  const themeMap = {};
+  // Category breakdown for pie chart
+  const categoryMap = {};
   portfolio.forEach(item => {
-    const theme = item.theme || item.type || "Other";
+    const cat = item.category || item.type || "Other";
     const val = (item.price || 0) * (item.quantity || 0);
-    themeMap[theme] = (themeMap[theme] || 0) + val;
+    categoryMap[cat] = (categoryMap[cat] || 0) + val;
   });
-  const themeLabels = Object.keys(themeMap);
-  const themeSeries = Object.values(themeMap).map(v => parseFloat(v.toFixed(2)));
+  const categoryLabels = Object.keys(categoryMap);
+  const categorySeries = Object.values(categoryMap).map(v => parseFloat(v.toFixed(2)));
 
   const pieOptions = {
     chart: { type: "donut", background: "transparent" },
@@ -350,7 +350,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   title="View diversification by theme"
                 >
                   <label>Diversification</label>
-                  {themeSeries.length > 0 ? (
+                  {categorySeries.length > 0 ? (
                     <Chart
                       options={{
                         ...pieOptions,
@@ -358,8 +358,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
                         legend: { show: false },
                         dataLabels: { enabled: false },
                         plotOptions: { pie: { donut: { size: "70%" } } },
+                        labels: categoryLabels
                       }}
-                      series={themeSeries}
+                      series={categorySeries}
                       type="donut"
                       height={80}
                       width="100%"
@@ -368,14 +369,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
                     <div className="value" style={{ fontSize: "14px" }}>No holdings</div>
                   )}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
-                    {themeLabels.slice(0, 4).map((label, i) => (
+                    {categoryLabels.slice(0, 4).map((label, i) => (
                       <span key={label} style={{
                         fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
                         background: "rgba(255,255,255,0.06)", color: "var(--color-text-secondary)"
                       }}>{label}</span>
                     ))}
-                    {themeLabels.length > 4 && (
-                      <span style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>+{themeLabels.length - 4} more</span>
+                    {categoryLabels.length > 4 && (
+                      <span style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>+{categoryLabels.length - 4} more</span>
                     )}
                   </div>
                 </div>

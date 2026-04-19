@@ -33,7 +33,7 @@ export function OptionsModule({activeOptionsTrades,
   const [whaleNotice, setWhaleNotice] = useState("");
   const [whaleMeta, setWhaleMeta] = useState({});
   const [whalePage, setWhalePage] = useState(1);
-  const [whaleMinNotional, setWhaleMinNotional] = useState(100000);
+  const [whaleMinNotional, setWhaleMinNotional] = useState(10000);
   const [whaleSource, setWhaleSource] = useState("derive");
   
 const [strategyTradeModal, setStrategyTradeModal] = useState(null);
@@ -364,7 +364,16 @@ useEffect(() => {
       }
       const data = await res.json();
       if (!isMounted) return;
-      setWhaleTrades(Array.isArray(data?.trades) ? data.trades : []);
+      let parsedTrades = Array.isArray(data?.trades) ? data.trades : [];
+      if (whaleSource === "telegram") {
+        parsedTrades.sort((a, b) => {
+          if (!a.expiration && !b.expiration) return 0;
+          if (!a.expiration) return 1;
+          if (!b.expiration) return -1;
+          return new Date(a.expiration).getTime() - new Date(b.expiration).getTime();
+        });
+      }
+      setWhaleTrades(parsedTrades);
       setWhaleStale(Boolean(data?.stale || data?.unavailable));
       setWhaleMeta(data || {});
       setWhaleNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
@@ -697,7 +706,7 @@ useEffect(() => {
             <div className="asset-dropdown-container">
               <select
                 value={whaleMinNotional}
-                onChange={(e) => setWhaleMinNotional(Number(e.target.value) || 100000)}
+                onChange={(e) => setWhaleMinNotional(Number(e.target.value) || 10000)}
               >
                 {whaleThresholdOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -728,7 +737,6 @@ useEffect(() => {
               <thead>
                 <tr>
                   <th>Symbol</th>
-                  <th>Source</th>
                   <th>Expiration</th>
                   <th>Reference Price</th>
                   <th>Strategy</th>
@@ -739,7 +747,6 @@ useEffect(() => {
                 {pagedWhaleTrades.map((trade) => (
                   <tr key={trade.id}>
                     <td className="greek">{trade.symbol}</td>
-                    <td className="greek">{trade.sourceLabel || (trade.source === "telegram" ? "Telegram" : "Derive")}</td>
                     <td className="greek">{trade.expiration || "—"}</td>
                     <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>
                     <td className="greek">{trade.strategy}</td>

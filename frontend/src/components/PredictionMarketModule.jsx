@@ -20,6 +20,7 @@ export function PredictionMarketModule() {
   const [activeCategory, setActiveCategory] = useState("geopolitics");
   const [whaleMinSize, setWhaleMinSize] = useState(10000);
   const [whaleSort, setWhaleSort] = useState({ key: "transactionSize", direction: "desc" });
+  const [whaleCategory, setWhaleCategory] = useState("all");
 
   useEffect(() => {
     let isMounted = true;
@@ -213,7 +214,10 @@ export function PredictionMarketModule() {
   }, [predictionWhaleTransactions, marketByConditionId]);
 
   const filteredPredictionWhales = useMemo(() => {
-    const rows = predictionWhaleRows.filter((item) => Number(item?.transactionSize || 0) >= whaleMinSize);
+    const rows = predictionWhaleRows.filter((item) => {
+      if (whaleCategory !== "all" && String(item?.category || "").toLowerCase() !== whaleCategory) return false;
+      return Number(item?.transactionSize || 0) >= whaleMinSize;
+    });
     const sorted = [...rows].sort((a, b) => {
       const aVal = whaleSort.key === "pnl" ? Number(a?._pnl) : Number(a?.transactionSize);
       const bVal = whaleSort.key === "pnl" ? Number(b?._pnl) : Number(b?.transactionSize);
@@ -240,7 +244,7 @@ export function PredictionMarketModule() {
 
   useEffect(() => {
     setPredictionWhalePage(1);
-  }, [whaleMinSize, whaleSort]);
+  }, [whaleMinSize, whaleSort, whaleCategory]);
 
   const formatDateLabel = (value) => {
     if (!value) return "—";
@@ -388,19 +392,34 @@ export function PredictionMarketModule() {
               </span>
             </div>
           </div>
-          <div className="asset-dropdown-container" style={{ display: "grid", gap: "4px", justifyItems: "end" }}>
-            <div className="asset-count" style={{ fontSize: "0.72rem" }}>Min Transaction Size</div>
-            <select
-              value={whaleMinSize}
-              onChange={(e) => setWhaleMinSize(Number(e.target.value) || 10000)}
-              aria-label="Minimum whale transaction size"
-            >
-              {whaleThresholdOptions.map((threshold) => (
-                <option key={threshold.value} value={threshold.value}>
-                  {threshold.label}
-                </option>
-              ))}
-            </select>
+          <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+            <div className="asset-dropdown-container" style={{ display: "grid", gap: "4px", justifyItems: "end" }}>
+              <div className="asset-count" style={{ fontSize: "0.72rem" }}>Category</div>
+              <select
+                value={whaleCategory}
+                onChange={(e) => setWhaleCategory(e.target.value)}
+                aria-label="Filter by category"
+              >
+                <option value="all">All</option>
+                {predictionCategories.map((cat) => (
+                  <option key={cat} value={cat}>{getPredictionCategoryLabel(cat)}</option>
+                ))}
+              </select>
+            </div>
+            <div className="asset-dropdown-container" style={{ display: "grid", gap: "4px", justifyItems: "end" }}>
+              <div className="asset-count" style={{ fontSize: "0.72rem" }}>Min Size</div>
+              <select
+                value={whaleMinSize}
+                onChange={(e) => setWhaleMinSize(Number(e.target.value) || 10000)}
+                aria-label="Minimum whale transaction size"
+              >
+                {whaleThresholdOptions.map((threshold) => (
+                  <option key={threshold.value} value={threshold.value}>
+                    {threshold.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 

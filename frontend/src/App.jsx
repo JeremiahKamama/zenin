@@ -1225,7 +1225,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     const saved = localStorage.getItem("zenin_active_section");
     return sections.includes(saved) ? saved : "Home";
   });
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
@@ -1787,11 +1787,20 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   return (
     <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+      {isSidebarCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
+        <button
+          className="mobile-hamburger-btn"
+          onClick={() => setIsSidebarCollapsed(false)}
+          aria-label="Open Menu"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+      )}
       <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header">
           <h1 className="sidebar-brand">Zenin</h1>
           <button
-            className="sidebar-toggle-btn"
+            className="sidebar-toggle-btn mobile-close-btn"
             onClick={() => setIsSidebarCollapsed((prev) => !prev)}
             aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}

@@ -4039,7 +4039,7 @@ app.delete("/api/db/portfolio/:id", writeLimiter, async (req, res) => {
 // Get portfolio items by symbol and marketType
 app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
   try {
-    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20).toUpperCase();
+    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50).toUpperCase();
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
     const marketType = String(req.query.marketType || "").trim().toLowerCase();
     if (!marketType) {
@@ -4107,7 +4107,7 @@ app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, async (req, 
 
 app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
   try {
-    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+    const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50);
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
     const { marketType, category = null, theme = null } = req.query;
     if (!marketType) {

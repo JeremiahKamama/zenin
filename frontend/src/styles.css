@@ -4461,57 +4461,79 @@ button {
     gap: 0;
   }
 
-  .sidebar {
-    width: 100% !important;
-    min-width: unset !important;
-    border-right: none;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-    padding: 12px 16px;
-    flex-direction: row;
+  .mobile-hamburger-btn {
+    display: flex;
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 1000;
+    background: rgba(148, 163, 184, 0.1);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    padding: 8px;
+    color: #e2e8f0;
+    backdrop-filter: blur(8px);
+    cursor: pointer;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
+    justify-content: center;
+  }
+
+  .sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    width: 260px !important;
+    height: 100dvh !important;
+    padding: 24px 16px !important;
+    z-index: 1100 !important;
+    flex-direction: column !important;
+    background: rgba(2, 6, 23, 0.98) !important;
+    backdrop-filter: blur(12px);
+    border-right: 1px solid rgba(148, 163, 184, 0.15) !important;
+    transform: translateX(0);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .sidebar.collapsed {
-    width: 100% !important;
+    transform: translateX(-100%);
+    width: 260px !important;
   }
 
   .sidebar-header {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 0;
+    width: 100%;
+    margin-bottom: 20px;
   }
 
   .sidebar-brand {
-    font-size: 1.2rem !important;
+    font-size: 1.5rem !important;
   }
 
   .sidebar-toggle-btn {
-    display: none;
+    display: flex !important;
   }
 
   .sidebar-nav {
     display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 4px;
+    flex-direction: column !important;
+    gap: 8px;
     flex: 1;
+    width: 100%;
   }
 
   .nav-btn {
-    padding: 7px 12px;
-    font-size: 0.85rem;
-    border-radius: 8px;
+    padding: 12px 18px;
+    font-size: 1.05rem;
   }
 
   .sidebar-footer {
-    display: none;
+    display: flex !important;
   }
 
   .main-content {
-    padding-top: 16px;
+    padding-top: 50px;
   }
 
   .portfolio-analytics-row {
@@ -5268,28 +5290,8 @@ button {
     min-height: auto;
   }
 
-  .sidebar,
-  .sidebar.collapsed {
-    width: 100% !important;
-    padding: 10px 12px;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-  }
-
-  .sidebar-nav {
-    width: 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    scrollbar-width: thin;
-  }
-
-  .nav-btn {
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
   .main-content {
-    padding-top: 10px;
+    padding-top: 50px;
   }
 
   .view-container {
@@ -5457,6 +5459,29 @@ button {
   .options-calculator-action-btn {
     width: 100%;
   }
+
+  .settings-window {
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 12px;
+  }
+
+  .settings-window-body {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-categories {
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+
+  .settings-category-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 }
 
 @media (max-width: 430px) {
@@ -5467,18 +5492,8 @@ button {
     padding-left: max(8px, env(safe-area-inset-left));
   }
 
-  .sidebar {
-    padding: 8px;
-    gap: 6px;
-  }
-
   .sidebar-header h1 {
     font-size: 1.25rem;
-  }
-
-  .nav-btn {
-    padding: 7px 10px;
-    font-size: 0.78rem;
   }
 
   .watchlist-panel,
@@ -5596,12 +5611,6 @@ button {
     padding: 10px 12px;
   }
 
-  .settings-window {
-    width: 100%;
-    max-height: 100dvh;
-    border-radius: 12px;
-  }
-
   .prediction-market-meta {
     flex-direction: column;
     gap: 2px;
@@ -5610,23 +5619,6 @@ button {
   .prediction-modal-window {
     max-height: 94vh;
     padding: 10px;
-  }
-
-  .settings-window-body {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-categories {
-    border-right: none;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 8px;
-  }
-
-  .settings-category-btn {
-    white-space: nowrap;
-    flex-shrink: 0;
   }
 }
 

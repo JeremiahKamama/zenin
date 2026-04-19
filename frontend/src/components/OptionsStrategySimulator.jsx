@@ -196,7 +196,7 @@ function tierProbability(tier) {
 
 export default function OptionsStrategySimulator({
   underlying,
-  maxVisible = 5,
+  maxVisible = 10,
   onStrategyChosen,
 }) {
   const [selectedView, setSelectedView] = useState(null);
@@ -227,9 +227,8 @@ export default function OptionsStrategySimulator({
     <div
       style={{
         borderRadius: 12,
-        border: "1px solid rgba(148,163,184,0.35)",
-        background:
-          "radial-gradient(circle at top left, rgba(148,163,184,0.18), transparent 55%), #020617",
+        border: "1px solid rgba(148,163,184,0.15)",
+        background: "#000000",
         padding: 16,
         color: "#e5e7eb",
         fontSize: 13,

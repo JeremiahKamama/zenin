@@ -585,19 +585,22 @@ export function OptionsCalculator({   spotPrice = 0,
                 </div>
 
                 <div className="options-leg-row two-col">
-                  <select
+                  <input
+                    type="number"
+                    list={`strikes-${i}`}
                     value={leg.strike}
                     onChange={e => {
                       const strike = e.target.value;
                       updateLegMarketSelection(i, { strike });
                     }}
+                    placeholder="Strike"
                     className="options-leg-input"
-                  >
-                    <option value="">Amount</option>
+                  />
+                  <datalist id={`strikes-${i}`}>
                     {getChainStrikes().map(s => (
-                      <option key={s} value={s}>{s.toLocaleString()}</option>
+                      <option key={s} value={s} />
                     ))}
-                  </select>
+                  </datalist>
                   <input
                     type="date"
                     value={leg.expiry}
@@ -760,7 +763,7 @@ export function OptionsCalculator({   spotPrice = 0,
 
       {savedCalculationsOpen ? (
         <div className="modal-overlay" onClick={() => setSavedCalculationsOpen(false)}>
-          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()} style={{ width: "95%", maxWidth: "1200px", padding: "24px", overflowX: "hidden" }}>
             <div className="options-calculation-history-head">
               <div>
                 <p className="options-calculation-history-kicker">Saved Calculations</p>

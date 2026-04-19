@@ -420,12 +420,6 @@ export function HomeModule({
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               {moversLoading ? (
                 <span className="asset-count">Loading...</span>
-              ) : moversCoverage.total > 0 ? (
-                <span className={`asset-count home-movers-status ${moversCoverage.unavailable > 0 || moversCoverage.fallback > 0 ? "warning" : ""}`}>
-                  {moversCoverage.resolved} synced
-                  {moversCoverage.fallback > 0 ? ` · ${moversCoverage.fallback} fallback` : ""}
-                  {moversCoverage.unavailable > 0 ? ` · ${moversCoverage.unavailable} unavailable` : ""}
-                </span>
               ) : null}
               <select
                 value={moversHorizon}
@@ -447,13 +441,7 @@ export function HomeModule({
               </select>
             </div>
           </div>
-          {!moversLoading && (moversCoverage.fallback > 0 || moversCoverage.unavailable > 0) ? (
-            <div className="home-movers-note">
-              {(MOVERS_HORIZONS[moversHorizon]?.interval || "1D") === "1D"
-                ? "Daily movers can fall back to quote change when interval snapshots are unavailable."
-                : `Only symbols with verified ${MOVERS_HORIZONS[moversHorizon]?.label?.toLowerCase() || "selected"} performance are shown when upstream interval data is partial.`}
-            </div>
-          ) : null}
+
           <div className="home-movers-split" style={{ display: "flex", gap: "0" }}>
             
             <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
