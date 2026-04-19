@@ -86,6 +86,16 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Income + capped upside",
       summary: "Hold spot and sell OTM calls to earn yield.",
       legs: "Long 1x spot + Short 1x OTM call",
+      greeks: { delta: 0.65, gamma: -0.001, theta: 0.12, vega: -0.05 }
+    },
+    {
+      name: "Bull Put Spread",
+      tier: "high",
+      horizons: ["short", "medium"],
+      payoffLabel: "Limited risk income",
+      summary: "Sell OTM put, buy further OTM put for protection.",
+      legs: "Short 1x higher-strike put + Long 1x lower-strike put",
+      greeks: { delta: 0.35, gamma: -0.004, theta: 0.08, vega: -0.04 }
     },
     {
       name: "Bull Call Spread",
@@ -94,6 +104,16 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Defined-risk upside",
       summary: "Buy lower-strike call, sell higher-strike call.",
       legs: "Long 1x lower-strike call + Short 1x higher-strike call",
+      greeks: { delta: 0.42, gamma: 0.002, theta: -0.05, vega: 0.08 }
+    },
+    {
+      name: "Long Call Butterfly",
+      tier: "medium",
+      horizons: ["medium"],
+      payoffLabel: "Neutral-Bullish pin",
+      summary: "Long 1x lower call, Short 2x ATM call, Long 1x higher call.",
+      legs: "Long 1x Call(A) + Short 2x Call(B) + Long 1x Call(C)",
+      greeks: { delta: 0.05, gamma: -0.012, theta: 0.15, vega: -0.10 }
     },
     {
       name: "Long Call",
@@ -102,9 +122,19 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Leveraged upside",
       summary: "Pure upside convexity, loss capped at premium.",
       legs: "Long 1x ATM/OTM call",
+      greeks: { delta: 0.55, gamma: 0.015, theta: -0.18, vega: 0.22 }
     },
   ],
   bearish: [
+    {
+      name: "Bear Call Spread",
+      tier: "high",
+      horizons: ["short", "medium"],
+      payoffLabel: "Limited risk income",
+      summary: "Sell OTM call, buy further OTM call for protection.",
+      legs: "Short 1x lower-strike call + Long 1x higher-strike call",
+      greeks: { delta: -0.32, gamma: -0.003, theta: 0.10, vega: -0.06 }
+    },
     {
       name: "Bear Put Spread",
       tier: "medium",
@@ -112,6 +142,16 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Defined-risk downside",
       summary: "Buy higher-strike put, sell lower-strike put.",
       legs: "Long 1x higher-strike put + Short 1x lower-strike put",
+      greeks: { delta: -0.45, gamma: 0.004, theta: -0.06, vega: 0.09 }
+    },
+    {
+      name: "Long Put Butterfly",
+      tier: "medium",
+      horizons: ["medium"],
+      payoffLabel: "Neutral-Bearish pin",
+      summary: "Long 1x lower put, Short 2x ATM put, Long 1x higher put.",
+      legs: "Long 1x Put(A) + Short 2x Put(B) + Long 1x Put(C)",
+      greeks: { delta: -0.08, gamma: -0.014, theta: 0.18, vega: -0.12 }
     },
     {
       name: "Long Put",
@@ -120,6 +160,7 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Leveraged downside",
       summary: "Pure downside bet, loss capped at premium.",
       legs: "Long 1x ATM/OTM put",
+      greeks: { delta: -0.52, gamma: 0.018, theta: -0.21, vega: 0.24 }
     },
   ],
   protect: [
@@ -130,6 +171,7 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Floor on long spot",
       summary: "Buy OTM put to cap downside on an existing long.",
       legs: "Existing long spot + Long 1x OTM put",
+      greeks: { delta: 0.55, gamma: 0.008, theta: -0.04, vega: 0.12 }
     },
     {
       name: "Collar",
@@ -138,7 +180,17 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Capped up/down, low cost",
       summary: "Buy put and finance it by selling OTM call.",
       legs: "Long spot + Long 1x OTM put + Short 1x OTM call",
+      greeks: { delta: 0.35, gamma: -0.002, theta: 0.05, vega: -0.02 }
     },
+    {
+      name: "Put Backspread",
+      tier: "speculative",
+      horizons: ["medium"],
+      payoffLabel: "Unlimited down, safe up",
+      summary: "Short 1x higher put, long 2x lower puts.",
+      legs: "Short 1x Put(A) + Long 2x Put(B)",
+      greeks: { delta: -0.45, gamma: 0.022, theta: -0.12, vega: 0.35 }
+    }
   ],
   rangebound: [
     {
@@ -147,7 +199,17 @@ const STRATEGY_LIBRARY = {
       horizons: ["medium"],
       payoffLabel: "High-prob range income",
       summary: "Short OTM put/call spreads around current price.",
-      legs: "Short 1x OTM put + Long 1x further OTM put + Short 1x OTM call + Long 1x further OTM call",
+      legs: "Short 1x OTM P/C Spreads",
+      greeks: { delta: 0.02, gamma: -0.025, theta: 0.35, vega: -0.22 }
+    },
+    {
+      name: "Iron Butterfly",
+      tier: "medium",
+      horizons: ["short", "medium"],
+      payoffLabel: "Aggressive range credit",
+      summary: "Short ATM call/put, Long OTM call/put.",
+      legs: "Short 1x ATM Call + Short 1x ATM Put + Long Wing Protections",
+      greeks: { delta: 0.00, gamma: -0.045, theta: 0.55, vega: -0.42 }
     },
     {
       name: "Short Strangle",
@@ -156,6 +218,7 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Max theta, undefined risk",
       summary: "Short OTM put and call, expects price to stay in band.",
       legs: "Short 1x OTM put + Short 1x OTM call",
+      greeks: { delta: 0.05, gamma: -0.015, theta: 0.28, vega: -0.18 }
     },
   ],
   breakout: [
@@ -166,6 +229,16 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Long vol both ways",
       summary: "Buy ATM call + put, profits from big move either way.",
       legs: "Long 1x ATM call + Long 1x ATM put",
+      greeks: { delta: 0.05, gamma: 0.055, theta: -0.85, vega: 1.15 }
+    },
+    {
+      name: "Reverse Iron Condor",
+      tier: "medium",
+      horizons: ["short", "medium"],
+      payoffLabel: "Defined-risk breakout",
+      summary: "Buy OTM spreads, profits if price leaves the range.",
+      legs: "Long 1x OTM Call Spread + Long 1x OTM Put Spread",
+      greeks: { delta: 0.02, gamma: 0.012, theta: -0.15, vega: 0.25 }
     },
     {
       name: "Long Strangle",
@@ -174,6 +247,7 @@ const STRATEGY_LIBRARY = {
       payoffLabel: "Cheaper long vol",
       summary: "Buy OTM call and put, needs larger move to pay off.",
       legs: "Long 1x OTM call + Long 1x OTM put",
+      greeks: { delta: 0.08, gamma: 0.035, theta: -0.45, vega: 0.75 }
     },
   ],
 };
@@ -201,6 +275,9 @@ export default function OptionsStrategySimulator({
 }) {
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
+  const [selectedStrategyId, setSelectedStrategyId] = useState(null);
+  const [tradeAmount, setTradeAmount] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const strategies = useMemo(() => {
     if (!selectedView || !selectedHorizon) return [];
@@ -222,6 +299,27 @@ export default function OptionsStrategySimulator({
   }, [selectedView, selectedHorizon]);
 
   const visible = strategies.slice(0, maxVisible);
+  const selectedStrategy = visible.find(s => s.id === selectedStrategyId);
+
+  const handleExecute = async () => {
+    if (!selectedStrategy || !onStrategyChosen) return;
+    const amt = Number(tradeAmount);
+    if (!amt || amt <= 0) {
+      alert("Please enter a valid amount.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await onStrategyChosen({
+        ...selectedStrategy,
+        notional: amt
+      });
+      setSelectedStrategyId(null);
+      setTradeAmount("");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div
@@ -410,21 +508,16 @@ export default function OptionsStrategySimulator({
               <thead>
                 <tr>
                   <th style={{ textAlign: "left" }}>Strategy</th>
-                  <th style={{ textAlign: "left" }}>Tier</th>
-                  <th style={{ textAlign: "left" }}>Est. prob.</th>
-                  <th style={{ textAlign: "left" }}>Payoff profile</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((s) => {
+                 {visible.map((s) => {
                   const tier = TIER_META[s.tier] || TIER_META.medium;
+                  const isSelected = s.id === selectedStrategyId;
                   return (
+                    <React.Fragment key={s.id}>
                     <tr
-                      key={s.id}
                       onClick={() =>
-                        onStrategyChosen && onStrategyChosen(s)
+                        setSelectedStrategyId(prev => prev === s.id ? null : s.id)
                       }
-                      style={{ cursor: "pointer" }}
+                      style={{ cursor: "pointer", background: isSelected ? "rgba(56,189,248,0.1)" : "" }}
                     >
                       <td>
                         <div
@@ -438,7 +531,7 @@ export default function OptionsStrategySimulator({
                             style={{
                               fontSize: "0.85rem",
                               fontWeight: 600,
-                              color: "#e2e8f0",
+                              color: isSelected ? "#38bdf8" : "#e2e8f0",
                             }}
                           >
                             {s.name}
@@ -474,6 +567,83 @@ export default function OptionsStrategySimulator({
                         </span>
                       </td>
                       <td style={{ fontWeight: 600, color: "#38bdf8" }}>
+                        {(s.probability * 100).toFixed(0)}%
+                      </td>
+                      <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>
+                    </tr>
+                    {isSelected && (
+                      <tr key={`${s.id}-details`} className="strategy-details-row">
+                        <td colSpan="4" style={{ padding: "16px", background: "rgba(15,23,42,0.4)", borderBottom: "1px solid rgba(56,189,248,0.2)" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+                            {/* Greeks */}
+                            <div>
+                              <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Strategy Greeks</div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
+                                <div className="greek-box">
+                                  <label>Delta</label>
+                                  <strong>{s.greeks?.delta}</strong>
+                                </div>
+                                <div className="greek-box">
+                                  <label>Gamma</label>
+                                  <strong>{s.greeks?.gamma}</strong>
+                                </div>
+                                <div className="greek-box">
+                                  <label>Theta</label>
+                                  <strong>{s.greeks?.theta}</strong>
+                                </div>
+                                <div className="greek-box">
+                                  <label>Vega</label>
+                                  <strong>{s.greeks?.vega}</strong>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Execution */}
+                            <div>
+                              <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Trade Execution</div>
+                              <div style={{ display: "flex", gap: "8px" }}>
+                                <input 
+                                  type="number"
+                                  placeholder="Amount (USD)"
+                                  value={tradeAmount}
+                                  onChange={(e) => setTradeAmount(e.target.value)}
+                                  style={{
+                                    flex: 1,
+                                    background: "rgba(15,23,42,0.6)",
+                                    border: "1px solid rgba(148,163,184,0.3)",
+                                    borderRadius: "6px",
+                                    padding: "8px",
+                                    color: "#fff",
+                                    fontSize: "0.85rem"
+                                  }}
+                                />
+                                <button
+                                  onClick={handleExecute}
+                                  disabled={isSubmitting}
+                                  style={{
+                                    background: "var(--color-primary, #38bdf8)",
+                                    color: "#000",
+                                    border: "none",
+                                    borderRadius: "6px",
+                                    padding: "0 16px",
+                                    fontWeight: "600",
+                                    fontSize: "0.85rem",
+                                    cursor: "pointer",
+                                    transition: "opacity 0.2s"
+                                  }}
+                                >
+                                  {isSubmitting ? "..." : "Execute"}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
+                  );
+                })}
+ontWeight: 600, color: "#38bdf8" }}>
                         {(s.probability * 100).toFixed(0)}%
                       </td>
                       <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>

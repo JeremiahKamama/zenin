@@ -834,6 +834,9 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("base");
   const [openSections, setOpenSections] = useState(() => new Set());
+  const [finvizData, setFinvizData] = useState(null);
+  const [finvizLoading, setFinvizLoading] = useState(false);
+  const [finvizError, setFinvizError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -911,6 +914,31 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
       controller.abort();
     };
   }, [normalizedSymbol, preferredTheme, preferredCategory]);
+
+  useEffect(() => {
+    if (!normalizedSymbol || (asset?.type && asset.type !== "stock")) {
+      setFinvizData(null);
+      return;
+    }
+    
+    let isMounted = true;
+    async function fetchFinviz() {
+      setFinvizLoading(true);
+      setFinvizError(null);
+      try {
+        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${normalizedSymbol}`);
+        if (!res.ok) throw new Error("Market intelligence unavailable");
+        const data = await res.json();
+        if (isMounted) setFinvizData(data);
+      } catch (err) {
+        if (isMounted) setFinvizError(err.message);
+      } finally {
+        if (isMounted) setFinvizLoading(false);
+      }
+    }
+    fetchFinviz();
+    return () => { isMounted = false; };
+  }, [normalizedSymbol, asset?.type]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -1066,16 +1094,120 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
           >
             {framework.deepTabLabel}
           </button>
+          {asset?.type !== "crypto" && (
+            <button
+              type="button"
+              className={`company-page-tab ${activeTab === "intel" ? "active-intel" : ""}`}
+              onClick={() => setActiveTab("intel")}
+              style={{
+                borderBottomColor: activeTab === "intel" ? "var(--color-primary)" : "transparent",
+                color: activeTab === "intel" ? "var(--color-text-primary)" : "var(--color-text-secondary)"
+              }}
+            >
+              Market Intel
+            </button>
+          )}
         </div>
 
         <div className="company-page-legend">
-          {activeTab === "base" ? framework.baseLegend : framework.deepLegend}
+          {activeTab === "base" ? framework.baseLegend : activeTab === "deep" ? framework.deepLegend : "Real-time market intelligence: Analyst sentiment, insider activity, and latest news from Finviz."}
         </div>
 
         {loading && !profile ? (
           <div className="company-page-empty">Loading company profile...</div>
         ) : error ? (
           <div className="company-page-empty">{error}</div>
+        ) : activeTab === "intel" ? (
+          <div className="company-page-intel">
+            {finvizLoading ? (
+              <div className="company-page-empty">Fetching market intelligence...</div>
+            ) : finvizError ? (
+              <div className="company-page-empty">Market intelligence unavailable ({finvizError})</div>
+            ) : !finvizData ? (
+              <div className="company-page-empty">No intelligence data found for this symbol.</div>
+            ) : (
+              <div className="intel-content">
+                {/* Analyst Ratings */}
+                <section className="intel-section">
+                  <h3 className="intel-title">Analyst Ratings</h3>
+                  <div className="intel-table-wrap">
+                    <table className="intel-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Action</th>
+                          <th>Analyst</th>
+                          <th>Rating</th>
+                          <th>Target</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {finvizData.ratings?.slice(0, 10).map((r, i) => (
+                          <tr key={`rate-${i}`}>
+                            <td>{r.date}</td>
+                            <td><span className={`intel-status ${String(r.action).toLowerCase().includes('up') ? 'positive' : String(r.action).toLowerCase().includes('down') ? 'negative' : ''}`}>{r.action}</span></td>
+                            <td>{r.analyst}</td>
+                            <td>{r.rating}</td>
+                            <td>{r.price_target}</td>
+                          </tr>
+                        ))}
+                        {!finvizData.ratings?.length && <tr><td colSpan="5">No recent ratings found.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                {/* Insider Trading */}
+                <section className="intel-section">
+                  <h3 className="intel-title">Insider Trading</h3>
+                  <div className="intel-table-wrap">
+                    <table className="intel-table">
+                      <thead>
+                        <tr>
+                          <th>Owner</th>
+                          <th>Relationship</th>
+                          <th>Date</th>
+                          <th>Type</th>
+                          <th>Value</th>
+                          <th>Shares</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {finvizData.insider?.slice(0, 10).map((ins, i) => (
+                          <tr key={`ins-${i}`}>
+                            <td>{ins.owner}</td>
+                            <td>{ins.relationship}</td>
+                            <td>{ins.date}</td>
+                            <td><span className={`intel-status ${String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : String(ins.transaction).toLowerCase().includes('sale') ? 'negative' : ''}`}>{ins.transaction}</span></td>
+                            <td>{ins.value}</td>
+                            <td>{ins.shares}</td>
+                          </tr>
+                        ))}
+                        {!finvizData.insider?.length && <tr><td colSpan="6">No recent insider trades found.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                {/* News Feed */}
+                <section className="intel-section">
+                  <h3 className="intel-title">Latest News</h3>
+                  <div className="intel-news-list">
+                    {finvizData.news?.slice(0, 12).map((n, i) => (
+                      <div key={`news-${i}`} className="intel-news-item">
+                        <span className="news-time">{n.timestamp}</span>
+                        <div className="news-body">
+                          <p className="news-headline">{n.headline}</p>
+                          <span className="news-source">{n.source}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {!finvizData.news?.length && <p>No recent news found.</p>}
+                  </div>
+                </section>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="company-page-sections">
             {visibleSections.map((section, idx) => {

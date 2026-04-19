@@ -485,9 +485,15 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           <div className="chart-header-controls">
             <div className="asset-price-mini">
               <span className="price">${asset.price?.toFixed(2)}</span>
-              <span className={`change ${asset.priceChangePercent >= 0 ? "positive" : "negative"}`}>
-                {asset.priceChangePercent >= 0 ? "+" : ""}{asset.priceChangePercent?.toFixed(2)}%
-              </span>
+              {asset.isMarketOpen === false ? (
+                <span className="market-status-badge closed" style={{ color: "var(--color-text-secondary)", marginLeft: "8px", fontSize: "0.85rem" }}>
+                  — Market Closed ({asset.marketStatus || 'Weekend/Holiday'})
+                </span>
+              ) : (
+                <span className={`change ${asset.priceChangePercent >= 0 ? "positive" : "negative"}`}>
+                  {asset.priceChangePercent >= 0 ? "+" : ""}{asset.priceChangePercent?.toFixed(2)}%
+                </span>
+              )}
               {assetType === "crypto" && historySource ? (
                 <span className="chart-source-chip">
                   Source: {historySource === "hyperliquid" ? "Hyperliquid" : historySource === "coingecko" ? "CoinGecko (fallback)" : historySource}

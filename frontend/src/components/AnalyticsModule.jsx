@@ -730,61 +730,6 @@ export function AnalyticsModule({ backendUrl }) {
                 />
               </div>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                  gap: 14,
-                }}
-              >
-                <AnalyticsTableCard
-                  title="Options volume per asset"
-                  subtitle="Cross-asset options volume for available crypto underlyings"
-                  emptyText="No options volume rows returned yet."
-                  columns={[
-                    { key: "asset", label: "Asset" },
-                    { key: "exchange", label: "Route" },
-                    {
-                      key: "volumeUsd",
-                      label: "Volume",
-                      align: "right",
-                      render: (v, row) =>
-                        formatMoney(v ?? row.volume ?? null),
-                    },
-                  ]}
-                  rows={(cryptoData.optionsVolumeByAsset || []).map(
-                    (row, idx) => ({
-                      id: row.id || `opt-vol-${idx}`,
-                      asset: row.asset,
-                      exchange: row.exchange,
-                      volumeUsd: row.volumeUsd ?? row.volume,
-                    })
-                  )}
-                />
-
-                <AnalyticsTableCard
-                  title="Options max pain"
-                  subtitle="Max pain by asset & expiry"
-                  emptyText="No max pain rows returned yet."
-                  columns={[
-                    { key: "asset", label: "Asset" },
-                    { key: "expiry", label: "Expiry" },
-                    {
-                      key: "maxPain",
-                      label: "Max Pain",
-                      align: "right",
-                      render: (v) => formatMoney(v, 0),
-                    },
-                    { key: "exchange", label: "Route", align: "right" },
-                  ]}
-                  rows={(cryptoData.optionsMaxPain || []).map((row, idx) => ({
-                    id: row.id || `maxpain-${idx}`,
-                    asset: row.asset,
-                    expiry: row.expiry,
-                    maxPain: row.maxPain,
-                    exchange: row.exchange,
-                  }))}
-                />
               </div>
             </>
           ) : activeTab === "options" ? (

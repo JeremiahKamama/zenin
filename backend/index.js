@@ -880,10 +880,13 @@ function fetchYFinancePrices(originalSymbols) {
     }
 
     const { toYF, fromYF } = buildSymbolMaps(originalSymbols);
-    const yfSymbols = [...new Set(Object.values(toYF))]; // deduplicated YF tickers
+    // Modified to pass objects with type info if possible, otherwise default to stock
+    const payload = originalSymbols.map(s => ({
+      symbol: s,
+      type: "stock" // We could improve this by infering type from symbol if needed
+    }));
 
     console.log("Fetching prices — original:", originalSymbols);
-    console.log("Normalised YF tickers:     ", yfSymbols);
     // const safeSymbol = sanitizeSymbol(symbol);
     const child = spawn("python3", ["fetch_prices.py"], { cwd: __dirname });
     let stdout = "";
@@ -910,8 +913,12 @@ function fetchYFinancePrices(originalSymbols) {
       // Re-key results from YF ticker back to the original symbol
       const result = {};
       for (const orig of originalSymbols) {
-        const yf = toYF[orig];
-        result[orig] = yfPrices[yf] || { price: null, priceChangePercent: null };
+        result[orig] = yfPrices[orig] || { 
+          price: null, 
+          priceChangePercent: null,
+          isMarketOpen: true,
+          marketStatus: "unknown"
+        };
       }
       resolve(result);
     });
@@ -921,8 +928,8 @@ function fetchYFinancePrices(originalSymbols) {
       resolve({});
     });
 
-    // Send the normalised YF tickers to the Python script
-    child.stdin.write(JSON.stringify(yfSymbols));
+    // Send the payload to the Python script
+    child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
 
     // Generous timeout — international exchanges can be slow
@@ -1329,6 +1336,47 @@ app.get("/api/search", async (req, res) => {
     res.json({ results });
   } catch (error) {
     res.status(502).json({ error: error.message });
+  }
+});
+
+const FINVIZ_CACHE = new Map();
+const FINVIZ_CACHE_TTL = 3600 * 1000; // 1 hour
+
+app.get("/api/finviz", async (req, res) => {
+  const symbol = String(req.query.symbol || "").trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: "symbol query is required" });
+
+  // Cache check
+  const now = Date.now();
+  if (FINVIZ_CACHE.has(symbol)) {
+    const entry = FINVIZ_CACHE.get(symbol);
+    if (now - entry.timestamp < FINVIZ_CACHE_TTL) {
+      return res.json(entry.data);
+    }
+  }
+
+  try {
+    const child = spawn("python3", ["scripts/fetch_finviz.py", symbol], { cwd: __dirname });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        console.error("Finviz scraper failed:", stderr);
+        return res.status(500).json({ error: "Scraper failed" });
+      }
+      try {
+        const data = JSON.parse(stdout);
+        FINVIZ_CACHE.set(symbol, { timestamp: now, data });
+        res.json(data);
+      } catch (e) {
+        res.status(500).json({ error: "Failed to parse scraper output" });
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

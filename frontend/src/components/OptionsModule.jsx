@@ -36,11 +36,8 @@ export function OptionsModule({activeOptionsTrades,
   const [whaleMinNotional, setWhaleMinNotional] = useState(10000);
   const [whaleSource, setWhaleSource] = useState("derive");
   
-const [strategyTradeModal, setStrategyTradeModal] = useState(null);
-// shape: { asset, strategy, probability, description }
-const [strategyAmount, setStrategyAmount] = useState("");
+// strategy states removed, now handled inline
 const [strategySubmitting, setStrategySubmitting] = useState(false);
-const [strategyError, setStrategyError] = useState("");
 
 
   const closeOptionTrade = (id) => {
@@ -56,57 +53,35 @@ const [strategyError, setStrategyError] = useState("");
   };
 
 
-const handleStrategyChosen = (strategy) => {
-  // `strategy` can include whatever OptionsStrategySimulator returns:
-  // { name, probability, legs, notes, ... }
-  setStrategyError("");
-  setStrategyAmount("");
-  setStrategyTradeModal({
-    asset: activeAsset,
-    strategy,
-  });
-};
-
-const handleConfirmStrategyTrade = async () => {
-  if (!strategyTradeModal) return;
-  const notional = Number(strategyAmount);
-  if (!Number.isFinite(notional) || notional <= 0) {
-    setStrategyError("Enter a valid notional amount greater than zero.");
-    return;
-  }
-
+const handleStrategyChosen = async (tradePayload) => {
+  // `tradePayload` now includes { ...strategy, notional }
+  if (!tradePayload || !tradePayload.notional) return;
+  
   setStrategySubmitting(true);
   try {
-    const base = strategyTradeModal.strategy;
     const id = `sim-${Date.now()}`;
-
     const newTrade = {
       id,
-      asset: strategyTradeModal.asset,
-      strategy: base.name || base.label || "Strategy",
+      asset: activeAsset,
+      strategy: tradePayload.name || tradePayload.label || "Strategy",
       status: "OPEN",
       executedAt: new Date().toISOString(),
-      legs: base.legs || [],
-      netPremiumAtEntry: base.netPremiumAtEntry ?? 1.0,
-      qty: base.qty ?? 1,
-      totalNotional: notional,
+      legs: tradePayload.legs || [],
+      netPremiumAtEntry: tradePayload.netPremiumAtEntry ?? 1.0,
+      qty: tradePayload.qty ?? 1,
+      totalNotional: tradePayload.notional,
     };
 
     // Push into active options trades
     setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
-
-    // Optional: here you could POST to your backend /api/db/execute-strategy
-
-    setStrategyTradeModal(null);
-    setStrategyAmount("");
-    setStrategyError("");
   } catch (err) {
     console.error("Failed to execute strategy", err);
-    setStrategyError("Failed to execute strategy. Please try again.");
   } finally {
     setStrategySubmitting(false);
   }
 };
+
+// handleConfirmStrategyTrade removed as it is now handled inline by handleStrategyChosen
 
 // OptionsModule.jsx
 
@@ -792,139 +767,6 @@ useEffect(() => {
         activeExpiry={activeExpiry}
       />
 
-    {strategyTradeModal && (
-  <div
-    className="connect-account-overlay"
-    style={{
-      position: "fixed",
-      inset: 0,
-      background: "rgba(15,23,42,0.85)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 50,
-    }}
-    onClick={() => !strategySubmitting && setStrategyTradeModal(null)}
-  >
-    <div
-      className="connect-account-window"
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        width: 420,
-        maxWidth: "90vw",
-        background: "rgba(15,23,42,0.98)",
-        borderRadius: 16,
-        border: "1px solid rgba(51,65,85,0.8)",
-        padding: 20,
-        color: "#e2e8f0",
-      }}
-    >
-      <div
-        className="settings-window-header"
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}
-      >
-        <h2 style={{ fontSize: 16, fontWeight: 600 }}>
-          Execute Strategy
-        </h2>
-        <button
-          onClick={() => !strategySubmitting && setStrategyTradeModal(null)}
-          style={{
-            border: "none",
-            background: "transparent",
-            color: "#94a3b8",
-            cursor: "pointer",
-            fontSize: 18,
-          }}
-        >
-          ×
-        </button>
-      </div>
-
-      <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 12 }}>
-        {strategyTradeModal.strategy.name || "Selected strategy"} on{" "}
-        <strong>{strategyTradeModal.asset}</strong>.
-      </p>
-
-      <label
-        className="settings-field"
-        style={{ display: "block", marginBottom: 12, fontSize: 13 }}
-      >
-        <span style={{ display: "block", marginBottom: 4, color: "#cbd5e1" }}>
-          Notional amount (USD)
-        </span>
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={strategyAmount}
-          onChange={(e) => setStrategyAmount(e.target.value)}
-          style={{
-            width: "100%",
-            background: "#020617",
-            borderRadius: 8,
-            border: "1px solid rgba(51,65,85,0.9)",
-            padding: "8px 10px",
-            color: "#e2e8f0",
-            fontSize: 13,
-          }}
-          placeholder="e.g. 1000"
-        />
-      </label>
-
-      {strategyError && (
-        <p
-          style={{
-            color: "#f97373",
-            fontSize: 12,
-            marginBottom: 8,
-          }}
-        >
-          {strategyError}
-        </p>
-      )}
-
-      <div
-        className="settings-inline-actions"
-        style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}
-      >
-        <button
-          className="settings-secondary-btn"
-          onClick={() => !strategySubmitting && setStrategyTradeModal(null)}
-          style={{
-            borderRadius: 8,
-            border: "1px solid rgba(51,65,85,0.8)",
-            background: "transparent",
-            color: "#cbd5e1",
-            padding: "6px 10px",
-            fontSize: 13,
-            cursor: "pointer",
-          }}
-          disabled={strategySubmitting}
-        >
-          Cancel
-        </button>
-        <button
-          className="settings-primary-btn"
-          onClick={handleConfirmStrategyTrade}
-          disabled={strategySubmitting}
-          style={{
-            borderRadius: 8,
-            border: "none",
-            background: "#22c55e",
-            color: "#020617",
-            padding: "6px 14px",
-            fontSize: 13,
-            fontWeight: 500,
-            cursor: "pointer",
-            opacity: strategySubmitting ? 0.8 : 1,
-          }}
-        >
-          {strategySubmitting ? "Placing…" : "Execute Trade"}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
     </div>
   );
 }

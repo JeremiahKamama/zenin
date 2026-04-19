@@ -5683,3 +5683,167 @@ button {
   font-size: 0.85rem;
   color: var(--color-text-secondary, #94a3b8);
 }
+/* ── Market Intelligence (Finviz Data) ────────────────────────── */
+.company-page-intel {
+  padding: 16px 4px;
+  animation: fadeIn 0.4s ease-out;
+}
+
+.intel-section {
+  margin-bottom: 32px;
+}
+
+.intel-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f8fafc;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.intel-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.3);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.intel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.intel-table th {
+  padding: 12px 14px;
+  color: #94a3b8;
+  font-weight: 500;
+  background: rgba(148, 163, 184, 0.05);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+}
+
+.intel-table td {
+  padding: 10px 14px;
+  color: #e2e8f0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+}
+
+.intel-table tr:hover td {
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.intel-status {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.intel-status.positive {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.intel-status.negative {
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.1);
+}
+
+.intel-news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intel-news-item {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.3);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  transition: all 0.2s ease;
+}
+
+.intel-news-item:hover {
+  border-color: rgba(56, 189, 248, 0.3);
+  transform: translateX(4px);
+}
+
+.news-time {
+  font-size: 0.75rem;
+  color: #64748b;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.news-body {
+  flex: 1;
+}
+
+.news-headline {
+  font-size: 0.9rem;
+  color: #f1f5f9;
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.news-source {
+  font-size: 0.75rem;
+  color: var(--color-primary);
+  opacity: 0.8;
+}
+
+.active-intel {
+  border-bottom: 2px solid var(--color-primary) !important;
+}
+
+/* ── Options Strategy Simulator ────────────────────────────── */
+.greek-box {
+  background: rgba(148, 163, 184, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.greek-box:hover {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.2);
+}
+
+.greek-box label {
+  font-size: 0.6rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+
+.greek-box strong {
+  font-size: 0.85rem;
+  color: #f1f5f9;
+}
+
+.strategy-details-row {
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

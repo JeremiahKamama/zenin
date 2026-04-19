@@ -533,12 +533,15 @@ useEffect(() => {
                         <span className="price-val">
                           {asset.market === "Treasury" ? "" : "$"}
                           {asset.price.toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                             })}
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
                           {asset.market === "Treasury" ? "%" : ""}
                         </span>
-                        {asset.priceChangePercent != null &&
+                        {asset.isMarketOpen === false && (
+                          <span className="market-closed-dash" title={`Market Closed: ${asset.marketStatus || 'Holiday/Weekend'}`} style={{ color: "var(--color-text-secondary)", marginLeft: "4px", fontSize: "0.9rem" }}>–</span>
+                        )}
+                        {asset.priceChangePercent != null && asset.isMarketOpen !== false &&
                           (() => {
                             const change = Number(asset.priceChangePercent);
                             if (Number.isNaN(change)) return null;

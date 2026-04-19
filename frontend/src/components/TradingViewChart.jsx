@@ -70,8 +70,12 @@ export function TradingViewChart({
     // Clean up existing series map if replacing all data
     const currentSeriesNames = series.map(s => s.name);
     Object.keys(seriesRef.current).forEach(name => {
-      if (!currentSeriesNames.includes(name)) {
-        chartRef.current.removeSeries(seriesRef.current[name]);
+      if (!currentSeriesNames.includes(name) && chartRef.current?.removeSeries) {
+        try {
+          chartRef.current.removeSeries(seriesRef.current[name]);
+        } catch (e) {
+          console.warn("TradingViewChart: Error removing series", e);
+        }
         delete seriesRef.current[name];
       }
     });
@@ -79,26 +83,28 @@ export function TradingViewChart({
     // Add or update series
     series.forEach(({ name, data, type = 'area', color = '#38bdf8' }) => {
       let activeSeries = seriesRef.current[name];
+      const chart = chartRef.current;
+      if (!chart || typeof chart.addLineSeries !== 'function') return;
 
       if (!activeSeries) {
         // Create new series
-        if (type === 'area') {
-          activeSeries = chartRef.current.addAreaSeries({
+        if (type === 'area' && typeof chart.addAreaSeries === 'function') {
+          activeSeries = chart.addAreaSeries({
             lineColor: color,
             topColor: `${color}88`,
             bottomColor: `${color}00`,
             lineWidth: 2,
           });
-        } else if (type === 'candlestick') {
-          activeSeries = chartRef.current.addCandlestickSeries({
+        } else if (type === 'candlestick' && typeof chart.addCandlestickSeries === 'function') {
+          activeSeries = chart.addCandlestickSeries({
             upColor: '#22c55e',
             downColor: '#ef4444',
             borderVisible: false,
             wickUpColor: '#22c55e',
             wickDownColor: '#ef4444',
           });
-        } else {
-          activeSeries = chartRef.current.addLineSeries({
+        } else if (typeof chart.addLineSeries === 'function') {
+          activeSeries = chart.addLineSeries({
             color: color,
             lineWidth: 2,
           });
@@ -133,7 +139,11 @@ export function TradingViewChart({
       }
     });
     
-    chartRef.current.timeScale().fitContent();
+    if (chartRef.current?.timeScale) {
+      try {
+        chartRef.current.timeScale().fitContent();
+      } catch (e) {}
+    }
   }, [series]);
 
   return (
