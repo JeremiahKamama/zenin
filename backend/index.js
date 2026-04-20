@@ -20,6 +20,58 @@ const { ANNUAL_RETURNS, REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equitie
 
 const app = express();
 
+// --- EODHD Macro Indicators Configuration ---
+const EODHD_API_TOKEN = String(
+  process.env.EODHD_API_TOKEN ||
+  process.env.EODHD_API_KEY ||
+  process.env.EODHD_TOKEN ||
+  ""
+).trim().replace(/^,+|,+$/g, "");
+
+const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const macroIndicatorsCache = new Map();
+
+const MACRO_INDICATOR_CONFIG = [
+  { 
+    key: "consumer_price_index", 
+    label: "CPI", 
+    unit: "Index", 
+    aliases: ["cpi", "consumer_prices"] 
+  },
+  { 
+    key: "inflation_consumer_prices_annual", 
+    label: "Inflation Rate", 
+    unit: "%", 
+    aliases: ["inflation_rate", "inflation_consumer_prices_annual_pct"] 
+  },
+  { 
+    key: "gdp_growth_annual", 
+    label: "GDP Growth Rate", 
+    unit: "%", 
+    aliases: ["gdp_growth_rate", "real_gdp_growth", "gdp_growth_annual_pct"] 
+  },
+  { 
+    key: "real_interest_rate", 
+    label: "Real Interest Rate", 
+    unit: "%", 
+    aliases: ["real_interest_rates"] 
+  },
+  { 
+    key: "unemployment_total_percent", 
+    label: "Unemployment Rate", 
+    unit: "%", 
+    aliases: ["unemployment_rate", "unemployment_total"] 
+  },
+  { 
+    key: "inflation_gdp_deflator_annual", 
+    label: "Inflation Rate (GDP Deflator)", 
+    unit: "%", 
+    aliases: ["gdp_deflator_inflation_rate"] 
+  }
+];
+// --------------------------------------------
+
+
 // Security headers
 app.use(helmet.contentSecurityPolicy({
   directives: {
@@ -2153,13 +2205,24 @@ app.get("/api/macro-indicators", async (req, res) => {
 
     // Prefer one bulk request (more reliable and far cheaper than multiple indicator calls).
     const bulkUrl = `${base}?${defaultParams.toString()}`;
+    
+    // Diagnostic mask for token in logs
+    const maskedUrl = bulkUrl.replace(EODHD_API_TOKEN, EODHD_API_TOKEN.slice(0, 4) + "..." + EODHD_API_TOKEN.slice(-2));
+    console.log(`[EODHD] Fetching macro indicators for ${country}: ${maskedUrl}`);
+
     const bulkRes = await fetch(bulkUrl);
     const bulkText = await bulkRes.text();
+    
+    console.log(`[EODHD] Response status: ${bulkRes.status}`);
     if (!bulkRes.ok) {
+      console.error(`[EODHD] Error response body: ${bulkText.slice(0, 500)}`);
       throw new Error(`HTTP ${bulkRes.status} ${bulkText.slice(0, 200)}`);
     }
 
+    console.log(`[EODHD] Raw response sample: ${bulkText.slice(0, 200)}...`);
+
     let bulkData = null;
+
     try {
       bulkData = JSON.parse(bulkText);
     } catch {
@@ -2525,28 +2588,8 @@ const PREDICTION_CATEGORY_TAGS = {
 };
 const PREDICTION_EVENTS_FETCH_LIMIT = 160;
 const POLYMARKET_WEB_BASE_URL = "https://polymarket.com";
-const EODHD_API_TOKEN = String(
-  process.env.EODHD_API_TOKEN ||
-  process.env.EODHD_API_KEY ||
-  process.env.EODHD_TOKEN ||
-  ""
-).trim().replace(/^,+|,+$/g, "");
-const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const macroIndicatorsCache = new Map();
-const COUNTRY_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-let countryCatalogMemory = {
-  countries: [],
-  cachedAt: 0
-};
 
-const MACRO_INDICATOR_CONFIG = [
-  { key: "consumer_price_index", label: "CPI", unit: "Index", aliases: ["cpi"] },
-  { key: "inflation_consumer_prices_annual", label: "Inflation Rate", unit: "%", aliases: ["inflation_rate"] },
-  { key: "gdp_growth_annual", label: "GDP Growth Rate", unit: "%", aliases: ["gdp_growth_rate"] },
-  { key: "real_interest_rate", label: "Real Interest Rate", unit: "%", aliases: ["real_interest_rates"] },
-  { key: "unemployment_total_percent", label: "Unemployment Rate", unit: "%", aliases: ["unemployment_rate"] },
-  { key: "inflation_gdp_deflator_annual", label: "Inflation Rate (GDP Deflator)", unit: "%", aliases: ["gdp_deflator_inflation_rate"] }
-];
+
 
 function firstFiniteNumber(...values) {
   for (const value of values) {
@@ -2777,7 +2820,7 @@ function groupMacroPayloadByIndicator(payload) {
 
   if (Array.isArray(payload)) {
     payload.forEach((row) => {
-      const key = normalizeIndicatorKey(row?.indicator || row?.Indicator || row?.name || row?.Name);
+      const key = normalizeIndicatorKey(row?.indicator || row?.Indicator || row?.name || row?.Name || row?.label || row?.Label);
       if (!key) return;
       pushRows(key, [row]);
     });
