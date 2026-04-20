@@ -14,7 +14,8 @@ import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch } from "./utils/zeninFetch";
-import { Gatekeeper } from "./components/Gatekeeper";
+
+
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 

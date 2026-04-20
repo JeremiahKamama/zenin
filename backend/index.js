@@ -163,37 +163,8 @@ const writeLimiter = rateLimit({
 
 app.use(express.json({ limit: "100kb" }));
 
-// ---------------------------------------------------------------------------
-// Security Middleware: Shared Secret Check
-// ---------------------------------------------------------------------------
-const APP_ACCESS_SECRET = process.env.ZENIN_APP_SECRET || "";
 
-function requireSecret(req, res, next) {
-  // Allow health check and OPTIONS requests (preflight) to pass
-  if (req.path === "/health" || req.method === "OPTIONS") {
-    return next();
-  }
 
-  // If no secret is configured in the environment, allow all (for local dev ease, 
-  // but recommended to always set it in production).
-  if (!APP_ACCESS_SECRET) {
-    return next();
-  }
-
-  const providedSecret = req.headers["x-zenin-secret"];
-  if (providedSecret === APP_ACCESS_SECRET) {
-    return next();
-  }
-
-  console.warn(`[Security] Unauthorized access attempt to ${req.path} from ${req.ip}`);
-  res.status(401).json({ 
-    error: "unauthorized", 
-    reason: "A valid dashboard secret is required to access Zenin API routes." 
-  });
-}
-
-// Apply to all /api routes
-app.use("/api", requireSecret);
 
 
 function handleServerError(res, context, error) {
