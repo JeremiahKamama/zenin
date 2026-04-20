@@ -30,9 +30,11 @@ const EMPTY_OPTIONS = {
 
 const EMPTY_EQUITIES = {
   updatedAt: null,
-  assetClasses: [],
-  industries: [],
-  regions: [],
+  benchmarkPerformance: [],
+  annualReturns: [],
+  reitData: { benchmarks: [] },
+  mmfYields: [],
+  fundsList: [],
 };
 
 function formatMoney(value, digits = 2) {
@@ -204,7 +206,7 @@ function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" })
   );
 }
 
-function AnalyticsTableCard({ title, subtitle, columns, rows, emptyText }) {
+function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) {
   return (
     <div
       style={{
@@ -235,7 +237,7 @@ function AnalyticsTableCard({ title, subtitle, columns, rows, emptyText }) {
         </div>
       </div>
 
-      {rows.length === 0 ? (
+      {(rows || []).length === 0 ? (
         <div style={{ padding: "18px 6px 6px", fontSize: 13, color: "#94a3b8" }}>
           {emptyText}
         </div>

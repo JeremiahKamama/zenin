@@ -279,6 +279,7 @@ export default function OptionsStrategySimulator({
   const [selectedHorizon, setSelectedHorizon] = useState(null);
   const [selectedStrategyId, setSelectedStrategyId] = useState(null);
   const [tradeAmount, setTradeAmount] = useState("");
+  const [selectedDate, setSelectedDate] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const strategies = useMemo(() => {
@@ -314,48 +315,50 @@ export default function OptionsStrategySimulator({
     try {
       // Map heuristic strategy to real strikes in the chain
       const sorted = [...chain].sort((a, b) => a.strike - b.strike);
+      
+      // Filter chain by selectedDate if provided, otherwise atmosphere
       const atmIdx = sorted.findIndex(r => r.strike >= spotPrice);
       const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
       const atm = sorted[safeAtmIdx];
 
       let structuredLegs = [];
       const sName = selectedStrategy.name;
+      const targetExpiry = selectedDate || atm?.call?.expiry || atm?.put?.expiry;
 
       if (atm) {
-        if (sName === "Long Call") {
-          structuredLegs = [{ type: 'call', side: 'long', strike: atm.strike, qty: 1, expiry: atm.call?.expiry }];
+          structuredLegs = [{ type: 'call', side: 'long', strike: atm.strike, qty: 1, expiry: targetExpiry }];
         } else if (sName === "Long Put") {
-          structuredLegs = [{ type: 'put', side: 'long', strike: atm.strike, qty: 1, expiry: atm.put?.expiry }];
+          structuredLegs = [{ type: 'put', side: 'long', strike: atm.strike, qty: 1, expiry: targetExpiry }];
         } else if (sName === "Covered Call") {
           structuredLegs = [
             { type: 'spot', side: 'long', strike: spotPrice, qty: 1 },
-            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: atm.call?.expiry }
+            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: targetExpiry }
           ];
         } else if (sName === "Bull Put Spread") {
           structuredLegs = [
-            { type: 'put', side: 'short', strike: atm.strike, qty: 1, expiry: atm.put?.expiry },
-            { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 3)].strike, qty: 1, expiry: atm.put?.expiry }
+            { type: 'put', side: 'short', strike: atm.strike, qty: 1, expiry: targetExpiry },
+            { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 3)].strike, qty: 1, expiry: targetExpiry }
           ];
         } else if (sName === "Bull Call Spread") {
           structuredLegs = [
-            { type: 'call', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike, qty: 1, expiry: atm.call?.expiry },
-            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: atm.call?.expiry }
+            { type: 'call', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike, qty: 1, expiry: targetExpiry },
+            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: targetExpiry }
           ];
         } else if (sName === "Bear Call Spread") {
           structuredLegs = [
-            { type: 'call', side: 'short', strike: atm.strike, qty: 1, expiry: atm.call?.expiry },
-            { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 3)].strike, qty: 1, expiry: atm.call?.expiry }
+            { type: 'call', side: 'short', strike: atm.strike, qty: 1, expiry: targetExpiry },
+            { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 3)].strike, qty: 1, expiry: targetExpiry }
           ];
         } else if (sName === "Iron Condor") {
           structuredLegs = [
-            { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 5)].strike, qty: 1, expiry: atm.put?.expiry },
-            { type: 'put', side: 'short', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike, qty: 1, expiry: atm.put?.expiry },
-            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: atm.call?.expiry },
-            { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 5)].strike, qty: 1, expiry: atm.call?.expiry }
+            { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 5)].strike, qty: 1, expiry: targetExpiry },
+            { type: 'put', side: 'short', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike, qty: 1, expiry: targetExpiry },
+            { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 2)].strike, qty: 1, expiry: targetExpiry },
+            { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length-1, safeAtmIdx + 5)].strike, qty: 1, expiry: targetExpiry }
           ];
         } else {
           // Default fallback for other strategies
-          structuredLegs = [{ type: 'call', side: 'long', strike: atm.strike, qty: 1, expiry: atm.call?.expiry }];
+          structuredLegs = [{ type: 'call', side: 'long', strike: atm.strike, qty: 1, expiry: targetExpiry }];
         }
       }
 
@@ -367,6 +370,7 @@ export default function OptionsStrategySimulator({
       });
       setSelectedStrategyId(null);
       setTradeAmount("");
+      setSelectedDate("");
     } finally {
       setIsSubmitting(false);
     }
@@ -658,7 +662,26 @@ export default function OptionsStrategySimulator({
                               {/* Execution */}
                               <div>
                                 <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Trade Execution</div>
-                                <div style={{ display: "flex", gap: "8px" }}>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                                  <div style={{ position: "relative", flex: "1 1 120px" }}>
+                                    <input
+                                      type="date"
+                                      value={selectedDate}
+                                      min={new Date().toISOString().split("T")[0]}
+                                      max={(() => {
+                                        const now = new Date();
+                                        const horizon = TIME_HORIZONS.find(h => h.id === selectedHorizon);
+                                        if (!horizon) return undefined;
+                                        const maxDate = new Date();
+                                        maxDate.setDate(now.getDate() + (horizon.days || 30) + 14);
+                                        return maxDate.toISOString().split("T")[0];
+                                      })()}
+                                      onChange={(e) => setSelectedDate(e.target.value)}
+                                      className="options-leg-input"
+                                      style={{ paddingRight: "30px", width: "100%" }}
+                                    />
+                                    <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#94a3b8", fontSize: "14px" }}>📅</span>
+                                  </div>
                                   <input 
                                     type="number"
                                     placeholder="Amount (USD)"

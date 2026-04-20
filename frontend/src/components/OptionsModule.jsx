@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
@@ -68,7 +68,9 @@ export function OptionsModule({activeOptionsTrades,
   setActiveOptionsTrades,
   onOptionTradeExecuted,
   onOptionTradeClosed,
+  balance = 0
 }) {
+  const activeTradesRef = useRef(null);
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
   const [spotPrices, setSpotPrices] = useState({});
@@ -106,9 +108,18 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
     setActiveOptionsTrades((prev) => prev.filter((t) => t.id !== id));
   };
   const calculateOptionPnL = (trade) => {
-    if (trade.asset !== activeAsset || !chain || chain.length === 0) {
-      return { currentMark: null, pnl: null, delta: null, theta: null, isStale: true };
-    }
+    const isAssetStale = trade.asset !== activeAsset || !chain || chain.length === 0;
+    
+    // Default to stored entry values if live data isn't currently loaded for this asset
+    const result = {
+      currentMark: isAssetStale ? trade.netPremiumAtEntry : 0,
+      pnl: isAssetStale ? 0 : null,
+      delta: isAssetStale ? (trade.initialDelta || 0) : 0,
+      theta: isAssetStale ? (trade.initialTheta || 0) : 0,
+      isStale: isAssetStale
+    };
+
+    if (isAssetStale) return result;
 
     let totalMark = 0;
     let totalDelta = 0;
@@ -142,34 +153,67 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
       }
     });
 
-    const pnl = (totalMark - (trade.netPremiumAtEntry || 0)) * (trade.qty || 1);
-    return { currentMark: totalMark, pnl, delta: totalDelta, theta: totalTheta, isStale: false };
+    result.currentMark = totalMark;
+    result.delta = totalDelta;
+    result.theta = totalTheta;
+    result.pnl = (totalMark - (trade.netPremiumAtEntry || 0)) * (trade.qty || 1);
+    result.isStale = false;
+    return result;
   };
 
 
 const handleStrategyChosen = async (tradePayload) => {
-  // `tradePayload` now includes { ...strategy, notional }
   if (!tradePayload || !tradePayload.notional) return;
   
   setStrategySubmitting(true);
+  setOptionsError(""); // Clear any previous errors
+
   try {
-    // Calculate initial net premium from chain if legs provided
     let entryPremium = 0;
+    let initialDelta = 0;
+    let initialTheta = 0;
+
     if (tradePayload.legs && chain.length > 0) {
       tradePayload.legs.forEach(leg => {
         if (leg.type === 'spot') {
-          entryPremium += (leg.side === 'long' ? spotPrices[activeAsset] : -spotPrices[activeAsset]) || 0;
+          const spot = spotPrices[activeAsset] || 0;
+          entryPremium += (leg.side === 'long' ? spot : -spot);
+          initialDelta += (leg.side === 'long' ? 1 : -1);
         } else {
           const row = chain.find(r => Math.abs(r.strike - leg.strike) < 0.01);
           if (row) {
             const instr = leg.type === 'call' ? row.call : row.put;
             if (instr) {
               const mark = (Number(instr.bid || 0) + Number(instr.ask || 0)) / 2 || Number(instr.mark) || 0;
-              entryPremium += (leg.side === 'long' ? mark : -mark);
+              const delta = Number(instr.delta) || 0;
+              const theta = Number(instr.theta) || 0;
+              
+              if (leg.side === 'long') {
+                entryPremium += mark;
+                initialDelta += delta;
+                initialTheta += theta;
+              } else {
+                entryPremium -= mark;
+                initialDelta -= delta;
+                initialTheta -= theta;
+              }
             }
           }
         }
       });
+    }
+
+    // Balance Enforcement
+    const totalCost = (entryPremium || 0) * (tradePayload.qty || 1);
+    if (balance <= 0) {
+      setOptionsError("Execution blocked: Your account balance is zero or negative.");
+      setStrategySubmitting(false);
+      return;
+    }
+    if (totalCost > 0 && balance < totalCost) {
+      setOptionsError(`Insufficient balance. Required: $${totalCost.toFixed(2)}, Available: $${balance.toFixed(2)}`);
+      setStrategySubmitting(false);
+      return;
     }
 
     const id = `sim-${Date.now()}`;
@@ -181,19 +225,26 @@ const handleStrategyChosen = async (tradePayload) => {
       executedAt: new Date().toISOString(),
       legs: tradePayload.legs || [],
       netPremiumAtEntry: entryPremium || tradePayload.netPremiumAtEntry || 0,
+      initialDelta: initialDelta || 0,
+      initialTheta: initialTheta || 0,
       qty: tradePayload.qty ?? 1,
       totalNotional: tradePayload.notional,
     };
 
-    // Record into global state/backend
     if (onOptionTradeExecuted) {
       await onOptionTradeExecuted(newTrade);
     } else {
-      // Fallback to local only for simulation if no handler
       setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
     }
-} catch (err) {
+
+    // Smooth scroll to the Active Trades card
+    setTimeout(() => {
+      activeTradesRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 100);
+
+  } catch (err) {
     console.error("Failed to execute strategy", err);
+    setOptionsError("Strategy execution failed. See console for details.");
   } finally {
     setStrategySubmitting(false);
   }
@@ -553,7 +604,7 @@ useEffect(() => {
 
       {/* NEW: Active Options Trades Card */}
       {activeOptionsTrades && activeOptionsTrades.length > 0 && (
-        <div className="watchlist-panel glass" style={{ marginBottom: "16px", padding: "16px" }}>
+        <div ref={activeTradesRef} className="watchlist-panel glass" style={{ marginBottom: "16px", padding: "16px" }}>
           <div className="section-header">
             <h2>Active Options Trades</h2>
           </div>

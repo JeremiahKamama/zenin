@@ -926,7 +926,8 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
       setFinvizLoading(true);
       setFinvizError(null);
       try {
-        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${normalizedSymbol}`);
+        const finvizSymbol = normalizedSymbol.replace('.', '-');
+        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${finvizSymbol}`);
         if (!res.ok) throw new Error("Market intelligence unavailable");
         const data = await res.json();
         if (isMounted) setFinvizData(data);
@@ -1137,10 +1138,6 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
               type="button"
               className={`company-page-tab ${activeTab === "intel" ? "active-intel" : ""}`}
               onClick={() => setActiveTab("intel")}
-              style={{
-                borderBottomColor: activeTab === "intel" ? "var(--color-primary)" : "transparent",
-                color: activeTab === "intel" ? "var(--color-text-primary)" : "var(--color-text-secondary)"
-              }}
             >
               Market Intel
             </button>
@@ -1165,6 +1162,42 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
               <div className="company-page-empty">No intelligence data found for this symbol.</div>
             ) : (
               <div className="intel-content">
+                <div className="intel-header-bar">
+                  <div className="intel-header-info">
+                    <h2 className="intel-main-title">Market Intel & Signals</h2>
+                    {finvizData.header_meta && (
+                      <p className="intel-meta-subtitle">
+                        {finvizData.header_meta.sector} | {finvizData.header_meta.industry} | {finvizData.header_meta.country}
+                      </p>
+                    )}
+                  </div>
+                  <a 
+                    href={`https://finviz.com/quote.ashx?t=${finvizData.ticker || normalizedSymbol.replace('.', '-')}`} 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className="view-finviz-link"
+                  >
+                    View on Finviz ↗
+                  </a>
+                </div>
+
+                {/* Summary Metrics Grid */}
+                {finvizData.summary && Object.keys(finvizData.summary).length > 0 && (
+                  <section className="intel-section">
+                    <h3 className="section-subtitle">Snapshot Overview</h3>
+                    <div className="intel-summary-grid">
+                      {Object.entries(finvizData.summary).slice(0, 16).map(([label, value]) => (
+                        <div key={label} className="intel-summary-card">
+                          <span className="summary-label">{label}</span>
+                          <span className={`summary-value ${value?.includes('-') ? 'negative' : (value?.includes('%') && parseFloat(value) > 0) ? 'positive' : ''}`}>
+                            {value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
                 {/* Analyst Ratings */}
                 <section className="intel-section">
                   <h3 className="intel-title">Analyst Ratings</h3>
@@ -1185,11 +1218,11 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                             <td>{r.date}</td>
                             <td><span className={`intel-status ${String(r.action).toLowerCase().includes('up') ? 'positive' : String(r.action).toLowerCase().includes('down') ? 'negative' : ''}`}>{r.action}</span></td>
                             <td>{r.analyst}</td>
-                            <td>{r.rating}</td>
+                            <td className="rating-cell">{r.rating}</td>
                             <td>{r.price_target}</td>
                           </tr>
                         ))}
-                        {!finvizData.ratings?.length && <tr><td colSpan="5">No recent ratings found.</td></tr>}
+                        {!finvizData.ratings?.length && <tr><td colSpan="5" className="empty-table-msg">No recent ratings found.</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -1213,15 +1246,15 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                       <tbody>
                         {finvizData.insider?.slice(0, 10).map((ins, i) => (
                           <tr key={`ins-${i}`}>
-                            <td>{ins.owner}</td>
+                            <td className="owner-cell">{ins.owner}</td>
                             <td>{ins.relationship}</td>
                             <td>{ins.date}</td>
                             <td><span className={`intel-status ${String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : String(ins.transaction).toLowerCase().includes('sale') ? 'negative' : ''}`}>{ins.transaction}</span></td>
-                            <td>{ins.value}</td>
+                            <td className={String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : 'negative'}>{ins.value}</td>
                             <td>{ins.shares}</td>
                           </tr>
                         ))}
-                        {!finvizData.insider?.length && <tr><td colSpan="6">No recent insider trades found.</td></tr>}
+                        {!finvizData.insider?.length && <tr><td colSpan="6" className="empty-table-msg">No recent insider trades found.</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -1232,15 +1265,15 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                   <h3 className="intel-title">Latest News</h3>
                   <div className="intel-news-list">
                     {finvizData.news?.slice(0, 12).map((n, i) => (
-                      <div key={`news-${i}`} className="intel-news-item">
+                      <a key={`news-${i}`} className="intel-news-item" href={n.link} target="_blank" rel="noreferrer">
                         <span className="news-time">{n.timestamp}</span>
                         <div className="news-body">
                           <p className="news-headline">{n.headline}</p>
                           <span className="news-source">{n.source}</span>
                         </div>
-                      </div>
+                      </a>
                     ))}
-                    {!finvizData.news?.length && <p>No recent news found.</p>}
+                    {!finvizData.news?.length && <p className="empty-news-msg">No recent news found.</p>}
                   </div>
                 </section>
               </div>

@@ -2156,11 +2156,12 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         {activeSection === "Options" && (
           <OptionsModule
-  activeOptionsTrades={activeOptionsTrades}
-  setActiveOptionsTrades={setActiveOptionsTrades}
-  onOptionTradeExecuted={handleOptionTradeExecuted}
-  onOptionTradeClosed={handleOptionTradeClosed}
-/>
+            activeOptionsTrades={activeOptionsTrades}
+            setActiveOptionsTrades={setActiveOptionsTrades}
+            onOptionTradeExecuted={handleOptionTradeExecuted}
+            onOptionTradeClosed={handleOptionTradeClosed}
+            balance={balance}
+          />
         )}
 
         {activeSection === "Predictions" && (
