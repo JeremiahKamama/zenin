@@ -155,7 +155,8 @@ export function AnalyticsModule({ backendUrl }) {
   
   const [etfAssetToggle, setEtfAssetToggle] = useState("All");
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
-  const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
+  const [annualReturnsPageIndex, setAnnualReturnsPageIndex] = useState(0);
+  const ANNUAL_RETURNS_PAGE_SIZE = 10;
 
   useEffect(() => {
     let cancelled = false;
@@ -439,17 +440,11 @@ export function AnalyticsModule({ backendUrl }) {
                   gap: 14,
                 }}
               >
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background: "rgba(15,23,42,0.6)",
-                    padding: "10px 16px",
-                    borderRadius: 12,
-                    border: "1px solid rgba(148,163,184,0.12)"
-                  }}>
-                    <span style={{ fontSize: 13, color: "#94a3b8", fontWeight: 500 }}>Exchange Venue</span>
+                <AnalyticsTableCard
+                  title="Perpetual OI & funding"
+                  subtitle={`${selectedPerpExchange} perp markets for key assets`}
+                  emptyText={`No ${selectedPerpExchange} perp context rows returned yet.`}
+                  headerExtra={
                     <div style={{ display: "flex", gap: 4 }}>
                       {["Hyperliquid", "Binance", "Bybit"].map((ex) => (
                         <button
@@ -470,12 +465,7 @@ export function AnalyticsModule({ backendUrl }) {
                         </button>
                       ))}
                     </div>
-                  </div>
-
-                  <AnalyticsTableCard
-                    title="Perpetual OI & funding"
-                    subtitle={`${selectedPerpExchange} perp markets for key assets`}
-                    emptyText={`No ${selectedPerpExchange} perp context rows returned yet.`}
+                  }
                   columns={[
                     { key: "symbol", label: "Asset" },
                     {
@@ -494,7 +484,6 @@ export function AnalyticsModule({ backendUrl }) {
                   ]}
                   rows={cryptoPerps}
                 />
-              </div>
 
                 <div style={{
                   background: "rgba(0, 0, 0, 0.85)",
@@ -878,6 +867,45 @@ export function AnalyticsModule({ backendUrl }) {
                   title="Historical Annual Total Returns"
                   subtitle="20-year annual series (USD Total Return)"
                   emptyText="No historical returns data."
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        {annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE + 1} - {Math.min((annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE, equitiesData.annualReturns.length)} of {equitiesData.annualReturns.length}
+                      </span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button 
+                          disabled={annualReturnsPageIndex === 0}
+                          onClick={() => setAnnualReturnsPageIndex(p => Math.max(0, p - 1))}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            background: "rgba(30,41,59,0.7)",
+                            border: "1px solid rgba(148,163,184,0.2)",
+                            color: annualReturnsPageIndex === 0 ? "#475569" : "#e2e8f0",
+                            cursor: annualReturnsPageIndex === 0 ? "default" : "pointer",
+                            fontSize: 12
+                          }}
+                        >
+                          Prev
+                        </button>
+                        <button 
+                          disabled={(annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= equitiesData.annualReturns.length}
+                          onClick={() => setAnnualReturnsPageIndex(p => p + 1)}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            background: "rgba(30,41,59,0.7)",
+                            border: "1px solid rgba(148,163,184,0.2)",
+                            color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= equitiesData.annualReturns.length ? "#475569" : "#e2e8f0",
+                            cursor: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= equitiesData.annualReturns.length ? "default" : "pointer",
+                            fontSize: 12
+                          }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  }
                   columns={[
                     { key: "year", label: "Year" },
                     { key: "sp500", label: "S&P 500", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
@@ -885,7 +913,10 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "msciEm", label: "MSCI EM", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
                     { key: "reits", label: "REITs (Global)", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
                   ]}
-                  rows={equitiesData.annualReturns}
+                  rows={equitiesData.annualReturns.slice(
+                    annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE,
+                    (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE
+                  )}
                 />
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(350px, 1fr))", gap: 20 }}>
@@ -1011,7 +1042,7 @@ function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" })
   );
 }
 
-function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) {
+function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra }) {
   return (
     <div
       style={{
@@ -1042,6 +1073,7 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) 
             </div>
           ) : null}
         </div>
+        {headerExtra && <div>{headerExtra}</div>}
       </div>
 
       {(rows || []).length === 0 ? (
