@@ -128,9 +128,11 @@ function normalizeOptionsPayload(payload) {
 function normalizeEquitiesPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || null,
-    assetClasses: Array.isArray(payload?.assetClasses) ? payload.assetClasses : [],
-    industries: Array.isArray(payload?.industries) ? payload.industries : [],
-    regions: Array.isArray(payload?.regions) ? payload.regions : [],
+    benchmarkPerformance: Array.isArray(payload?.benchmarkPerformance) ? payload.benchmarkPerformance : [],
+    annualReturns: Array.isArray(payload?.annualReturns) ? payload.annualReturns : [],
+    reitData: payload?.reitData || { benchmarks: [] },
+    mmfYields: Array.isArray(payload?.mmfYields) ? payload.mmfYields : [],
+    fundsList: Array.isArray(payload?.fundsList) ? payload.fundsList : [],
   };
 }
 
@@ -874,38 +876,81 @@ export function AnalyticsModule({ backendUrl }) {
             </>
           ) : (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-                {(equitiesData.assetClasses || []).map((ac, idx) => (
-                  <AnalyticsStatCard
-                    key={`ac-${idx}`}
-                    title={ac.class}
-                    value={formatCompactMoney(ac.aumUsd)}
-                    subvalue={`Performance: ${formatPercent(ac.performance)}`}
-                    source="Equities DB"
-                    tone={ac.performance >= 0 ? "positive" : "negative"}
-                  />
-                ))}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
+                {/* Benchmark Performance Summary */}
                 <AnalyticsTableCard
-                  title="Performance by Industry"
-                  subtitle="Equities sector performance"
-                  emptyText="No industry data."
+                  title="Benchmark Performance (CAGR)"
+                  subtitle="Periodic returns for major equity and REIT indices"
+                  emptyText="No benchmark performance data."
                   columns={[
-                    { key: "industry", label: "Industry" },
-                    { key: "performance", label: "Performance", align: "right", render: v => formatPercent(v) },
+                    { key: "name", label: "Index Name" },
+                    { key: "yr1", label: "1Y", align: "right", render: v => formatPercent(v) },
+                    { key: "yr3", label: "3Y", align: "right", render: v => formatPercent(v) },
+                    { key: "yr5", label: "5Y", align: "right", render: v => formatPercent(v) },
+                    { key: "yr10", label: "10Y", align: "right", render: v => formatPercent(v) },
+                    { key: "yr20", label: "20Y", align: "right", render: v => formatPercent(v) },
                   ]}
-                  rows={(equitiesData.industries || []).map((r, i) => ({ id: `ind-${i}`, ...r }))}
+                  rows={equitiesData.benchmarkPerformance}
                 />
+
+                {/* Annual Returns Series */}
                 <AnalyticsTableCard
-                  title="Performance by Region"
-                  subtitle="Global equities performance"
-                  emptyText="No regional data."
+                  title="Historical Annual Total Returns"
+                  subtitle="20-year annual series (USD Total Return)"
+                  emptyText="No historical returns data."
                   columns={[
-                    { key: "region", label: "Region" },
-                    { key: "performance", label: "Performance", align: "right", render: v => formatPercent(v) },
+                    { key: "year", label: "Year" },
+                    { key: "sp500", label: "S&P 500", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                    { key: "msciWorld", label: "MSCI World", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                    { key: "msciEm", label: "MSCI EM", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                    { key: "reits", label: "REITs (Global)", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
                   ]}
-                  rows={(equitiesData.regions || []).map((r, i) => ({ id: `reg-${i}`, ...r }))}
+                  rows={equitiesData.annualReturns}
+                />
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(350px, 1fr))", gap: 20 }}>
+                  {/* REIT Detailed Data */}
+                  <AnalyticsTableCard
+                    title={`REIT Benchmarks (${equitiesData.reitData?.provider || ""})`}
+                    subtitle="FTSE EPRA/Nareit Regional & Country indices"
+                    emptyText="No REIT benchmark data."
+                    columns={[
+                      { key: "name", label: "Region / Country" },
+                      { key: "yr1", label: "1Y", align: "right", render: v => formatPercent(v) },
+                      { key: "yr3", label: "3Y", align: "right", render: v => formatPercent(v) },
+                      { key: "yr5", label: "5Y", align: "right", render: v => formatPercent(v) },
+                    ]}
+                    rows={equitiesData.reitData?.benchmarks || []}
+                  />
+
+                  {/* MMF Table */}
+                  <AnalyticsTableCard
+                    title="Money Market Fund (MMF) Yields"
+                    subtitle="Yield ranges for local currency markets"
+                    emptyText="No MMF yield data."
+                    columns={[
+                      { key: "country", label: "Jurisdiction" },
+                      { key: "currency", label: "Currency" },
+                      { key: "yieldRange", label: "Yield Range", align: "right" },
+                      { key: "note", label: "Notes", align: "right" },
+                    ]}
+                    rows={equitiesData.mmfYields}
+                  />
+                </div>
+
+                {/* Funds List */}
+                <AnalyticsTableCard
+                  title="Institutional Fund Directory"
+                  subtitle="Representative funds for selected providers and jurisdictions"
+                  emptyText="No funds directory data."
+                  columns={[
+                    { key: "provider", label: "Provider" },
+                    { key: "name", label: "Fund Name" },
+                    { key: "jurisdiction", label: "Jurisdiction" },
+                    { key: "type", label: "Type" },
+                    { key: "aum", label: "AUM", align: "right" },
+                  ]}
+                  rows={equitiesData.fundsList}
                 />
               </div>
             </>

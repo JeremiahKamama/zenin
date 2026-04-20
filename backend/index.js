@@ -15,6 +15,7 @@ const {
   balance,
   trading
 } = require("./database");
+const { ANNUAL_RETURNS, REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
 
 const app = express();
 
@@ -4448,30 +4449,57 @@ app.get('/api/analytics/options', async (req, res) => {
 
 app.get('/api/analytics/equities', async (req, res) => {
   try {
-    // Generate placeholder data for Equities performance
+    const calculateCAGR = (series, assetKey, years) => {
+      const recent = series.slice(0, years);
+      if (recent.length === 0) return 0;
+      // Total return = Product of (1 + r) - 1
+      const product = recent.reduce((acc, curr) => acc * (1 + curr[assetKey] / 100), 1);
+      const cagr = (Math.pow(product, 1 / recent.length) - 1) * 100;
+      return Number(cagr.toFixed(2));
+    };
+
+    const benchmarkPerformance = [
+      {
+        name: "S&P 500 (USA)",
+        yr1: calculateCAGR(ANNUAL_RETURNS, "sp500", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "sp500", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "sp500", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "sp500", 10),
+        yr20: calculateCAGR(ANNUAL_RETURNS, "sp500", 20),
+      },
+      {
+        name: "MSCI World (Global)",
+        yr1: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 10),
+        yr20: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 20),
+      },
+      {
+        name: "MSCI EM (Emerging)",
+        yr1: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "msciEm", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "msciEm", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "msciEm", 10),
+        yr20: calculateCAGR(ANNUAL_RETURNS, "msciEm", 20),
+      },
+      {
+        name: "Global REITs (EPRA/Nareit)",
+        yr1: calculateCAGR(ANNUAL_RETURNS, "reits", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "reits", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "reits", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "reits", 10),
+        yr20: calculateCAGR(ANNUAL_RETURNS, "reits", 20),
+      }
+    ];
+
     res.json({
       updatedAt: new Date().toISOString(),
-      assetClasses: [
-        { class: "Stocks", performance: 12.5, aumUsd: 154000000000 },
-        { class: "Bonds", performance: -1.2, aumUsd: 65000000000 },
-        { class: "MMFs", performance: 5.1, aumUsd: 42000000000 },
-        { class: "REITs", performance: 3.4, aumUsd: 18000000000 },
-        { class: "Special Funds", performance: 8.9, aumUsd: 5000000000 }
-      ],
-      industries: [
-        { industry: "Technology", performance: 24.5 },
-        { industry: "Healthcare", performance: 4.2 },
-        { industry: "Financials", performance: 14.1 },
-        { industry: "Energy", performance: -2.3 },
-        { industry: "Industrials", performance: 9.8 }
-      ],
-      regions: [
-        { region: "North America", performance: 18.2 },
-        { region: "Europe", performance: 5.4 },
-        { region: "Asia-Pacific", performance: 7.1 },
-        { region: "Emerging Markets", performance: -1.5 },
-        { region: "Global Macro", performance: 4.5 }
-      ]
+      benchmarkPerformance,
+      annualReturns: ANNUAL_RETURNS,
+      reitData: REIT_DATA,
+      mmfYields: MMF_YIELDS,
+      fundsList: FUNDS_LIST
     });
   } catch (error) {
     handleServerError(res, "Analytics Equities fetch failed", error);

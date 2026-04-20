@@ -642,6 +642,7 @@ export function OptionsCalculator({   spotPrice = 0,
                       <option key={s} value={s} />
                     ))}
                   </datalist>
+                  <div
                     style={{ position: 'relative' }}
                   >
                     <input
@@ -660,6 +661,7 @@ export function OptionsCalculator({   spotPrice = 0,
                       <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: '#38bdf8', pointerEvents: 'none' }}>⟳ Deribit</span>
                     )}
                   </div>
+                </div>
 
                 <div className="options-leg-row two-col">
                   <div className="options-leg-segment">
