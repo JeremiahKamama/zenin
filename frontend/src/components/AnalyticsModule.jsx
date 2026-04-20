@@ -1,6 +1,6 @@
+// src/components/AnalyticsModule.jsx
 import { useEffect, useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
-import { zeninFetch } from "../utils/zeninFetch";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
@@ -317,7 +317,7 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) 
   );
 }
 
-export function AnalyticsModule() {
+export function AnalyticsModule({ backendUrl }) {
   const [activeTab, setActiveTab] = useState("crypto");
   const [cryptoData, setCryptoData] = useState(EMPTY_CRYPTO);
   const [optionsData, setOptionsData] = useState(EMPTY_OPTIONS);
@@ -337,7 +337,7 @@ export function AnalyticsModule() {
       setErrors((prev) => ({ ...prev, [activeTab]: "" }));
 
       try {
-        const res = await zeninFetch(`/analytics/${activeTab}`, {
+        const res = await fetch(`${backendUrl}/analytics/${activeTab}`, {
           signal: controller.signal,
         });
         if (!res.ok) {

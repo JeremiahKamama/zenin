@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
-import { zeninFetch } from "../utils/zeninFetch";
 
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const PREDICTION_REFRESH_MS = 21600000; // 6 hours
 
 export function PredictionMarketModule() {
@@ -34,7 +35,7 @@ export function PredictionMarketModule() {
       }
       setPredictionLoading(true);
       try {
-        const res = await zeninFetch(`/prediction/snapshot`);
+        const res = await fetch(`${BACKEND_URL}/prediction/snapshot`);
         if (!res.ok) {
           const text = await res.text();
           throw new Error(`HTTP ${res.status}: ${text}`);
@@ -85,7 +86,7 @@ export function PredictionMarketModule() {
       }
       setMarketDetailsLoading(true);
       try {
-        const res = await zeninFetch(`/prediction/market-details/${encodeURIComponent(selectedPredictionMarket.id)}`);
+        const res = await fetch(`${BACKEND_URL}/prediction/market-details/${encodeURIComponent(selectedPredictionMarket.id)}`);
         if (!res.ok) {
           const text = await res.text();
           throw new Error(`HTTP ${res.status}: ${text}`);

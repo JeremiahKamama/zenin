@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
-import { zeninFetch } from "../utils/zeninFetch";
 
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_DATE_KEY = "zenin_profile_session_date";
 
@@ -873,7 +873,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
     const fetchFinviz = async () => {
       setFinvizLoading(true);
       try {
-        const res = await zeninFetch(`/finviz?symbol=${normalizedSymbol}`);
+        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${normalizedSymbol}`);
         const data = await res.json();
         if (data && !data.error) setFinvizData(data);
       } catch (err) {
@@ -921,7 +921,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
         if (preferredTheme) params.set("theme", preferredTheme);
         if (preferredCategory) params.set("category", preferredCategory);
         if (cachedPayload?.companyProfileHash) params.set("snapshotHash", cachedPayload.companyProfileHash);
-        const res = await zeninFetch(`/company-profile?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(`${BACKEND_URL}/company-profile?${params.toString()}`, { signal: controller.signal });
         const data = await res.json();
         if (controller.signal.aborted || cancelled) return;
         if (!res.ok || data?.error) {

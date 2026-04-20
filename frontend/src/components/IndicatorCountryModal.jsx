@@ -3,8 +3,9 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
-import { zeninFetch } from "../utils/zeninFetch";
 
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
 
 export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleStar }) {
@@ -39,7 +40,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
     const fetchSnapshot = async () => {
       setLoading(true);
       try {
-        const res = await zeninFetch(`/macro-indicators?country=${encodeURIComponent(countryCode)}`, {
+        const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(countryCode)}`, {
           signal: controller.signal
         });
         const data = await res.json();

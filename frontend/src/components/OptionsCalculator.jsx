@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import ReactApexChart from "react-apexcharts";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
-import { zeninFetch } from "../utils/zeninFetch";
 
-
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 
 const STRATEGIES = [
   { name: "Long Call", legs: [{ type: "call", direction: "long", qty: 1 }] },
@@ -244,7 +244,7 @@ export function OptionsCalculator({   spotPrice = 0,
       const params = new URLSearchParams({
         symbol: normalizedSymbol, expiry: deribitExpiry, strike: leg.strike, type: leg.type === "put" ? "P" : "C"
       });
-      const res = await zeninFetch(`/greeks?${params.toString()}`);
+      const res = await fetch(`${BACKEND_URL}/greeks?${params.toString()}`);
       if (!res.ok) throw new Error("Greeks fetch failed");
       const data = await res.json();
       if (!data.stale && data.mark !== null) {
@@ -385,7 +385,7 @@ export function OptionsCalculator({   spotPrice = 0,
           symbol: normalizedSymbol,
           limit: "100"
         });
-        const res = await zeninFetch(`/db/options-calculations?${params.toString()}`, {
+        const res = await fetch(`${BACKEND_URL}/db/options-calculations?${params.toString()}`, {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -448,7 +448,7 @@ export function OptionsCalculator({   spotPrice = 0,
       createdAt: new Date().toISOString()
     };
     try {
-      const res = await zeninFetch(`/db/options-calculations`, {
+      const res = await fetch(`${BACKEND_URL}/db/options-calculations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(calc)

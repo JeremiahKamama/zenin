@@ -3,10 +3,9 @@ import { OptionsCalculator } from "./OptionsCalculator";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
-import { zeninFetch } from "../utils/zeninFetch";
-
-
-const OPTIONS_CHAIN_REFRESH_MS = 300000; // 5 minutes
+const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
@@ -292,7 +291,7 @@ useEffect(() => {
     assetsWithTrades.forEach(asset => {
       // If not in cache and not the active asset
       if (!multiChainCache[asset] && asset !== activeAsset) {
-        zeninFetch(`/options/crypto`, {
+        fetch(`${BACKEND_URL}/options/crypto`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ currency: asset })
@@ -315,7 +314,7 @@ useEffect(() => {
     // NEW: Also ensure we have spot prices for these assets
     assetsWithTrades.forEach(asset => {
       if (!spotPrices[asset]) {
-        zeninFetch(`/prices?type=crypto&symbols=${asset}`)
+        fetch(`${BACKEND_URL}/prices?type=crypto&symbols=${asset}`)
           .then(res => res.json())
           .then(data => {
              const price = Number(data?.prices?.[asset]?.price);
@@ -344,7 +343,7 @@ useEffect(() => {
 
   const getHyperliquidFallbackSpot = async (assetSymbol) => {
     try {
-      const res = await zeninFetch(`/crypto-market`, { signal: controller.signal });
+      const res = await fetch(`${BACKEND_URL}/crypto-market`, { signal: controller.signal });
       if (!res.ok) return null;
       const data = await res.json();
       if (controller.signal.aborted) return null;
@@ -383,7 +382,7 @@ useEffect(() => {
       setLoading(true);
       try {
         setOptionsError("");
-        const res = await zeninFetch(`/options/crypto`, {
+        const res = await fetch(`${BACKEND_URL}/options/crypto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
@@ -524,7 +523,7 @@ useEffect(() => {
         minNotional: String(whaleMinNotional),
         source: whaleSource
       });
-      const res = await zeninFetch(`/options/whale-trades?${params.toString()}`);
+      const res = await fetch(`${BACKEND_URL}/options/whale-trades?${params.toString()}`);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`HTTP ${res.status}: ${text}`);
