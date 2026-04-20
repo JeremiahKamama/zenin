@@ -1053,10 +1053,38 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   };
 
+  const spotPrices = useMemo(() => {
+    const prices = {};
+    if (Array.isArray(assets)) {
+      assets.forEach(a => {
+        if (a && a.symbol && Number.isFinite(Number(a.price))) {
+          prices[a.symbol.toUpperCase()] = Number(a.price);
+        }
+      });
+    }
+    if (Array.isArray(portfolio)) {
+      portfolio.forEach(h => {
+        if (h && h.symbol && Number.isFinite(Number(h.price))) {
+          prices[h.symbol.toUpperCase()] = Number(h.price);
+        }
+      });
+    }
+    return prices;
+  }, [assets, portfolio]);
+
   const portfolioMarketValue = useMemo(
     () => calculatePortfolioMarketValue(portfolioWithEntry),
     [portfolioWithEntry]
   );
+
+  const totalOptionsPnL = useMemo(() => {
+    return activeOptionsTrades.reduce((total, trade) => {
+      const chain = multiChainCache[trade.asset];
+      const spot = spotPrices[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      return total + (metrics.pnl || 0);
+    }, 0);
+  }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
   const calculatePortfolioValue = () => portfolioMarketValue;
 
@@ -1105,14 +1133,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     };
   }, [activeOptionsTrades]);
 
-  const totalOptionsPnL = useMemo(() => {
-    return activeOptionsTrades.reduce((total, trade) => {
-      const chain = multiChainCache[trade.asset];
-      const spot = spotPrices[trade.asset];
-      const metrics = calculateOptionPnL(trade, chain, spot);
-      return total + (metrics.pnl || 0);
-    }, 0);
-  }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
   const accountMetrics = useMemo(
     () => calculateAccountSnapshot({
@@ -1124,26 +1144,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     [trades, portfolioMarketValue, totalOptionsPnL, balance]
   );
 
-  const spotPrices = useMemo(() => {
-    const prices = {};
-    // Extract from assets state (watchlist/category results)
-    if (Array.isArray(assets)) {
-      assets.forEach(a => {
-        if (a && a.symbol && Number.isFinite(Number(a.price))) {
-          prices[a.symbol.toUpperCase()] = Number(a.price);
-        }
-      });
-    }
-    // Extract from portfolio state (active holdings)
-    if (Array.isArray(portfolio)) {
-      portfolio.forEach(h => {
-        if (h && h.symbol && Number.isFinite(Number(h.price))) {
-          prices[h.symbol.toUpperCase()] = Number(h.price);
-        }
-      });
-    }
-    return prices;
-  }, [assets, portfolio]);
 
   useEffect(() => {
     if (!portfolioRef.current.length) return;
