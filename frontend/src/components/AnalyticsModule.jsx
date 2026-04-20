@@ -143,179 +143,7 @@ function normalizeEquitiesPayload(payload) {
   };
 }
 
-function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" }) {
-  const toneMap = {
-    neutral: { border: "rgba(148,163,184,0.18)", color: "#e2e8f0" },
-    positive: { border: "rgba(34,197,94,0.28)", color: "#86efac" },
-    negative: { border: "rgba(239,68,68,0.28)", color: "#fca5a5" },
-    info: { border: "rgba(56,189,248,0.24)", color: "#7dd3fc" },
-  };
-  const chosen = toneMap[tone] || toneMap.neutral;
 
-  return (
-    <div
-      style={{
-        background: "rgba(0, 0, 0, 0.85)",
-        backdropFilter: "blur(12px)",
-        border: `1px solid ${chosen.border}`,
-        borderRadius: 14,
-        padding: 16,
-        minHeight: 110,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-        <div>
-          <div
-            style={{
-              fontSize: 11,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "#94a3b8",
-            }}
-          >
-            {title}
-          </div>
-          <div
-            style={{
-              marginTop: 10,
-              fontSize: 24,
-              fontWeight: 700,
-              color: chosen.color,
-            }}
-          >
-            {value}
-          </div>
-          {subvalue ? (
-            <div style={{ marginTop: 6, fontSize: 12, color: "#cbd5e1" }}>
-              {subvalue}
-            </div>
-          ) : null}
-        </div>
-        {source ? (
-          <div>
-            <span
-              style={{
-                padding: "4px 8px",
-                borderRadius: 999,
-                border: "1px solid rgba(148,163,184,0.18)",
-                fontSize: 10,
-                color: "#94a3b8",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {source}
-            </span>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) {
-  return (
-    <div
-      style={{
-        background: "rgba(0, 0, 0, 0.85)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(148, 163, 184, 0.16)",
-        borderRadius: 14,
-        padding: 16,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "center",
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>
-            {title}
-          </div>
-          {subtitle ? (
-            <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>
-              {subtitle}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      {(rows || []).length === 0 ? (
-        <div style={{ padding: "18px 6px 6px", fontSize: 13, color: "#94a3b8" }}>
-          {emptyText}
-        </div>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              minWidth: 420,
-            }}
-          >
-            <thead>
-              <tr>
-                {columns.map((column) => (
-                  <th
-                    key={column.key}
-                    style={{
-                      textAlign: column.align || "left",
-                      padding: "0 0 10px",
-                      fontSize: 11,
-                      color: "#64748b",
-                      fontWeight: 600,
-                      letterSpacing: "0.06em",
-                      textTransform: "uppercase",
-                      borderBottom: "1px solid rgba(148,163,184,0.14)",
-                    }}
-                  >
-                    {column.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(rows || []).map((row, idx) => (
-                <tr key={row.id || `${title}-${idx}`}>
-                  {columns.map((column) => {
-                    const cellValue = row[column.key];
-                    return (
-                      <td
-                        key={column.key}
-                        style={{
-                          padding: "12px 0",
-                          fontSize: 13,
-                          color: "#e2e8f0",
-                          textAlign: column.align || "left",
-                          borderBottom:
-                            idx === (rows || []).length - 1
-                              ? "none"
-                              : "1px solid rgba(148,163,184,0.08)",
-                        }}
-                      >
-                        {column.render
-                          ? column.render(cellValue, row)
-                          : typeof cellValue === 'object' && cellValue !== null
-                            ? JSON.stringify(cellValue)
-                            : cellValue ?? "—"}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function AnalyticsModule({ backendUrl }) {
   const [activeTab, setActiveTab] = useState("crypto");
@@ -376,13 +204,16 @@ export function AnalyticsModule({ backendUrl }) {
   }, [activeTab, backendUrl]);
 
   const cryptoPerps = useMemo(() => {
+    if (!cryptoData || !cryptoData.perpMetrics || !selectedPerpExchange) {
+      return [];
+    }
     const preferredOrder = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
     const currentMetrics = (cryptoData.perpMetrics || []).filter(
-      (m) => m.exchange === selectedPerpExchange
+      (m) => m && m.exchange === selectedPerpExchange
     );
     const bySymbol = new Map(
       currentMetrics.map((row) => [
-        String(row.symbol || "").toUpperCase(),
+        String(row?.symbol || "").toUpperCase(),
         row,
       ])
     );
@@ -1105,6 +936,180 @@ export function AnalyticsModule({ backendUrl }) {
             </>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" }) {
+  const toneMap = {
+    neutral: { border: "rgba(148,163,184,0.18)", color: "#e2e8f0" },
+    positive: { border: "rgba(34,197,94,0.28)", color: "#86efac" },
+    negative: { border: "rgba(239,68,68,0.28)", color: "#fca5a5" },
+    info: { border: "rgba(56,189,248,0.24)", color: "#7dd3fc" },
+  };
+  const chosen = toneMap[tone] || toneMap.neutral;
+
+  return (
+    <div
+      style={{
+        background: "rgba(0, 0, 0, 0.85)",
+        backdropFilter: "blur(12px)",
+        border: `1px solid ${chosen.border}`,
+        borderRadius: 14,
+        padding: 16,
+        minHeight: 110,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "#94a3b8",
+            }}
+          >
+            {title}
+          </div>
+          <div
+            style={{
+              marginTop: 10,
+              fontSize: 24,
+              fontWeight: 700,
+              color: chosen.color,
+            }}
+          >
+            {value}
+          </div>
+          {subvalue ? (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#cbd5e1" }}>
+              {subvalue}
+            </div>
+          ) : null}
+        </div>
+        {source ? (
+          <div>
+            <span
+              style={{
+                padding: "4px 8px",
+                borderRadius: 999,
+                border: "1px solid rgba(148,163,184,0.18)",
+                fontSize: 10,
+                color: "#94a3b8",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {source}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) {
+  return (
+    <div
+      style={{
+        background: "rgba(0, 0, 0, 0.85)",
+        backdropFilter: "blur(12px)",
+        border: "1px solid rgba(148, 163, 184, 0.16)",
+        borderRadius: 14,
+        padding: 16,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>
+            {title}
+          </div>
+          {subtitle ? (
+            <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>
+              {subtitle}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {(rows || []).length === 0 ? (
+        <div style={{ padding: "18px 6px 6px", fontSize: 13, color: "#94a3b8" }}>
+          {emptyText}
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              minWidth: 420,
+            }}
+          >
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th
+                    key={column.key}
+                    style={{
+                      textAlign: column.align || "left",
+                      padding: "0 0 10px",
+                      fontSize: 11,
+                      color: "#64748b",
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      borderBottom: "1px solid rgba(148,163,184,0.14)",
+                    }}
+                  >
+                    {column.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(rows || []).map((row, idx) => (
+                <tr key={row.id || `${title}-${idx}`}>
+                  {columns.map((column) => {
+                    const cellValue = row[column.key];
+                    return (
+                      <td
+                        key={column.key}
+                        style={{
+                          padding: "12px 0",
+                          fontSize: 13,
+                          color: "#e2e8f0",
+                          textAlign: column.align || "left",
+                          borderBottom:
+                            idx === (rows || []).length - 1
+                              ? "none"
+                              : "1px solid rgba(148,163,184,0.08)",
+                        }}
+                      >
+                        {column.render
+                          ? column.render(cellValue, row)
+                          : typeof cellValue === 'object' && cellValue !== null
+                            ? JSON.stringify(cellValue)
+                            : cellValue ?? "—"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
