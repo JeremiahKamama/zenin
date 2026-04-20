@@ -354,7 +354,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 >
                   <label>Diversification</label>
                   {categorySeries.length > 0 ? (
-                    <Chart
+                    <ReactApexChart
                       options={{
                         ...pieOptions,
                         chart: { ...pieOptions.chart, sparkline: { enabled: false } },
