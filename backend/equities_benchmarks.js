@@ -4,6 +4,7 @@
  * High-quality historical benchmark returns (Total Return, USD)
  * Data sourced from MSCI and SPGlobal historical reports (2006-2025)
  */
+const ANNUAL_RETURNS = [
   { year: 2025, sp500: 25.02, msciWorld: 21.60, msciEm: 34.36, reits: 8.40 },
   { year: 2024, sp500: 26.29, msciWorld: 19.19, msciEm: 8.05, reits: 2.80 },
   { year: 2023, sp500: 26.29, msciWorld: 24.42, msciEm: 10.27, reits: 10.90 },
