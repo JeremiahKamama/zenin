@@ -2773,33 +2773,136 @@ button {
 
 .trade-toast {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 1500;
-  max-width: min(420px, 92vw);
-  padding: 11px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(2, 6, 23, 0.95);
-  color: #e2e8f0;
-  font-size: 0.87rem;
-  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.55);
-  animation: tradeToastIn 0.2s ease-out;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2000;
+  min-width: 300px;
+  max-width: 450px;
+  padding: 16px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px) saturate(180%);
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 500;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  animation: tradeToastIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .trade-toast.success {
-  border-color: rgba(34, 197, 94, 0.5);
-  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(2, 44, 34, 0.85);
+  box-shadow: 0 20px 50px rgba(2, 44, 34, 0.4);
 }
 
 .trade-toast.error {
-  border-color: rgba(239, 68, 68, 0.55);
-  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(69, 10, 10, 0.85);
+  box-shadow: 0 20px 50px rgba(69, 10, 10, 0.4);
 }
 
+.trade-toast::before {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 24px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.trade-toast.success::before { background: #22c55e; }
+.trade-toast.error::before { background: #ef4444; }
+.trade-toast.info::before { background: #38bdf8; }
+
 @keyframes tradeToastIn {
-  from { transform: translateY(8px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from { transform: translateX(20px) scale(0.95); opacity: 0; }
+  to { transform: translateX(0) scale(1); opacity: 1; }
+}
+
+/* ── Active Options Trades Table Refinement ─────────────────────── */
+.active-trades-table-container {
+  overflow-x: auto;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.3);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.active-trades-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.88rem;
+}
+
+.active-trades-table th {
+  background: rgba(148, 163, 184, 0.06);
+  color: #94a3b8;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.active-trades-table td {
+  padding: 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+  color: #e2e8f0;
+  vertical-align: middle;
+}
+
+.active-trades-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.active-trades-table tr:last-child td {
+  border-bottom: none;
+}
+
+.active-trades-table .strategy-name {
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.active-trades-symbol {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.active-trades-pnl {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.close-trade-btn {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+
+.close-trade-btn:hover {
+  background: #ef4444;
+  color: white;
+  border-color: #ef4444;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.stale-row {
+  opacity: 0.6;
 }
 
 .asset-card .star-button {

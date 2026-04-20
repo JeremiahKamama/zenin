@@ -2161,6 +2161,7 @@ const handleOptionTradeClosed = async (tradeId) => {
             onOptionTradeExecuted={handleOptionTradeExecuted}
             onOptionTradeClosed={handleOptionTradeClosed}
             balance={balance}
+            showToast={showTradeToast}
           />
         )}
 
@@ -2207,7 +2208,11 @@ const handleOptionTradeClosed = async (tradeId) => {
       )}
 
       {tradeToast && (
-        <div className={`trade-toast ${tradeToast.type}`}>
+        <div 
+          className={`trade-toast ${tradeToast.type}`}
+          onClick={() => setTradeToast(null)}
+          style={{ cursor: "pointer" }}
+        >
           {tradeToast.message}
         </div>
       )}

@@ -274,6 +274,7 @@ export default function OptionsStrategySimulator({
   spotPrice = null,
   maxVisible = 10,
   onStrategyChosen,
+  showToast
 }) {
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
@@ -312,7 +313,8 @@ export default function OptionsStrategySimulator({
     if (!selectedStrategy || !onStrategyChosen) return;
     const amt = Number(amount);
     if (!amt || amt <= 0) {
-      alert("Please enter a valid amount.");
+      if (showToast) showToast("Please enter a valid amount.", "error");
+      else alert("Please enter a valid amount.");
       return;
     }
     setIsSubmitting(true);
@@ -323,7 +325,9 @@ export default function OptionsStrategySimulator({
       const atm = sorted[safeAtmIdx];
 
       if (!atm) {
-        alert("No options data available for the ATM strike. Simulation aborted.");
+        const msg = "No options data available for the ATM strike. Simulation aborted.";
+        if (showToast) showToast(msg, "error");
+        else alert(msg);
         return;
       }
 

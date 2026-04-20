@@ -15,7 +15,8 @@ const StrategySimulatorCard = ({
   onChangeAsset,
   onStrategyChosen,
   chain,
-  spotPrices
+  spotPrices,
+  showToast
 }) => {
   const assetOptions = Array.isArray(allAssets) && allAssets.length
     ? allAssets
@@ -58,6 +59,7 @@ const StrategySimulatorCard = ({
           spotPrice={spotPrices[activeAsset]}
           maxVisible={20}
           onStrategyChosen={onStrategyChosen}
+          showToast={showToast}
         />
       </div>
     </div>
@@ -68,7 +70,8 @@ export function OptionsModule({activeOptionsTrades,
   setActiveOptionsTrades,
   onOptionTradeExecuted,
   onOptionTradeClosed,
-  balance = 0
+  balance = 0,
+  showToast
 }) {
   const activeTradesRef = useRef(null);
   const [activeAsset, setActiveAsset] = useState("BTC");
@@ -628,13 +631,26 @@ useEffect(() => {
                 {activeOptionsTrades.map(trade => {
                   const metrics = calculateOptionPnL(trade);
                   const { currentMark, pnl, delta, theta, isStale } = metrics;
+                  
                   const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
                   const formattedPnL = (pnl >= 0 ? "+" : "") + (pnl || 0).toFixed(2);
+                  const isLong = String(trade.strategy || "").toLowerCase().includes("long") || 
+                                 String(trade.strategy || "").toLowerCase().includes("bull");
                   
                   return (
                     <tr key={trade.id} className={isStale ? "stale-row" : ""}>
-                      <td style={{ fontWeight: 600 }}>{trade.strategy}</td>
-                      <td>{trade.asset}</td>
+                      <td className="strategy-name">
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ 
+                            width: "4px", 
+                            height: "14px", 
+                            borderRadius: "2px", 
+                            background: isLong ? "#22c55e" : "#ef4444" 
+                          }}></span>
+                          {trade.strategy}
+                        </div>
+                      </td>
+                      <td className="active-trades-symbol">{trade.asset}</td>
                       <td>{trade.notional || 1}</td>
                       <td style={{ fontSize: "11px", color: "#94a3b8" }}>
                         {trade.legs?.[0]?.expiry || "—"}
@@ -651,14 +667,13 @@ useEffect(() => {
                       <td style={{ color: (theta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
                         {(theta || 0).toFixed(2)}
                       </td>
-                      <td style={{ fontWeight: 700, color: pnlColor }}>
+                      <td className="active-trades-pnl" style={{ color: pnlColor }}>
                         {formattedPnL}
                       </td>
                       <td>
                         <button 
                           className="close-trade-btn"
                           onClick={() => closeOptionTrade(trade.id)}
-                          style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "0.75rem" }}
                         >
                           Close
                         </button>
@@ -678,6 +693,7 @@ useEffect(() => {
         onStrategyChosen={handleStrategyChosen}
         chain={chain}
         spotPrices={spotPrices}
+        showToast={showToast}
       />
 
       <div className="watchlist-panel glass">
