@@ -3,9 +3,9 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
+import { zeninFetch } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const EARNINGS_CLIENT_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
@@ -274,7 +274,7 @@ useEffect(() => {
     const fetchMacro = async () => {
       setMacroLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
+        const res = await zeninFetch(`/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -353,7 +353,7 @@ useEffect(() => {
           symbols: earningsSymbols.join(","),
           limit: String(earningsPerPage)
         });
-        const res = await fetch(`${BACKEND_URL}/earnings-calendar?${params.toString()}`, {
+        const res = await zeninFetch(`/earnings-calendar?${params.toString()}`, {
           signal: controller.signal
         });
         if (!res.ok) {

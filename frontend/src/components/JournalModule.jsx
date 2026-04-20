@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
+import { zeninFetch } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 export function JournalModule({ trades = [], portfolio = [], balance = 0, accountEquity = null }) {
@@ -71,8 +70,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
     const enrichWithCategoryPrices = async (symbols, category, target) => {
       try {
-        const res = await fetch(
-          `${BACKEND_URL}/watchlist?category=${encodeURIComponent(category)}&symbols=${encodeURIComponent(symbols.join(","))}`
+        const res = await zeninFetch(
+          `/watchlist?category=${encodeURIComponent(category)}&symbols=${encodeURIComponent(symbols.join(","))}`
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -90,8 +89,8 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
     const enrichWithSearchPrice = async (symbol, type, target) => {
       try {
-        const res = await fetch(
-          `${BACKEND_URL}/search?q=${encodeURIComponent(symbol)}&type=${encodeURIComponent(type)}`
+        const res = await zeninFetch(
+          `/search?q=${encodeURIComponent(symbol)}&type=${encodeURIComponent(type)}`
         );
         if (!res.ok) return false;
         const data = await res.json();

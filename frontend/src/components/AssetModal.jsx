@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+import { zeninFetch } from "../utils/zeninFetch";
+
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -90,11 +90,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       setLoading(true);
       try {
         const params = new URLSearchParams({
-          symbol: assetSymbol,
-          type: assetType,
           interval: activeInterval
         });
-        const res = await fetch(`${BACKEND_URL}/history?${params.toString()}`);
+        const res = await zeninFetch(`/history?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
         const nextHistory = Array.isArray(data?.history) ? data.history : [];
@@ -139,7 +137,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       }
       try {
         const params = new URLSearchParams({ symbol: assetSymbol, type: assetType });
-        const res = await fetch(`${BACKEND_URL}/interval-performance?${params.toString()}`);
+        const res = await zeninFetch(`/interval-performance?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
         const performance = data?.performance && typeof data.performance === "object" ? data.performance : {};
@@ -180,7 +178,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       setEarningsLoading(true);
       try {
         const params = new URLSearchParams({ symbol: assetSymbol });
-        const res = await fetch(`${BACKEND_URL}/earnings?${params.toString()}`, { signal: controller.signal });
+        const res = await zeninFetch(`/earnings?${params.toString()}`, { signal: controller.signal });
         const data = await res.json();
         if (controller.signal.aborted) return;
         if (!res.ok || data?.error) {
@@ -214,7 +212,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     const fetchFinviz = async () => {
       setFinvizLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${assetSymbol}`);
+        const res = await zeninFetch(`/finviz?symbol=${assetSymbol}`);
         const data = await res.json();
         if (data && !data.error) {
           setFinvizData(data);
@@ -664,8 +662,14 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                   ) : null}
                 </div>
               ) : (
-                <div className="chart-no-data asset-modal-empty-copy">
-                  No fundamentals available.
+                <div className="fundamentals-empty-hint" style={{ padding: "16px", textAlign: "center", color: "#64748b" }}>
+                  <p style={{ margin: 0 }}>Detailed fundamentals unavailable for this ticker.</p>
+                  {asset.symbol.includes(".") && (
+                    <p style={{ margin: "8px 0 0", fontSize: "11px", opacity: 0.8 }}>
+                      Hint: Coverage for international listings ( Milan, etc.) is limited. 
+                      Try searching for US-listed alternatives (e.g. ONDS) for full metrics.
+                    </p>
+                  )}
                 </div>
               )}
             </div>

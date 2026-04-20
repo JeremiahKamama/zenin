@@ -13,6 +13,8 @@ import { TaxEstimator } from "./components/TaxEstimator";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
+import { zeninFetch } from "./utils/zeninFetch";
+import { Gatekeeper } from "./components/Gatekeeper";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 
@@ -137,7 +139,7 @@ function App() {
 const [balance, setBalance] = useState(10000);
 
 useEffect(() => {
-  fetch(`${BACKEND_URL}/db/balance`)
+  zeninFetch(`/db/balance`)
     .then((res) => {
       if (!res.ok) throw new Error(`Failed to load balance: ${res.status}`);
       return res.json();
@@ -161,7 +163,7 @@ useEffect(() => {
 
   // Load portfolio from database on mount
   useEffect(() => {
-    fetch(`${BACKEND_URL}/db/portfolio`)
+    zeninFetch(`/db/portfolio`)
       .then((res) => res.json())
       .then((data) => {
         const holdings = data.holdings || [];
@@ -187,7 +189,7 @@ useEffect(() => {
 
   // Load persisted watchlist from database on mount
   useEffect(() => {
-    fetch(`${BACKEND_URL}/db/watchlist`)
+    zeninFetch(`/db/watchlist`)
       .then((res) => res.json())
       .then((data) => setWatchlistAssets(data.assets || []))
       .catch((err) => console.error("Failed to load watchlist:", err));
@@ -195,7 +197,7 @@ useEffect(() => {
 
   useEffect(() => {
     let isMounted = true;
-    fetch(`${BACKEND_URL}/db/trades?limit=2000`)
+    zeninFetch(`/db/trades?limit=2000`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load trades from backend");
         return res.json();
@@ -244,7 +246,7 @@ useEffect(() => {
 
     const fetchHomeMovers = async () => {
       try {
-        const baseRes = await fetch(`${BACKEND_URL}/watchlist?category=stocks`);
+        const baseRes = await zeninFetch(`/watchlist?category=stocks`);
         if (!baseRes.ok) return;
         const baseData = await baseRes.json();
         const snapshotAssets = Array.isArray(baseData?.assets) ? baseData.assets : [];
@@ -282,7 +284,7 @@ useEffect(() => {
   }, []);
 
   useEffect(() => {
-    fetch(`${BACKEND_URL}/categories`)
+    zeninFetch(`/categories`)
       .then((res) => res.json())
       .then((data) => setCategories(data.categories || []))
       .catch((err) => setError(err.message));
@@ -302,7 +304,7 @@ useEffect(() => {
     setSearchLoading(true);
     setSearchHasSettled(false);
 
-    fetch(`${BACKEND_URL}/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`, {
+    zeninFetch(`/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`, {
       signal: controller.signal
     })
       .then(async (res) => {
@@ -504,7 +506,7 @@ useEffect(() => {
 
     if (uncachedSymbols.length > 0) {
       try {
-        const res = await fetch(`${BACKEND_URL}/watchlist?category=${category}&symbols=${encodeURIComponent(uncachedSymbols.join(","))}`);
+        const res = await zeninFetch(`/watchlist?category=${category}&symbols=${encodeURIComponent(uncachedSymbols.join(","))}`);
         const priceData = await res.json();
         (priceData.assets || []).forEach((asset) => {
           if (asset.price != null || asset.priceChangePercent != null) {
@@ -555,7 +557,7 @@ useEffect(() => {
       return;
     }
 
-    fetch(`${BACKEND_URL}/watchlist?category=${activeCategory}`)
+    zeninFetch(`/watchlist?category=${activeCategory}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Server responded with ${res.status}`);
         return res.json();
@@ -857,7 +859,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       clientId: `${normalizedSymbol}-${normalizedMarketType}-${Date.now()}`
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+    const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(tradePayload)
@@ -904,7 +906,7 @@ const handleOptionTradeExecuted = async (tradePayload) => {
       executedAt: new Date().toISOString()
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+    const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(atomicPayload)
@@ -993,7 +995,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       executedAt: new Date().toISOString()
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+    const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(atomicPayload)
@@ -1024,7 +1026,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const removeFromPortfolio = async (id) => {
     try {
-      await fetch(`${BACKEND_URL}/db/portfolio/${id}`, { method: "DELETE" });
+      await zeninFetch(`/db/portfolio/${id}`, { method: "DELETE" });
       setPortfolio((prev) => prev.filter((item) => item.id !== id));
     } catch (err) {
       console.error("Failed to remove from portfolio:", err);
@@ -1035,7 +1037,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const holding = portfolio.find(item => item.id === id);
       if (holding) {
-        const response = await fetch(`${BACKEND_URL}/db/portfolio/${id}`, {
+        const response = await zeninFetch(`/db/portfolio/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...holding, quantity: Math.max(0, quantity) })
@@ -1209,7 +1211,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return [...next, payload];
     });
     try {
-      const res = await fetch(`${BACKEND_URL}/db/watchlist`, {
+      const res = await zeninFetch(`/db/watchlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1951,7 +1953,8 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   return (
-    <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+    <Gatekeeper>
+      <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       {isSidebarCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
         <button
           className="mobile-hamburger-btn"
@@ -2914,7 +2917,8 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </Gatekeeper>
   );
 }
 

@@ -77,11 +77,11 @@ This README reflects the current implementation in this repository.
 
 ## Known limitations / In progress (as of April 20, 2026)
 
-- **Data Provider Stability**: Features depending on external routes (EODHD, Derive, Polymarket, Finviz) may show stale or error states if upstream APIs rate-limit or fail.
-- **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented.
-- **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
+- **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
+- **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
 - **Security Logic**: Account/Security controls are currently frontend-level UI state (localStorage synchronized); full backend-enforced JWT/Session security for individual user accounts is pending.
 - **Multi-Tenant Support**: The current persistence model uses a fixed `user_id` for balance and trades; full multi-user isolation is not active.
+- **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 
 ## Data sources and integrations

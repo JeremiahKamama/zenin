@@ -98,6 +98,20 @@ def search_binance_crypto(query: str) -> list:
     return results
 
 
+def get_exchange_priority(exchange: str) -> int:
+    """Return priority score for an exchange. Higher is better."""
+    exchange = str(exchange or "").upper()
+    if any(e in exchange for e in ["NASDAQ", "NYSE", "AMEX", "BATS", "ARCA", "NMS", "NGS", "NCM"]):
+        return 100
+    if "HKSE" in exchange or "HKG" in exchange or ".HK" in exchange:
+        return 50
+    if "TSE" in exchange or ".T" in exchange:
+        return 40
+    if "LSE" in exchange or ".L" in exchange:
+        return 30
+    return 10
+
+
 def search_yahoo_stocks(query: str) -> list:
     """Search Yahoo Finance for stocks."""
     results = []
@@ -111,6 +125,7 @@ def search_yahoo_stocks(query: str) -> list:
                 'name': name,
                 'type': 'stock',
                 'exchange': 'NASDAQ/NYSE',
+                '_priority': 1000
             })
             return results
     
@@ -123,17 +138,45 @@ def search_yahoo_stocks(query: str) -> list:
         info = ticker.info
         
         if info and 'symbol' in info and info.get('symbol'):
+            exchange = info.get('exchange', 'NASDAQ/NYSE')
             results.append({
                 'symbol': info['symbol'],
                 'name': info.get('longName', info.get('shortName', query.upper())),
                 'type': 'stock',
-                'exchange': info.get('exchange', 'NASDAQ/NYSE'),
+                'exchange': exchange,
+                '_priority': get_exchange_priority(exchange) + 200 # Boost direct matches
             })
-            return results
-    except Exception as e:
+    except Exception:
         pass
     
-    # Third try: substring match in fallback database
+    # Third try: use Yahoo's internal search endpoint via a request if yfinance info was insufficient
+    try:
+        import requests
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10&newsCount=0"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.ok:
+            data = resp.json()
+            for quote in data.get("quotes", []):
+                symbol = quote.get("symbol")
+                if not symbol: continue
+                
+                exchange = quote.get("exchange", "")
+                results.append({
+                    "symbol": symbol,
+                    "name": quote.get("longname") or quote.get("shortname") or symbol,
+                    "type": "stock",
+                    "exchange": exchange,
+                    "_priority": get_exchange_priority(exchange)
+                })
+    except Exception:
+        pass
+
+    # Dedupe and sort by priority
+    deduped = []
+    seen = set()
+    
+    # Also add fallback substring matches
     for symbol, name in FALLBACK_STOCKS.items():
         if query_lower in symbol.lower() or query_lower in name.lower():
             results.append({
@@ -141,9 +184,17 @@ def search_yahoo_stocks(query: str) -> list:
                 'name': name,
                 'type': 'stock',
                 'exchange': 'NASDAQ/NYSE',
+                '_priority': 500 # Fallback locals are usually high interest
             })
-    
-    return results[:10]
+
+    for r in sorted(results, key=lambda x: x.get('_priority', 0), reverse=True):
+        if r['symbol'] not in seen:
+            seen.add(r['symbol'])
+            # Clean up internal priority before returning
+            final_r = {k: v for k, v in r.items() if k != '_priority'}
+            deduped.append(final_r)
+            
+    return deduped[:10]
 
 
 def search_symbols(query: str, search_type: str = "tradfi") -> list:
@@ -157,25 +208,8 @@ def search_symbols(query: str, search_type: str = "tradfi") -> list:
     
     try:
         if search_type == "tradfi":
-            # Check fallback first for exact/substring matches
-            for symbol, name in FALLBACK_STOCKS.items():
-                if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
-                        'symbol': symbol,
-                        'name': name,
-                        'type': 'stock',
-                        'exchange': 'NASDAQ/NYSE',
-                    })
-                    seen_symbols.add((symbol, 'stock'))
+            return search_yahoo_stocks(query)
             
-            # Then try Yahoo Finance API for additional results
-            if len(results) < 5:  # Only if we have fewer than 5 results
-                stock_results = search_yahoo_stocks(query)
-                for result in stock_results:
-                    key = (result['symbol'], result['type'])
-                    if key not in seen_symbols:
-                        results.append(result)
-                        seen_symbols.add(key)
         elif search_type == "crypto":
             # Check fallback first for exact/substring matches
             for symbol, name in FALLBACK_CRYPTO.items():
@@ -185,96 +219,53 @@ def search_symbols(query: str, search_type: str = "tradfi") -> list:
                         'name': name,
                         'type': 'crypto',
                         'exchange': 'Binance',
+                        '_priority': 1000 if query_lower == symbol.lower() else 500
                     })
                     seen_symbols.add((symbol, 'crypto'))
             
-            # Then try Binance API for additional results
-            if len(results) < 5:  # Only if we have fewer than 5 results
-                crypto_results = search_binance_crypto(query)
-                for result in crypto_results:
-                    key = (result['symbol'], result['type'])
-                    if key not in seen_symbols:
-                        results.append(result)
-                        seen_symbols.add(key)
+            # Then try Binance/CoinGecko API for additional results
+            crypto_results = search_binance_crypto(query)
+            for result in crypto_results:
+                key = (result['symbol'], result['type'])
+                if key not in seen_symbols:
+                    result['_priority'] = 100
+                    results.append(result)
+                    seen_symbols.add(key)
+                    
+            return [ {k:v for k,v in r.items() if k != '_priority'} 
+                     for r in sorted(results, key=lambda x: x.get('_priority', 0), reverse=True) ][:10]
+
         else:
-            # Both types - check fallbacks first
-            for symbol, name in FALLBACK_STOCKS.items():
-                if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
-                        'symbol': symbol,
-                        'name': name,
-                        'type': 'stock',
-                        'exchange': 'NASDAQ/NYSE',
-                    })
-                    seen_symbols.add((symbol, 'stock'))
-            
+            # Both types
+            stocks = search_yahoo_stocks(query)
+            # Add crypto too
+            cryptos = []
             for symbol, name in FALLBACK_CRYPTO.items():
                 if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
+                    cryptos.append({
                         'symbol': symbol,
                         'name': name,
                         'type': 'crypto',
                         'exchange': 'Binance',
+                        '_priority': 1000 if query_lower == symbol.lower() else 500
                     })
-                    seen_symbols.add((symbol, 'crypto'))
-        
-        return results[:10]
+            
+            combined = stocks + cryptos
+            return [ {k:v for k,v in r.items() if k != '_priority'} 
+                     for r in sorted(combined, key=lambda x: x.get('_priority', 0), reverse=True) ][:15]
     
     except Exception as e:
-        # Return fallback results
-        query_lower = query.lower()
-        results = []
-        
-        if search_type == "tradfi":
-            for symbol, name in FALLBACK_STOCKS.items():
-                if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
-                        'symbol': symbol,
-                        'name': name,
-                        'type': 'stock',
-                        'exchange': 'NASDAQ/NYSE',
-                    })
-        elif search_type == "crypto":
-            for symbol, name in FALLBACK_CRYPTO.items():
-                if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
-                        'symbol': symbol,
-                        'name': name,
-                        'type': 'crypto',
-                        'exchange': 'Binance',
-                    })
-        else:
-            for symbol, name in FALLBACK_STOCKS.items():
-                if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
-                        'symbol': symbol,
-                        'name': name,
-                        'type': 'stock',
-                        'exchange': 'NASDAQ/NYSE',
-                    })
-            
-            for symbol, name in FALLBACK_CRYPTO.items():
-                if query_lower in symbol.lower() or query_lower in name.lower():
-                    results.append({
-                        'symbol': symbol,
-                        'name': name,
-                        'type': 'crypto',
-                        'exchange': 'Binance',
-                    })
-        
-        return results[:10]
+        return []
 
 
 if __name__ == "__main__":
     try:
         raw = sys.stdin.read().strip()
-        # Parse input: could be JSON object {"query": "AAPL", "type": "tradfi"} or plain string
         try:
             input_data = json.loads(raw)
             query = input_data.get("query", "")
             search_type = input_data.get("type", "tradfi")
         except (json.JSONDecodeError, TypeError):
-            # Fallback to plain string for backward compatibility
             query = raw
             search_type = "tradfi"
         
@@ -282,3 +273,4 @@ if __name__ == "__main__":
         print(json.dumps(results))
     except Exception as e:
         print(json.dumps([]))
+

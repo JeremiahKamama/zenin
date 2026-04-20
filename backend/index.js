@@ -111,6 +111,39 @@ const writeLimiter = rateLimit({
 
 app.use(express.json({ limit: "100kb" }));
 
+// ---------------------------------------------------------------------------
+// Security Middleware: Shared Secret Check
+// ---------------------------------------------------------------------------
+const APP_ACCESS_SECRET = process.env.ZENIN_APP_SECRET || "";
+
+function requireSecret(req, res, next) {
+  // Allow health check and OPTIONS requests (preflight) to pass
+  if (req.path === "/health" || req.method === "OPTIONS") {
+    return next();
+  }
+
+  // If no secret is configured in the environment, allow all (for local dev ease, 
+  // but recommended to always set it in production).
+  if (!APP_ACCESS_SECRET) {
+    return next();
+  }
+
+  const providedSecret = req.headers["x-zenin-secret"];
+  if (providedSecret === APP_ACCESS_SECRET) {
+    return next();
+  }
+
+  console.warn(`[Security] Unauthorized access attempt to ${req.path} from ${req.ip}`);
+  res.status(401).json({ 
+    error: "unauthorized", 
+    reason: "A valid dashboard secret is required to access Zenin API routes." 
+  });
+}
+
+// Apply to all /api routes
+app.use("/api", requireSecret);
+
+
 function handleServerError(res, context, error) {
   console.error(`${context}:`, error?.message || error);
   return res.status(500).json({ error: "Internal server error" });
@@ -364,6 +397,8 @@ const SYMBOL_MAP = {
   "ENR":        "ENR.DE",
   "ALOY":       "ALOY",
   "USAR":       "USAR",
+  "1ONDS.MI":   "ONDS",
+  "ONDS":       "ONDS"
 };
 
 const STOCK_CATALOG = Array.isArray(watchlistData?.stocks) ? watchlistData.stocks : [];
@@ -3721,18 +3756,19 @@ app.post("/api/options/crypto", async (req, res) => {
       );
 
       const data = {
-        bid: Number.isFinite(rawBid) ? rawBid : (Number.isFinite(fallbackPx) ? fallbackPx : 0),
-        ask: Number.isFinite(rawAsk) ? rawAsk : (Number.isFinite(fallbackPx) ? fallbackPx : 0),
-        delta: firstFiniteNumber(t?.greeks?.delta, t?.delta, 0),
-        gamma: firstFiniteNumber(t?.greeks?.gamma, t?.gamma, 0),
-        vega: firstFiniteNumber(t?.greeks?.vega, t?.vega, 0),
-        theta: firstFiniteNumber(t?.greeks?.theta, t?.theta, 0),
+        bid: firstFiniteNumber(t?.best_bid_price, t?.bid_price, t?.best_bid, t?.bid, t?.bids?.[0]?.price, fallbackPx, 0),
+        ask: firstFiniteNumber(t?.best_ask_price, t?.ask_price, t?.best_ask, t?.ask, t?.asks?.[0]?.price, fallbackPx, 0),
+        delta: firstFiniteNumber(t?.greeks?.delta, t?.stats?.delta, t?.delta, 0),
+        gamma: firstFiniteNumber(t?.greeks?.gamma, t?.stats?.gamma, t?.gamma, 0),
+        vega: firstFiniteNumber(t?.greeks?.vega, t?.stats?.vega, t?.vega, 0),
+        theta: firstFiniteNumber(t?.greeks?.theta, t?.stats?.theta, t?.theta, 0),
         iv: firstFiniteNumber(
-          t?.iv,
           t?.mark_iv,
+          t?.iv,
           t?.bid_iv,
           t?.ask_iv,
           t?.greeks?.iv,
+          t?.stats?.iv,
           0
         ),
       };
