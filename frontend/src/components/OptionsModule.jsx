@@ -442,6 +442,8 @@ useEffect(() => {
         writeResilientCache("options-chain", cacheParams, data);
         if (data.stale) {
           setOptionsError(`Using cached options data (${data.stale_age_seconds || 0}s old).`);
+        } else {
+          if (showToast) showToast(`${activeAsset} options chain synchronized.`, "success");
         }
       } else {
         console.warn("Invalid options response:", data);

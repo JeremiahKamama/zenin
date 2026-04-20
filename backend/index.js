@@ -4351,6 +4351,22 @@ app.get('/api/analytics/crypto', async (req, res) => {
       perpMetrics,
       kimchiPremium: { valuePct: 1.2, market: "KRW vs USD" },
       etfInflows,
+      perpsMarketShare: [
+        { protocol: "Hyperliquid", sharePct: 53.3, color: "#00ff9d" },
+        { protocol: "Aster", sharePct: 14.1, color: "#3d96ff" },
+        { protocol: "edgeX", sharePct: 6.8, color: "#ff3d6b" },
+        { protocol: "Lighter", sharePct: 5.1, color: "#ffcc00" },
+        { protocol: "Variational", sharePct: 4.4, color: "#a855f7" },
+        { protocol: "Others", sharePct: 16.3, color: "#64748b" }
+      ],
+      perpsOverview: [
+        { protocol: "Hyperliquid", volume24h: 3460000000, openInterest: 7407000000 },
+        { protocol: "ApeX", volume24h: 986740000, openInterest: 125800000 },
+        { protocol: "dYdX", volume24h: 813500000, openInterest: 0 },
+        { protocol: "Aster", volume24h: 786100000, openInterest: 1956000000 },
+        { protocol: "Variational", volume24h: 436460000, openInterest: 612210000 },
+        { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
+      ],
       perpVolumeByProtocol: [
         { protocol: "Hyperliquid", volumeUsd: 1400000000 },
         { protocol: "dYdX", volumeUsd: 850000000 },

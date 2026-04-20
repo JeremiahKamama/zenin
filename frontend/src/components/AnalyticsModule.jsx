@@ -1,5 +1,6 @@
 // src/components/AnalyticsModule.jsx
 import { useEffect, useMemo, useState } from "react";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
@@ -16,6 +17,8 @@ const EMPTY_CRYPTO = {
   revenueByProtocol: [],
   optionsVolumeByAsset: [],
   optionsMaxPain: [],
+  perpsMarketShare: [],
+  perpsOverview: [],
 };
 
 const EMPTY_OPTIONS = {
@@ -101,6 +104,8 @@ function normalizeCryptoPayload(payload) {
     optionsMaxPain: Array.isArray(payload?.optionsMaxPain)
       ? payload.optionsMaxPain
       : [],
+    perpsMarketShare: Array.isArray(payload?.perpsMarketShare) ? payload.perpsMarketShare : [],
+    perpsOverview: Array.isArray(payload?.perpsOverview) ? payload.perpsOverview : [],
   };
 }
 
@@ -668,6 +673,97 @@ export function AnalyticsModule({ backendUrl }) {
                         netUsd: row.netUsd,
                       }))}
                   />
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
+                  gap: 14,
+                  marginBottom: 14,
+                }}
+              >
+                <AnalyticsTableCard
+                  title="Perps Overview"
+                  subtitle="Top 24h Volume and Open Interest rankings"
+                  emptyText="No perp overview rows available."
+                  columns={[
+                    { key: "protocol", label: "Protocol" },
+                    {
+                      key: "volume24h",
+                      label: "24h Vol",
+                      align: "right",
+                      render: (v) => formatCompactMoney(v),
+                    },
+                    {
+                      key: "openInterest",
+                      label: "Open Interest",
+                      align: "right",
+                      render: (v) => formatCompactMoney(v),
+                    },
+                  ]}
+                  rows={(cryptoData.perpsOverview || []).map((row, idx) => ({
+                    id: `perp-ov-${idx}`,
+                    ...row,
+                  }))}
+                />
+
+                <div
+                  style={{
+                    background: "rgba(255, 255, 255, 0.03)",
+                    backdropFilter: "blur(10px)",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255, 255, 255, 0.1)",
+                    padding: 20,
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ color: "#fff", fontSize: 16, fontWeight: 600 }}>
+                      Open Interest Market Share
+                    </div>
+                    <div style={{ color: "rgba(255, 255, 255, 0.5)", fontSize: 12 }}>
+                      Distribution of total OI across major protocols
+                    </div>
+                  </div>
+                  <div style={{ flex: 1, minHeight: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={cryptoData.perpsMarketShare}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={100}
+                          paddingAngle={5}
+                          dataKey="sharePct"
+                          nameKey="protocol"
+                          stroke="none"
+                        >
+                          {cryptoData.perpsMarketShare.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{
+                            background: "rgba(10, 15, 30, 0.95)",
+                            border: "1px solid rgba(255, 255, 255, 0.1)",
+                            borderRadius: 8,
+                            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+                          }}
+                          itemStyle={{ color: "#fff" }}
+                          formatter={(value) => [`${value}%`, "Market Share"]}
+                        />
+                        <Legend
+                          verticalAlign="bottom"
+                          height={36}
+                          wrapperStyle={{ paddingTop: 20 }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
 

@@ -268,7 +268,7 @@ function tierProbability(tier) {
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 
-export default function OptionsStrategySimulator({
+const OptionsStrategySimulator = ({
   underlying,
   chain = [],
   spotPrice = null,
@@ -277,7 +277,7 @@ export default function OptionsStrategySimulator({
   showToast,
   loading = false,
   availableExpiries = []
-}) {
+}) => {
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
   const [selectedStrategyId, setSelectedStrategyId] = useState(null);
@@ -427,7 +427,7 @@ export default function OptionsStrategySimulator({
         netPremiumAtEntry: entryPremium,
         initialDelta: initialNetDelta,
         initialTheta: initialNetTheta,
-        asset: activeAsset,
+        asset: underlying,
         timestamp: new Date().toISOString()
       });
       setSelectedStrategyId(null);
@@ -438,22 +438,10 @@ export default function OptionsStrategySimulator({
   };
 
   return (
-    <div
-      style={{
-        color: "#e5e7eb",
-        fontSize: "0.85rem",
-      }}
-    >
-
+    <div style={{ color: "#e5e7eb", fontSize: "0.85rem" }}>
       {/* Step 1: View */}
       <div style={{ marginBottom: 12 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             1. What is your view?
           </span>
@@ -463,41 +451,24 @@ export default function OptionsStrategySimulator({
             </span>
           )}
         </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-            gap: 8,
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
           {VIEWS.map((v) => {
             const active = v.id === selectedView;
             return (
               <button
                 key={v.id}
                 type="button"
-                onClick={() =>
-                  setSelectedView((prev) => (prev === v.id ? null : v.id))
-                }
+                onClick={() => setSelectedView((prev) => (prev === v.id ? null : v.id))}
                 style={{
                   textAlign: "left",
                   padding: 10,
                   borderRadius: 10,
-                  border: `1px solid ${
-                    active ? v.border : "rgba(148,163,184,0.25)"
-                  }`,
+                  border: `1px solid ${active ? v.border : "rgba(148,163,184,0.25)"}`,
                   background: active ? v.bg : "rgba(15,23,42,0.85)",
                   cursor: "pointer",
                 }}
               >
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: v.accent,
-                    marginBottom: 4,
-                  }}
-                >
+                <div style={{ fontSize: 12, fontWeight: 600, color: v.accent, marginBottom: 4 }}>
                   {v.label}
                 </div>
                 <div style={{ fontSize: 11, color: "#9ca3af" }}>{v.desc}</div>
@@ -509,13 +480,7 @@ export default function OptionsStrategySimulator({
 
       {/* Step 2: Horizon */}
       <div style={{ marginBottom: 12 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             2. Time horizon
           </span>
@@ -525,45 +490,24 @@ export default function OptionsStrategySimulator({
             </span>
           )}
         </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-            gap: 8,
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
           {TIME_HORIZONS.map((h) => {
             const active = h.id === selectedHorizon;
             return (
               <button
                 key={h.id}
                 type="button"
-                onClick={() =>
-                  setSelectedHorizon((prev) => (prev === h.id ? null : h.id))
-                }
+                onClick={() => setSelectedHorizon((prev) => (prev === h.id ? null : h.id))}
                 style={{
                   textAlign: "left",
                   padding: 10,
                   borderRadius: 10,
-                  border: `1px solid ${
-                    active
-                      ? "rgba(94,234,212,0.65)"
-                      : "rgba(148,163,184,0.25)"
-                  }`,
-                  background: active
-                    ? "rgba(15,118,110,0.22)"
-                    : "rgba(15,23,42,0.85)",
+                  border: `1px solid ${active ? "rgba(94,234,212,0.65)" : "rgba(148,163,184,0.25)"}`,
+                  background: active ? "rgba(15,118,110,0.22)" : "rgba(15,23,42,0.85)",
                   cursor: "pointer",
                 }}
               >
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 500,
-                    color: "#e5e7eb",
-                    marginBottom: 2,
-                  }}
-                >
+                <div style={{ fontSize: 12, fontWeight: 500, color: "#e5e7eb", marginBottom: 2 }}>
                   {h.label}
                 </div>
                 <div style={{ fontSize: 11, color: "#9ca3af" }}>{h.sub}</div>
@@ -575,13 +519,7 @@ export default function OptionsStrategySimulator({
 
       {/* Step 3: Strategy list */}
       <div>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             3. Suggested strategies
           </span>
@@ -593,49 +531,17 @@ export default function OptionsStrategySimulator({
         </div>
 
         {!selectedView || !selectedHorizon ? (
-          <div
-            style={{
-              borderRadius: 10,
-              border: "1px dashed rgba(148,163,184,0.4)",
-              padding: 12,
-              fontSize: 12,
-              color: "#9ca3af",
-            }}
-          >
+          <div style={{ borderRadius: 10, border: "1px dashed rgba(148,163,184,0.4)", padding: 12, fontSize: 12, color: "#9ca3af" }}>
             Choose a view and horizon to see candidate strategies.
           </div>
         ) : loading && chain.length === 0 ? (
-          <div
-            style={{
-              borderRadius: 10,
-              border: "1px dashed rgba(56,189,248,0.6)",
-              padding: 24,
-              fontSize: 13,
-              color: "#38bdf8",
-              background: "rgba(15,23,42,0.6)",
-              textAlign: "center",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 12
-            }}
-          >
+          <div style={{ borderRadius: 10, border: "1px dashed rgba(56,189,248,0.6)", padding: 24, fontSize: 13, color: "#38bdf8", background: "rgba(15,23,42,0.6)", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
              <div className="spinner" style={{ width: 24, height: 24, border: "2px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8", borderRadius: "50%" }}></div>
              Syncing real-time market data for {underlying}...
           </div>
         ) : visible.length === 0 ? (
-          <div
-            style={{
-              borderRadius: 10,
-              border: "1px dashed rgba(248,113,113,0.6)",
-              padding: 12,
-              fontSize: 12,
-              color: "#fecaca",
-              background: "rgba(127,29,29,0.25)",
-            }}
-          >
-            No strategies in the library match this combination yet. Try a
-            different horizon or view.
+          <div style={{ borderRadius: 10, border: "1px dashed rgba(248,113,113,0.6)", padding: 12, fontSize: 12, color: "#fecaca", background: "rgba(127,29,29,0.25)" }}>
+            No strategies in the library match this combination yet. Try a different horizon or view.
           </div>
         ) : (
           <div className="table-scroll">
@@ -655,69 +561,34 @@ export default function OptionsStrategySimulator({
                   return (
                     <React.Fragment key={s.id}>
                       <tr
-                        onClick={() =>
-                          setSelectedStrategyId(prev => prev === s.id ? null : s.id)
-                        }
+                        onClick={() => setSelectedStrategyId(prev => prev === s.id ? null : s.id)}
                         style={{ cursor: "pointer", background: isSelected ? "rgba(56,189,248,0.1)" : "" }}
                       >
                         <td>
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: 2,
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: "0.85rem",
-                                fontWeight: 600,
-                                color: isSelected ? "#38bdf8" : "#e2e8f0",
-                              }}
-                            >
-                              {s.name}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "#94a3b8",
-                              }}
-                            >
-                              {s.summary}
-                            </span>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <span style={{ fontSize: "0.85rem", fontWeight: 600, color: isSelected ? "#38bdf8" : "#e2e8f0" }}>{s.name}</span>
+                            <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>{s.summary}</span>
                           </div>
                         </td>
                         <td>
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 4,
-                              borderRadius: 999,
-                              padding: "2px 8px",
-                              fontSize: "0.7rem",
-                              background: tier.bg,
-                              color: tier.color,
-                              border: `1px solid ${tier.border}`,
-                              textTransform: "uppercase",
-                              fontWeight: 700,
-                              letterSpacing: "0.02em"
-                            }}
-                          >
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, borderRadius: 999, padding: "2px 8px", fontSize: "0.7rem", background: tier.bg, color: tier.color, border: `1px solid ${tier.border}`, textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.02em" }}>
                             {tier.label}
                           </span>
                         </td>
-                        <td style={{ fontWeight: 600, color: "#38bdf8" }}>
-                          {(s.probability * 100).toFixed(0)}%
-                        </td>
+                        <td style={{ fontWeight: 600, color: "#38bdf8" }}>{(s.probability * 100).toFixed(0)}%</td>
                         <td style={{ color: "#e2e8f0" }}>{s.payoffLabel}</td>
                       </tr>
                       {isSelected && (
                         <tr key={`${s.id}-details`} className="strategy-details-row">
                           <td colSpan="4" style={{ padding: "16px", background: "rgba(15,23,42,0.4)", borderBottom: "1px solid rgba(56,189,248,0.2)" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
-                              {/* Greeks */}
+                              {/* Explanation & Greeks */}
                               <div>
+                                <div style={{ marginBottom: "12px", paddingBottom: "12px", borderBottom: "1px solid rgba(148,163,184,0.1)" }}>
+                                  <div style={{ fontSize: "0.75rem", color: "#38bdf8", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px", letterSpacing: "0.02em" }}>Strategy Explanation</div>
+                                  <p style={{ fontSize: "0.8rem", color: "#e2e8f0", margin: 0, lineHeight: 1.4 }}>{s.summary}</p>
+                                  <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: "4px", fontStyle: "italic" }}>Structure: {s.legs}</div>
+                                </div>
                                 <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Strategy Greeks</div>
                                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
                                   <div className="greek-box">
@@ -749,16 +620,7 @@ export default function OptionsStrategySimulator({
                                         value={selectedExpiry}
                                         onChange={(e) => setSelectedExpiry(e.target.value)}
                                         className="options-leg-input"
-                                        style={{
-                                          width: "100%",
-                                          padding: "8px",
-                                          background: "rgba(15,23,42,0.6)",
-                                          border: "1px solid rgba(148,163,184,0.3)",
-                                          borderRadius: "6px",
-                                          color: "#fff",
-                                          fontSize: "0.85rem",
-                                          appearance: "none"
-                                        }}
+                                        style={{ width: "100%", padding: "8px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", color: "#fff", fontSize: "0.85rem", appearance: "none" }}
                                       >
                                         {!availableExpiries.some(exp => new Date(exp * 1000).toISOString().split('T')[0] === String(selectedExpiry)) && (
                                            <option value={selectedExpiry}>{new Date(selectedExpiry).toLocaleDateString()}</option>
@@ -776,16 +638,7 @@ export default function OptionsStrategySimulator({
                                         min={new Date().toISOString().split("T")[0]}
                                         onChange={(e) => setSelectedExpiry(e.target.value)}
                                         className="options-leg-input"
-                                        style={{
-                                          paddingRight: "30px",
-                                          width: "100%",
-                                          padding: "8px",
-                                          background: "rgba(15,23,42,0.6)",
-                                          border: "1px solid rgba(148,163,184,0.3)",
-                                          borderRadius: "6px",
-                                          color: "#fff",
-                                          fontSize: "0.85rem"
-                                        }}
+                                        style={{ width: "100%", padding: "8px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", color: "#fff", fontSize: "0.85rem" }}
                                       />
                                     )}
                                     <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#38bdf8", fontSize: "14px" }}>
@@ -797,30 +650,12 @@ export default function OptionsStrategySimulator({
                                     placeholder="Qty"
                                     value={amount}
                                     onChange={(e) => setAmount(Number(e.target.value))}
-                                    style={{
-                                      width: "70px",
-                                      background: "rgba(15,23,42,0.6)",
-                                      border: "1px solid rgba(148,163,184,0.3)",
-                                      borderRadius: "6px",
-                                      padding: "8px",
-                                      color: "#fff",
-                                      fontSize: "0.85rem"
-                                    }}
+                                    style={{ width: "70px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", padding: "8px", color: "#fff", fontSize: "0.85rem" }}
                                   />
                                   <button
                                     onClick={handleExecute}
                                     disabled={isSubmitting}
-                                    style={{
-                                      background: "var(--color-primary, #38bdf8)",
-                                      color: "#000",
-                                      border: "none",
-                                      borderRadius: "6px",
-                                      padding: "0 16px",
-                                      fontWeight: "600",
-                                      fontSize: "0.85rem",
-                                      cursor: "pointer",
-                                      transition: "opacity 0.2s"
-                                    }}
+                                    style={{ background: "var(--color-primary, #38bdf8)", color: "#000", border: "none", borderRadius: "6px", padding: "0 16px", fontWeight: "600", fontSize: "0.85rem", cursor: "pointer", transition: "opacity 0.2s" }}
                                   >
                                     {isSubmitting ? "..." : "Execute"}
                                   </button>
@@ -835,31 +670,14 @@ export default function OptionsStrategySimulator({
                 })}
               </tbody>
             </table>
-            <div
-              style={{
-                marginTop: 6,
-                fontSize: 10,
-                color: "#6b7280",
-              }}
-            >
-              Click a row to push this strategy into the Options trade ticket.
-              Probabilities are heuristic and for guidance only.
+            <div style={{ marginTop: 6, fontSize: 10, color: "#6b7280" }}>
+              Click a row to push this strategy into the Options trade ticket. Probabilities are heuristic and for guidance only.
             </div>
           </div>
         )}
       </div>
     </div>
   );
-}
-
-const thStyle = {
-  padding: "6px 8px",
-  borderBottom: "1px solid rgba(51,65,85,0.8)",
-  fontWeight: 500,
-  color: "#9ca3af",
 };
 
-const tdStyle = {
-  padding: "6px 8px",
-  borderBottom: "1px solid rgba(30,41,59,0.85)",
-};
+export default OptionsStrategySimulator;
