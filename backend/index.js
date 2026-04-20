@@ -194,7 +194,8 @@ function validatePortfolioHolding(req, res, next) {
   if (!name || typeof name !== "string" || name.length > 100) {
     return res.status(400).json({ error: "Invalid name" });
   }
-  if (typeof price !== "number" || price < 0 || !isFinite(price)) {
+  const isOptions = (type || "").toLowerCase() === "options" || (marketType || "").toLowerCase() === "options";
+  if (typeof price !== "number" || (!isOptions && price < 0) || !isFinite(price)) {
     return res.status(400).json({ error: "Invalid price" });
   }
   if (typeof quantity !== "number" || !isFinite(quantity)) {

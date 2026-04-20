@@ -82,7 +82,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Covered Call",
       tier: "high",
-      horizons: ["medium", "long"],
+      horizons: ["medium", "long", "leaps"],
       payoffLabel: "Income + capped upside",
       summary: "Hold spot and sell OTM calls to earn yield.",
       legs: "Long 1x spot + Short 1x OTM call",
@@ -91,7 +91,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Bull Put Spread",
       tier: "high",
-      horizons: ["short", "medium"],
+      horizons: ["short", "medium", "long"],
       payoffLabel: "Limited risk income",
       summary: "Sell OTM put, buy further OTM put for protection.",
       legs: "Short 1x higher-strike put + Long 1x lower-strike put",
@@ -100,7 +100,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Bull Call Spread",
       tier: "medium",
-      horizons: ["short", "medium"],
+      horizons: ["short", "medium", "long"],
       payoffLabel: "Defined-risk upside",
       summary: "Buy lower-strike call, sell higher-strike call.",
       legs: "Long 1x lower-strike call + Short 1x higher-strike call",
@@ -109,7 +109,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Call Butterfly",
       tier: "medium",
-      horizons: ["medium"],
+      horizons: ["medium", "long"],
       payoffLabel: "Neutral-Bullish pin",
       summary: "Long 1x lower call, Short 2x ATM call, Long 1x higher call.",
       legs: "Long 1x Call(A) + Short 2x Call(B) + Long 1x Call(C)",
@@ -118,7 +118,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Call",
       tier: "speculative",
-      horizons: ["short", "medium"],
+      horizons: ["short", "medium", "long", "leaps"],
       payoffLabel: "Leveraged upside",
       summary: "Pure upside convexity, loss capped at premium.",
       legs: "Long 1x ATM/OTM call",
@@ -129,7 +129,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Bear Call Spread",
       tier: "high",
-      horizons: ["short", "medium"],
+      horizons: ["short", "medium", "long"],
       payoffLabel: "Limited risk income",
       summary: "Sell OTM call, buy further OTM call for protection.",
       legs: "Short 1x lower-strike call + Long 1x higher-strike call",
@@ -138,7 +138,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Bear Put Spread",
       tier: "medium",
-      horizons: ["short", "medium"],
+      horizons: ["short", "medium", "long"],
       payoffLabel: "Defined-risk downside",
       summary: "Buy higher-strike put, sell lower-strike put.",
       legs: "Long 1x higher-strike put + Short 1x lower-strike put",
@@ -147,7 +147,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Put Butterfly",
       tier: "medium",
-      horizons: ["medium"],
+      horizons: ["medium", "long"],
       payoffLabel: "Neutral-Bearish pin",
       summary: "Long 1x lower put, Short 2x ATM put, Long 1x higher put.",
       legs: "Long 1x Put(A) + Short 2x Put(B) + Long 1x Put(C)",
@@ -156,7 +156,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Put",
       tier: "speculative",
-      horizons: ["short"],
+      horizons: ["short", "medium", "long"],
       payoffLabel: "Leveraged downside",
       summary: "Pure downside bet, loss capped at premium.",
       legs: "Long 1x ATM/OTM put",
@@ -167,7 +167,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Protective Put",
       tier: "high",
-      horizons: ["short", "medium", "long"],
+      horizons: ["short", "medium", "long", "leaps"],
       payoffLabel: "Floor on long spot",
       summary: "Buy OTM put to cap downside on an existing long.",
       legs: "Existing long spot + Long 1x OTM put",
@@ -176,7 +176,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Collar",
       tier: "medium",
-      horizons: ["medium", "long"],
+      horizons: ["medium", "long", "leaps"],
       payoffLabel: "Capped up/down, low cost",
       summary: "Buy put and finance it by selling OTM call.",
       legs: "Long spot + Long 1x OTM put + Short 1x OTM call",
@@ -185,7 +185,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Put Backspread",
       tier: "speculative",
-      horizons: ["medium"],
+      horizons: ["medium", "long"],
       payoffLabel: "Unlimited down, safe up",
       summary: "Short 1x higher put, long 2x lower puts.",
       legs: "Short 1x Put(A) + Long 2x Put(B)",
@@ -196,7 +196,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Iron Condor",
       tier: "high",
-      horizons: ["medium"],
+      horizons: ["medium", "long"],
       payoffLabel: "High-prob range income",
       summary: "Short OTM put/call spreads around current price.",
       legs: "Short 1x OTM P/C Spreads",

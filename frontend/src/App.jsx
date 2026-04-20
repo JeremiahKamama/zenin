@@ -2161,6 +2161,7 @@ const handleOptionTradeClosed = async (tradeId) => {
             onOptionTradeExecuted={handleOptionTradeExecuted}
             onOptionTradeClosed={handleOptionTradeClosed}
             balance={balance}
+            spotPrices={spotPrices}
             showToast={showTradeToast}
           />
         )}

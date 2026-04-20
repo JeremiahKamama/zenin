@@ -66,21 +66,24 @@ const StrategySimulatorCard = ({
   );
 };
 
-export function OptionsModule({activeOptionsTrades,
-  setActiveOptionsTrades,
-  onOptionTradeExecuted,
-  onOptionTradeClosed,
+export const OptionsModule = ({ 
+  activeOptionsTrades, 
+  setActiveOptionsTrades, 
+  onOptionTradeExecuted, 
+  onOptionTradeClosed, 
   balance = 0,
+  spotPrices: externalSpotPrices = {},
   showToast
-}) {
+}) => {
   const activeTradesRef = useRef(null);
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
-  const [spotPrices, setSpotPrices] = useState({});
+  const [spotPrices, setSpotPrices] = useState(externalSpotPrices);
   const [spotSources, setSpotSources] = useState({});
   const [activeExpiry, setActiveExpiry] = useState(null);
   const [allAssets, setAllAssets] = useState(SUPPORTED_OPTIONS_ASSETS);
   const [chain, setChain] = useState([]);
+  const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
   const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState("");
@@ -111,7 +114,10 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
     setActiveOptionsTrades((prev) => prev.filter((t) => t.id !== id));
   };
   const calculateOptionPnL = (trade) => {
-    const isAssetStale = trade.asset !== activeAsset || !chain || chain.length === 0;
+    const tradeChain = multiChainCache[trade.asset] || (trade.asset === activeAsset ? chain : null);
+    const tradeSpot = spotPrices[trade.asset] || (trade.asset === activeAsset ? spotPrices[activeAsset] : null);
+    
+    const isAssetStale = !tradeChain || tradeChain.length === 0 || !tradeSpot;
     
     // Default to stored entry values if live data isn't currently loaded for this asset
     const result = {
@@ -130,11 +136,11 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
 
     (trade.legs || []).forEach(leg => {
       if (leg.type === 'spot') {
-        const spot = spotPrices[activeAsset] || leg.strike || 0;
+        const spot = tradeSpot || leg.strike || 0;
         totalMark += leg.side === 'long' ? spot : -spot;
         totalDelta += leg.side === 'long' ? 1 : -1;
       } else {
-        const row = chain.find(r => Math.abs(r.strike - leg.strike) < 0.01);
+        const row = tradeChain.find(r => Math.abs(r.strike - leg.strike) < 0.01);
         if (row) {
           const instr = leg.type === 'call' ? row.call : row.put;
           if (instr) {
@@ -247,8 +253,12 @@ const handleStrategyChosen = async (tradePayload) => {
 
   } catch (err) {
     console.error("Failed to execute strategy", err);
-    setOptionsError("Strategy execution failed. See console for details.");
-  } finally {
+    const errorMsg = err.message || "Strategy execution failed.";
+    if (showToast) {
+       showToast(errorMsg, "error");
+    } else {
+       setOptionsError(errorMsg);
+    }
     setStrategySubmitting(false);
   }
 };
@@ -258,6 +268,43 @@ const handleStrategyChosen = async (tradePayload) => {
  useEffect(() => {
   setAllAssets(SUPPORTED_OPTIONS_ASSETS);
 }, []);
+
+useEffect(() => {
+  if (externalSpotPrices && Object.keys(externalSpotPrices).length > 0) {
+    setSpotPrices(prev => ({ ...prev, ...externalSpotPrices }));
+  }
+}, [externalSpotPrices]);
+
+  // Fetch chains for all open trade assets
+  useEffect(() => {
+    if (!activeOptionsTrades || activeOptionsTrades.length === 0) return;
+    
+    const assetsWithTrades = Array.from(new Set(activeOptionsTrades.map(t => t.asset)));
+    
+    assetsWithTrades.forEach(asset => {
+      // If not in cache and not the active asset
+      if (!multiChainCache[asset] && asset !== activeAsset) {
+        fetch(`${BACKEND_URL}/options/crypto`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ currency: asset })
+        })
+          .then(res => res.json())
+          .then(data => {
+            if (data && data.chain) {
+              setMultiChainCache(prev => ({ ...prev, [asset]: data.chain }));
+            }
+          })
+          .catch(err => console.error(`Failed to fetch supplementary chain for ${asset}`, err));
+      }
+    });
+
+    // Also sync multiChainCache with the current active chain
+    if (chain && chain.length > 0) {
+       setMultiChainCache(prev => ({ ...prev, [activeAsset]: chain }));
+    }
+  }, [activeOptionsTrades, activeAsset, chain]);
+
   useEffect(() => {
     setActiveExpiry(null); // Reset expiry when asset changes
   }, [activeAsset]);
