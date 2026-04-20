@@ -156,7 +156,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Put",
       tier: "speculative",
-      horizons: ["short", "medium", "long"],
+      horizons: ["short", "medium", "long", "leaps"],
       payoffLabel: "Leveraged downside",
       summary: "Pure downside bet, loss capped at premium.",
       legs: "Long 1x ATM/OTM put",
@@ -196,7 +196,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Iron Condor",
       tier: "high",
-      horizons: ["medium", "long"],
+      horizons: ["medium", "long", "leaps"],
       payoffLabel: "High-prob range income",
       summary: "Short OTM put/call spreads around current price.",
       legs: "Short 1x OTM P/C Spreads",
@@ -225,7 +225,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Straddle",
       tier: "medium",
-      horizons: ["short"],
+      horizons: ["short", "leaps"],
       payoffLabel: "Long vol both ways",
       summary: "Buy ATM call + put, profits from big move either way.",
       legs: "Long 1x ATM call + Long 1x ATM put",
@@ -243,7 +243,7 @@ const STRATEGY_LIBRARY = {
     {
       name: "Long Strangle",
       tier: "speculative",
-      horizons: ["short"],
+      horizons: ["short", "leaps"],
       payoffLabel: "Cheaper long vol",
       summary: "Buy OTM call and put, needs larger move to pay off.",
       legs: "Long 1x OTM call + Long 1x OTM put",

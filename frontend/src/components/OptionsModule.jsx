@@ -303,6 +303,21 @@ useEffect(() => {
     if (chain && chain.length > 0) {
        setMultiChainCache(prev => ({ ...prev, [activeAsset]: chain }));
     }
+
+    // NEW: Also ensure we have spot prices for these assets
+    assetsWithTrades.forEach(asset => {
+      if (!spotPrices[asset]) {
+        fetch(`${BACKEND_URL}/prices?type=crypto&symbols=${asset}`)
+          .then(res => res.json())
+          .then(data => {
+             const price = Number(data?.prices?.[asset]?.price);
+             if (price) {
+               setSpotPrices(prev => ({ ...prev, [asset]: price }));
+             }
+          })
+          .catch(err => console.error(`Failed to fetch spot price for ${asset}`, err));
+      }
+    });
   }, [activeOptionsTrades, activeAsset, chain]);
 
   useEffect(() => {

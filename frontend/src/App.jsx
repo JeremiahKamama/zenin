@@ -1054,6 +1054,27 @@ const handleOptionTradeClosed = async (tradeId) => {
     [trades, portfolioMarketValue, balance]
   );
 
+  const spotPrices = useMemo(() => {
+    const prices = {};
+    // Extract from assets state (watchlist/category results)
+    if (Array.isArray(assets)) {
+      assets.forEach(a => {
+        if (a && a.symbol && Number.isFinite(Number(a.price))) {
+          prices[a.symbol.toUpperCase()] = Number(a.price);
+        }
+      });
+    }
+    // Extract from portfolio state (active holdings)
+    if (Array.isArray(portfolio)) {
+      portfolio.forEach(h => {
+        if (h && h.symbol && Number.isFinite(Number(h.price))) {
+          prices[h.symbol.toUpperCase()] = Number(h.price);
+        }
+      });
+    }
+    return prices;
+  }, [assets, portfolio]);
+
   useEffect(() => {
     if (!portfolioRef.current.length) return;
     let canceled = false;
