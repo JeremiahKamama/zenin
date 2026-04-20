@@ -274,7 +274,9 @@ export default function OptionsStrategySimulator({
   spotPrice = null,
   maxVisible = 10,
   onStrategyChosen,
-  showToast
+  showToast,
+  loading = false,
+  availableExpiries = []
 }) {
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
@@ -319,8 +321,22 @@ export default function OptionsStrategySimulator({
     }
     setIsSubmitting(true);
     try {
+      if (!chain || chain.length === 0) {
+        const msg = "Syncing market data... please wait for the options chain to load.";
+        if (showToast) showToast(msg, "warning");
+        return;
+      }
+
       const sorted = [...chain].sort((a, b) => a.strike - b.strike);
-      const atmIdx = sorted.findIndex(r => r.strike >= spotPrice);
+      
+      // Resilient spot price detection
+      let effectiveSpot = spotPrice;
+      if (!effectiveSpot || effectiveSpot <= 0) {
+        // Fallback to median strike if spot price is unknown
+        effectiveSpot = sorted[Math.floor(sorted.length / 2)].strike;
+      }
+
+      const atmIdx = sorted.findIndex(r => r.strike >= effectiveSpot);
       const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
       const atm = sorted[safeAtmIdx];
 
@@ -588,6 +604,25 @@ export default function OptionsStrategySimulator({
           >
             Choose a view and horizon to see candidate strategies.
           </div>
+        ) : loading && chain.length === 0 ? (
+          <div
+            style={{
+              borderRadius: 10,
+              border: "1px dashed rgba(56,189,248,0.6)",
+              padding: 24,
+              fontSize: 13,
+              color: "#38bdf8",
+              background: "rgba(15,23,42,0.6)",
+              textAlign: "center",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 12
+            }}
+          >
+             <div className="spinner" style={{ width: 24, height: 24, border: "2px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8", borderRadius: "50%" }}></div>
+             Syncing real-time market data for {underlying}...
+          </div>
         ) : visible.length === 0 ? (
           <div
             style={{
@@ -709,23 +744,50 @@ export default function OptionsStrategySimulator({
                                 <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Trade Execution</div>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                                   <div style={{ position: "relative", flex: "1 1 120px" }}>
-                                    <input
-                                      type="date"
-                                      value={selectedExpiry}
-                                      min={new Date().toISOString().split("T")[0]}
-                                      onChange={(e) => setSelectedExpiry(e.target.value)}
-                                      className="options-leg-input"
-                                      style={{
-                                        paddingRight: "30px",
-                                        width: "100%",
-                                        padding: "8px",
-                                        background: "rgba(15,23,42,0.6)",
-                                        border: "1px solid rgba(148,163,184,0.3)",
-                                        borderRadius: "6px",
-                                        color: "#fff",
-                                        fontSize: "0.85rem"
-                                      }}
-                                    />
+                                    {availableExpiries.length > 0 ? (
+                                      <select
+                                        value={selectedExpiry}
+                                        onChange={(e) => setSelectedExpiry(e.target.value)}
+                                        className="options-leg-input"
+                                        style={{
+                                          width: "100%",
+                                          padding: "8px",
+                                          background: "rgba(15,23,42,0.6)",
+                                          border: "1px solid rgba(148,163,184,0.3)",
+                                          borderRadius: "6px",
+                                          color: "#fff",
+                                          fontSize: "0.85rem",
+                                          appearance: "none"
+                                        }}
+                                      >
+                                        {!availableExpiries.some(exp => new Date(exp * 1000).toISOString().split('T')[0] === String(selectedExpiry)) && (
+                                           <option value={selectedExpiry}>{new Date(selectedExpiry).toLocaleDateString()}</option>
+                                        )}
+                                        {availableExpiries.map(exp => (
+                                          <option key={exp} value={new Date(exp * 1000).toISOString().split('T')[0]}>
+                                            {new Date(exp * 1000).toLocaleDateString()}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <input
+                                        type="date"
+                                        value={selectedExpiry}
+                                        min={new Date().toISOString().split("T")[0]}
+                                        onChange={(e) => setSelectedExpiry(e.target.value)}
+                                        className="options-leg-input"
+                                        style={{
+                                          paddingRight: "30px",
+                                          width: "100%",
+                                          padding: "8px",
+                                          background: "rgba(15,23,42,0.6)",
+                                          border: "1px solid rgba(148,163,184,0.3)",
+                                          borderRadius: "6px",
+                                          color: "#fff",
+                                          fontSize: "0.85rem"
+                                        }}
+                                      />
+                                    )}
                                     <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#38bdf8", fontSize: "14px" }}>
                                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                                     </span>

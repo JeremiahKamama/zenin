@@ -16,7 +16,9 @@ const StrategySimulatorCard = ({
   onStrategyChosen,
   chain,
   spotPrices,
-  showToast
+  showToast,
+  loading = false,
+  availableExpiries = [],
 }) => {
   const assetOptions = Array.isArray(allAssets) && allAssets.length
     ? allAssets
@@ -60,6 +62,8 @@ const StrategySimulatorCard = ({
           maxVisible={20}
           onStrategyChosen={onStrategyChosen}
           showToast={showToast}
+          loading={loading}
+          availableExpiries={availableExpiries}
         />
       </div>
     </div>
@@ -756,6 +760,8 @@ useEffect(() => {
         chain={chain}
         spotPrices={spotPrices}
         showToast={showToast}
+        loading={loading}
+        availableExpiries={availableExpiries}
       />
 
       <div className="watchlist-panel glass">
