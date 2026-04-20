@@ -11,6 +11,7 @@ import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { TaxEstimator } from "./components/TaxEstimator";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
+import { calculateOptionPnL } from "./utils/optionsPnL";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch } from "./utils/zeninFetch";
@@ -117,6 +118,7 @@ function App() {
   const WATCHLIST_CATEGORY_REFRESH_TTL_MS = 5 * 60 * 1000;
 
   const [activeOptionsTrades, setActiveOptionsTrades] = useState([]);
+  const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
 
   const stockThemes = useMemo(() => {
     const seen = new Set();
@@ -1059,22 +1061,67 @@ const handleOptionTradeClosed = async (tradeId) => {
   const calculatePortfolioValue = () => portfolioMarketValue;
 
   const calculatePortfolioGain = () => {
-    return portfolioWithEntry.reduce((total, item) => {
+    const spotGain = portfolioWithEntry.reduce((total, item) => {
       const itemValue = (item.price || 0) * (item.quantity || 0);
       const entryPrice = Number(item.entryPrice);
       const costBasis = Number.isFinite(entryPrice) ? entryPrice : Number(item.price) || 0;
       const costValue = costBasis * (item.quantity || 0);
       return total + (itemValue - costValue);
     }, 0);
+    return spotGain + (totalOptionsPnL || 0);
   };
+
+  // PERIODIC OPTIONS CHAIN SYNC FOR ACTIVE TRADES
+  useEffect(() => {
+    if (!activeOptionsTrades || activeOptionsTrades.length === 0) return;
+    
+    let isMounted = true;
+    const assetsWithTrades = Array.from(new Set(activeOptionsTrades.map(t => t.asset)));
+    
+    const refreshActiveOptionsChains = async () => {
+      for (const asset of assetsWithTrades) {
+         try {
+           const res = await zeninFetch("/options/crypto", {
+             method: "POST",
+             headers: { "Content-Type": "application/json" },
+             body: JSON.stringify({ currency: asset })
+           });
+           if (!res.ok) continue;
+           const data = await res.json();
+           if (isMounted && data && data.chain) {
+             setMultiChainCache(prev => ({ ...prev, [asset]: data.chain }));
+           }
+         } catch (err) {
+           console.warn(`Failed to sync App options chain for ${asset}:`, err);
+         }
+      }
+    };
+
+    refreshActiveOptionsChains();
+    const interval = setInterval(refreshActiveOptionsChains, 180000); // 3 minutes
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [activeOptionsTrades]);
+
+  const totalOptionsPnL = useMemo(() => {
+    return activeOptionsTrades.reduce((total, trade) => {
+      const chain = multiChainCache[trade.asset];
+      const spot = spotPrices[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      return total + (metrics.pnl || 0);
+    }, 0);
+  }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
   const accountMetrics = useMemo(
     () => calculateAccountSnapshot({
       trades,
       portfolioValue: portfolioMarketValue,
+      optionsUnrealizedPnL: totalOptionsPnL,
       balance
     }),
-    [trades, portfolioMarketValue, balance]
+    [trades, portfolioMarketValue, totalOptionsPnL, balance]
   );
 
   const spotPrices = useMemo(() => {
@@ -2168,6 +2215,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                 calculatePortfolioGain={calculatePortfolioGain}
                 activeOptionsTrades={activeOptionsTrades}
                 setActiveOptionsTrades={setActiveOptionsTrades}
+                multiChainCache={multiChainCache}
+                spotPrices={spotPrices}
                 onRemove={removeFromPortfolio}
                 onSelectAsset={(asset) => {
                   const enriched = {
@@ -2220,6 +2269,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             portfolio={portfolioWithEntry}
             balance={accountMetrics.liveAvailableBalance}
             accountEquity={accountMetrics.totalAccountEquity}
+            activeOptionsTrades={activeOptionsTrades}
+            multiChainCache={multiChainCache}
+            spotPrices={spotPrices}
           />
         )}
 

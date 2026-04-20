@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import Chart from "react-apexcharts";
+import { calculateOptionPnL } from "../utils/optionsPnL";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-export function JournalModule({ trades = [], portfolio = [], balance = 0, accountEquity = null }) {
+export function JournalModule({ 
+  trades = [], 
+  portfolio = [], 
+  balance = 0, 
+  accountEquity = null,
+  activeOptionsTrades = [],
+  multiChainCache = {},
+  spotPrices = {}
+}) {
   const [reportPage, setReportPage] = useState(1);
   const [calendarCursor, setCalendarCursor] = useState(() => {
     const now = new Date();
@@ -523,7 +532,14 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       return sum + ((currentPrice - entryPrice) * qty);
     }, 0);
 
-    const unrealizedPnl = unrealizedFromOpenLots + unrealizedFromPortfolioFallback;
+    const unrealizedPnlFromOptions = (activeOptionsTrades || []).reduce((sum, trade) => {
+      const chain = multiChainCache[trade.asset];
+      const spot = spotPrices[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      return sum + (metrics.pnl || 0);
+    }, 0);
+
+    const unrealizedPnl = unrealizedFromOpenLots + unrealizedFromPortfolioFallback + unrealizedPnlFromOptions;
     const totalGainLoss = realizedGainLoss + unrealizedPnl;
 
     return {
@@ -551,7 +567,7 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
       tradedAssetsReport,
       realizedTrades: realized
     };
-  }, [trades, portfolio, livePriceBySymbol, nowTs]);
+  }, [trades, portfolio, livePriceBySymbol, nowTs, activeOptionsTrades, multiChainCache, spotPrices]);
 
   const portfolioValue = useMemo(
     () => (portfolio || []).reduce((total, item) => total + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0),

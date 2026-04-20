@@ -57,6 +57,7 @@ export function inferCashBalanceFromTradeTimeline(tradeTimeline = [], initialBal
 export function calculateAccountSnapshot({
   trades = [],
   portfolioValue = 0,
+  optionsUnrealizedPnL = 0,
   balance = null,
   initialBalance = INITIAL_ACCOUNT_BALANCE
 } = {}) {
@@ -65,12 +66,14 @@ export function calculateAccountSnapshot({
   const normalizedBalance = toFiniteNumber(balance);
   const liveAvailableBalance = Number.isFinite(normalizedBalance) ? normalizedBalance : inferredCashBalance;
   const normalizedPortfolioValue = toFiniteNumber(portfolioValue, 0);
+  const normalizedOptionsPnL = toFiniteNumber(optionsUnrealizedPnL, 0);
 
   return {
     initialBalance,
     tradeTimeline,
     inferredCashBalance,
     liveAvailableBalance,
-    totalAccountEquity: liveAvailableBalance + normalizedPortfolioValue
+    optionsUnrealizedPnL: normalizedOptionsPnL,
+    totalAccountEquity: liveAvailableBalance + normalizedPortfolioValue + normalizedOptionsPnL
   };
 }

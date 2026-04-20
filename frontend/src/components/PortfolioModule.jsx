@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import ReactApexChart from "react-apexcharts";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
+import { calculateOptionPnL } from "../utils/optionsPnL";
 
 export function PortfolioModule({
   portfolio,
@@ -10,6 +11,8 @@ export function PortfolioModule({
   calculatePortfolioValue,
   calculatePortfolioGain,
   activeOptionsTrades = [],
+  multiChainCache = {},
+  spotPrices = {},
   onRemove,
   onSellAsset,
   onSelectAsset
@@ -53,8 +56,10 @@ const totalOptionsValue = (Array.isArray(activeOptionsTrades)
   ? activeOptionsTrades
   : []
 ).reduce((acc, trade) => {
-  // Prefer pnl/unrealizedPnl stored on the trade until you wire live marks in Portfolio
-  const value = Number(trade?.unrealizedPnl ?? trade?.pnl ?? 0);
+  const chain = multiChainCache[trade.asset];
+  const spot = spotPrices[trade.asset];
+  const metrics = calculateOptionPnL(trade, chain, spot);
+  const value = Number(metrics.pnl || 0);
   return acc + (Number.isFinite(value) ? value : 0);
 }, 0);
 
@@ -451,11 +456,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
                         <div className="portfolio-left">
                           <div>
                             <strong>{item.symbol}</strong>
-                            {item.marketType === "options" && (
-                              <span style={{ fontSize: "11px", color: "var(--color-text-secondary)", marginLeft: "6px" }}>
-                                {item.strategyName || item.name}
-                              </span>
-                            )}
                           </div>
                         </div>
                         <div className="portfolio-center">
@@ -473,6 +473,52 @@ const isProfitable = currentAccountEquity >= initialBalance;
                           <div className={`position-gain ${positionGain >= 0 ? "positive" : "negative"}`}>
                             {positionGain >= 0 ? "+" : ""}${positionGain.toFixed(2)}
                           </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Active Options Positions */}
+                  {activeOptionsTrades.map((trade) => {
+                    const chain = multiChainCache[trade.asset];
+                    const spot = spotPrices[trade.asset];
+                    const metrics = calculateOptionPnL(trade, chain, spot);
+                    const { currentMark, pnl, isStale } = metrics;
+                    const pnlColor = (pnl || 0) >= 0 ? "#22c55e" : "#ef4444";
+
+                    return (
+                      <div
+                        key={trade.id}
+                        className={`portfolio-card ${isStale ? "stale-row" : ""}`}
+                        style={{ borderLeft: `3px solid ${pnlColor}` }}
+                      >
+                        <div className="portfolio-left">
+                          <div>
+                            <strong>{trade.asset}</strong>
+                            <span style={{ fontSize: "11px", color: "var(--color-text-secondary)", marginLeft: "6px" }}>
+                              {trade.strategy}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="portfolio-center">
+                           <div className="price-info">
+                             <div style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                               {trade.qty} Unit{trade.qty !== 1 ? "s" : ""}
+                             </div>
+                           </div>
+                        </div>
+                        <div className="portfolio-quantity">
+                           <div className="quantity-readonly" style={{ fontSize: "11px" }}>
+                             ${(currentMark || 0).toFixed(2)} Mark
+                           </div>
+                        </div>
+                        <div className="portfolio-value">
+                           <div className="position-value" style={{ color: pnlColor }}>
+                             {pnl >= 0 ? "+" : ""}${ (pnl || 0).toFixed(2) }
+                           </div>
+                           <div style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>
+                             Options PnL
+                           </div>
                         </div>
                       </div>
                     );

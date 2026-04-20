@@ -28,6 +28,8 @@ const EODHD_API_TOKEN = String(
   ""
 ).trim().replace(/^,+|,+$/g, "");
 
+console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES (" + EODHD_API_TOKEN.slice(0, 4) + "...)" : "NO"}`);
+
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const macroIndicatorsCache = new Map();
 

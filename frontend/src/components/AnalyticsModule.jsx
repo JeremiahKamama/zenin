@@ -327,6 +327,7 @@ export function AnalyticsModule({ backendUrl }) {
   
   const [etfAssetToggle, setEtfAssetToggle] = useState("All");
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
+  const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
 
   useEffect(() => {
     let cancelled = false;
@@ -376,8 +377,11 @@ export function AnalyticsModule({ backendUrl }) {
 
   const cryptoPerps = useMemo(() => {
     const preferredOrder = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
+    const currentMetrics = (cryptoData.perpMetrics || []).filter(
+      (m) => m.exchange === selectedPerpExchange
+    );
     const bySymbol = new Map(
-      (cryptoData.perpMetrics || []).map((row) => [
+      currentMetrics.map((row) => [
         String(row.symbol || "").toUpperCase(),
         row,
       ])
@@ -385,17 +389,18 @@ export function AnalyticsModule({ backendUrl }) {
     return preferredOrder
       .map((symbol) => {
         const row = bySymbol.get(symbol);
+        if (!row) return null;
         return {
-          id: symbol,
+          id: `${selectedPerpExchange}-${symbol}`,
           symbol,
           openInterestUsd:
             row?.openInterestUsd ?? row?.oiUsd ?? row?.openInterest ?? null,
           fundingRate: row?.fundingRate ?? row?.funding ?? null,
-          exchange: row?.exchange || "Hyperliquid",
+          exchange: row?.exchange || selectedPerpExchange,
         };
       })
-      .filter((row) => row.openInterestUsd != null && row.fundingRate != null);
-  }, [cryptoData]);
+      .filter((row) => row !== null);
+  }, [cryptoData, selectedPerpExchange]);
 
   const cryptoTotalOi = useMemo(
     () =>
@@ -560,8 +565,8 @@ export function AnalyticsModule({ backendUrl }) {
                 <AnalyticsStatCard
                   title="Tracked OI"
                   value={formatCompactMoney(cryptoTotalOi)}
-                  subvalue="BTC, ETH, SOL, HYPE, BNB perpetual open interest"
-                  source="HL"
+                  subvalue={`${selectedPerpExchange} open interest for tracked assets`}
+                  source={selectedPerpExchange === "Hyperliquid" ? "HL" : selectedPerpExchange}
                   tone="info"
                 />
                 <AnalyticsStatCard
@@ -603,10 +608,43 @@ export function AnalyticsModule({ backendUrl }) {
                   gap: 14,
                 }}
               >
-                <AnalyticsTableCard
-                  title="Perpetual OI & funding"
-                  subtitle="BTC, ETH, SOL, HYPE and BNB from Hyperliquid"
-                  emptyText="No Hyperliquid perp context rows returned yet."
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    background: "rgba(15,23,42,0.6)",
+                    padding: "10px 16px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(148,163,184,0.12)"
+                  }}>
+                    <span style={{ fontSize: 13, color: "#94a3b8", fontWeight: 500 }}>Exchange Venue</span>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {["Hyperliquid", "Binance", "Bybit"].map((ex) => (
+                        <button
+                          key={ex}
+                          onClick={() => setSelectedPerpExchange(ex)}
+                          style={{
+                            padding: "6px 12px",
+                            fontSize: 12,
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            background: selectedPerpExchange === ex ? "rgba(56,189,248,0.2)" : "transparent",
+                            border: `1px solid ${selectedPerpExchange === ex ? "#38bdf8" : "rgba(255,255,255,0.08)"}`,
+                            color: selectedPerpExchange === ex ? "#38bdf8" : "#94a3b8",
+                            transition: "all 0.2s ease"
+                          }}
+                        >
+                          {ex}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <AnalyticsTableCard
+                    title="Perpetual OI & funding"
+                    subtitle={`${selectedPerpExchange} perp markets for key assets`}
+                    emptyText={`No ${selectedPerpExchange} perp context rows returned yet.`}
                   columns={[
                     { key: "symbol", label: "Asset" },
                     {
@@ -625,6 +663,7 @@ export function AnalyticsModule({ backendUrl }) {
                   ]}
                   rows={cryptoPerps}
                 />
+              </div>
 
                 <div style={{
                   background: "rgba(0, 0, 0, 0.85)",
