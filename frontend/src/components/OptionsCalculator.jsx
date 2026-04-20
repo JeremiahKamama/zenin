@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import Chart from "react-apexcharts";
+import ReactApexChart from "react-apexcharts";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
@@ -107,6 +107,9 @@ export function OptionsCalculator({   spotPrice = 0,
   const [savedCalculationsPage, setSavedCalculationsPage] = useState(1);
   const [saveMsg, setSaveMsg] = useState("");
   const [saveMsgType, setSaveMsgType] = useState("success");
+  // Live Deribit Greeks per leg
+  const [deribitGreeks, setDeribitGreeks] = useState({});
+  const [deribitGreeksLoading, setDeribitGreeksLoading] = useState({});
   const normalizedActiveAsset = String(activeAsset || "").trim().toUpperCase();
   const previousActiveAssetRef = useRef(normalizedActiveAsset);
   const normalizedSymbol = String(symbol || "").trim().toUpperCase();
@@ -226,10 +229,48 @@ export function OptionsCalculator({   spotPrice = 0,
     if (premium) updateLeg(i, "premium", premium);
   };
 
+  // Fetch live Deribit Greeks when expiry date is selected for a leg
+  const fetchDeribitGreeksForLeg = async (i, leg) => {
+    if (!leg.expiry || !leg.strike || !normalizedSymbol) return;
+    // Convert YYYY-MM-DD → DDMMMYY format for Deribit (e.g. 2024-06-28 → 28JUN24)
+    const d = new Date(leg.expiry);
+    if (isNaN(d.getTime())) return;
+    const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+    const deribitExpiry = `${d.getDate()}${months[d.getMonth()]}${String(d.getFullYear()).slice(2)}`;
+    const cacheKey = `${i}-${normalizedSymbol}-${deribitExpiry}-${leg.strike}-${leg.type}`;
+
+    setDeribitGreeksLoading(prev => ({ ...prev, [i]: true }));
+    try {
+      const params = new URLSearchParams({
+        symbol: normalizedSymbol, expiry: deribitExpiry, strike: leg.strike, type: leg.type === "put" ? "P" : "C"
+      });
+      const res = await fetch(`${BACKEND_URL}/greeks?${params.toString()}`);
+      if (!res.ok) throw new Error("Greeks fetch failed");
+      const data = await res.json();
+      if (!data.stale && data.mark !== null) {
+        setDeribitGreeks(prev => ({ ...prev, [cacheKey]: data }));
+        // Inject live values into the leg
+        setLegs(prev => prev.map((l, idx) => {
+          if (idx !== i) return l;
+          return {
+            ...l,
+            premium: data.mark != null ? String(data.mark) : l.premium,
+            iv: data.iv != null ? String(Number(data.iv).toFixed(1)) : l.iv
+          };
+        }));
+      }
+    } catch {
+      // Silent fail — user values stay intact
+    } finally {
+      setDeribitGreeksLoading(prev => ({ ...prev, [i]: false }));
+    }
+  };
+
   const applyStrategy = (strategy) => {
     setActiveStrategy(strategy.name);
     setLegs(strategy.legs.map(l => ({ ...EMPTY_LEG, ...l })));
   };
+
 
   const greeks = legs.map(leg => {
     const K = parseFloat(leg.strike);
@@ -601,13 +642,24 @@ export function OptionsCalculator({   spotPrice = 0,
                       <option key={s} value={s} />
                     ))}
                   </datalist>
-                  <input
-                    type="date"
-                    value={leg.expiry}
-                    onChange={e => updateLeg(i, "expiry", e.target.value)}
-                    className="options-leg-input"
-                  />
-                </div>
+                    style={{ position: 'relative' }}
+                  >
+                    <input
+                      type="date"
+                      value={leg.expiry}
+                      onChange={e => {
+                        const val = e.target.value;
+                        updateLeg(i, "expiry", val);
+                        // Trigger live Deribit Greeks fetch when date is selected
+                        const updatedLeg = { ...leg, expiry: val };
+                        fetchDeribitGreeksForLeg(i, updatedLeg);
+                      }}
+                      className="options-leg-input"
+                    />
+                    {deribitGreeksLoading[i] && (
+                      <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: '#38bdf8', pointerEvents: 'none' }}>⟳ Deribit</span>
+                    )}
+                  </div>
 
                 <div className="options-leg-row two-col">
                   <div className="options-leg-segment">
@@ -747,7 +799,7 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
         </div>
         {hasCalculatorMarketData ? (
-          <Chart
+          <ReactApexChart
             options={chartOptions}
             series={[{ name: "P&L", data: pnlData }]}
             type="area"

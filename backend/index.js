@@ -241,16 +241,21 @@ function validateWatchlistAsset(req, res, next) {
 
 function normalizeWatchlistCategoryKey(asset = {}) {
   const explicitCategory = String(asset?.category || "").trim().toLowerCase();
-  if (explicitCategory) return explicitCategory;
-
   const rawType = String(asset?.type || "").trim().toLowerCase();
   const marketType = String(asset?.marketType || "").trim().toLowerCase();
+
+  // Route based on explicitCategory where applicable to top-level domains
+  if (explicitCategory === "indicators" || rawType === "indicator" || marketType === "macro") return "indicators";
+  if (explicitCategory === "bonds" || rawType === "bond") return "bonds";
+  if (explicitCategory === "crypto" || rawType === "crypto" || marketType === "spot" || marketType === "perp") return "crypto";
+  if (["commodities", "metals"].includes(explicitCategory) || ["commodity", "commodities", "metal", "metals"].includes(rawType)) return "commodities";
+
   if (["stock", "stocks", "equity", "etf", "etfs"].includes(rawType) || marketType === "equity") return "stocks";
-  if (rawType === "bond") return "bonds";
-  if (rawType === "indicator" || marketType === "macro") return "indicators";
-  if (rawType === "crypto" || marketType === "spot" || marketType === "perp") return "crypto";
-  if (["commodity", "commodities", "metal", "metals"].includes(rawType)) return "commodities";
-  return rawType;
+  if (explicitCategory && ["stocks"].includes(explicitCategory)) return "stocks";
+  
+  if (explicitCategory) return explicitCategory; // fallback for truly custom top-level categories if any
+
+  return rawType || "stocks";
 }
 
 function buildWatchlistAssetIdentityKey(asset = {}) {
@@ -947,57 +952,57 @@ function fetchYFinancePrices(originalSymbols) {
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
-function searchYahooFinance(query, type = "tradfi") {
-  return new Promise((resolve) => {
-    if (!query || query.trim().length === 0) {
-      resolve([]);
-      return;
+const FALLBACK_STOCKS = {
+  'AAPL': 'Apple Inc', 'MSFT': 'Microsoft Corporation', 'GOOGL': 'Alphabet Inc',
+  'AMZN': 'Amazon.com Inc', 'TSLA': 'Tesla Inc', 'NVDA': 'NVIDIA Corporation',
+  'META': 'Meta Platforms Inc', 'NFLX': 'Netflix Inc', 'JPM': 'JPMorgan Chase',
+  'V': 'Visa Inc', 'WMT': 'Walmart Inc', 'JNJ': 'Johnson & Johnson'
+};
+
+async function searchYahooFinance(query, type = "tradfi") {
+  if (!query || query.trim().length === 0) return [];
+  
+  const results = [];
+  const queryLower = query.toLowerCase();
+  
+  // Fast Fallback Dictionary Match
+  for (const [symbol, name] of Object.entries(FALLBACK_STOCKS)) {
+    if (symbol.toLowerCase().includes(queryLower) || name.toLowerCase().includes(queryLower)) {
+      results.push({ symbol, name, type: 'stock', exchange: 'NASDAQ/NYSE' });
     }
+  }
 
-    const child = spawn("python3", ["search_symbols.py"], { cwd: __dirname });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-
-    child.on("close", (code) => {
-      if (stderr) console.error("Python stderr:", stderr);
-      console.log("Search exited with code:", code);
-
-      if (code !== 0) { resolve([]); return; }
-
-      let results = [];
-      try {
-        results = JSON.parse(stdout);
-      } catch (e) {
-        console.error("Failed to parse Python output:", e.message);
-        resolve([]);
-        return;
+  try {
+    const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json"
       }
-
-      resolve(results);
     });
 
-    child.on("error", (err) => {
-      console.error("Failed to start Python process:", err);
-      resolve([]);
-    });
+    if (response.ok) {
+      const data = await response.json();
+      const quotes = Array.isArray(data.quotes) ? data.quotes : [];
+      let fetchResolveCount = 0;
+      for (const q of quotes) {
+        if (!q.symbol) continue;
+        if (!results.some(r => r.symbol === q.symbol)) {
+          results.push({
+            symbol: q.symbol,
+            name: q.shortname || q.longname || q.symbol,
+            type: "stock",
+            exchange: q.exchange || "NASDAQ/NYSE"
+          });
+          fetchResolveCount++;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Yahoo Finance search natively failed:", err.message);
+  }
 
-    // Send the search query and type to the Python script
-    const inputData = { query, type };
-    child.stdin.write(JSON.stringify(inputData));
-    child.stdin.end();
-
-    // Timeout for search requests
-    const timer = setTimeout(() => {
-      console.warn("Search timeout — killing Python process");
-      child.kill();
-      resolve([]);
-    }, 15000);
-
-    child.on("close", () => clearTimeout(timer));
-  });
+  return results.slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,6 +1319,75 @@ app.get("/api/interval-performance", async (req, res) => {
       cache_updated_at: null,
       stale_age_seconds: null
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Live Greeks / IV / Premium from Deribit (with Binance fallback)
+// ---------------------------------------------------------------------------
+const GREEKS_CACHE = new Map();
+const GREEKS_CACHE_TTL = 60 * 1000; // 1 minute
+
+app.get("/api/greeks", async (req, res) => {
+  const { symbol, expiry, strike, type: optType } = req.query;
+  if (!symbol || !expiry || !strike) {
+    return res.status(400).json({ error: "symbol, expiry, and strike are required" });
+  }
+
+  const cacheKey = `${symbol}-${expiry}-${strike}-${optType || "C"}`;
+  const now = Date.now();
+  if (GREEKS_CACHE.has(cacheKey)) {
+    const entry = GREEKS_CACHE.get(cacheKey);
+    if (now - entry.ts < GREEKS_CACHE_TTL) return res.json(entry.data);
+  }
+
+  const sym = String(symbol || "").trim().toUpperCase();
+  const deribitCurrency = sym === "ETH" ? "ETH" : sym === "SOL" ? "SOL" : "BTC";
+
+  try {
+    const expiryUpper = String(expiry || "").trim().toUpperCase();
+    const instrumentName = `${deribitCurrency}-${expiryUpper}-${strike}-${(optType || "C").toUpperCase()}`;
+    const deribitUrl = `https://www.deribit.com/api/v2/public/get_order_book?instrument_name=${encodeURIComponent(instrumentName)}&depth=1`;
+
+    const deribitRes = await fetch(deribitUrl, { headers: { Accept: "application/json" } });
+
+    if (deribitRes.ok) {
+      const deribitData = await deribitRes.json();
+      const result = deribitData?.result;
+      if (result) {
+        const greeks = result.greeks || {};
+        const payload = {
+          source: "deribit",
+          instrument: instrumentName,
+          bid: result.best_bid_price,
+          ask: result.best_ask_price,
+          mark: result.mark_price,
+          iv: result.mark_iv,
+          delta: greeks.delta,
+          gamma: greeks.gamma,
+          theta: greeks.theta,
+          vega: greeks.vega,
+          rho: greeks.rho,
+          underlying: result.underlying_price,
+          openInterest: result.open_interest,
+          updatedAt: new Date().toISOString()
+        };
+        GREEKS_CACHE.set(cacheKey, { ts: now, data: payload });
+        return res.json(payload);
+      }
+    }
+
+    return res.json({
+      source: "unavailable", instrument: instrumentName,
+      bid: null, ask: null, mark: null, iv: null,
+      delta: null, gamma: null, theta: null, vega: null, rho: null,
+      underlying: null, openInterest: null,
+      stale: true, stale_reason: "Instrument not found on Deribit",
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Greeks fetch failed:", error.message);
+    res.status(502).json({ error: error.message });
   }
 });
 

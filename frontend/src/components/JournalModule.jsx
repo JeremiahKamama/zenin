@@ -676,15 +676,10 @@ export function JournalModule({ trades = [], portfolio = [], balance = 0, accoun
 
     const orderedDates = [...equityByDate.keys()].sort();
     const pnlByDate = new Map();
-    let prevEquity = null;
+    let prevEquity = 10000; // Set initial balance instead of null so first day records PNL
     for (const day of orderedDates) {
       const eq = Number(equityByDate.get(day));
       if (!Number.isFinite(eq)) continue;
-      if (prevEquity === null) {
-        prevEquity = eq;
-        pnlByDate.set(day, 0);
-        continue;
-      }
       pnlByDate.set(day, eq - prevEquity);
       prevEquity = eq;
     }

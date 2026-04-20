@@ -9,6 +9,61 @@ const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
+const StrategySimulatorCard = ({
+  activeAsset,
+  allAssets,
+  onChangeAsset,
+  onStrategyChosen,
+  chain,
+  spotPrices
+}) => {
+  const assetOptions = Array.isArray(allAssets) && allAssets.length
+    ? allAssets
+    : ["BTC", "ETH", "SOL", "HYPE"];
+
+  return (
+    <div className="watchlist-panel glass strategy-simulator-panel">
+      <div className="section-header">
+        <div className="header-left">
+          <h2>Strategy Simulator for {activeAsset}</h2>
+          <span className="asset-count">
+            Express your view → pick a play. Generated from {activeAsset} flow.
+          </span>
+        </div>
+        <div className="asset-dropdown-container">
+          <label
+            style={{
+              fontSize: "0.75rem",
+              textTransform: "uppercase",
+              color: "#94a3b8",
+              marginRight: 8,
+            }}
+          >
+            Underlying
+          </label>
+          <select value={activeAsset} onChange={(e) => onChangeAsset(e.target.value)}>
+            {assetOptions.map((sym) => (
+              <option key={sym} value={sym}>
+                {sym}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="strategy-simulator-body">
+        <OptionsStrategySimulator
+          underlying={activeAsset}
+          chain={chain}
+          spotPrice={spotPrices[activeAsset]}
+          maxVisible={20}
+          onStrategyChosen={onStrategyChosen}
+        />
+      </div>
+    </div>
+  );
+};
+
 export function OptionsModule({activeOptionsTrades,
   setActiveOptionsTrades,
   onOptionTradeExecuted,
@@ -137,7 +192,7 @@ const handleStrategyChosen = async (tradePayload) => {
       // Fallback to local only for simulation if no handler
       setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
     }
-  } catch (err) {
+} catch (err) {
     console.error("Failed to execute strategy", err);
   } finally {
     setStrategySubmitting(false);
@@ -146,65 +201,9 @@ const handleStrategyChosen = async (tradePayload) => {
 
 // handleConfirmStrategyTrade removed as it is now handled inline by handleStrategyChosen
 
-// OptionsModule.jsx
-
-const StrategySimulatorCard = ({
-  activeAsset,
-  allAssets,
-  onChangeAsset,
-  onStrategyChosen,
-}) => {
-  const assetOptions = Array.isArray(allAssets) && allAssets.length
-    ? allAssets
-    : ["BTC", "ETH", "SOL", "HYPE"];
-
-  return (
-    <div className="watchlist-panel glass strategy-simulator-panel">
-      <div className="section-header">
-        <div className="header-left">
-          <h2>Strategy Simulator for {activeAsset}</h2>
-          <span className="asset-count">
-            Express your view → pick a play. Generated from {activeAsset} flow.
-          </span>
-        </div>
-        <div className="asset-dropdown-container">
-          <label
-            style={{
-              fontSize: "0.75rem",
-              textTransform: "uppercase",
-              color: "#94a3b8",
-              marginRight: 8,
-            }}
-          >
-            Underlying
-          </label>
-          <select value={activeAsset} onChange={(e) => onChangeAsset(e.target.value)}>
-            {assetOptions.map((sym) => (
-              <option key={sym} value={sym}>
-                {sym}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="strategy-simulator-body">
-        <OptionsStrategySimulator
-          underlying={activeAsset}
-          chain={chain}
-          spotPrice={spotPrices[activeAsset]}
-          maxVisible={20}
-          onStrategyChosen={onStrategyChosen}
-        />
-      </div>
-    </div>
-  );
-};
-
  useEffect(() => {
   setAllAssets(SUPPORTED_OPTIONS_ASSETS);
 }, []);
-
   useEffect(() => {
     setActiveExpiry(null); // Reset expiry when asset changes
   }, [activeAsset]);
@@ -614,6 +613,8 @@ useEffect(() => {
         allAssets={allAssets}
         onChangeAsset={setActiveAsset}
         onStrategyChosen={handleStrategyChosen}
+        chain={chain}
+        spotPrices={spotPrices}
       />
 
       <div className="watchlist-panel glass">

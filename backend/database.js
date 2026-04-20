@@ -220,6 +220,11 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE portfolio_holdings
+      DROP CONSTRAINT IF EXISTS portfolio_holdings_symbol_market_type_strategy_name_key;
+    `);
+
+    await client.query(`
+      ALTER TABLE portfolio_holdings
       ADD CONSTRAINT portfolio_holdings_symbol_market_type_strategy_name_key 
       UNIQUE (symbol, market_type, strategy_name);
     `);

@@ -51,14 +51,16 @@ export function Watchlist({
   const normalizeCategory = (value) => String(value || "").trim().toLowerCase();
   const normalizeTheme = (value) => String(value || "").trim().toLowerCase();
   const resolveWatchlistCategory = (asset) => {
-    const explicitCategory = normalizeCategory(asset?.category);
-    if (explicitCategory) return explicitCategory;
     const kind = normalizeAssetKind(asset);
     if (kind === "stock" || kind === "etf") return "stocks";
     if (kind === "crypto") return "crypto";
     if (kind === "bond") return "bonds";
     if (kind === "indicator") return "indicators";
     if (kind === "commodity") return "commodities";
+    
+    // Fallback
+    const explicitCategory = normalizeCategory(asset?.category);
+    if (explicitCategory) return explicitCategory;
     return kind;
   };
   const normalizeAssetKind = (asset) => {
