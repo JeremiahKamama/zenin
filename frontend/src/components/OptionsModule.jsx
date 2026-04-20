@@ -608,55 +608,67 @@ useEffect(() => {
           <div className="section-header">
             <h2>Active Options Trades</h2>
           </div>
-          <table className="option-chain-table">
-            <thead>
-              <tr>
-                <th>Strategy</th>
-                <th>Asset</th>
-                <th>Exp</th>
-                <th>Entry Premium</th>
-                <th>Live Mark (Derive)</th>
-                <th>Delta</th>
-                <th>Theta</th>
-                <th>Unrealized PnL</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeOptionsTrades.map(trade => {
-                const metrics = calculateOptionPnL(trade);
-                const { currentMark, pnl, delta, theta, isStale } = metrics;
-                const isProfit = pnl >= 0;
-                
-                return (
-                  <tr key={trade.id}>
-                    <td>{trade.strategy}</td>
-                    <td>{trade.asset}</td>
-                    <td>{trade.legs?.[0]?.expiry || trade.legs?.expiry || "—"}</td>
-                    <td style={{ color: "#94a3b8" }}>{trade.netPremiumAtEntry ? `$${trade.netPremiumAtEntry.toFixed(2)}` : "—"}</td>
-                    <td>{isStale ? <span style={{ color: "#64748b", fontSize: "0.75rem" }}>Switch to {trade.asset}</span> : `$${(currentMark || 0).toFixed(2)}`}</td>
-                    <td className="greek" style={{ color: (delta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
-                      {isStale ? "—" : (delta || 0).toFixed(3)}
-                    </td>
-                    <td className="greek" style={{ color: (theta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
-                      {isStale ? "—" : (theta || 0).toFixed(3)}
-                    </td>
-                    <td style={{ color: isStale ? "#64748b" : (isProfit ? "#22c55e" : "#ef4444"), fontWeight: "bold" }}>
-                      {isStale ? "Stale" : `${isProfit ? "+" : ""}$${(pnl || 0).toFixed(2)}`}
-                    </td>
-                    <td>
-                      <button 
-                        onClick={() => closeOptionTrade(trade.id)}
-                        style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "0.75rem" }}
-                      >
-                        Close
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="active-trades-table-container scrollbar-thin">
+            <table className="active-trades-table">
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th>Asset</th>
+                  <th>Qty</th>
+                  <th>Expiry</th>
+                  <th>Entry Prem</th>
+                  <th>Live Mark</th>
+                  <th>Delta</th>
+                  <th>Theta</th>
+                  <th>Unrealized PnL</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeOptionsTrades.map(trade => {
+                  const metrics = calculateOptionPnL(trade);
+                  const { currentMark, pnl, delta, theta, isStale } = metrics;
+                  const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
+                  const formattedPnL = (pnl >= 0 ? "+" : "") + (pnl || 0).toFixed(2);
+                  
+                  return (
+                    <tr key={trade.id} className={isStale ? "stale-row" : ""}>
+                      <td style={{ fontWeight: 600 }}>{trade.strategy}</td>
+                      <td>{trade.asset}</td>
+                      <td>{trade.notional || 1}</td>
+                      <td style={{ fontSize: "11px", color: "#94a3b8" }}>
+                        {trade.legs?.[0]?.expiry || "—"}
+                      </td>
+                      <td style={{ color: "#94a3b8" }}>
+                        ${(trade.netPremiumAtEntry || 0).toFixed(2)}
+                      </td>
+                      <td style={{ fontWeight: 600, color: "#e2e8f0" }}>
+                        ${(currentMark || 0).toFixed(2)}
+                      </td>
+                      <td style={{ color: (delta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
+                        {(delta || 0).toFixed(2)}
+                      </td>
+                      <td style={{ color: (theta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
+                        {(theta || 0).toFixed(2)}
+                      </td>
+                      <td style={{ fontWeight: 700, color: pnlColor }}>
+                        {formattedPnL}
+                      </td>
+                      <td>
+                        <button 
+                          className="close-trade-btn"
+                          onClick={() => closeOptionTrade(trade.id)}
+                          style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "0.75rem" }}
+                        >
+                          Close
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       <StrategySimulatorCard

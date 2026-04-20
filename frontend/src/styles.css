@@ -1696,24 +1696,35 @@ button {
   color: #cbd5e1;
   font-weight: 700;
   font-size: 0.84rem;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.company-page-tab:hover {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: rgba(148, 163, 184, 0.3);
+  transform: translateY(-1px);
 }
 
 .company-page-tab.active-base {
-  border-color: rgba(93, 202, 165, 0.7);
-  background: rgba(29, 158, 117, 0.16);
-  color: #a7f3d0;
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.1);
 }
 
 .company-page-tab.active-deep {
-  border-color: rgba(239, 159, 39, 0.7);
-  background: rgba(186, 117, 23, 0.14);
-  color: #fde68a;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.1);
 }
 
 .company-page-tab.active-intel {
-  border-color: rgba(56, 189, 248, 0.7);
-  background: rgba(56, 189, 248, 0.14);
-  color: #bae6fd;
+  border-color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.15);
+  color: #7dd3fc;
+  box-shadow: 0 0 15px rgba(14, 165, 233, 0.1);
 }
 
 .company-page-legend,

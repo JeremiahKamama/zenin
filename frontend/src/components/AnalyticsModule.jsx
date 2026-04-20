@@ -272,27 +272,32 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) 
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, idx) => (
+              {(rows || []).map((row, idx) => (
                 <tr key={row.id || `${title}-${idx}`}>
-                  {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      style={{
-                        padding: "12px 0",
-                        fontSize: 13,
-                        color: "#e2e8f0",
-                        textAlign: column.align || "left",
-                        borderBottom:
-                          idx === rows.length - 1
-                            ? "none"
-                            : "1px solid rgba(148,163,184,0.08)",
-                      }}
-                    >
-                      {column.render
-                        ? column.render(row[column.key], row)
-                        : row[column.key] ?? "—"}
-                    </td>
-                  ))}
+                  {columns.map((column) => {
+                    const cellValue = row[column.key];
+                    return (
+                      <td
+                        key={column.key}
+                        style={{
+                          padding: "12px 0",
+                          fontSize: 13,
+                          color: "#e2e8f0",
+                          textAlign: column.align || "left",
+                          borderBottom:
+                            idx === (rows || []).length - 1
+                              ? "none"
+                              : "1px solid rgba(148,163,184,0.08)",
+                        }}
+                      >
+                        {column.render
+                          ? column.render(cellValue, row)
+                          : typeof cellValue === 'object' && cellValue !== null
+                            ? JSON.stringify(cellValue)
+                            : cellValue ?? "—"}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
