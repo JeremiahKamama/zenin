@@ -309,7 +309,14 @@ export function TaxEstimator() {
           {results.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {results.map((res, idx) => (
-                <section key={idx} style={{ padding: '20px', background: 'rgba(2,6,23,0.8)', border: '1px solid rgba(56,189,248,0.35)', borderRadius: '16px' }}>
+                <section key={idx} style={{ 
+                  padding: '20px', 
+                  background: 'rgba(0, 0, 0, 0.85)', 
+                  backdropFilter: 'blur(12px)',
+                  border: '1px solid rgba(56,189,248,0.35)', 
+                  borderRadius: '16px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
+                }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                     <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>{res.jurisdiction}</h3>
                     <span style={{ color: res.liability === 0 ? '#4ade80' : '#38bdf8', fontWeight: 700, fontSize: '1.25rem' }}>
@@ -331,7 +338,14 @@ export function TaxEstimator() {
 
               {/* ── Jurisdiction Recommendation Card ────────────────────── */}
               {jurisdictionRecommendations.length > 0 && (
-                <section style={{ padding: '20px', background: 'linear-gradient(135deg, rgba(16,32,16,0.85), rgba(2,20,10,0.9))', border: '1px solid rgba(74,222,128,0.35)', borderRadius: '16px' }}>
+                <section style={{ 
+                  padding: '20px', 
+                  background: 'linear-gradient(135deg, rgba(0, 20, 10, 0.95), rgba(0, 0, 0, 0.9))', 
+                  backdropFilter: 'blur(12px)',
+                  border: '1px solid rgba(74,222,128,0.35)', 
+                  borderRadius: '16px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+                }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
                     <span style={{ fontSize: '1.25rem' }}>🌍</span>
                     <div>
@@ -375,7 +389,14 @@ export function TaxEstimator() {
           )}
 
           {savedEstimates.length > 0 && (
-            <section style={{ background: 'rgba(2,6,23,0.6)', border: '1px solid rgba(148,163,184,0.1)', borderRadius: '14px', padding: '16px' }}>
+            <section style={{ 
+              background: 'rgba(0, 0, 0, 0.75)', 
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(148,163,184,0.1)', 
+              borderRadius: '14px', 
+              padding: '16px',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)'
+            }}>
               <h4 style={{ margin: '0 0 12px', color: '#94a3b8', fontSize: '0.9rem' }}>Saved Estimates</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {savedEstimates.map((est, idx) => (
@@ -399,7 +420,14 @@ export function TaxEstimator() {
 // ── Helper micro-components ────────────────────────────────────────────────────
 function GainCard({ title, children }) {
   return (
-    <div style={{ background: 'rgba(15,23,42,0.5)', padding: '14px', borderRadius: '12px', border: '1px solid rgba(148,163,184,0.08)' }}>
+    <div style={{ 
+      background: 'rgba(0, 0, 0, 0.65)', 
+      backdropFilter: 'blur(8px)',
+      padding: '14px', 
+      borderRadius: '12px', 
+      border: '1px solid rgba(148,163,184,0.12)',
+      boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
+    }}>
       <h4 style={{ margin: '0 0 12px', fontSize: '0.88rem', color: '#e2e8f0' }}>{title}</h4>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>{children}</div>
     </div>

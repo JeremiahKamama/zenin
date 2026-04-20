@@ -6,80 +6,94 @@ This README reflects the current implementation in this repository.
 
 ## What the web app can do
 
-### 1) Home
-- Account and balance summary cards
-- Portfolio performance chart with interval and mode controls
-- Top positions by value
+#### 1) Home
+- Account and balance summary cards with trend indicators
+- Portfolio performance chart with interval (`1D` to `MAX`) and mode controls (Area, Bar, Line)
+- Top positions by value with live price/gain overlays
 - Top movers (gainers/losers) with timeframe selector (`daily`, `weekly`, `quarterly`, `ytd`, `yearly`)
 
 ### 2) Watchlist
 - Category-based asset browsing (stocks, crypto, bonds, metals, commodities, indicators)
 - Starred/watchlist-only views with ordering preserved from DB
-- TradFi/crypto/indicator search
+- TradFi/crypto/indicator search with fuzzy matching
 - Stock theme filters (default + custom themes)
 - Earnings calendar cards for stock watchlist symbols
 - Macro indicators view for G7 countries (USA, CAN, GBR, FRA, DEU, ITA, JPN)
 
-### 3) Portfolio
+### 3) Company Profile
+- Deep-dive fundamental research framework for stocks (Defense, Energy, AI, Robotics, Pharma, etc.)
+- Integrated **Finviz Market Intel**:
+  - Analyst ratings & price targets
+  - Insider trading activity
+  - Real-time news feed & sentiment indicators
+- 10-year (40-quarter) historical earnings table with surprise tracking
+- Leadership background with automated Wikipedia research links
+- Intelligent session-based caching (refreshes once per calendar day)
+
+### 4) Portfolio
 - Buy/sell via asset modal and persisted trade execution
-- Live holdings valuation and gain/loss metrics
+- Live holdings valuation and aggregate gain/loss metrics
 - Portfolio charts and performance snapshots
 - Per-position entry-price aware gain calculations
 
-### 4) Options
+### 5) Options
 - Crypto options chain (Derive/Lyra-style provider route)
 - Spot price fallback via Hyperliquid when needed
 - Whale options trades table with min-notional filtering and pagination
-- Options calculator:
-  - multi-leg setup
-  - strategy presets
-  - Greeks and net P&L
-  - payoff chart
-  - saved calculations persisted to DB
+- **Options Strategy Simulator**:
+  - Express market views (Bullish, Bearish, Rangebound, etc.) to generate multi-leg strategies
+  - Heuristic probability scoring and payoff labels
+  - Direct execution from simulator into trade tickets
+- **Options Calculator**:
+  - multi-leg setup, Greeks, and net P&L
+  - Interactive payoff charts
+  - Saved calculations persisted to DB
 
-### 5) Predictions
-- Prediction snapshot by category (`geopolitics`, `crypto`, `tech`, `politics`, `finance`)
-- Category market list with probability gauge
+### 6) Predictions
+- Prediction market snapshots for Polymarket
+- Category browsing (`geopolitics`, `crypto`, `tech`, `politics`, `finance`)
 - Whale transaction table with sort/filter/pagination
-- Market details modal (holders + position splits)
+- Market details modal with holder distribution and position splits
 
-### 6) Journal
-- Recent execution history
-- Calendar PnL visualization with symbol filtering
-- Analytics cards (realized/unrealized/expectancy/win metrics)
-- Traded Assets Report with pagination and live price refresh support
+### 7) Journal & Analytics
+- Recent execution history with asset detail expansion
+- **Calendar PnL visualization**: Daily profit/loss heatmap with symbol filtering
+- **Advanced Analytics**:
+  - Success metrics (Win rate, Profit Factor, Expectancy)
+  - Portfolio distribution and risk metrics
+- **Traded Assets Report**: Paginated overview with live price refresh and total volume tracking
 
-### 7) Settings & account panel
+### 8) Tax Estimator
+- Capital gains estimates for 40+ global jurisdictions (US, UK, India, Brazil, UAE, etc.)
+- Short-term vs. Long-term liability logic per region
+- **Jurisdiction Recommendation**: Suggests lower-tax alternatives based on your declared gains
+- CSV and PDF export support
+
+### 9) Settings & account panel
 - Profile and security controls (email/password/2FA/passkeys placeholders)
 - General preferences (timezone, refresh cadence, visibility controls)
-- Connected accounts modal (CEX/DEX/broker/prediction)
+- Connected accounts modal for exchange/prediction market metadata
 - Notification + layout preference toggles
 
-## Known limitations / In progress (as of April 16, 2026)
+## Known limitations / In progress (as of April 20, 2026)
 
-- External data providers can fail or rate-limit. Features that depend on EODHD, Derive/Lyra routes, Hyperliquid, CoinGecko, Yahoo, or Polymarket may temporarily show empty/stale/error states.
-- Macro indicators require a valid `EODHD_API_TOKEN` with macro access. If the token is missing or plan-restricted, the indicators view cannot return fresh data.
-- Telegram whale ingestion is optional and best-effort. It is disabled without MTProto credentials and only parses messages that match supported text patterns.
-- Security/account settings are currently workspace-level UX state (stored in local browser storage), not full backend-authenticated account security.
-- Connected account entries are currently metadata only (not live exchange/broker API execution).
-- The persistence model is currently single-workspace/single-tenant (`user_balance` uses a fixed id and core tables are not user-scoped).
-- Top Movers now prefers verified interval-performance data for each selected horizon and only falls back to quote-change values for daily movers; non-daily horizons may therefore show fewer rows when upstream interval data is partial.
+- **Data Provider Stability**: Features depending on external routes (EODHD, Derive, Polymarket, Finviz) may show stale or error states if upstream APIs rate-limit or fail.
+- **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented.
+- **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
+- **Security Logic**: Account/Security controls are currently frontend-level UI state (localStorage synchronized); full backend-enforced JWT/Session security for individual user accounts is pending.
+- **Multi-Tenant Support**: The current persistence model uses a fixed `user_id` for balance and trades; full multi-user isolation is not active.
+- **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 
 ## Data sources and integrations
 
-- **Hyperliquid**
-  - crypto search/pricing contexts
-  - crypto candle snapshot support (history path)
-- **CoinGecko**
-  - fallback for crypto search/history/pricing
-- **Yahoo Finance via Python scripts (`yfinance`)**
-  - TradFi symbol search/history/earnings/fundamentals
-- **Derive/Lyra-style options API endpoints**
-  - options chain + recent trades used for whale flow
-- **Polymarket Gamma/Data API**
-  - prediction snapshot, market details, holder/position data
-- **Telegram MTProto (optional, for whale ingestion)**
-  - optional ingestion of channel text trade-tape rows into options whale trades endpoint
+- **Hyperliquid**: Crypto search, pricing contexts, and fallback spot data.
+- **Polymarket (Gamma API)**: Prediction snapshots, market details, holder/position data.
+- **Finviz**: Market Intel (Insider trades, Ratings, News) and supplemental fundamental metrics.
+- **Yahoo Finance (`yfinance`)**: TradFi symbol search, history, earnings, and fundamentals.
+- **Derive/Lyra**: Options chain data and whale trade tape.
+- **EODHD**: Macro indicators and general pricing fallback.
+- **CoinGecko**: Supplemental crypto metadata.
+- **Telegram MTProto**: Optional ingestion for Derive whale flow.
 
 ## MTProto whale ingestion (implemented)
 
@@ -270,4 +284,8 @@ frontend/
       PredictionMarketModule.jsx
       JournalModule.jsx
       AssetModal.jsx
+      CompanyProfilePage.jsx
+      AnalyticsModule.jsx
+      TaxEstimator.jsx
+      OptionsStrategySimulator.jsx
 ```

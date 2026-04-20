@@ -1602,6 +1602,100 @@ app.get("/api/earnings", async (req, res) => {
   });
 });
 
+app.get("/api/finviz", async (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+
+  const safeSymbol = symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
+  const snapshotParams = { symbol: safeSymbol.toUpperCase() };
+  const cached = await readServiceSnapshot("finviz", snapshotParams);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      res.json(payload);
+      resolve();
+    };
+
+    const scriptPath = path.join(__dirname, "scripts", "fetch_finviz.py");
+    const child = spawn("python3", [scriptPath, safeSymbol], { cwd: __dirname });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+    child.on("close", async (code) => {
+      if (stderr) console.error("Finviz stderr:", stderr);
+      if (code !== 0) {
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_failed"));
+        }
+        return finish({
+          symbol: safeSymbol.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+          stale: true,
+          unavailable: true,
+          stale_reason: "finviz_fetch_failed"
+        });
+      }
+      try {
+        const result = JSON.parse(stdout);
+        if (result?.error) {
+          if (cached?.payload) {
+            return finish(applyStaleMeta(cached.payload, cached, result.error));
+          }
+          return finish({
+            symbol: safeSymbol.toUpperCase(),
+            updatedAt: new Date().toISOString(),
+            stale: true,
+            unavailable: true,
+            stale_reason: result.error
+          });
+        }
+        const payload = {
+          ...(result || {}),
+          symbol: safeSymbol.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+          stale: false
+        };
+        await writeServiceSnapshot("finviz", snapshotParams, payload);
+        finish(payload);
+      } catch (e) {
+        console.error("Finviz parse error:", e);
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "finviz_parse_failed"));
+        }
+        finish({
+          symbol: safeSymbol.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+          stale: true,
+          unavailable: true,
+          stale_reason: "finviz_parse_failed"
+        });
+      }
+    });
+
+    child.on("error", (err) => {
+      console.error("Failed to start Finviz process:", err);
+      if (cached?.payload) {
+        return finish(applyStaleMeta(cached.payload, cached, "finviz_process_start_failed"));
+      }
+      finish({ symbol: safeSymbol, error: "process_start_failed" });
+    });
+
+    setTimeout(() => {
+      child.kill();
+      if (cached?.payload) {
+        return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_timed_out"));
+      }
+      finish({ symbol: safeSymbol, error: "timed_out" });
+    }, 25000);
+  });
+});
+
 app.get("/api/company-profile", async (req, res) => {
   const { symbol, theme, category, snapshotHash } = req.query;
   if (!symbol) return res.status(400).json({ error: "symbol required" });

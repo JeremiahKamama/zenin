@@ -3,12 +3,22 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const COMPANY_PROFILE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_DATE_KEY = "zenin_profile_session_date";
+
+function getTodayStr() {
+  return new Date().toISOString().split("T")[0];
+}
 
 function isFresh(cacheEntry, ttlMs) {
   if (!cacheEntry?.updatedAt) return false;
   const ts = new Date(cacheEntry.updatedAt).getTime();
-  return Number.isFinite(ts) && Date.now() - ts < ttlMs;
+  const dateStr = new Date(cacheEntry.updatedAt).toISOString().split("T")[0];
+  const today = getTodayStr();
+  
+  // Is it within TTL AND is it from the same calendar day?
+  // Using calendar day ensures "once a day" behavior across sessions.
+  return Number.isFinite(ts) && (Date.now() - ts < ttlMs) && (dateStr === today);
 }
 
 function formatMoney(value) {
@@ -73,7 +83,12 @@ function normalizeFrameworkKey(theme, category) {
 
 function compactBullets(items, fallback) {
   const cleaned = (Array.isArray(items) ? items : [])
-    .map((item) => (item == null ? "" : String(item).trim()))
+    .map((item) => {
+      if (item == null) return "";
+      // If it's a React element or has a custom structure, don't stringify
+      if (typeof item === "object" && item.$$typeof) return item;
+      return String(item).trim();
+    })
     .filter(Boolean);
   return cleaned.length ? cleaned : [fallback];
 }
@@ -111,6 +126,7 @@ function buildFrameworkContext(profile, displayMeta) {
   const filings = profile?.filings || {};
   const research = profile?.research || {};
   const sources = Array.isArray(profile?.sources) ? profile.sources : [];
+  const finvizSummary = profile?.finviz?.summary || {};
   const location = [profile?.city, profile?.state, profile?.country].filter(Boolean).join(", ");
   const latestAnnualReport = filings?.latestAnnualReport || null;
   const latestQuarterlyReport = filings?.latestQuarterlyReport || null;
@@ -176,7 +192,21 @@ function buildFrameworkContext(profile, displayMeta) {
       "A comparable peer set is not yet available in the internal stock catalog for this symbol."
     ),
     leadershipSummary: compactBullets(
-      leadership.slice(0, 6).map((leader) => [leader.name, leader.title, leader.age ? `age ${leader.age}` : null].filter(Boolean).join(" • ")),
+      leadership.slice(0, 6).map((leader) => (
+        <span key={leader.name}>
+          <a
+            href={`https://en.wikipedia.org/wiki/${encodeURIComponent(leader.name)}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: "#38bdf8", textDecoration: "none", borderBottom: "1px dashed rgba(56,189,248,0.4)" }}
+            title={`View ${leader.name} on Wikipedia`}
+          >
+            {leader.name}
+          </a>
+          {leader.title ? ` • ${leader.title}` : ""}
+          {leader.age ? ` • age ${leader.age}` : ""}
+        </span>
+      )),
       "Leadership roster was not available in structured form from the current public snapshot."
     ),
     earningsSummary: compactBullets(
@@ -205,10 +235,10 @@ function buildFrameworkContext(profile, displayMeta) {
       profile?.currency ? `Reporting currency: ${profile.currency}` : null
     ], "Product-line detail is inferred from the public company summary and the stock catalog."),
     financialGrowthBullets: mergeBullets([
-      `Revenue: ${formatMoney(profile?.totalRevenue)}`,
-      `Revenue growth: ${formatPercent(profile?.revenueGrowth)}`,
-      `Earnings growth: ${formatPercent(profile?.earningsGrowth)}`,
-      `Market cap: ${formatMoney(profile?.marketCap)}`
+      `Revenue: ${finvizSummary["Sales"] || formatMoney(profile?.totalRevenue)}`,
+      `Revenue growth: ${finvizSummary["Sales Q/Q"] || formatPercent(profile?.revenueGrowth)}`,
+      `Earnings growth: ${finvizSummary["EPS Q/Q"] || formatPercent(profile?.earningsGrowth)}`,
+      `Market cap: ${finvizSummary["Market Cap"] || formatMoney(profile?.marketCap)}`
     ], "Top-line financial growth data is limited in the current public snapshot."),
     profitabilityBullets: compactBullets([
       `Gross margin: ${formatPercent(profile?.grossMargins)}`,
@@ -228,10 +258,10 @@ function buildFrameworkContext(profile, displayMeta) {
       `Current ratio: ${formatDecimal(profile?.currentRatio, 2)}`
     ], "Balance-sheet and leverage fields are limited in the current public snapshot."),
     valuationBullets: compactBullets([
-      `Trailing P/E: ${formatDecimal(profile?.trailingPE, 2)}`,
-      `Forward P/E: ${formatDecimal(profile?.forwardPE, 2)}`,
-      `Price to book: ${formatDecimal(profile?.priceToBook, 2)}`,
-      `Analyst target: ${formatMoney(profile?.targetMeanPrice)}`
+      `Trailing P/E: ${finvizSummary["P/E"] || formatDecimal(profile?.trailingPE, 2)}`,
+      `Forward P/E: ${finvizSummary["Forward P/E"] || formatDecimal(profile?.forwardPE, 2)}`,
+      `Price to sales: ${finvizSummary["P/S"] || formatDecimal(profile?.priceToSales, 2)}`,
+      `Analyst target: ${finvizSummary["Target Price"] || formatMoney(profile?.targetMeanPrice)}`
     ], "Valuation fields are limited in the current public snapshot."),
     returnsBullets: compactBullets([
       `Return on assets: ${formatPercent(profile?.returnOnAssets)}`,
@@ -839,6 +869,23 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
   const [finvizError, setFinvizError] = useState(null);
 
   useEffect(() => {
+    if (!normalizedSymbol) return;
+    const fetchFinviz = async () => {
+      setFinvizLoading(true);
+      try {
+        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${normalizedSymbol}`);
+        const data = await res.json();
+        if (data && !data.error) setFinvizData(data);
+      } catch (err) {
+        console.error("Failed to fetch Finviz for profile:", err);
+      } finally {
+        setFinvizLoading(false);
+      }
+    };
+    fetchFinviz();
+  }, [normalizedSymbol]);
+
+  useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
 
@@ -914,32 +961,6 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
       controller.abort();
     };
   }, [normalizedSymbol, preferredTheme, preferredCategory]);
-
-  useEffect(() => {
-    if (!normalizedSymbol || (asset?.type && asset.type !== "stock")) {
-      setFinvizData(null);
-      return;
-    }
-    
-    let isMounted = true;
-    async function fetchFinviz() {
-      setFinvizLoading(true);
-      setFinvizError(null);
-      try {
-        const finvizSymbol = normalizedSymbol.replace('.', '-');
-        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${finvizSymbol}`);
-        if (!res.ok) throw new Error("Market intelligence unavailable");
-        const data = await res.json();
-        if (isMounted) setFinvizData(data);
-      } catch (err) {
-        if (isMounted) setFinvizError(err.message);
-      } finally {
-        if (isMounted) setFinvizLoading(false);
-      }
-    }
-    fetchFinviz();
-    return () => { isMounted = false; };
-  }, [normalizedSymbol, asset?.type]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -1331,7 +1352,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
           <div className="company-earnings-head">
             <h2>Recent earnings performance</h2>
           </div>
-          <div className="company-earnings-table-wrap">
+          <div className="company-earnings-table-wrap" style={{ maxHeight: "400px", overflowY: "auto" }}>
             <table className="company-earnings-table">
               <thead>
                 <tr>
@@ -1342,7 +1363,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 </tr>
               </thead>
               <tbody>
-                {earningsHistory.slice(0, 8).map((row, index) => {
+                {earningsHistory.slice(0, 40).map((row, index) => {
                   const surprise = Number(row?.surprisePct);
                   return (
                     <tr key={`${row?.date || "earnings"}-${index}`}>

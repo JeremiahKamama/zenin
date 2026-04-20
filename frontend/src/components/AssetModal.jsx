@@ -16,6 +16,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [earnings, setEarnings] = useState(null);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
+  const [finvizData, setFinvizData] = useState(null);
+  const [finvizLoading, setFinvizLoading] = useState(false);
+  const [finvizError, setFinvizError] = useState("");
 
   const normalizeAssetKind = (value) => {
     const rawType = String(value?.type || "").trim().toLowerCase();
@@ -205,6 +208,27 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     return () => controller.abort();
   }, [isTradFi, assetSymbol]);
 
+  useEffect(() => {
+    if (!isTradFi || !assetSymbol) return;
+    
+    const fetchFinviz = async () => {
+      setFinvizLoading(true);
+      try {
+        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${assetSymbol}`);
+        const data = await res.json();
+        if (data && !data.error) {
+          setFinvizData(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch Finviz data:", err);
+      } finally {
+        setFinvizLoading(false);
+      }
+    };
+
+    fetchFinviz();
+  }, [isTradFi, assetSymbol]);
+
   const totalValue = (asset.price || 0) * (quantity || 0);
   const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
   const insufficientBalance = orderType === "buy" && totalValue > availableBalance;
@@ -276,7 +300,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     onClose?.();
   };
 
-  const getChartData = () => {
+  const chartData = useMemo(() => {
     if (chartType === "candlestick") {
       return [{
         name: "Price",
@@ -299,9 +323,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         value: Number(h.close || h.price)
       }))
     }];
-  };
+  }, [history, chartType]);
 
-  const chartOptions = {
+  const chartOptions = useMemo(() => ({
     chart: {
       type: chartType,
       toolbar: { show: false },
@@ -370,7 +394,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         }
       }
     }
-  };
+  }), [chartType]);
 
   const formatCompactNumber = (value, digits = 2) => {
     const numeric = Number(value);
@@ -513,7 +537,8 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           <div className="chart-container">
             {history.length > 0 ? (
               <TradingViewChart 
-                series={getChartData()}
+                series={chartData}
+                options={chartOptions}
                 height={280}
                 width="100%"
               />
@@ -563,7 +588,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                     className="asset-modal-more-link"
                     onClick={() => onViewCompanyProfile?.(asset)}
                   >
-                    See more
+                    Company Profile
                   </button>
                 ) : (
                   <span />
@@ -573,75 +598,58 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                   Fundamentals
                 </span>
               </div>
-              {earningsLoading && !earnings ? (
+              { (earningsLoading || finvizLoading) && !earnings && !finvizData ? (
                 <div className="asset-modal-loader asset-modal-loader-compact" aria-label="Loading fundamentals">
                   <span className="status-icon spinner">⟳</span>
                 </div>
-              ) : earnings ? (
+              ) : (earnings || finvizData) ? (
                 <div className="asset-modal-fundamentals-card">
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                     <thead>
                       <tr style={{ background: "rgba(148,163,184,0.06)" }}>
                         <th style={{ padding: "8px 12px", textAlign: "left", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Metric</th>
-                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Consensus</th>
-                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Previous</th>
+                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Value</th>
+                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Finviz Info</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>EPS</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Market Cap</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
-                          {earnings.eps?.consensus != null ? `$${Number(earnings.eps.consensus).toFixed(2)}` : "—"}
+                          {finvizData?.summary?.["Market Cap"] || (earnings?.marketCap != null ? formatCompactMoney(earnings.marketCap) : "—")}
                         </td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8" }}>
-                          {earnings.eps?.previous != null ? `$${Number(earnings.eps.previous).toFixed(2)}` : "—"}
-                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8", fontSize: "10px" }}>Live</td>
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
                         <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Revenue</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
-                          {earnings.revenue?.consensus != null
-                            ? formatCompactMoney(earnings.revenue.consensus)
-                            : "—"}
+                          {finvizData?.summary?.["Sales"] || (earnings?.revenue?.consensus != null ? formatCompactMoney(earnings.revenue.consensus) : "—")}
                         </td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8" }}>
-                          {earnings.revenue?.previous != null
-                            ? formatCompactMoney(earnings.revenue.previous)
-                            : "—"}
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8", fontSize: "10px" }}>Annual</td>
+                      </tr>
+                      <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Analyst Target</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#38bdf8", fontWeight: 600 }}>
+                          {finvizData?.summary?.["Target Price"] || (earnings?.targetPrice != null ? `$${Number(earnings.targetPrice).toFixed(2)}` : "—")}
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                           {finvizData?.ratings?.[0] && (
+                             <span style={{
+                               fontSize: "10px", padding: "2px 6px", borderRadius: "4px", fontWeight: 700, textTransform: "uppercase",
+                               background: (finvizData.ratings[0].rating?.toLowerCase().includes("buy") || finvizData.ratings[0].rating?.toLowerCase().includes("outperform")) ? "rgba(34,197,94,0.15)" : finvizData.ratings[0].rating?.toLowerCase().includes("sell") ? "rgba(239,68,68,0.15)" : "rgba(148,163,184,0.1)",
+                               color: (finvizData.ratings[0].rating?.toLowerCase().includes("buy") || finvizData.ratings[0].rating?.toLowerCase().includes("outperform")) ? "#22c55e" : finvizData.ratings[0].rating?.toLowerCase().includes("sell") ? "#ef4444" : "#94a3b8"
+                             }}>
+                               {finvizData.ratings[0].rating}
+                             </span>
+                           )}
                         </td>
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Market Cap</td>
-                        <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
-                          {earnings.marketCap != null ? formatCompactMoney(earnings.marketCap) : "—"}
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Next Earnings</td>
+                        <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 600, fontSize: "11px" }}>
+                          {finvizData?.summary?.["Earnings"] || earnings?.nextEarnings || "—"}
                         </td>
                       </tr>
-                      {earnings.targetPrice != null && (
-                        <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                          <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Analyst Target</td>
-                          <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right" }}>
-                            <span style={{ color: "#38bdf8", fontWeight: 600 }}>${Number(earnings.targetPrice).toFixed(2)}</span>
-                            {earnings.analystRating && (
-                              <span style={{
-                                marginLeft: "8px", fontSize: "10px", padding: "2px 6px", borderRadius: "4px", fontWeight: 700, textTransform: "uppercase",
-                                background: earnings.analystRating.includes("buy") ? "rgba(34,197,94,0.15)" : earnings.analystRating.includes("sell") ? "rgba(239,68,68,0.15)" : "rgba(148,163,184,0.1)",
-                                color: earnings.analystRating.includes("buy") ? "#22c55e" : earnings.analystRating.includes("sell") ? "#ef4444" : "#94a3b8"
-                              }}>
-                                {earnings.analystRating.replace(/_/g, " ")}
-                                {earnings.analystCount ? ` (${earnings.analystCount})` : ""}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                      {earnings.nextEarnings && (
-                        <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                          <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Next Earnings</td>
-                          <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 600, fontSize: "11px" }}>
-                            {earnings.nextEarnings}
-                          </td>
-                        </tr>
-                      )}
                     </tbody>
                   </table>
                   {hasDetailedFundamentals ? (

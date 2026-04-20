@@ -105,6 +105,7 @@ export const OptionsModule = ({
   const [whaleMinNotional, setWhaleMinNotional] = useState(10000);
   const [whaleSource, setWhaleSource] = useState("derive");
   const lastSyncToastRef = useRef(null); // Ref to track the last toasted request key
+  const [simulatorError, setSimulatorError] = useState("");
   
 // strategy states removed, now handled inline
 const [strategySubmitting, setStrategySubmitting] = useState(false);
@@ -181,6 +182,7 @@ const handleStrategyChosen = async (tradePayload) => {
   
   setStrategySubmitting(true);
   setOptionsError(""); // Clear any previous errors
+  setSimulatorError(""); // Clear strategy-specific errors
 
   try {
     let entryPremium = 0;
@@ -220,12 +222,12 @@ const handleStrategyChosen = async (tradePayload) => {
     // Balance Enforcement
     const totalCost = (entryPremium || 0) * (tradePayload.qty || 1);
     if (balance <= 0) {
-      setOptionsError("Execution blocked: Your account balance is zero or negative.");
+      setSimulatorError("Execution blocked: Your account balance is zero or negative.");
       setStrategySubmitting(false);
       return;
     }
     if (totalCost > 0 && balance < totalCost) {
-      setOptionsError(`Insufficient balance. Required: $${totalCost.toFixed(2)}, Available: $${balance.toFixed(2)}`);
+      setSimulatorError(`Insufficient balance. Required: $${totalCost.toFixed(2)}, Available: $${balance.toFixed(2)}`);
       setStrategySubmitting(false);
       return;
     }
@@ -768,6 +770,7 @@ useEffect(() => {
         showToast={showToast}
         loading={loading}
         availableExpiries={availableExpiries}
+        error={simulatorError}
       />
 
       <div className="watchlist-panel glass">

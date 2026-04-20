@@ -276,12 +276,13 @@ const OptionsStrategySimulator = ({
   onStrategyChosen,
   showToast,
   loading = false,
-  availableExpiries = []
+  availableExpiries = [],
+  error = ""
 }) => {
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
   const [selectedStrategyId, setSelectedStrategyId] = useState(null);
-  const [amount, setAmount] = useState(1);
+  const [notionalDollars, setNotionalDollars] = useState(1000);
   const [selectedExpiry, setSelectedExpiry] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);
@@ -324,6 +325,7 @@ const OptionsStrategySimulator = ({
     const atmIdx = sorted.findIndex(r => r.strike >= effectiveSpot);
     const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
     const atm = sorted[safeAtmIdx];
+    const derivedQty = Number(notionalDollars) / (effectiveSpot || 1);
 
     let rawLegs = [];
     const sName = selectedStrategy.name;
@@ -364,7 +366,7 @@ const OptionsStrategySimulator = ({
     }
 
     return rawLegs.map(leg => {
-      if (leg.type === 'spot') return { ...leg, qty: amount };
+      if (leg.type === 'spot') return { ...leg, qty: derivedQty };
       
       const row = sorted.find(r => Math.abs(r.strike - leg.strike) < 0.01) || atm;
       const opt = leg.type === 'call' ? row.call : row.put;
@@ -372,16 +374,16 @@ const OptionsStrategySimulator = ({
       
       return {
         ...leg,
-        qty: amount,
+        qty: derivedQty,
         expiry: selectedExpiry,
         entryPrice: mark,
-        delta: Number(opt?.delta || 0),
-        gamma: Number(opt?.gamma || 0),
-        theta: Number(opt?.theta || 0),
-        vega: Number(opt?.vega || 0)
+        delta: Number(opt?.delta) || 0,
+        gamma: Number(opt?.gamma) || 0,
+        theta: Number(opt?.theta) || 0,
+        vega: Number(opt?.vega) || 0
       };
     });
-  }, [selectedStrategy, chain, spotPrice, selectedExpiry, amount]);
+  }, [selectedStrategy, chain, spotPrice, selectedExpiry, notionalDollars]);
 
   // Real-time Aggregate Greeks Sync
   const realtimeGreeks = useMemo(() => {
@@ -403,12 +405,17 @@ const OptionsStrategySimulator = ({
 
   const handleExecute = async () => {
     if (!selectedStrategy || !onStrategyChosen) return;
-    const amt = Number(amount);
-    if (!amt || amt <= 0) {
-      if (showToast) showToast("Please enter a valid amount.", "error");
-      else alert("Please enter a valid amount.");
+    const dollars = Number(notionalDollars);
+    if (!dollars || dollars <= 0) {
+      if (showToast) showToast("Please enter a valid dollar amount.", "error");
+      else alert("Please enter a valid dollar amount.");
       return;
     }
+    
+    // Derived qty from notional dollars
+    const effectiveSpot = spotPrice || (chain.length > 0 ? chain[Math.floor(chain.length / 2)].strike : 0);
+    const derivedQty = dollars / (effectiveSpot || 1);
+
     setIsSubmitting(true);
     try {
       if (!chain || chain.length === 0) {
@@ -425,7 +432,8 @@ const OptionsStrategySimulator = ({
 
       await onStrategyChosen({
         ...selectedStrategy,
-        notional: amt,
+        notional: dollars, // Total dollar notional
+        qty: derivedQty,   // Native unit qty
         legs: generateLegs,
         netPremiumAtEntry: entryPremium,
         initialDelta: realtimeGreeks.delta,
@@ -434,7 +442,7 @@ const OptionsStrategySimulator = ({
         timestamp: new Date().toISOString()
       });
       setSelectedStrategyId(null);
-      setAmount(1);
+      setNotionalDollars(1000);
     } finally {
       setIsSubmitting(false);
     }
@@ -617,58 +625,82 @@ const OptionsStrategySimulator = ({
                               {/* Execution */}
                               <div>
                                 <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Trade Execution</div>
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                                  <div style={{ position: "relative", flex: "1 1 120px" }}>
-                                    {availableExpiries.length > 0 ? (
-                                      <select
-                                        value={selectedExpiry}
-                                        onChange={(e) => setSelectedExpiry(e.target.value)}
-                                        className="options-leg-input"
-                                        style={{ width: "100%", padding: "8px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", color: "#fff", fontSize: "0.85rem", appearance: "none" }}
-                                      >
-                                        {!availableExpiries.some(exp => new Date(exp * 1000).toISOString().split('T')[0] === String(selectedExpiry)) && (
-                                           <option value={selectedExpiry}>{new Date(selectedExpiry).toLocaleDateString()}</option>
-                                        )}
-                                        {availableExpiries.map(exp => (
-                                          <option key={exp} value={new Date(exp * 1000).toISOString().split('T')[0]}>
-                                            {new Date(exp * 1000).toLocaleDateString()}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    ) : (
-                                      <input
-                                        type="date"
-                                        value={selectedExpiry}
-                                        min={new Date().toISOString().split("T")[0]}
-                                        onChange={(e) => setSelectedExpiry(e.target.value)}
-                                        className="options-leg-input"
-                                        style={{ width: "100%", padding: "8px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", color: "#fff", fontSize: "0.85rem" }}
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                                    <div style={{ position: "relative", flex: "1 1 120px" }}>
+                                      {availableExpiries.length > 0 ? (
+                                        <select
+                                          value={selectedExpiry}
+                                          onChange={(e) => setSelectedExpiry(e.target.value)}
+                                          className="options-leg-input"
+                                          style={{ width: "100%", padding: "8px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", color: "#fff", fontSize: "0.85rem", appearance: "none" }}
+                                        >
+                                          {!availableExpiries.some(exp => new Date(exp * 1000).toISOString().split('T')[0] === String(selectedExpiry)) && (
+                                             <option value={selectedExpiry}>{new Date(selectedExpiry).toLocaleDateString()}</option>
+                                          )}
+                                          {availableExpiries.map(exp => {
+                                            const d = exp && !isNaN(exp) ? new Date(exp * 1000) : new Date(exp);
+                                            const val = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : String(exp);
+                                            return (
+                                              <option key={exp} value={val}>
+                                                {!isNaN(d.getTime()) ? d.toLocaleDateString() : String(exp)}
+                                              </option>
+                                            );
+                                          })}
+                                        </select>
+                                      ) : (
+                                        <input
+                                          type="date"
+                                          value={selectedExpiry}
+                                          min={new Date().toISOString().split("T")[0]}
+                                          onChange={(e) => setSelectedExpiry(e.target.value)}
+                                          className="options-leg-input"
+                                          style={{ width: "100%", padding: "8px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", color: "#fff", fontSize: "0.85rem" }}
+                                        />
+                                      )}
+                                      <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#38bdf8", fontSize: "14px" }}>
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                                      </span>
+                                    </div>
+                                    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                                      <span style={{ position: "absolute", left: "8px", color: "#94a3b8", fontSize: "0.85rem" }}>$</span>
+                                      <input 
+                                        type="number"
+                                        placeholder="Notional ($)"
+                                        value={notionalDollars}
+                                        onChange={(e) => setNotionalDollars(Number(e.target.value))}
+                                        style={{ width: "90px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", padding: "8px 8px 8px 20px", color: "#fff", fontSize: "0.85rem" }}
                                       />
-                                    )}
-                                    <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#38bdf8", fontSize: "14px" }}>
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                                    </span>
+                                    </div>
+                                    <button
+                                      onClick={handleExecute}
+                                      disabled={isSubmitting}
+                                      style={{ background: "var(--color-primary, #38bdf8)", color: "#000", border: "none", borderRadius: "6px", padding: "0 16px", height: "35px", fontWeight: "600", fontSize: "0.85rem", cursor: "pointer", transition: "opacity 0.2s" }}
+                                    >
+                                      {isSubmitting ? "..." : "Execute"}
+                                    </button>
                                   </div>
-                                  <input 
-                                    type="number"
-                                    placeholder="Qty"
-                                    value={amount}
-                                    onChange={(e) => setAmount(Number(e.target.value))}
-                                    style={{ width: "70px", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: "6px", padding: "8px", color: "#fff", fontSize: "0.85rem" }}
-                                  />
-                                  <button
-                                    onClick={handleExecute}
-                                    disabled={isSubmitting}
-                                    style={{ background: "var(--color-primary, #38bdf8)", color: "#000", border: "none", borderRadius: "6px", padding: "0 16px", fontWeight: "600", fontSize: "0.85rem", cursor: "pointer", transition: "opacity 0.2s" }}
-                                  >
-                                    {isSubmitting ? "..." : "Execute"}
-                                  </button>
+                                  {error && (
+                                    <div style={{ 
+                                      marginTop: "10px", 
+                                      padding: "8px 12px", 
+                                      background: "rgba(239,68,68,0.1)", 
+                                      border: "1px solid rgba(239,68,68,0.2)", 
+                                      borderRadius: "6px",
+                                      color: "#fca5a5",
+                                      fontSize: "0.75rem",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "6px"
+                                    }}>
+                                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                                      {error}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
+                            </td>
+                          </tr>
+                        )}
                     </React.Fragment>
                   );
                 })}

@@ -155,11 +155,13 @@ function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" })
   return (
     <div
       style={{
-        background: "rgba(15, 23, 42, 0.72)",
+        background: "rgba(0, 0, 0, 0.85)",
+        backdropFilter: "blur(12px)",
         border: `1px solid ${chosen.border}`,
         borderRadius: 14,
         padding: 16,
         minHeight: 110,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -215,10 +217,12 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText }) 
   return (
     <div
       style={{
-        background: "rgba(15, 23, 42, 0.72)",
-        border: "1px solid rgba(148,163,184,0.16)",
+        background: "rgba(0, 0, 0, 0.85)",
+        backdropFilter: "blur(12px)",
+        border: "1px solid rgba(148, 163, 184, 0.16)",
         borderRadius: 14,
         padding: 16,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
       }}
     >
       <div
@@ -623,11 +627,13 @@ export function AnalyticsModule({ backendUrl }) {
                 />
 
                 <div style={{
-                  background: "rgba(15, 23, 42, 0.72)",
-                  border: "1px solid rgba(148,163,184,0.16)",
+                  background: "rgba(0, 0, 0, 0.85)",
+                  backdropFilter: "blur(12px)",
+                  border: "1px solid rgba(148, 163, 184, 0.16)",
                   borderRadius: 14,
                   padding: 16,
-                  display: "flex", flexDirection: "column"
+                  display: "flex", flexDirection: "column",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                     <div>
@@ -711,13 +717,14 @@ export function AnalyticsModule({ backendUrl }) {
 
                 <div
                   style={{
-                    background: "rgba(255, 255, 255, 0.03)",
-                    backdropFilter: "blur(10px)",
+                    background: "rgba(0, 0, 0, 0.85)",
+                    backdropFilter: "blur(12px)",
                     borderRadius: 12,
                     border: "1px solid rgba(255, 255, 255, 0.1)",
                     padding: 20,
                     display: "flex",
                     flexDirection: "column",
+                    boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
                   }}
                 >
                   <div style={{ marginBottom: 16 }}>

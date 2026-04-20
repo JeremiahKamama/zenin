@@ -920,22 +920,42 @@ const handleOptionTradeExecuted = async (tradePayload) => {
     setPortfolio(data.holdings || []);
     
     // Sync local activeOptionsTrades
-    const newHolding = (data.holdings || []).find(h => 
-      h.symbol === atomicPayload.symbol && 
+    const matchingHoldings = (data.holdings || []).filter(h => 
       h.marketType === "options" && 
-      h.strategyName === atomicPayload.strategyName
+      (h.symbol === atomicPayload.symbol || h.symbol?.startsWith(atomicPayload.symbol))
     );
     
-    if (newHolding) {
+    if (matchingHoldings.length > 0) {
+       setActiveOptionsTrades(prev => {
+         const next = [...prev];
+         matchingHoldings.forEach(h => {
+           const existingIdx = next.findIndex(t => t.dbId === h.id || t.id === `opt-${h.id}`);
+           const mapped = {
+             ...h,
+             id: `opt-${h.id}`,
+             dbId: h.id,
+             strategy: h.strategyName,
+             asset: h.symbol,
+             legs: h.legsJson || [],
+             status: "OPEN"
+           };
+           if (existingIdx >= 0) next[existingIdx] = mapped;
+           else next.unshift(mapped);
+         });
+         return next;
+       });
+    } else if (atomicPayload.marketType === "options") {
+       // Fallback: If for some reason holdings sync didn't return it, use the payload to show SOMETHING
        setActiveOptionsTrades(prev => [
          {
-           ...newHolding,
-           id: `opt-${newHolding.id}`,
-           dbId: newHolding.id,
-           strategy: newHolding.strategyName,
-           asset: newHolding.symbol,
-           legs: newHolding.legsJson || [],
-           status: "OPEN"
+           id: `opt-temp-${Date.now()}`,
+           strategy: atomicPayload.strategyName,
+           asset: atomicPayload.symbol,
+           legs: atomicPayload.legsJson || [],
+           quantity: atomicPayload.quantity,
+           netPremiumAtEntry: atomicPayload.price,
+           status: "OPEN",
+           executedAt: atomicPayload.executedAt
          },
          ...prev
        ]);
