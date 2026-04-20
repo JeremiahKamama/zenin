@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -47,9 +48,38 @@ function sanitizeSymbol(symbol) {
 }
 
 // CORS — allow configured frontend origin (or all origins in dev)
-const allowedOrigins = process.env.FRONTEND_URL
-  ? [process.env.FRONTEND_URL]
-  : ["http://localhost:5173", "http://localhost:3000"];
+const allowedOrigins = [
+  process.env.FRONTEND_URL || "http://localhost:5173",
+  "http://localhost:3000",
+  "https://zenincapital.com"
+];
+
+// Helper to fetch latest results from Dune Analytics
+async function fetchDuneLatestResults(queryId) {
+  const apiKey = process.env.DUNE_API_KEY;
+  if (!apiKey) {
+    console.warn(`[Dune] API key missing. Skipping fetch for query ${queryId}.`);
+    return null;
+  }
+
+  try {
+    const fetch = await resolveFetch();
+    const response = await fetch(`https://api.dune.com/api/v1/query/${queryId}/results`, {
+      headers: { "x-dune-api-key": apiKey }
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Dune API error (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    return data.result?.rows || [];
+  } catch (error) {
+    console.error(`[Dune] Failed to fetch query ${queryId}:`, error.message);
+    return null;
+  }
+}
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -4339,7 +4369,46 @@ app.get('/api/analytics/crypto', async (req, res) => {
     // Sort by symbol, then exchange
     perpMetrics.sort((a, b) => a.symbol.localeCompare(b.symbol) || a.exchange.localeCompare(b.exchange));
 
-    // Mocks for Dune & Farside due to 403 blocks
+    // Attempt live Dune fetches for specialized metrics
+    // REPLACE these placeholders with your actual Dune Query IDs
+    const DUNE_QUERY_IDS = {
+      MARKET_SHARE: "3834927", // Example ID for Market Share
+      OVERVIEW: "3834930",     // Example ID for Perps Overview
+      ETF_INFLOWS: "3834935"   // Example ID for ETF Flows
+    };
+
+    const [duneMarketShareRows, duneOverviewRows] = await Promise.all([
+      fetchDuneLatestResults(DUNE_QUERY_IDS.MARKET_SHARE),
+      fetchDuneLatestResults(DUNE_QUERY_IDS.OVERVIEW)
+    ]);
+
+    // Map Dune data to our visual formats, falling back to static mocks if API fails
+    const perpsMarketShare = duneMarketShareRows ? duneMarketShareRows.map(row => ({
+      protocol: row.protocol || "Unknown",
+      sharePct: Number(row.share_pct || row.sharePct || 0),
+      color: row.color || "#64748b"
+    })) : [
+      { protocol: "Hyperliquid", sharePct: 53.3, color: "#00ff9d" },
+      { protocol: "Aster", sharePct: 14.1, color: "#3d96ff" },
+      { protocol: "edgeX", sharePct: 6.8, color: "#ff3d6b" },
+      { protocol: "Lighter", sharePct: 5.1, color: "#ffcc00" },
+      { protocol: "Variational", sharePct: 4.4, color: "#a855f7" },
+      { protocol: "Others", sharePct: 16.3, color: "#64748b" }
+    ];
+
+    const perpsOverview = duneOverviewRows ? duneOverviewRows.map(row => ({
+      protocol: row.protocol || "Unknown",
+      volume24h: Number(row.volume24h || row.volume_24h || 0),
+      openInterest: Number(row.open_interest || row.openInterest || 0)
+    })) : [
+      { protocol: "Hyperliquid", volume24h: 3460000000, openInterest: 7407000000 },
+      { protocol: "ApeX", volume24h: 986740000, openInterest: 125800000 },
+      { protocol: "dYdX", volume24h: 813500000, openInterest: 0 },
+      { protocol: "Aster", volume24h: 786100000, openInterest: 1956000000 },
+      { protocol: "Variational", volume24h: 436460000, openInterest: 612210000 },
+      { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
+    ];
+
     const etfInflows = [
       { id: "1", date: new Date().toISOString().split("T")[0], ticker: "IBIT", asset: "BTC", manager: "BlackRock", netUsd: 125000000, period: "daily" },
       { id: "2", date: new Date().toISOString().split("T")[0], ticker: "FBTC", asset: "BTC", manager: "Fidelity", netUsd: 45000000, period: "daily" },
@@ -4351,22 +4420,8 @@ app.get('/api/analytics/crypto', async (req, res) => {
       perpMetrics,
       kimchiPremium: { valuePct: 1.2, market: "KRW vs USD" },
       etfInflows,
-      perpsMarketShare: [
-        { protocol: "Hyperliquid", sharePct: 53.3, color: "#00ff9d" },
-        { protocol: "Aster", sharePct: 14.1, color: "#3d96ff" },
-        { protocol: "edgeX", sharePct: 6.8, color: "#ff3d6b" },
-        { protocol: "Lighter", sharePct: 5.1, color: "#ffcc00" },
-        { protocol: "Variational", sharePct: 4.4, color: "#a855f7" },
-        { protocol: "Others", sharePct: 16.3, color: "#64748b" }
-      ],
-      perpsOverview: [
-        { protocol: "Hyperliquid", volume24h: 3460000000, openInterest: 7407000000 },
-        { protocol: "ApeX", volume24h: 986740000, openInterest: 125800000 },
-        { protocol: "dYdX", volume24h: 813500000, openInterest: 0 },
-        { protocol: "Aster", volume24h: 786100000, openInterest: 1956000000 },
-        { protocol: "Variational", volume24h: 436460000, openInterest: 612210000 },
-        { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
-      ],
+      perpsMarketShare,
+      perpsOverview,
       perpVolumeByProtocol: [
         { protocol: "Hyperliquid", volumeUsd: 1400000000 },
         { protocol: "dYdX", volumeUsd: 850000000 },

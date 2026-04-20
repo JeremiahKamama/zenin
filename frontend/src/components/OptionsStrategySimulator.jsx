@@ -311,6 +311,96 @@ const OptionsStrategySimulator = ({
   const visible = strategies.slice(0, maxVisible);
   const selectedStrategy = visible.find(s => s.id === selectedStrategyId);
 
+  // Helper to generate normalized legs with current chain data
+  const generateLegs = useMemo(() => {
+    if (!selectedStrategy || !chain || chain.length === 0) return [];
+
+    const sorted = [...chain].sort((a, b) => a.strike - b.strike);
+    let effectiveSpot = spotPrice;
+    if (!effectiveSpot || effectiveSpot <= 0) {
+      effectiveSpot = sorted[Math.floor(sorted.length / 2)].strike;
+    }
+
+    const atmIdx = sorted.findIndex(r => r.strike >= effectiveSpot);
+    const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
+    const atm = sorted[safeAtmIdx];
+
+    let rawLegs = [];
+    const sName = selectedStrategy.name;
+
+    if (sName === "Long Call") {
+      rawLegs = [{ type: 'call', side: 'long', strike: atm.strike }];
+    } else if (sName === "Long Put") {
+      rawLegs = [{ type: 'put', side: 'long', strike: atm.strike }];
+    } else if (sName === "Covered Call") {
+      rawLegs = [
+        { type: 'spot', side: 'long', strike: effectiveSpot },
+        { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 2)].strike }
+      ];
+    } else if (sName === "Bull Put Spread") {
+      rawLegs = [
+        { type: 'put', side: 'short', strike: atm.strike },
+        { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 3)].strike }
+      ];
+    } else if (sName === "Bull Call Spread") {
+      rawLegs = [
+        { type: 'call', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike },
+        { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 2)].strike }
+      ];
+    } else if (sName === "Bear Call Spread") {
+      rawLegs = [
+        { type: 'call', side: 'short', strike: atm.strike },
+        { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 3)].strike }
+      ];
+    } else if (sName === "Iron Condor") {
+      rawLegs = [
+        { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 5)].strike },
+        { type: 'put', side: 'short', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike },
+        { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 2)].strike },
+        { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 5)].strike }
+      ];
+    } else {
+      rawLegs = [{ type: 'call', side: 'long', strike: atm.strike }];
+    }
+
+    return rawLegs.map(leg => {
+      if (leg.type === 'spot') return { ...leg, qty: amount };
+      
+      const row = sorted.find(r => Math.abs(r.strike - leg.strike) < 0.01) || atm;
+      const opt = leg.type === 'call' ? row.call : row.put;
+      const mark = opt ? (Number(opt.bid || 0) + Number(opt.ask || 0)) / 2 || Number(opt.mark) || 0 : 0;
+      
+      return {
+        ...leg,
+        qty: amount,
+        expiry: selectedExpiry,
+        entryPrice: mark,
+        delta: Number(opt?.delta || 0),
+        gamma: Number(opt?.gamma || 0),
+        theta: Number(opt?.theta || 0),
+        vega: Number(opt?.vega || 0)
+      };
+    });
+  }, [selectedStrategy, chain, spotPrice, selectedExpiry, amount]);
+
+  // Real-time Aggregate Greeks Sync
+  const realtimeGreeks = useMemo(() => {
+    if (!generateLegs.length) return { delta: 0, gamma: 0, theta: 0, vega: 0 };
+    
+    return generateLegs.reduce((acc, leg) => {
+      const mult = leg.side === 'long' ? 1 : -1;
+      if (leg.type === 'spot') {
+        acc.delta += 1 * mult; // Spot delta is 1
+      } else {
+        acc.delta += (leg.delta || 0) * mult;
+        acc.gamma += (leg.gamma || 0) * mult;
+        acc.theta += (leg.theta || 0) * mult;
+        acc.vega += (leg.vega || 0) * mult;
+      }
+      return acc;
+    }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
+  }, [generateLegs]);
+
   const handleExecute = async () => {
     if (!selectedStrategy || !onStrategyChosen) return;
     const amt = Number(amount);
@@ -327,106 +417,19 @@ const OptionsStrategySimulator = ({
         return;
       }
 
-      const sorted = [...chain].sort((a, b) => a.strike - b.strike);
-      
-      // Resilient spot price detection
-      let effectiveSpot = spotPrice;
-      if (!effectiveSpot || effectiveSpot <= 0) {
-        // Fallback to median strike if spot price is unknown
-        effectiveSpot = sorted[Math.floor(sorted.length / 2)].strike;
-      }
-
-      const atmIdx = sorted.findIndex(r => r.strike >= effectiveSpot);
-      const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
-      const atm = sorted[safeAtmIdx];
-
-      if (!atm) {
-        const msg = "No options data available for the ATM strike. Simulation aborted.";
-        if (showToast) showToast(msg, "error");
-        else alert(msg);
-        return;
-      }
-
-      let rawLegs = [];
-      const sName = selectedStrategy.name;
-      const targetExpiry = selectedExpiry || atm?.call?.expiry || atm?.put?.expiry;
-
-      if (sName === "Long Call") {
-        rawLegs = [{ type: 'call', side: 'long', strike: atm.strike }];
-      } else if (sName === "Long Put") {
-        rawLegs = [{ type: 'put', side: 'long', strike: atm.strike }];
-      } else if (sName === "Covered Call") {
-        rawLegs = [
-          { type: 'spot', side: 'long', strike: spotPrice },
-          { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 2)].strike }
-        ];
-      } else if (sName === "Bull Put Spread") {
-        rawLegs = [
-          { type: 'put', side: 'short', strike: atm.strike },
-          { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 3)].strike }
-        ];
-      } else if (sName === "Bull Call Spread") {
-        rawLegs = [
-          { type: 'call', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike },
-          { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 2)].strike }
-        ];
-      } else if (sName === "Bear Call Spread") {
-        rawLegs = [
-          { type: 'call', side: 'short', strike: atm.strike },
-          { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 3)].strike }
-        ];
-      } else if (sName === "Iron Condor") {
-        rawLegs = [
-          { type: 'put', side: 'long', strike: sorted[Math.max(0, safeAtmIdx - 5)].strike },
-          { type: 'put', side: 'short', strike: sorted[Math.max(0, safeAtmIdx - 2)].strike },
-          { type: 'call', side: 'short', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 2)].strike },
-          { type: 'call', side: 'long', strike: sorted[Math.min(sorted.length - 1, safeAtmIdx + 5)].strike }
-        ];
-      } else {
-        rawLegs = [{ type: 'call', side: 'long', strike: atm.strike }];
-      }
-
-      // Enrich legs with real chain data
-      let initialNetDelta = 0;
-      let initialNetTheta = 0;
       let entryPremium = 0;
-
-      const structuredLegs = rawLegs.map(leg => {
-        if (leg.type === 'spot') return { ...leg, qty: amt };
-        
-        const row = sorted.find(r => Math.abs(r.strike - leg.strike) < 0.01) || atm;
-        const opt = leg.type === 'call' ? row.call : row.put;
-        const mark = opt ? (Number(opt.bid || 0) + Number(opt.ask || 0)) / 2 || Number(opt.mark) || 0 : 0;
-        const delta = Number(opt?.delta || 0);
-        const theta = Number(opt?.theta || 0);
-
-        if (leg.side === 'long') {
-          initialNetDelta += delta;
-          initialNetTheta += theta;
-          entryPremium += mark;
-        } else {
-          initialNetDelta -= delta;
-          initialNetTheta -= theta;
-          entryPremium -= mark;
-        }
-
-        return {
-          ...leg,
-          qty: amt,
-          expiry: targetExpiry,
-          entryPrice: mark,
-          delta: delta,
-          theta: theta
-        };
+      generateLegs.forEach(leg => {
+        const mult = leg.side === 'long' ? 1 : -1;
+        entryPremium += (leg.entryPrice || 0) * mult;
       });
 
       await onStrategyChosen({
         ...selectedStrategy,
         notional: amt,
-        legs: structuredLegs,
+        legs: generateLegs,
         netPremiumAtEntry: entryPremium,
-        initialDelta: initialNetDelta,
-        initialTheta: initialNetTheta,
+        initialDelta: realtimeGreeks.delta,
+        initialTheta: realtimeGreeks.theta,
         asset: underlying,
         timestamp: new Date().toISOString()
       });
@@ -585,27 +588,28 @@ const OptionsStrategySimulator = ({
                               {/* Explanation & Greeks */}
                               <div>
                                 <div style={{ marginBottom: "12px", paddingBottom: "12px", borderBottom: "1px solid rgba(148,163,184,0.1)" }}>
-                                  <div style={{ fontSize: "0.75rem", color: "#38bdf8", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px", letterSpacing: "0.02em" }}>Strategy Explanation</div>
-                                  <p style={{ fontSize: "0.8rem", color: "#e2e8f0", margin: 0, lineHeight: 1.4 }}>{s.summary}</p>
-                                  <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: "4px", fontStyle: "italic" }}>Structure: {s.legs}</div>
+                                  <p style={{ fontSize: "0.8rem", color: "#e2e8f0", margin: 0, lineHeight: 1.4, fontWeight: 500 }}>{s.summary}</p>
+                                  <div style={{ fontSize: "0.72rem", color: "#38bdf8", marginTop: "6px", fontStyle: "italic", background: "rgba(56,189,248,0.05)", padding: "4px 8px", borderRadius: "4px", display: "inline-block" }}>
+                                    Structure: {s.legs}
+                                  </div>
                                 </div>
-                                <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Strategy Greeks</div>
+                                <div style={{ fontSize: "0.7rem", color: "#94a3b8", textTransform: "uppercase", marginBottom: "8px", letterSpacing: "0.05em" }}>Strategy Greeks (Live)</div>
                                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
-                                  <div className="greek-box">
-                                    <label>Delta</label>
-                                    <strong>{s.greeks?.delta}</strong>
+                                  <div className="greek-box" style={{ background: "rgba(15,23,42,0.6)", borderRadius: "6px", padding: "6px", textAlign: "center" }}>
+                                    <label style={{ display: "block", fontSize: "0.6rem", color: "#64748b", marginBottom: "2px" }}>Delta</label>
+                                    <strong style={{ fontSize: "0.85rem", color: "#e2e8f0" }}>{realtimeGreeks.delta.toFixed(3)}</strong>
                                   </div>
-                                  <div className="greek-box">
-                                    <label>Gamma</label>
-                                    <strong>{s.greeks?.gamma}</strong>
+                                  <div className="greek-box" style={{ background: "rgba(15,23,42,0.6)", borderRadius: "6px", padding: "6px", textAlign: "center" }}>
+                                    <label style={{ display: "block", fontSize: "0.6rem", color: "#64748b", marginBottom: "2px" }}>Gamma</label>
+                                    <strong style={{ fontSize: "0.85rem", color: "#e2e8f0" }}>{realtimeGreeks.gamma.toFixed(4)}</strong>
                                   </div>
-                                  <div className="greek-box">
-                                    <label>Theta</label>
-                                    <strong>{s.greeks?.theta}</strong>
+                                  <div className="greek-box" style={{ background: "rgba(15,23,42,0.6)", borderRadius: "6px", padding: "6px", textAlign: "center" }}>
+                                    <label style={{ display: "block", fontSize: "0.6rem", color: "#64748b", marginBottom: "2px" }}>Theta</label>
+                                    <strong style={{ fontSize: "0.85rem", color: "#ef4444" }}>{realtimeGreeks.theta.toFixed(2)}</strong>
                                   </div>
-                                  <div className="greek-box">
-                                    <label>Vega</label>
-                                    <strong>{s.greeks?.vega}</strong>
+                                  <div className="greek-box" style={{ background: "rgba(15,23,42,0.6)", borderRadius: "6px", padding: "6px", textAlign: "center" }}>
+                                    <label style={{ display: "block", fontSize: "0.6rem", color: "#64748b", marginBottom: "2px" }}>Vega</label>
+                                    <strong style={{ fontSize: "0.85rem", color: "#38bdf8" }}>{realtimeGreeks.vega.toFixed(2)}</strong>
                                   </div>
                                 </div>
                               </div>

@@ -104,6 +104,7 @@ export const OptionsModule = ({
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(10000);
   const [whaleSource, setWhaleSource] = useState("derive");
+  const lastSyncToastRef = useRef(null); // Ref to track the last toasted request key
   
 // strategy states removed, now handled inline
 const [strategySubmitting, setStrategySubmitting] = useState(false);
@@ -443,7 +444,10 @@ useEffect(() => {
         if (data.stale) {
           setOptionsError(`Using cached options data (${data.stale_age_seconds || 0}s old).`);
         } else {
-          if (showToast) showToast(`${activeAsset} options chain synchronized.`, "success");
+          if (showToast && lastSyncToastRef.current !== requestKey) {
+            showToast(`${activeAsset} options chain synchronized.`, "success");
+            lastSyncToastRef.current = requestKey;
+          }
         }
       } else {
         console.warn("Invalid options response:", data);
