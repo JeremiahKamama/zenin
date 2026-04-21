@@ -35,6 +35,65 @@ console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES (" + EOD
 
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const macroIndicatorsCache = new Map();
+const COUNTRY_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+let countryCatalogMemory = { countries: [], cachedAt: 0 };
+
+const FALLBACK_COUNTRY_CATALOG_SEED = [
+  ["USA", "US", "United States"],
+  ["CAN", "CA", "Canada"],
+  ["MEX", "MX", "Mexico"],
+  ["BRA", "BR", "Brazil"],
+  ["ARG", "AR", "Argentina"],
+  ["CHL", "CL", "Chile"],
+  ["COL", "CO", "Colombia"],
+  ["PER", "PE", "Peru"],
+  ["GBR", "GB", "United Kingdom"],
+  ["FRA", "FR", "France"],
+  ["DEU", "DE", "Germany"],
+  ["ITA", "IT", "Italy"],
+  ["ESP", "ES", "Spain"],
+  ["PRT", "PT", "Portugal"],
+  ["NLD", "NL", "Netherlands"],
+  ["BEL", "BE", "Belgium"],
+  ["CHE", "CH", "Switzerland"],
+  ["SWE", "SE", "Sweden"],
+  ["NOR", "NO", "Norway"],
+  ["DNK", "DK", "Denmark"],
+  ["IRL", "IE", "Ireland"],
+  ["POL", "PL", "Poland"],
+  ["RUS", "RU", "Russia"],
+  ["TUR", "TR", "Turkey"],
+  ["ZAF", "ZA", "South Africa"],
+  ["EGY", "EG", "Egypt"],
+  ["NGA", "NG", "Nigeria"],
+  ["KEN", "KE", "Kenya"],
+  ["SAU", "SA", "Saudi Arabia"],
+  ["ARE", "AE", "United Arab Emirates"],
+  ["ISR", "IL", "Israel"],
+  ["IND", "IN", "India"],
+  ["CHN", "CN", "China"],
+  ["HKG", "HK", "Hong Kong"],
+  ["TWN", "TW", "Taiwan"],
+  ["SGP", "SG", "Singapore"],
+  ["KOR", "KR", "South Korea"],
+  ["JPN", "JP", "Japan"],
+  ["AUS", "AU", "Australia"],
+  ["NZL", "NZ", "New Zealand"]
+];
+
+function buildFallbackCountryCatalog() {
+  return FALLBACK_COUNTRY_CATALOG_SEED
+    .map(([cca3, cca2, name]) => normalizeCountryCatalogEntry({
+      cca3,
+      cca2,
+      name: { common: name, official: name },
+      altSpellings: [name, cca2, cca3]
+    }))
+    .filter(Boolean)
+    .sort((a, b) => String(a.name || a.cca3).localeCompare(String(b.name || b.cca3)));
+}
+
+const FALLBACK_COUNTRY_CATALOG = buildFallbackCountryCatalog();
 
 const MACRO_INDICATOR_CONFIG = [
   { 
@@ -1870,7 +1929,27 @@ app.get("/api/search", async (req, res) => {
       const hyperResults = await fetchHyperliquidSearchResults(q);
       results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
     } else if (normalizedType === "indicator" || normalizedType === "indicators") {
-      results = await searchCountries(q, 20);
+      try {
+        results = await searchCountries(q, 20);
+      } catch {
+        const needle = normalizeCountryLookupValue(q);
+        results = FALLBACK_COUNTRY_CATALOG
+          .filter((country) => {
+            const aliases = Array.isArray(country?.aliases) ? country.aliases : [];
+            return aliases.some((alias) => normalizeCountryLookupValue(alias).includes(needle));
+          })
+          .slice(0, 20)
+          .map((country) => ({
+            symbol: country.cca3,
+            name: country.name,
+            type: "indicator",
+            category: "indicators",
+            marketType: "macro",
+            market: "Macro",
+            countryCode: country.cca3,
+            countryName: country.name
+          }));
+      }
     } else {
       results = await searchYahooFinance(q, normalizedType);
     }
@@ -3067,6 +3146,13 @@ async function loadCountryCatalog(forceRefresh = false) {
       };
       return countryCatalogMemory.countries;
     }
+    if (Array.isArray(FALLBACK_COUNTRY_CATALOG) && FALLBACK_COUNTRY_CATALOG.length > 0) {
+      countryCatalogMemory = {
+        countries: FALLBACK_COUNTRY_CATALOG,
+        cachedAt: Date.now()
+      };
+      return countryCatalogMemory.countries;
+    }
     throw error;
   }
 }
@@ -3196,10 +3282,26 @@ function groupMacroPayloadByIndicator(payload) {
     }
     if (value && typeof value === "object" && Array.isArray(value?.data)) {
       pushRows(key, value.data);
+      return;
+    }
+    if (value && typeof value === "object") {
+      // Some EODHD responses use nested arrays under different property names.
+      const nestedArrays = Object.values(value).filter((entry) => Array.isArray(entry));
+      nestedArrays.forEach((rows) => {
+        pushRows(key, rows);
+      });
     }
   });
 
   return grouped;
+}
+
+function tokenizeIndicatorKey(value) {
+  return normalizeIndicatorKey(value)
+    .split("_")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter((token) => !["the", "of", "and", "for", "to", "in"].includes(token));
 }
 
 function getMacroRowsForConfig(groupedByIndicator, config) {
@@ -3211,6 +3313,30 @@ function getMacroRowsForConfig(groupedByIndicator, config) {
       return groupedByIndicator.get(candidate) || [];
     }
   }
+
+  // Fuzzy fallback: choose grouped key with strongest token overlap.
+  const candidateTokens = new Set(
+    [config.key, ...(Array.isArray(config.aliases) ? config.aliases : [])]
+      .flatMap((value) => tokenizeIndicatorKey(value))
+  );
+  let bestRows = [];
+  let bestScore = 0;
+
+  groupedByIndicator.forEach((rows, groupedKey) => {
+    const keyTokens = tokenizeIndicatorKey(groupedKey);
+    if (!keyTokens.length) return;
+    let overlap = 0;
+    keyTokens.forEach((token) => {
+      if (candidateTokens.has(token)) overlap += 1;
+    });
+    const score = overlap / Math.max(1, keyTokens.length);
+    if (overlap >= 2 && score > bestScore) {
+      bestScore = score;
+      bestRows = Array.isArray(rows) ? rows : [];
+    }
+  });
+
+  if (bestRows.length > 0) return bestRows;
   return [];
 }
 
