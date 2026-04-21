@@ -35,6 +35,7 @@ console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES (" + EOD
 
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const macroIndicatorsCache = new Map();
+const EARNINGS_CALENDAR_REFRESH_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days (~quarterly cadence)
 const COUNTRY_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 let countryCatalogMemory = { countries: [], cachedAt: 0 };
 
@@ -95,6 +96,21 @@ function buildFallbackCountryCatalog() {
 
 const FALLBACK_COUNTRY_CATALOG = buildFallbackCountryCatalog();
 
+const FOREX_FACTORY_FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
+const FOREX_FACTORY_CACHE_TTL_MS = 30 * 60 * 1000;
+const forexFactoryFeedCache = { events: [], fetchedAt: 0 };
+const FOREX_FACTORY_COUNTRY_MAP = [
+  { code: "USA", name: "United States", currency: "USD", aliases: ["US", "USA", "United States", "USD", "America"] },
+  { code: "GBR", name: "United Kingdom", currency: "GBP", aliases: ["UK", "GBR", "United Kingdom", "Great Britain", "GBP"] },
+  { code: "JPN", name: "Japan", currency: "JPY", aliases: ["JP", "JPN", "Japan", "JPY"] },
+  { code: "CAN", name: "Canada", currency: "CAD", aliases: ["CA", "CAN", "Canada", "CAD"] },
+  { code: "AUS", name: "Australia", currency: "AUD", aliases: ["AU", "AUS", "Australia", "AUD"] },
+  { code: "NZL", name: "New Zealand", currency: "NZD", aliases: ["NZ", "NZL", "New Zealand", "NZD"] },
+  { code: "CHE", name: "Switzerland", currency: "CHF", aliases: ["CH", "CHE", "Switzerland", "CHF"] },
+  { code: "CHN", name: "China", currency: "CNY", aliases: ["CN", "CHN", "China", "CNY", "RMB"] },
+  { code: "EUR", name: "Eurozone", currency: "EUR", aliases: ["EU", "EUR", "Eurozone", "Euro Area", "Euro"] }
+];
+
 const MACRO_INDICATOR_CONFIG = [
   { 
     key: "consumer_price_index", 
@@ -133,6 +149,15 @@ const MACRO_INDICATOR_CONFIG = [
     aliases: ["gdp_deflator_inflation_rate"] 
   }
 ];
+
+const WORLD_BANK_INDICATOR_MAP = {
+  consumer_price_index: "FP.CPI.TOTL",
+  inflation_consumer_prices_annual: "FP.CPI.TOTL.ZG",
+  gdp_growth_annual: "NY.GDP.MKTP.KD.ZG",
+  real_interest_rate: "FR.INR.RINR",
+  unemployment_total_percent: "SL.UEM.TOTL.ZS",
+  inflation_gdp_deflator_annual: "NY.GDP.DEFL.KD.ZG"
+};
 // --------------------------------------------
 
 
@@ -1943,27 +1968,7 @@ app.get("/api/search", async (req, res) => {
       const hyperResults = await fetchHyperliquidSearchResults(q);
       results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
     } else if (normalizedType === "indicator" || normalizedType === "indicators") {
-      try {
-        results = await searchCountries(q, 20);
-      } catch {
-        const needle = normalizeCountryLookupValue(q);
-        results = FALLBACK_COUNTRY_CATALOG
-          .filter((country) => {
-            const aliases = Array.isArray(country?.aliases) ? country.aliases : [];
-            return aliases.some((alias) => normalizeCountryLookupValue(alias).includes(needle));
-          })
-          .slice(0, 20)
-          .map((country) => ({
-            symbol: country.cca3,
-            name: country.name,
-            type: "indicator",
-            category: "indicators",
-            marketType: "macro",
-            market: "Macro",
-            countryCode: country.cca3,
-            countryName: country.name
-          }));
-      }
+      results = searchForexFactoryCountries(q, 20);
     } else {
       results = await searchYahooFinance(q, normalizedType);
     }
@@ -2409,6 +2414,18 @@ app.get("/api/earnings-calendar", async (req, res) => {
 
   const snapshotParams = { symbols };
   const cached = await readServiceSnapshot("earnings-calendar", snapshotParams);
+  const cachedAt = cached?.updatedAt ? new Date(cached.updatedAt).getTime() : 0;
+  const cachedFresh =
+    Boolean(cached?.payload) &&
+    Number.isFinite(cachedAt) &&
+    cachedAt > 0 &&
+    (Date.now() - cachedAt) < EARNINGS_CALENDAR_REFRESH_TTL_MS &&
+    !cached?.payload?.stale &&
+    !cached?.payload?.unavailable;
+
+  if (cachedFresh) {
+    return res.json(cached.payload);
+  }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -2616,121 +2633,48 @@ app.get("/api/macro-indicators", async (req, res) => {
       }
     });
 
-    if (!EODHD_API_TOKEN) {
-      if (cached?.payload) {
-        return res.json({
-          ...cached.payload,
-          stale: true,
-          unavailable: true,
-          stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000),
-          diagnostics: {
-            ...(cached.payload?.diagnostics || {}),
-            reason: "missing_eodhd_token"
-          }
-        });
-      }
-      return res.json(buildFallbackPayload("missing_eodhd_token"));
-    }
-
     try {
-      const fetch = await resolveFetch();
-      const base = `https://eodhd.com/api/macro-indicator/${encodeURIComponent(country)}`;
-      const defaultParams = new URLSearchParams({
-        api_token: EODHD_API_TOKEN,
-        fmt: "json"
+      const ffCountry = resolveForexFactoryCountry(country) || resolveForexFactoryCountry(countryName) || resolveForexFactoryCountry(requestedCountry);
+      if (!ffCountry) {
+        throw new Error("forex_factory_country_not_supported");
+      }
+
+      const events = await fetchForexFactoryEvents(false);
+      const currencyEvents = events
+        .filter((event) => String(event?.country || "").toUpperCase() === String(ffCountry.currency || "").toUpperCase())
+        .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+
+      const metrics = MACRO_INDICATOR_CONFIG.map((config, idx) => {
+        const event = currencyEvents[idx] || null;
+        return {
+          key: config.key,
+          label: event?.title || config.label,
+          unit: config.unit || "",
+          previous: parseForexFactoryNumeric(event?.previous),
+          current: parseForexFactoryNumeric(event?.actual) ?? parseForexFactoryNumeric(event?.forecast),
+          expectation: parseForexFactoryNumeric(event?.forecast),
+          asOf: event?.asOf || null,
+          series: []
+        };
       });
 
-    // Prefer one bulk request (more reliable and far cheaper than multiple indicator calls).
-    const bulkUrl = `${base}?${defaultParams.toString()}`;
-    
-    // Diagnostic mask for token in logs
-    const maskedUrl = bulkUrl.replace(EODHD_API_TOKEN, EODHD_API_TOKEN.slice(0, 4) + "..." + EODHD_API_TOKEN.slice(-2));
-    console.log(`[EODHD] Fetching macro indicators for ${country}: ${maskedUrl}`);
+      const missingKeys = metrics.filter((m) => m.current == null && m.previous == null && m.expectation == null).map((m) => m.key);
+      if (missingKeys.length === metrics.length) {
+        throw new Error("forex_factory_no_usable_values_for_currency");
+      }
 
-    const bulkRes = await fetch(bulkUrl);
-    const bulkText = await bulkRes.text();
-    
-    console.log(`[EODHD] Response status: ${bulkRes.status}`);
-    if (!bulkRes.ok) {
-      console.error(`[EODHD] Error response body: ${bulkText.slice(0, 500)}`);
-      throw new Error(`HTTP ${bulkRes.status} ${bulkText.slice(0, 200)}`);
-    }
-
-    console.log(`[EODHD] Raw response sample: ${bulkText.slice(0, 200)}...`);
-
-    let bulkData = null;
-
-    try {
-      bulkData = JSON.parse(bulkText);
-    } catch {
-      bulkData = null;
-    }
-
-    const rawServiceMessage = typeof bulkData === "string"
-      ? bulkData
-      : (typeof bulkText === "string" ? bulkText : "");
-    if (/Only EOD data allowed/i.test(rawServiceMessage)) {
-      throw new Error("EODHD token does not include macro indicators on the current plan.");
-    }
-
-    let groupedByIndicator = groupMacroPayloadByIndicator(bulkData);
-    let metrics = MACRO_INDICATOR_CONFIG.map((config) => {
-      const rows = getMacroRowsForConfig(groupedByIndicator, config);
-      return buildMacroMetric(rows, config);
-    });
-
-    const missingKeys = metrics.filter((m) => m.current == null).map((m) => m.key);
-    if (missingKeys.length === metrics.length) {
-      // Fallback path: try per-indicator calls when bulk payload is unavailable/unusable.
-      const perIndicatorRows = new Map();
-      for (const config of MACRO_INDICATOR_CONFIG) {
-        const indicatorParams = new URLSearchParams({
-          api_token: EODHD_API_TOKEN,
-          fmt: "json",
-          indicator: config.key
-        });
-        const indicatorUrl = `${base}?${indicatorParams.toString()}`;
-        try {
-          const response = await fetch(indicatorUrl);
-          if (!response.ok) continue;
-          const text = await response.text();
-          let parsed = null;
-          try {
-            parsed = JSON.parse(text);
-          } catch {
-            parsed = null;
-          }
-          const groupedSingle = groupMacroPayloadByIndicator(parsed);
-          const rows = getMacroRowsForConfig(groupedSingle, config);
-          if (Array.isArray(rows) && rows.length > 0) {
-            perIndicatorRows.set(config.key, rows);
-          }
-        } catch {
-          // ignore single-indicator fetch errors and continue with next indicator
+      const payload = {
+        country: ffCountry.code,
+        countryName: ffCountry.name,
+        source: "Forex Factory Calendar",
+        updatedAt: new Date().toISOString(),
+        metrics,
+        diagnostics: {
+          currency: ffCountry.currency,
+          eventCount: currencyEvents.length,
+          missingIndicatorKeys: missingKeys
         }
-      }
-      if (perIndicatorRows.size > 0) {
-        metrics = MACRO_INDICATOR_CONFIG.map((config) => buildMacroMetric(perIndicatorRows.get(config.key) || [], config));
-        groupedByIndicator = new Map([...groupedByIndicator.entries(), ...perIndicatorRows.entries()]);
-      }
-    }
-
-    const stillMissingKeys = metrics.filter((m) => m.current == null).map((m) => m.key);
-    if (stillMissingKeys.length === metrics.length) {
-      throw new Error("No usable macro indicator values returned by EODHD for this country/token.");
-    }
-
-    const payload = {
-      country,
-      countryName,
-      source: "EODHD Macro Indicators API",
-      updatedAt: new Date().toISOString(),
-      metrics,
-      diagnostics: {
-        missingIndicatorKeys: stillMissingKeys,
-        groupedIndicatorCount: groupedByIndicator.size
-      }
-    };
+      };
 
       macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
       await writeServiceSnapshot("macro-indicators", { country }, payload);
@@ -3090,6 +3034,122 @@ function normalizeMacroSeries(payload) {
     .sort((a, b) => b.ts - a.ts);
 }
 
+function parseForexFactoryNumeric(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /^(n\/a|na|--|-)$/i.test(raw)) return null;
+  const cleaned = raw.replace(/,/g, "");
+  const match = cleaned.match(/(-?\d+(?:\.\d+)?)([KMBT%])?/i);
+  if (!match) return null;
+  const base = Number(match[1]);
+  if (!Number.isFinite(base)) return null;
+  const suffix = String(match[2] || "").toUpperCase();
+  if (suffix === "%") return base;
+  if (suffix === "K") return base * 1e3;
+  if (suffix === "M") return base * 1e6;
+  if (suffix === "B") return base * 1e9;
+  if (suffix === "T") return base * 1e12;
+  return base;
+}
+
+function parseForexFactoryDateTime(dateText, timeText) {
+  const date = String(dateText || "").trim();
+  const time = String(timeText || "").trim();
+  if (!date) return { asOf: null, ts: 0 };
+  const normalizedDate = date.replace(/[^\d\-]/g, "");
+  const normalizedTime = /^(all day|tentative)$/i.test(time) || !time ? "12:00pm" : time;
+  const parsed = new Date(`${normalizedDate} ${normalizedTime}`);
+  const ts = Number.isFinite(parsed.getTime()) ? parsed.getTime() : 0;
+  return { asOf: ts ? parsed.toISOString() : `${date} ${time}`.trim(), ts };
+}
+
+function parseForexFactoryEventsFromXml(xmlText) {
+  const xml = String(xmlText || "");
+  if (!xml) return [];
+  if (/rate limited/i.test(xml) || /<title>\s*Rate Limited\s*<\/title>/i.test(xml)) {
+    throw new Error("forex_factory_rate_limited");
+  }
+  const blocks = [...xml.matchAll(/<event>([\s\S]*?)<\/event>/gi)];
+  const extractTag = (block, tag) => {
+    const m = block.match(new RegExp(`<${tag}>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, "i"));
+    return m ? String(m[1] || "").trim() : "";
+  };
+  return blocks.map((entry) => {
+    const block = entry[1] || "";
+    const title = extractTag(block, "title");
+    const country = extractTag(block, "country").toUpperCase();
+    const date = extractTag(block, "date");
+    const time = extractTag(block, "time");
+    const impact = extractTag(block, "impact");
+    const forecast = extractTag(block, "forecast");
+    const previous = extractTag(block, "previous");
+    const actual = extractTag(block, "actual");
+    const url = extractTag(block, "url");
+    const { asOf, ts } = parseForexFactoryDateTime(date, time);
+    return { title, country, date, time, impact, forecast, previous, actual, url, asOf, ts };
+  }).filter((row) => row.country && row.title);
+}
+
+function resolveForexFactoryCountry(query) {
+  const raw = String(query || "").trim();
+  if (!raw) return null;
+  const needle = raw.toLowerCase();
+  const exact = FOREX_FACTORY_COUNTRY_MAP.find((entry) => (
+    entry.code.toLowerCase() === needle ||
+    entry.currency.toLowerCase() === needle ||
+    entry.aliases.some((alias) => String(alias || "").toLowerCase() === needle)
+  ));
+  if (exact) return exact;
+  return FOREX_FACTORY_COUNTRY_MAP.find((entry) => (
+    entry.aliases.some((alias) => String(alias || "").toLowerCase().includes(needle))
+  )) || null;
+}
+
+function searchForexFactoryCountries(query, limit = 20) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return [];
+  return FOREX_FACTORY_COUNTRY_MAP
+    .filter((entry) => (
+      entry.code.toLowerCase().includes(needle) ||
+      entry.currency.toLowerCase().includes(needle) ||
+      entry.name.toLowerCase().includes(needle) ||
+      entry.aliases.some((alias) => String(alias || "").toLowerCase().includes(needle))
+    ))
+    .slice(0, Math.max(1, Number(limit) || 20))
+    .map((entry) => ({
+      symbol: entry.code,
+      name: `${entry.name} Macro Indicators`,
+      type: "indicator",
+      category: "indicators",
+      marketType: "macro",
+      market: "Macro",
+      countryCode: entry.code,
+      countryName: entry.name,
+      currency: entry.currency
+    }));
+}
+
+async function fetchForexFactoryEvents(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && Array.isArray(forexFactoryFeedCache.events) && forexFactoryFeedCache.events.length > 0) {
+    if (now - Number(forexFactoryFeedCache.fetchedAt || 0) < FOREX_FACTORY_CACHE_TTL_MS) {
+      return forexFactoryFeedCache.events;
+    }
+  }
+  const fetch = await resolveFetch();
+  const response = await fetch(FOREX_FACTORY_FEED_URL, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Zenin Macro Fetcher)"
+    }
+  });
+  if (!response.ok) throw new Error(`forex_factory_http_${response.status}`);
+  const text = await response.text();
+  const events = parseForexFactoryEventsFromXml(text);
+  if (!events.length) throw new Error("forex_factory_empty_feed");
+  forexFactoryFeedCache.events = events;
+  forexFactoryFeedCache.fetchedAt = now;
+  return events;
+}
+
 function buildMacroMetric(payload, config) {
   const points = normalizeMacroSeries(payload);
   const current = points[0]?.value ?? null;
@@ -3114,6 +3174,40 @@ function buildMacroMetric(payload, config) {
         ts: point.ts
       }))
   };
+}
+
+async function fetchWorldBankIndicatorSeries(countryCode, indicatorCode) {
+  const fetch = await resolveFetch();
+  const url = `https://api.worldbank.org/v2/country/${encodeURIComponent(countryCode)}/indicator/${encodeURIComponent(indicatorCode)}?format=json&per_page=80`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`world_bank_http_${response.status}`);
+  }
+  const payload = await response.json();
+  const rows = Array.isArray(payload?.[1]) ? payload[1] : [];
+  return rows
+    .map((row) => ({
+      date: String(row?.date || ""),
+      value: row?.value
+    }))
+    .filter((row) => row.date && row.value !== null && row.value !== undefined);
+}
+
+async function fetchWorldBankMacroMetrics(countryCode) {
+  const entries = await Promise.all(
+    MACRO_INDICATOR_CONFIG.map(async (config) => {
+      const wbCode = WORLD_BANK_INDICATOR_MAP[config.key];
+      if (!wbCode) return { key: config.key, rows: [] };
+      try {
+        const rows = await fetchWorldBankIndicatorSeries(countryCode, wbCode);
+        return { key: config.key, rows };
+      } catch {
+        return { key: config.key, rows: [] };
+      }
+    })
+  );
+  const byKey = new Map(entries.map((entry) => [entry.key, entry.rows]));
+  return MACRO_INDICATOR_CONFIG.map((config) => buildMacroMetric(byKey.get(config.key) || [], config));
 }
 
 function normalizeCountryCatalogEntry(raw = {}) {

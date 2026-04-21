@@ -7,7 +7,7 @@ import { IndicatorMetricModal } from "./IndicatorMetricModal";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const EARNINGS_CLIENT_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const EARNINGS_CLIENT_CACHE_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 
 export function Watchlist({
   categories,
