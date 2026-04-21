@@ -33,7 +33,24 @@ const EMPTY_OPTIONS = {
 
 const EMPTY_EQUITIES = {
   updatedAt: null,
+  benchmarkIndexHistory: [],
   benchmarkPerformance: [],
+  sectorPerformance: [],
+  regionalPerformance: [],
+  styleFactors: [],
+  rebalanceSignals: [],
+  correlationLabels: [],
+  correlationMatrix: [],
+  volatilityMetrics: [],
+  dividendData: [],
+  earningsCalendar: [],
+  valuationData: [],
+  macroData: [],
+  fundFlows: [],
+  fxRates: [],
+  marketBreadth: null,
+  riskIndicators: [],
+  corporateActions: [],
   annualReturns: [],
   reitData: { benchmarks: [] },
   mmfYields: [],
@@ -168,6 +185,27 @@ function formatDateTime(value) {
   });
 }
 
+function MiniSparkline({ points = [], width = 92, height = 24, color = "#38bdf8" }) {
+  const values = (Array.isArray(points) ? points : []).map((v) => Number(v)).filter((v) => Number.isFinite(v));
+  if (values.length < 2) return <span style={{ color: "#64748b" }}>—</span>;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const step = width / (values.length - 1);
+  const d = values
+    .map((v, i) => {
+      const x = i * step;
+      const y = height - ((v - min) / span) * height;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-label="sparkline">
+      <path d={d} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function normalizeCryptoPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || payload?.asOf || null,
@@ -225,7 +263,24 @@ function normalizeOptionsPayload(payload) {
 function normalizeEquitiesPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || null,
+    benchmarkIndexHistory: Array.isArray(payload?.benchmarkIndexHistory) ? payload.benchmarkIndexHistory : [],
     benchmarkPerformance: Array.isArray(payload?.benchmarkPerformance) ? payload.benchmarkPerformance : [],
+    sectorPerformance: Array.isArray(payload?.sectorPerformance) ? payload.sectorPerformance : [],
+    regionalPerformance: Array.isArray(payload?.regionalPerformance) ? payload.regionalPerformance : [],
+    styleFactors: Array.isArray(payload?.styleFactors) ? payload.styleFactors : [],
+    rebalanceSignals: Array.isArray(payload?.rebalanceSignals) ? payload.rebalanceSignals : [],
+    correlationLabels: Array.isArray(payload?.correlationLabels) ? payload.correlationLabels : [],
+    correlationMatrix: Array.isArray(payload?.correlationMatrix) ? payload.correlationMatrix : [],
+    volatilityMetrics: Array.isArray(payload?.volatilityMetrics) ? payload.volatilityMetrics : [],
+    dividendData: Array.isArray(payload?.dividendData) ? payload.dividendData : [],
+    earningsCalendar: Array.isArray(payload?.earningsCalendar) ? payload.earningsCalendar : [],
+    valuationData: Array.isArray(payload?.valuationData) ? payload.valuationData : [],
+    macroData: Array.isArray(payload?.macroData) ? payload.macroData : [],
+    fundFlows: Array.isArray(payload?.fundFlows) ? payload.fundFlows : [],
+    fxRates: Array.isArray(payload?.fxRates) ? payload.fxRates : [],
+    marketBreadth: payload?.marketBreadth || null,
+    riskIndicators: Array.isArray(payload?.riskIndicators) ? payload.riskIndicators : [],
+    corporateActions: Array.isArray(payload?.corporateActions) ? payload.corporateActions : [],
     annualReturns: Array.isArray(payload?.annualReturns) ? payload.annualReturns : [],
     reitData: payload?.reitData || { benchmarks: [] },
     mmfYields: Array.isArray(payload?.mmfYields) ? payload.mmfYields : [],
@@ -247,6 +302,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
   const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
   const [annualReturnsPageIndex, setAnnualReturnsPageIndex] = useState(0);
+  const [equityHorizon, setEquityHorizon] = useState("yr1");
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
 
   useEffect(() => {
@@ -342,6 +398,33 @@ export function AnalyticsModule({ backendUrl }) {
       ),
     [optionsData]
   );
+
+  const correlationColumns = useMemo(() => {
+    const labels = Array.isArray(equitiesData.correlationLabels) ? equitiesData.correlationLabels : [];
+    if (!labels.length) return [];
+    return [
+      { key: "asset", label: "Asset" },
+      ...labels.map((label, idx) => ({
+        key: `c${idx}`,
+        label,
+        align: "right",
+        render: (v) => (Number.isFinite(Number(v)) ? Number(v).toFixed(2) : "—"),
+      })),
+    ];
+  }, [equitiesData.correlationLabels]);
+
+  const correlationRows = useMemo(() => {
+    const labels = Array.isArray(equitiesData.correlationLabels) ? equitiesData.correlationLabels : [];
+    const matrix = Array.isArray(equitiesData.correlationMatrix) ? equitiesData.correlationMatrix : [];
+    if (!labels.length || !matrix.length) return [];
+    return matrix.map((row, i) => {
+      const out = { id: `corr-${i}`, asset: labels[i] || `Row ${i + 1}` };
+      labels.forEach((_, j) => {
+        out[`c${j}`] = Number(Array.isArray(row) ? row[j] : null);
+      });
+      return out;
+    });
+  }, [equitiesData.correlationLabels, equitiesData.correlationMatrix]);
 
   const currentUpdatedAt =
     activeTab === "crypto"
@@ -929,6 +1012,160 @@ export function AnalyticsModule({ backendUrl }) {
           ) : (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 13, color: "#94a3b8" }}>
+                    Equities intelligence across benchmarks, sectors, regions, factors, risk, macro, flows and corporate actions.
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[
+                      { key: "daily", label: "Daily" },
+                      { key: "ytd", label: "YTD" },
+                      { key: "yr1", label: "1Y" },
+                      { key: "yr3", label: "3Y" },
+                      { key: "yr5", label: "5Y" },
+                      { key: "yr10", label: "10Y" },
+                    ].map((h) => (
+                      <button
+                        key={h.key}
+                        onClick={() => setEquityHorizon(h.key)}
+                        style={{
+                          padding: "5px 10px",
+                          borderRadius: 8,
+                          border: `1px solid ${equityHorizon === h.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                          background: equityHorizon === h.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                          color: equityHorizon === h.key ? "#7dd3fc" : "#cbd5e1",
+                          cursor: "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        {h.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+                  {(equitiesData.benchmarkIndexHistory || []).slice(0, 4).map((row, idx) => (
+                    <AnalyticsStatCard
+                      key={row.id || `eq-bmk-${idx}`}
+                      title={`${row.name} (${row.currency || "USD"})`}
+                      value={formatPercent(row?.[equityHorizon])}
+                      subvalue={`${String(equityHorizon).toUpperCase()} · ${row.region || "Region N/A"}`}
+                      source={row.symbol}
+                      tone={Number(row?.[equityHorizon]) >= 0 ? "positive" : "negative"}
+                    />
+                  ))}
+                </div>
+
+                <AnalyticsTableCard
+                  title="Benchmark Index History"
+                  subtitle="Daily, weekly, monthly and annual returns with horizon selector and sparkline trend"
+                  emptyText="No benchmark index history data."
+                  columns={[
+                    { key: "name", label: "Benchmark" },
+                    { key: "currency", label: "CCY" },
+                    { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                    { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
+                    { key: "monthly", label: "Monthly", align: "right", render: (v) => formatPercent(v) },
+                    { key: "annual", label: "Annual", align: "right", render: (v) => formatPercent(v) },
+                    { key: "horizon", label: String(equityHorizon).toUpperCase(), align: "right", render: (_v, row) => formatPercent(row?.[equityHorizon]) },
+                    {
+                      key: "sparkline",
+                      label: "Trend",
+                      align: "right",
+                      render: (_v, row) => (
+                        <MiniSparkline
+                          points={row.sparkline || []}
+                          color={Number(row?.[equityHorizon]) >= 0 ? "#4ade80" : "#f87171"}
+                        />
+                      ),
+                    },
+                  ]}
+                  rows={(equitiesData.benchmarkIndexHistory || []).map((row, idx) => ({ id: row.id || `bmk-h-${idx}`, ...row }))}
+                />
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Sector Performance"
+                    subtitle="Rotation and net flows by sector"
+                    emptyText="No sector performance data."
+                    columns={[
+                      { key: "sector", label: "Sector" },
+                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                      { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
+                      { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                      { key: "flowUsdBn", label: "Flow ($bn)", align: "right", render: (v) => Number(v).toFixed(2) },
+                    ]}
+                    rows={(equitiesData.sectorPerformance || []).map((row, idx) => ({ id: `sec-${idx}`, ...row }))}
+                  />
+
+                  <AnalyticsTableCard
+                    title="Regional Performance"
+                    subtitle="Country/region return spread with currency-aware context"
+                    emptyText="No regional performance data."
+                    columns={[
+                      { key: "region", label: "Region" },
+                      { key: "currency", label: "CCY" },
+                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                      { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
+                      { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                      { key: "yr3", label: "3Y", align: "right", render: (v) => formatPercent(v) },
+                    ]}
+                    rows={(equitiesData.regionalPerformance || []).map((row, idx) => ({ id: `reg-${idx}`, ...row }))}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Style Factor Exposures"
+                    subtitle="Value, growth, momentum, quality, low-volatility and size"
+                    emptyText="No style factor rows."
+                    columns={[
+                      { key: "factor", label: "Factor" },
+                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                      { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
+                      { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                    ]}
+                    rows={(equitiesData.styleFactors || []).map((row, idx) => ({ id: `factor-${idx}`, ...row }))}
+                  />
+                  <AnalyticsTableCard
+                    title="Rebalance Signals"
+                    subtitle="Target drift and rule-based actions"
+                    emptyText="No rebalance signals."
+                    columns={[
+                      { key: "bucket", label: "Bucket" },
+                      { key: "targetWeight", label: "Target %", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      { key: "currentWeight", label: "Current %", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      { key: "driftPct", label: "Drift %", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      { key: "signal", label: "Signal", align: "right" },
+                    ]}
+                    rows={(equitiesData.rebalanceSignals || []).map((row, idx) => ({ id: `drift-${idx}`, ...row }))}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Correlation Matrix"
+                    subtitle="Cross-asset diversification matrix"
+                    emptyText="No correlation matrix data."
+                    columns={correlationColumns}
+                    rows={correlationRows}
+                  />
+                  <AnalyticsTableCard
+                    title="Volatility Metrics"
+                    subtitle="Annualized vol, max drawdown, Sharpe and Sortino"
+                    emptyText="No volatility metrics."
+                    columns={[
+                      { key: "asset", label: "Asset" },
+                      { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                      { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                      { key: "sharpe", label: "Sharpe", align: "right", render: (v) => Number(v).toFixed(2) },
+                      { key: "sortino", label: "Sortino", align: "right", render: (v) => Number(v).toFixed(2) },
+                    ]}
+                    rows={(equitiesData.volatilityMetrics || []).map((row, idx) => ({ id: `vol-${idx}`, ...row }))}
+                  />
+                </div>
+
                 {/* Benchmark Performance Summary */}
                 <AnalyticsTableCard
                   title="Benchmark Performance (CAGR)"
@@ -1035,17 +1272,142 @@ export function AnalyticsModule({ backendUrl }) {
                 {/* Funds List */}
                 <AnalyticsTableCard
                   title="Institutional Fund Directory"
-                  subtitle="Representative funds for selected providers and jurisdictions"
+                  subtitle="Representative funds with AUM, fee, domicile and structure metadata"
                   emptyText="No funds directory data."
                   columns={[
                     { key: "provider", label: "Provider" },
                     { key: "name", label: "Fund Name" },
-                    { key: "jurisdiction", label: "Jurisdiction" },
+                    { key: "domicile", label: "Domicile" },
+                    { key: "assetClass", label: "Asset Class" },
                     { key: "type", label: "Type" },
+                    { key: "structure", label: "Structure" },
+                    { key: "feeBps", label: "Fee (bps)", align: "right", render: (v) => Number(v).toFixed(0) },
                     { key: "aum", label: "AUM", align: "right" },
                   ]}
                   rows={equitiesData.fundsList}
                 />
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Dividend Data"
+                    subtitle="Yield, payout ratio, ex-dividend date and growth"
+                    emptyText="No dividend rows."
+                    columns={[
+                      { key: "symbol", label: "Symbol" },
+                      { key: "dividendYield", label: "Yield", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                      { key: "payoutRatio", label: "Payout", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      { key: "exDividendDate", label: "Ex-Date", align: "right" },
+                      { key: "dividendGrowth5Y", label: "5Y Growth", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                    ]}
+                    rows={(equitiesData.dividendData || []).map((row, idx) => ({ id: `dvd-${idx}`, ...row }))}
+                  />
+                  <AnalyticsTableCard
+                    title="Earnings Calendar"
+                    subtitle="Upcoming earnings, revisions and surprise context"
+                    emptyText="No earnings calendar rows."
+                    columns={[
+                      { key: "date", label: "Date" },
+                      { key: "symbol", label: "Ticker" },
+                      { key: "period", label: "Period", align: "right" },
+                      { key: "estimateEPS", label: "Est. EPS", align: "right", render: (v) => Number(v).toFixed(2) },
+                      { key: "previousSurprisePct", label: "Prev Surprise", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      { key: "revisionTrend", label: "Revision", align: "right" },
+                    ]}
+                    rows={(equitiesData.earningsCalendar || []).map((row, idx) => ({ id: `earn-${idx}`, ...row }))}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Valuation Comparison"
+                    subtitle="P/E, P/B, EV/EBITDA, yield and FCF yield"
+                    emptyText="No valuation rows."
+                    columns={[
+                      { key: "scope", label: "Scope" },
+                      { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(1) },
+                      { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(1) },
+                      { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => Number(v).toFixed(1) },
+                      { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                    ]}
+                    rows={(equitiesData.valuationData || []).map((row, idx) => ({ id: `val-${idx}`, ...row }))}
+                  />
+                  <AnalyticsTableCard
+                    title="Macro Indicators"
+                    subtitle="Rates, inflation, labor and PMI/yield-curve context"
+                    emptyText="No macro indicator rows."
+                    columns={[
+                      { key: "indicator", label: "Indicator" },
+                      { key: "country", label: "Market" },
+                      { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
+                      { key: "trend", label: "Trend", align: "right" },
+                    ]}
+                    rows={(equitiesData.macroData || []).map((row, idx) => ({ id: `macro-${idx}`, ...row }))}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Fund Flows"
+                    subtitle="ETF and fund inflows/outflows by segment"
+                    emptyText="No flow rows."
+                    columns={[
+                      { key: "segment", label: "Segment" },
+                      { key: "assetClass", label: "Asset Class" },
+                      { key: "region", label: "Region" },
+                      { key: "period", label: "Period", align: "right" },
+                      { key: "netFlowUsdBn", label: "Net Flow ($bn)", align: "right", render: (v) => Number(v).toFixed(2) },
+                    ]}
+                    rows={(equitiesData.fundFlows || []).map((row, idx) => ({ id: `flow-${idx}`, ...row }))}
+                  />
+                  <AnalyticsTableCard
+                    title="FX Rates"
+                    subtitle="Cross-currency trend context for regional returns"
+                    emptyText="No FX rows."
+                    columns={[
+                      { key: "pair", label: "Pair" },
+                      { key: "rate", label: "Rate", align: "right", render: (v) => Number(v).toFixed(4) },
+                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                      { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
+                    ]}
+                    rows={(equitiesData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  <AnalyticsTableCard
+                    title="Risk Indicators"
+                    subtitle="Volatility, credit and liquidity stress indicators"
+                    emptyText="No risk indicator rows."
+                    columns={[
+                      { key: "indicator", label: "Indicator" },
+                      { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
+                      { key: "status", label: "Status", align: "right" },
+                    ]}
+                    rows={(equitiesData.riskIndicators || []).map((row, idx) => ({ id: `risk-${idx}`, ...row }))}
+                  />
+                  <AnalyticsTableCard
+                    title="Corporate Actions"
+                    subtitle="Splits, buybacks, M&A and special distributions"
+                    emptyText="No corporate action rows."
+                    columns={[
+                      { key: "date", label: "Date" },
+                      { key: "symbol", label: "Ticker" },
+                      { key: "action", label: "Action" },
+                      { key: "detail", label: "Detail", align: "right" },
+                    ]}
+                    rows={(equitiesData.corporateActions || []).map((row, idx) => ({ id: `ca-${idx}`, ...row }))}
+                  />
+                </div>
+
+                {equitiesData.marketBreadth ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+                    <AnalyticsStatCard title="A/D Line" value={String(equitiesData.marketBreadth.adLine ?? "—")} subvalue="Advance/decline line level" source="Breadth" tone="info" />
+                    <AnalyticsStatCard title="New Highs/Lows" value={`${equitiesData.marketBreadth.newHighs ?? 0} / ${equitiesData.marketBreadth.newLows ?? 0}`} subvalue="52-week highs vs lows" source="Breadth" tone="neutral" />
+                    <AnalyticsStatCard title="% Above 50DMA" value={formatPercent(equitiesData.marketBreadth.above50dmaPct ?? 0)} subvalue="Market participation (short trend)" source="Breadth" tone="positive" />
+                    <AnalyticsStatCard title="% Above 200DMA" value={formatPercent(equitiesData.marketBreadth.above200dmaPct ?? 0)} subvalue="Market participation (long trend)" source="Breadth" tone="positive" />
+                  </div>
+                ) : null}
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 20 }}>
                   <AnalyticsRoadmapCard

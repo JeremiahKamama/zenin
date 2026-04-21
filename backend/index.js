@@ -5074,6 +5074,266 @@ app.get('/api/analytics/equities', async (req, res) => {
       return Number(cagr.toFixed(2));
     };
 
+    const calcAnnualizedVolatility = (series, assetKey) => {
+      const returns = series
+        .map((row) => Number(row?.[assetKey]))
+        .filter((v) => Number.isFinite(v))
+        .map((v) => v / 100);
+      if (returns.length < 2) return 0;
+      const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+      const variance = returns.reduce((s, v) => s + ((v - mean) ** 2), 0) / (returns.length - 1);
+      return Number((Math.sqrt(variance) * Math.sqrt(252) * 100).toFixed(2));
+    };
+
+    const calcMaxDrawdown = (series, assetKey) => {
+      const returns = series
+        .slice()
+        .reverse()
+        .map((row) => Number(row?.[assetKey]))
+        .filter((v) => Number.isFinite(v))
+        .map((v) => 1 + (v / 100));
+      if (!returns.length) return 0;
+      let equity = 1;
+      let peak = 1;
+      let maxDd = 0;
+      returns.forEach((r) => {
+        equity *= r;
+        peak = Math.max(peak, equity);
+        maxDd = Math.min(maxDd, (equity / peak) - 1);
+      });
+      return Number((Math.abs(maxDd) * 100).toFixed(2));
+    };
+
+    const calcSharpe = (series, assetKey, rf = 0.03) => {
+      const returns = series
+        .map((row) => Number(row?.[assetKey]))
+        .filter((v) => Number.isFinite(v))
+        .map((v) => v / 100);
+      if (returns.length < 2) return 0;
+      const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+      const std = Math.sqrt(returns.reduce((s, v) => s + ((v - mean) ** 2), 0) / (returns.length - 1));
+      if (std === 0) return 0;
+      return Number((((mean - rf / 252) / std) * Math.sqrt(252)).toFixed(2));
+    };
+
+    const calcSortino = (series, assetKey, rf = 0.03) => {
+      const returns = series
+        .map((row) => Number(row?.[assetKey]))
+        .filter((v) => Number.isFinite(v))
+        .map((v) => v / 100);
+      if (returns.length < 2) return 0;
+      const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+      const downside = returns.filter((v) => v < 0);
+      if (!downside.length) return 0;
+      const downsideDev = Math.sqrt(downside.reduce((s, v) => s + (v ** 2), 0) / downside.length);
+      if (downsideDev === 0) return 0;
+      return Number((((mean - rf / 252) / downsideDev) * Math.sqrt(252)).toFixed(2));
+    };
+
+    const benchmarkIndexHistory = [
+      {
+        id: "spx",
+        name: "S&P 500",
+        symbol: "SPX",
+        region: "USA",
+        currency: "USD",
+        daily: 0.42,
+        weekly: 1.34,
+        monthly: 2.85,
+        annual: calculateCAGR(ANNUAL_RETURNS, "sp500", 1),
+        ytd: 9.78,
+        yr1: calculateCAGR(ANNUAL_RETURNS, "sp500", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "sp500", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "sp500", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "sp500", 10),
+        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.sp500))
+      },
+      {
+        id: "mxwo",
+        name: "MSCI World",
+        symbol: "MXWO",
+        region: "Global",
+        currency: "USD",
+        daily: 0.31,
+        weekly: 1.09,
+        monthly: 2.12,
+        annual: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 1),
+        ytd: 8.24,
+        yr1: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 10),
+        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.msciWorld))
+      },
+      {
+        id: "mxef",
+        name: "MSCI EM",
+        symbol: "MXEF",
+        region: "Emerging Markets",
+        currency: "USD",
+        daily: 0.57,
+        weekly: 1.81,
+        monthly: 3.06,
+        annual: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1),
+        ytd: 11.32,
+        yr1: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "msciEm", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "msciEm", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "msciEm", 10),
+        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.msciEm))
+      },
+      {
+        id: "reit",
+        name: "Global REITs",
+        symbol: "EPRA/NAREIT",
+        region: "Global",
+        currency: "USD",
+        daily: 0.15,
+        weekly: 0.72,
+        monthly: 1.24,
+        annual: calculateCAGR(ANNUAL_RETURNS, "reits", 1),
+        ytd: 4.2,
+        yr1: calculateCAGR(ANNUAL_RETURNS, "reits", 1),
+        yr3: calculateCAGR(ANNUAL_RETURNS, "reits", 3),
+        yr5: calculateCAGR(ANNUAL_RETURNS, "reits", 5),
+        yr10: calculateCAGR(ANNUAL_RETURNS, "reits", 10),
+        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.reits))
+      }
+    ];
+
+    const sectorPerformance = [
+      { sector: "Technology", daily: 0.64, ytd: 18.2, yr1: 24.5, flowUsdBn: 6.2 },
+      { sector: "Financials", daily: 0.28, ytd: 11.1, yr1: 14.0, flowUsdBn: 2.4 },
+      { sector: "Healthcare", daily: -0.12, ytd: 6.4, yr1: 8.9, flowUsdBn: -0.8 },
+      { sector: "Energy", daily: 0.43, ytd: 9.8, yr1: 12.2, flowUsdBn: 1.3 },
+      { sector: "Industrials", daily: 0.37, ytd: 10.5, yr1: 13.7, flowUsdBn: 1.7 },
+      { sector: "Consumer", daily: 0.21, ytd: 7.3, yr1: 10.1, flowUsdBn: 0.9 },
+      { sector: "Utilities", daily: -0.05, ytd: 3.9, yr1: 5.4, flowUsdBn: 0.4 }
+    ];
+
+    const regionalPerformance = [
+      { region: "USA", currency: "USD", daily: 0.42, ytd: 9.78, yr1: 25.02, yr3: calculateCAGR(ANNUAL_RETURNS, "sp500", 3) },
+      { region: "Europe", currency: "EUR", daily: 0.19, ytd: 6.42, yr1: 12.14, yr3: 6.88 },
+      { region: "Asia", currency: "JPY", daily: 0.33, ytd: 8.11, yr1: 15.24, yr3: 7.11 },
+      { region: "Emerging Markets", currency: "USD", daily: 0.57, ytd: 11.32, yr1: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1), yr3: calculateCAGR(ANNUAL_RETURNS, "msciEm", 3) },
+      { region: "Frontier Markets", currency: "USD", daily: 0.25, ytd: 5.38, yr1: 9.04, yr3: 4.82 }
+    ];
+
+    const styleFactors = [
+      { factor: "Value", daily: 0.24, ytd: 7.2, yr1: 11.8 },
+      { factor: "Growth", daily: 0.58, ytd: 14.7, yr1: 22.6 },
+      { factor: "Momentum", daily: 0.49, ytd: 13.4, yr1: 20.1 },
+      { factor: "Quality", daily: 0.31, ytd: 10.2, yr1: 14.9 },
+      { factor: "Low Volatility", daily: 0.12, ytd: 5.1, yr1: 7.6 },
+      { factor: "Size (Small Cap)", daily: 0.19, ytd: 6.3, yr1: 9.4 }
+    ];
+
+    const rebalanceSignals = [
+      { bucket: "Technology", targetWeight: 27, currentWeight: 31, driftPct: 4.0, signal: "Trim" },
+      { bucket: "Financials", targetWeight: 14, currentWeight: 12.2, driftPct: -1.8, signal: "Add" },
+      { bucket: "Healthcare", targetWeight: 13, currentWeight: 11.4, driftPct: -1.6, signal: "Add" },
+      { bucket: "Energy", targetWeight: 8, currentWeight: 7.5, driftPct: -0.5, signal: "Hold" },
+      { bucket: "Industrials", targetWeight: 10, currentWeight: 9.7, driftPct: -0.3, signal: "Hold" }
+    ];
+
+    const correlationLabels = ["SPX", "World", "EM", "REIT", "US10Y"];
+    const correlationMatrix = [
+      [1.00, 0.88, 0.71, 0.64, -0.31],
+      [0.88, 1.00, 0.79, 0.67, -0.22],
+      [0.71, 0.79, 1.00, 0.52, -0.18],
+      [0.64, 0.67, 0.52, 1.00, -0.36],
+      [-0.31, -0.22, -0.18, -0.36, 1.00]
+    ];
+
+    const volatilityMetrics = [
+      {
+        asset: "S&P 500",
+        annualizedVolatility: calcAnnualizedVolatility(ANNUAL_RETURNS, "sp500"),
+        maxDrawdown: calcMaxDrawdown(ANNUAL_RETURNS, "sp500"),
+        sharpe: calcSharpe(ANNUAL_RETURNS, "sp500"),
+        sortino: calcSortino(ANNUAL_RETURNS, "sp500")
+      },
+      {
+        asset: "MSCI World",
+        annualizedVolatility: calcAnnualizedVolatility(ANNUAL_RETURNS, "msciWorld"),
+        maxDrawdown: calcMaxDrawdown(ANNUAL_RETURNS, "msciWorld"),
+        sharpe: calcSharpe(ANNUAL_RETURNS, "msciWorld"),
+        sortino: calcSortino(ANNUAL_RETURNS, "msciWorld")
+      },
+      {
+        asset: "MSCI EM",
+        annualizedVolatility: calcAnnualizedVolatility(ANNUAL_RETURNS, "msciEm"),
+        maxDrawdown: calcMaxDrawdown(ANNUAL_RETURNS, "msciEm"),
+        sharpe: calcSharpe(ANNUAL_RETURNS, "msciEm"),
+        sortino: calcSortino(ANNUAL_RETURNS, "msciEm")
+      }
+    ];
+
+    const dividendData = [
+      { symbol: "SPY", dividendYield: 1.34, payoutRatio: 38.1, exDividendDate: "2026-06-20", dividendGrowth5Y: 6.2 },
+      { symbol: "VIG", dividendYield: 1.79, payoutRatio: 44.7, exDividendDate: "2026-06-24", dividendGrowth5Y: 7.1 },
+      { symbol: "SCHD", dividendYield: 3.45, payoutRatio: 52.3, exDividendDate: "2026-06-22", dividendGrowth5Y: 10.4 }
+    ];
+
+    const earningsCalendar = [
+      { date: "2026-04-24", symbol: "MSFT", period: "Q1", estimateEPS: 3.12, previousSurprisePct: 4.1, revisionTrend: "Up" },
+      { date: "2026-04-25", symbol: "AAPL", period: "Q2", estimateEPS: 1.66, previousSurprisePct: 2.3, revisionTrend: "Flat" },
+      { date: "2026-04-26", symbol: "AMZN", period: "Q1", estimateEPS: 1.12, previousSurprisePct: 5.2, revisionTrend: "Up" },
+      { date: "2026-04-28", symbol: "NVDA", period: "Q1", estimateEPS: 6.08, previousSurprisePct: 7.9, revisionTrend: "Up" }
+    ];
+
+    const valuationData = [
+      { scope: "USA (S&P 500)", pe: 22.8, pb: 4.3, evEbitda: 14.2, dividendYield: 1.4, fcfYield: 3.9 },
+      { scope: "Europe (STOXX 600)", pe: 14.1, pb: 1.9, evEbitda: 9.7, dividendYield: 3.2, fcfYield: 6.1 },
+      { scope: "Asia (MSCI Asia)", pe: 15.8, pb: 1.7, evEbitda: 10.9, dividendYield: 2.4, fcfYield: 5.3 },
+      { scope: "Emerging (MSCI EM)", pe: 12.9, pb: 1.6, evEbitda: 8.8, dividendYield: 2.7, fcfYield: 6.8 }
+    ];
+
+    const macroData = [
+      { indicator: "Fed Funds Rate", value: 4.75, unit: "%", country: "USA", trend: "Flat" },
+      { indicator: "CPI YoY", value: 2.9, unit: "%", country: "USA", trend: "Down" },
+      { indicator: "Unemployment", value: 4.1, unit: "%", country: "USA", trend: "Flat" },
+      { indicator: "Manufacturing PMI", value: 51.2, unit: "index", country: "USA", trend: "Up" },
+      { indicator: "US 10Y - 2Y", value: -0.22, unit: "%", country: "USA", trend: "Steepening" }
+    ];
+
+    const fundFlows = [
+      { segment: "US Tech ETFs", assetClass: "Equities", region: "USA", sector: "Technology", period: "1W", netFlowUsdBn: 4.2 },
+      { segment: "EM Broad ETFs", assetClass: "Equities", region: "Emerging Markets", sector: "Broad", period: "1W", netFlowUsdBn: 1.6 },
+      { segment: "US IG Bond ETFs", assetClass: "Fixed Income", region: "USA", sector: "Investment Grade", period: "1W", netFlowUsdBn: 2.1 },
+      { segment: "Energy Sector ETFs", assetClass: "Equities", region: "Global", sector: "Energy", period: "1W", netFlowUsdBn: -0.4 }
+    ];
+
+    const fxRates = [
+      { pair: "EUR/USD", rate: 1.08, daily: 0.14, weekly: 0.32 },
+      { pair: "USD/JPY", rate: 150.32, daily: -0.21, weekly: -0.58 },
+      { pair: "GBP/USD", rate: 1.27, daily: 0.19, weekly: 0.44 },
+      { pair: "USD/CNH", rate: 7.14, daily: 0.06, weekly: 0.11 }
+    ];
+
+    const marketBreadth = {
+      adLine: 12850,
+      newHighs: 184,
+      newLows: 41,
+      above50dmaPct: 62.3,
+      above200dmaPct: 58.7
+    };
+
+    const riskIndicators = [
+      { indicator: "VIX", value: 15.4, unit: "index", status: "Normal" },
+      { indicator: "US HY OAS", value: 3.62, unit: "%", status: "Contained" },
+      { indicator: "US 10Y Treasury", value: 4.18, unit: "%", status: "Watch" },
+      { indicator: "MOVE Index", value: 103.2, unit: "index", status: "Elevated" },
+      { indicator: "USD Liquidity Proxy", value: -0.8, unit: "z-score", status: "Tightening" }
+    ];
+
+    const corporateActions = [
+      { date: "2026-04-18", symbol: "TSLA", action: "Split Proposal", detail: "Board authorized review for 3-for-1 split." },
+      { date: "2026-04-15", symbol: "AAPL", action: "Buyback", detail: "Authorized additional $90B repurchase plan." },
+      { date: "2026-04-12", symbol: "XOM", action: "Special Dividend", detail: "Declared special cash dividend of $0.35/share." },
+      { date: "2026-04-09", symbol: "UNH", action: "M&A", detail: "Announced acquisition of care-tech provider." }
+    ];
+
     const benchmarkPerformance = [
       {
         name: "S&P 500 (USA)",
@@ -5109,13 +5369,38 @@ app.get('/api/analytics/equities', async (req, res) => {
       }
     ];
 
+    const enrichedFundsList = FUNDS_LIST.map((fund, idx) => ({
+      ...fund,
+      domicile: fund.jurisdiction,
+      structure: String(fund.type || "").toLowerCase().includes("etf") ? "UCITS/40-Act ETF" : "Open-end Fund",
+      feeBps: [3, 6, 9, 12, 18, 24, 35][idx % 7],
+      assetClass: idx % 3 === 0 ? "Equities" : idx % 3 === 1 ? "Multi-Asset" : "Fixed Income"
+    }));
+
     res.json({
       updatedAt: new Date().toISOString(),
+      benchmarkIndexHistory,
       benchmarkPerformance,
+      sectorPerformance,
+      regionalPerformance,
+      styleFactors,
+      rebalanceSignals,
+      correlationLabels,
+      correlationMatrix,
+      volatilityMetrics,
+      dividendData,
+      earningsCalendar,
+      valuationData,
+      macroData,
+      fundFlows,
+      fxRates,
+      marketBreadth,
+      riskIndicators,
+      corporateActions,
       annualReturns: ANNUAL_RETURNS,
       reitData: REIT_DATA,
       mmfYields: MMF_YIELDS,
-      fundsList: FUNDS_LIST
+      fundsList: enrichedFundsList
     });
   } catch (error) {
     handleServerError(res, "Analytics Equities fetch failed", error);
