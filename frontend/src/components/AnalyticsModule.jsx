@@ -6,6 +6,7 @@ const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
   { id: "options", label: "Options", description: "Binance + Deribit options data" },
   { id: "equities", label: "Equities", description: "Asset Classes, Industries, Regions" },
+  { id: "macro", label: "Macro", description: "Macro indicators, FX and risk context" },
 ];
 
 const EMPTY_CRYPTO = {
@@ -55,6 +56,13 @@ const EMPTY_EQUITIES = {
   reitData: { benchmarks: [] },
   mmfYields: [],
   fundsList: [],
+};
+
+const EMPTY_MACRO = {
+  updatedAt: null,
+  macroData: [],
+  fxRates: [],
+  riskIndicators: [],
 };
 
 function formatMoney(value, digits = 2) {
@@ -198,6 +206,15 @@ function normalizeEquitiesPayload(payload) {
   };
 }
 
+function normalizeMacroPayload(payload) {
+  return {
+    updatedAt: payload?.updatedAt || null,
+    macroData: Array.isArray(payload?.macroData) ? payload.macroData : [],
+    fxRates: Array.isArray(payload?.fxRates) ? payload.fxRates : [],
+    riskIndicators: Array.isArray(payload?.riskIndicators) ? payload.riskIndicators : [],
+  };
+}
+
 
 
 export function AnalyticsModule({ backendUrl }) {
@@ -205,8 +222,9 @@ export function AnalyticsModule({ backendUrl }) {
   const [cryptoData, setCryptoData] = useState(EMPTY_CRYPTO);
   const [optionsData, setOptionsData] = useState(EMPTY_OPTIONS);
   const [equitiesData, setEquitiesData] = useState(EMPTY_EQUITIES);
-  const [loading, setLoading] = useState({ crypto: false, options: false, equities: false });
-  const [errors, setErrors] = useState({ crypto: "", options: "", equities: "" });
+  const [macroData, setMacroData] = useState(EMPTY_MACRO);
+  const [loading, setLoading] = useState({ crypto: false, options: false, equities: false, macro: false });
+  const [errors, setErrors] = useState({ crypto: "", options: "", equities: "", macro: "" });
   
   const [etfAssetToggle, setEtfAssetToggle] = useState("All");
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
@@ -222,9 +240,10 @@ export function AnalyticsModule({ backendUrl }) {
     async function load() {
       setLoading((prev) => ({ ...prev, [activeTab]: true }));
       setErrors((prev) => ({ ...prev, [activeTab]: "" }));
+      const endpointTab = activeTab === "macro" ? "equities" : activeTab;
 
       try {
-        const res = await fetch(`${backendUrl}/analytics/${activeTab}`, {
+        const res = await fetch(`${backendUrl}/analytics/${endpointTab}`, {
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -239,6 +258,8 @@ export function AnalyticsModule({ backendUrl }) {
           setOptionsData(normalizeOptionsPayload(payload));
         } else if (activeTab === "equities") {
           setEquitiesData(normalizeEquitiesPayload(payload));
+        } else if (activeTab === "macro") {
+          setMacroData(normalizeMacroPayload(payload));
         }
       } catch (err) {
         if (cancelled || err?.name === "AbortError") return;
@@ -341,6 +362,8 @@ export function AnalyticsModule({ backendUrl }) {
       ? cryptoData.updatedAt
       : activeTab === "options"
       ? optionsData.updatedAt
+      : activeTab === "macro"
+      ? macroData.updatedAt
       : equitiesData.updatedAt;
   const currentError = errors[activeTab];
   const currentLoading = loading[activeTab];
@@ -387,7 +410,7 @@ export function AnalyticsModule({ backendUrl }) {
               color: "#94a3b8",
             }}
           >
-            Switch between Crypto, Options, and Equities analytics. The module is
+            Switch between Crypto, Options, Equities, and Macro analytics. The module is
             structured for Hyperliquid + Dune on crypto, Binance + Derive + Deribit
             on options, and benchmark/regional/fund intelligence for equities.
           </p>
@@ -919,7 +942,7 @@ export function AnalyticsModule({ backendUrl }) {
                 />
               </div>
             </>
-          ) : (
+          ) : activeTab === "equities" ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -1227,34 +1250,20 @@ export function AnalyticsModule({ backendUrl }) {
                   />
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Valuation Comparison"
-                    subtitle="P/E, P/B, EV/EBITDA, yield and FCF yield"
-                    emptyText="No valuation rows."
-                    columns={[
-                      { key: "scope", label: "Scope" },
-                      { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(1) },
-                      { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(1) },
-                      { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => Number(v).toFixed(1) },
-                      { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                      { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                    ]}
-                    rows={(equitiesData.valuationData || []).map((row, idx) => ({ id: `val-${idx}`, ...row }))}
-                  />
-                  <AnalyticsTableCard
-                    title="Macro Indicators"
-                    subtitle="Rates, inflation, labor and PMI/yield-curve context"
-                    emptyText="No macro indicator rows."
-                    columns={[
-                      { key: "indicator", label: "Indicator" },
-                      { key: "country", label: "Market" },
-                      { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
-                      { key: "trend", label: "Trend", align: "right" },
-                    ]}
-                    rows={(equitiesData.macroData || []).map((row, idx) => ({ id: `macro-${idx}`, ...row }))}
-                  />
-                </div>
+                <AnalyticsTableCard
+                  title="Valuation Comparison"
+                  subtitle="P/E, P/B, EV/EBITDA, yield and FCF yield"
+                  emptyText="No valuation rows."
+                  columns={[
+                    { key: "scope", label: "Scope" },
+                    { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(1) },
+                    { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(1) },
+                    { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => Number(v).toFixed(1) },
+                    { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                    { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                  ]}
+                  rows={(equitiesData.valuationData || []).map((row, idx) => ({ id: `val-${idx}`, ...row }))}
+                />
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
                   <AnalyticsTableCard
@@ -1270,32 +1279,9 @@ export function AnalyticsModule({ backendUrl }) {
                     ]}
                     rows={(equitiesData.fundFlows || []).map((row, idx) => ({ id: `flow-${idx}`, ...row }))}
                   />
-                  <AnalyticsTableCard
-                    title="FX Rates"
-                    subtitle="Cross-currency trend context for regional returns"
-                    emptyText="No FX rows."
-                    columns={[
-                      { key: "pair", label: "Pair" },
-                      { key: "rate", label: "Rate", align: "right", render: (v) => Number(v).toFixed(4) },
-                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
-                      { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
-                    ]}
-                    rows={(equitiesData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
-                  />
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Risk Indicators"
-                    subtitle="Volatility, credit and liquidity stress indicators"
-                    emptyText="No risk indicator rows."
-                    columns={[
-                      { key: "indicator", label: "Indicator" },
-                      { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
-                      { key: "status", label: "Status", align: "right" },
-                    ]}
-                    rows={(equitiesData.riskIndicators || []).map((row, idx) => ({ id: `risk-${idx}`, ...row }))}
-                  />
                   <AnalyticsTableCard
                     title="Corporate Actions"
                     subtitle="Splits, buybacks, M&A and special distributions"
@@ -1320,6 +1306,46 @@ export function AnalyticsModule({ backendUrl }) {
                 ) : null}
 
               </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                <AnalyticsTableCard
+                  title="Macro Indicators"
+                  subtitle="Rates, inflation, labor and PMI/yield-curve context"
+                  emptyText="No macro indicator rows."
+                  columns={[
+                    { key: "indicator", label: "Indicator" },
+                    { key: "country", label: "Market" },
+                    { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
+                    { key: "trend", label: "Trend", align: "right" },
+                  ]}
+                  rows={(macroData.macroData || []).map((row, idx) => ({ id: `macro-${idx}`, ...row }))}
+                />
+                <AnalyticsTableCard
+                  title="FX Rates"
+                  subtitle="Cross-currency trend context for regional returns"
+                  emptyText="No FX rows."
+                  columns={[
+                    { key: "pair", label: "Pair" },
+                    { key: "rate", label: "Rate", align: "right", render: (v) => Number(v).toFixed(4) },
+                    { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                    { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
+                  ]}
+                  rows={(macroData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
+                />
+              </div>
+              <AnalyticsTableCard
+                title="Risk Indicators"
+                subtitle="Volatility, credit and liquidity stress indicators"
+                emptyText="No risk indicator rows."
+                columns={[
+                  { key: "indicator", label: "Indicator" },
+                  { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
+                  { key: "status", label: "Status", align: "right" },
+                ]}
+                rows={(macroData.riskIndicators || []).map((row, idx) => ({ id: `risk-${idx}`, ...row }))}
+              />
             </>
           )}
         </>
