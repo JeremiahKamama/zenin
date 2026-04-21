@@ -39,7 +39,15 @@ export function JournalModule({
     }
   });
   const [entryDraft, setEntryDraft] = useState({
+    sourceTradeKey: "",
     symbol: "",
+    tradeDate: "",
+    side: "",
+    quantity: "",
+    price: "",
+    notional: "",
+    marketType: "",
+    status: "",
     strategy: "",
     setupTag: "",
     marketRegime: "",
@@ -52,6 +60,8 @@ export function JournalModule({
     learned: "",
     chartLink: ""
   });
+  const [journalPage, setJournalPage] = useState("entry");
+  const [editingEntryId, setEditingEntryId] = useState(null);
   const [journalFilters, setJournalFilters] = useState({
     strategy: "all",
     timeframe: "all",
@@ -70,6 +80,61 @@ export function JournalModule({
   useEffect(() => {
     localStorage.setItem("zenin_journal_entries", JSON.stringify(journalEntries.slice(0, 300)));
   }, [journalEntries]);
+
+  useEffect(() => {
+    const normalizeTimeframe = (trade) => {
+      const mt = String(trade?.marketType || "").toLowerCase();
+      if (mt.includes("option")) return "swing";
+      if (mt.includes("crypto")) return "intraday";
+      return "position";
+    };
+    const normalizeEmotion = () => "neutral";
+    const nowIso = new Date().toISOString();
+
+    setJournalEntries((prev) => {
+      const existingKeys = new Set(
+        (prev || [])
+          .map((entry) => String(entry?.sourceTradeKey || "").trim())
+          .filter(Boolean)
+      );
+      const additions = [];
+      (Array.isArray(trades) ? trades : []).forEach((trade, idx) => {
+        const sourceTradeKey = String(
+          trade?.clientId ||
+          trade?.id ||
+          `${trade?.asset || "UNKNOWN"}-${trade?.executedAt || trade?.date || idx}-${trade?.type || ""}-${trade?.quantity || ""}-${trade?.price || ""}`
+        );
+        if (existingKeys.has(sourceTradeKey)) return;
+        existingKeys.add(sourceTradeKey);
+        additions.push({
+          id: `jrnl-trade-${sourceTradeKey}`,
+          sourceTradeKey,
+          createdAt: nowIso,
+          symbol: String(trade?.asset || "").toUpperCase(),
+          tradeDate: trade?.executedAt || trade?.date || nowIso,
+          side: String(trade?.side || trade?.type || "").toUpperCase(),
+          quantity: Number(trade?.quantity) || 0,
+          price: Number(trade?.price) || 0,
+          notional: Number(trade?.notional) || 0,
+          marketType: String(trade?.marketType || ""),
+          status: String(trade?.status || "Filled"),
+          strategy: String(trade?.strategyName || trade?.name || ""),
+          setupTag: "",
+          marketRegime: "",
+          timeframe: normalizeTimeframe(trade),
+          emotion: normalizeEmotion(),
+          confidence: 5,
+          preThesis: "",
+          postReview: "",
+          mistakeCategory: "",
+          learned: "",
+          chartLink: ""
+        });
+      });
+      if (!additions.length) return prev;
+      return [...additions, ...prev].slice(0, 500);
+    });
+  }, [trades]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -248,14 +313,40 @@ export function JournalModule({
 
   const addJournalEntry = () => {
     if (!entryDraft.symbol.trim() && !entryDraft.preThesis.trim() && !entryDraft.postReview.trim()) return;
-    const newEntry = {
-      id: `jrnl-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      ...entryDraft
+    const normalized = {
+      ...entryDraft,
+      symbol: String(entryDraft.symbol || "").toUpperCase(),
+      quantity: Number(entryDraft.quantity) || 0,
+      price: Number(entryDraft.price) || 0,
+      notional: Number(entryDraft.notional) || 0,
     };
-    setJournalEntries((prev) => [newEntry, ...prev]);
+    if (editingEntryId) {
+      setJournalEntries((prev) =>
+        prev.map((entry) =>
+          entry.id === editingEntryId
+            ? { ...entry, ...normalized, updatedAt: new Date().toISOString() }
+            : entry
+        )
+      );
+    } else {
+      const newEntry = {
+        id: `jrnl-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        ...normalized
+      };
+      setJournalEntries((prev) => [newEntry, ...prev]);
+    }
+    setEditingEntryId(null);
     setEntryDraft({
+      sourceTradeKey: "",
       symbol: "",
+      tradeDate: "",
+      side: "",
+      quantity: "",
+      price: "",
+      notional: "",
+      marketType: "",
+      status: "",
       strategy: "",
       setupTag: "",
       marketRegime: "",
@@ -1117,15 +1208,25 @@ export function JournalModule({
         <div className="section-header">
           <h2>Trade Entry Journal</h2>
           <div className="asset-count">Structured notes with strategy, regime, and review context</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="pagination-button" onClick={() => setJournalPage("entry")} disabled={journalPage === "entry"}>
+              Entry Form
+            </button>
+            <button className="pagination-button" onClick={() => setJournalPage("saved")} disabled={journalPage === "saved"}>
+              View Entries
+            </button>
+          </div>
         </div>
-        <div className="journal-report-table-wrap" style={{ marginBottom: "10px" }}>
-          <table className="journal-report-table">
+        {journalPage === "entry" ? (
+          <>
+            <div className="journal-report-table-wrap" style={{ marginBottom: "10px" }}>
+              <table className="journal-report-table">
             <thead>
               <tr>
                 <th>Symbol</th>
+                <th>Trade Date</th>
                 <th>Strategy</th>
                 <th>Setup Tag</th>
-                <th>Market Regime</th>
               </tr>
             </thead>
             <tbody>
@@ -1134,22 +1235,30 @@ export function JournalModule({
                   <input className="search-input" style={{ width: "100%" }} placeholder="e.g. BTC" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} />
                 </td>
                 <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="Execution date" value={entryDraft.tradeDate} onChange={(e) => setEntryDraft((p) => ({ ...p, tradeDate: e.target.value }))} />
+                </td>
+                <td>
                   <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Breakout" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} />
                 </td>
                 <td>
                   <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Pullback" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} />
                 </td>
+              </tr>
+              <tr>
+                <th>Market Regime</th>
+                <th>Side / Qty</th>
+                <th>Timeframe</th>
+                <th>Emotion</th>
+                <th>Confidence / Link</th>
+              </tr>
+              <tr>
                 <td>
                   <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Risk-on" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} />
                 </td>
-              </tr>
-              <tr>
-                <th>Timeframe</th>
-                <th>Emotion</th>
-                <th>Confidence</th>
-                <th>Chart Link</th>
-              </tr>
-              <tr>
+                <td style={{ display: "grid", gap: 6 }}>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="BUY/SELL" value={entryDraft.side} onChange={(e) => setEntryDraft((p) => ({ ...p, side: e.target.value.toUpperCase() }))} />
+                  <input className="search-input" style={{ width: "100%" }} type="number" min="0" placeholder="Quantity" value={entryDraft.quantity} onChange={(e) => setEntryDraft((p) => ({ ...p, quantity: e.target.value }))} />
+                </td>
                 <td>
                   <select className="search-input" style={{ width: "100%" }} value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
                     <option value="intraday">Intraday</option>
@@ -1166,11 +1275,29 @@ export function JournalModule({
                     <option value="disciplined">Disciplined</option>
                   </select>
                 </td>
+                <td style={{ display: "grid", gap: 6 }}>
+                  <input className="search-input" style={{ width: "100%" }} type="number" min="1" max="10" placeholder="Confidence 1-10" value={entryDraft.confidence} onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) || 5 }))} />
+                  <input className="search-input" style={{ width: "100%" }} placeholder="URL / screenshot" value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
+                </td>
+              </tr>
+              <tr>
+                <th>Price</th>
+                <th>Notional</th>
+                <th>Market Type</th>
+                <th colSpan={2}>Status</th>
+              </tr>
+              <tr>
                 <td>
-                  <input className="search-input" style={{ width: "100%" }} type="number" min="1" max="10" placeholder="1-10" value={entryDraft.confidence} onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) || 5 }))} />
+                  <input className="search-input" style={{ width: "100%" }} type="number" min="0" step="0.0001" placeholder="Execution price" value={entryDraft.price} onChange={(e) => setEntryDraft((p) => ({ ...p, price: e.target.value }))} />
                 </td>
                 <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="URL / screenshot" value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
+                  <input className="search-input" style={{ width: "100%" }} type="number" min="0" step="0.01" placeholder="Trade notional" value={entryDraft.notional} onChange={(e) => setEntryDraft((p) => ({ ...p, notional: e.target.value }))} />
+                </td>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="spot/options/equity" value={entryDraft.marketType} onChange={(e) => setEntryDraft((p) => ({ ...p, marketType: e.target.value }))} />
+                </td>
+                <td colSpan={2}>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="Filled / Open / Closed" value={entryDraft.status} onChange={(e) => setEntryDraft((p) => ({ ...p, status: e.target.value }))} />
                 </td>
               </tr>
               <tr>
@@ -1198,11 +1325,69 @@ export function JournalModule({
                 </td>
               </tr>
             </tbody>
-          </table>
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button className="pagination-button" onClick={addJournalEntry}>Save Journal Entry</button>
-        </div>
+              </table>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button className="pagination-button" onClick={addJournalEntry}>
+                {editingEntryId ? "Update Journal Entry" : "Save Journal Entry"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: "grid", gap: "8px" }}>
+            {filteredJournalEntries.slice(0, 50).map((entry) => (
+              <div key={entry.id} style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px", background: "rgba(15,23,42,0.4)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                  <div style={{ fontSize: "12px", color: "#e2e8f0", fontWeight: 600 }}>
+                    {entry.symbol || "N/A"} · {entry.strategy || "Unspecified strategy"} · {entry.side || "—"} {entry.quantity || 0}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ fontSize: "11px", color: "#94a3b8" }}>{new Date(entry.createdAt || Date.now()).toLocaleString()}</div>
+                    <button
+                      className="pagination-button"
+                      onClick={() => {
+                        setEntryDraft({
+                          sourceTradeKey: entry.sourceTradeKey || "",
+                          symbol: entry.symbol || "",
+                          tradeDate: entry.tradeDate || "",
+                          side: entry.side || "",
+                          quantity: entry.quantity || "",
+                          price: entry.price || "",
+                          notional: entry.notional || "",
+                          marketType: entry.marketType || "",
+                          status: entry.status || "",
+                          strategy: entry.strategy || "",
+                          setupTag: entry.setupTag || "",
+                          marketRegime: entry.marketRegime || "",
+                          timeframe: entry.timeframe || "intraday",
+                          emotion: entry.emotion || "neutral",
+                          confidence: entry.confidence || 5,
+                          preThesis: entry.preThesis || "",
+                          postReview: entry.postReview || "",
+                          mistakeCategory: entry.mistakeCategory || "",
+                          learned: entry.learned || "",
+                          chartLink: entry.chartLink || ""
+                        });
+                        setEditingEntryId(entry.id);
+                        setJournalPage("entry");
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </div>
+                <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px" }}>
+                  {entry.marketType || "—"} · {entry.status || "—"} · {formatValue(entry.notional || 0, true)} · {entry.tradeDate ? new Date(entry.tradeDate).toLocaleString() : "No trade date"}
+                </div>
+                {entry.preThesis ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "6px" }}><strong>Thesis:</strong> {entry.preThesis}</div> : null}
+                {entry.postReview ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "4px" }}><strong>Review:</strong> {entry.postReview}</div> : null}
+              </div>
+            ))}
+            {filteredJournalEntries.length === 0 ? (
+              <div className="empty-state" style={{ padding: "20px", color: "#64748b" }}>No saved entries yet. Execute a trade or add one manually.</div>
+            ) : null}
+          </div>
+        )}
       </div>
 
       <div className="watchlist-panel glass">
@@ -1401,57 +1586,6 @@ export function JournalModule({
               </div>
             );
           })}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass">
-        <div className="section-header">
-          <h2>Journal Archive</h2>
-          <div className="asset-count">{filteredJournalEntries.length} Entries</div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "8px", marginBottom: "10px" }}>
-          <select className="search-input" value={journalFilters.strategy} onChange={(e) => setJournalFilters((p) => ({ ...p, strategy: e.target.value }))}>
-            <option value="all">All Strategies</option>
-            {[...new Set(journalEntries.map((row) => String(row.strategy || "").toLowerCase()).filter(Boolean))].map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select className="search-input" value={journalFilters.timeframe} onChange={(e) => setJournalFilters((p) => ({ ...p, timeframe: e.target.value }))}>
-            <option value="all">All Timeframes</option>
-            <option value="intraday">Intraday</option>
-            <option value="swing">Swing</option>
-            <option value="position">Position</option>
-          </select>
-          <select className="search-input" value={journalFilters.emotion} onChange={(e) => setJournalFilters((p) => ({ ...p, emotion: e.target.value }))}>
-            <option value="all">All Emotions</option>
-            <option value="neutral">Neutral</option>
-            <option value="confident">Confident</option>
-            <option value="fearful">Fearful</option>
-            <option value="fomo">FOMO</option>
-            <option value="disciplined">Disciplined</option>
-          </select>
-          <input className="search-input" placeholder="Search notes..." value={journalFilters.search} onChange={(e) => setJournalFilters((p) => ({ ...p, search: e.target.value }))} />
-        </div>
-        <div style={{ display: "grid", gap: "8px" }}>
-          {filteredJournalEntries.slice(0, 20).map((entry) => (
-            <div key={entry.id} style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px", background: "rgba(15,23,42,0.4)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
-                <div style={{ fontSize: "12px", color: "#e2e8f0", fontWeight: 600 }}>{entry.symbol || "N/A"} · {entry.strategy || "Unspecified strategy"}</div>
-                <div style={{ fontSize: "11px", color: "#94a3b8" }}>{new Date(entry.createdAt).toLocaleString()}</div>
-              </div>
-              <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px" }}>
-                {entry.timeframe} · {entry.emotion} · Confidence {entry.confidence}/10 · {entry.marketRegime || "No regime"}
-              </div>
-              {entry.preThesis ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "6px" }}><strong>Thesis:</strong> {entry.preThesis}</div> : null}
-              {entry.postReview ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "4px" }}><strong>Review:</strong> {entry.postReview}</div> : null}
-              {entry.mistakeCategory || entry.learned ? (
-                <div style={{ fontSize: "11px", color: "#fbbf24", marginTop: "4px" }}>
-                  {entry.mistakeCategory ? `Mistake: ${entry.mistakeCategory}. ` : ""}{entry.learned ? `Learned: ${entry.learned}` : ""}
-                </div>
-              ) : null}
-            </div>
-          ))}
-          {filteredJournalEntries.length === 0 ? (
-            <div className="empty-state" style={{ padding: "20px", color: "#64748b" }}>No journal notes match the current filters.</div>
-          ) : null}
         </div>
       </div>
 

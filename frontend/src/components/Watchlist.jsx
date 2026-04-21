@@ -33,7 +33,6 @@ export function Watchlist({
 
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
-  const [earningsPage, setEarningsPage] = useState(1);
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
@@ -146,10 +145,6 @@ export function Watchlist({
     setSelectedIndicatorMetric(null);
   }, [indicatorCountry]);
 
-  useEffect(() => {
-    setEarningsPage(1);
-  }, [activeCategory, activeTheme]);
-
   const assetCatalogByMeta = useMemo(
     () => new Map((Array.isArray(assets) ? assets : []).map((asset) => [buildAssetMetaKey(asset), asset])),
     [assets]
@@ -233,12 +228,25 @@ const pageSymbols = pagedAssets.map((a) => a.symbol).join(",");
     [indicatorCountry, indicatorWatchlistCountries]
   );
 
-  const earningsAssets = activeCategory === "stocks" ? displayedAssets : [];
-  const earningsPerPage = 5;
-  const earningsTotalPages = Math.max(1, Math.ceil(earningsAssets.length / earningsPerPage));
-  const earningsSymbols = earningsAssets
-    .slice((earningsPage - 1) * earningsPerPage, earningsPage * earningsPerPage)
-    .map((a) => a.symbol);
+  const earningsSymbols = useMemo(
+    () => (
+      activeCategory === "stocks"
+        ? [...new Set(pagedAssets.map((a) => normalizeSymbol(a?.symbol)).filter(Boolean))]
+        : []
+    ),
+    [activeCategory, pagedAssets]
+  );
+  const earningsRows = useMemo(() => {
+    const bySymbol = new Map(
+      (Array.isArray(earningsItems) ? earningsItems : [])
+        .map((item) => [normalizeSymbol(item?.symbol), item])
+        .filter(([symbol]) => Boolean(symbol))
+    );
+    return earningsSymbols.map((symbol) => ({
+      symbol,
+      item: bySymbol.get(symbol) || null
+    }));
+  }, [earningsItems, earningsSymbols]);
 
 useEffect(() => {
   onPageChange?.(currentPage, pageSymbols ? pageSymbols.split(",") : []);
@@ -362,7 +370,7 @@ useEffect(() => {
       try {
         const params = new URLSearchParams({
           symbols: earningsSymbols.join(","),
-          limit: String(earningsPerPage)
+          limit: String(Math.max(1, earningsSymbols.length))
         });
         const res = await fetch(`${BACKEND_URL}/earnings-calendar?${params.toString()}`, {
           signal: controller.signal
@@ -395,7 +403,7 @@ useEffect(() => {
       isMounted = false;
       controller.abort();
     };
-  }, [activeCategory, earningsPage, earningsSymbols.join(","), earningsPerPage]);
+  }, [activeCategory, earningsSymbols.join(",")]);
 
   const formatEarningsDate = (value) => {
     if (!value) return "No upcoming date";
@@ -625,15 +633,15 @@ useEffect(() => {
               </span>
             </div>
           </div>
-          {earningsLoading && earningsItems.length === 0 ? (
+          {earningsLoading && earningsRows.length === 0 ? (
             <div className="loading-state">Loading earnings calendar...</div>
-          ) : earningsItems.length === 0 ? (
+          ) : earningsRows.length === 0 ? (
             <div className="loading-state">Waiting for earnings data...</div>
           ) : (
             <div style={{ display: "grid", gap: "8px" }}>
-              {earningsItems.map((item) => (
+              {earningsRows.map(({ symbol, item }) => (
                 <div
-                  key={item.symbol}
+                  key={symbol}
                   style={{
                     display: "flex",
                     justifyContent: "space-between",
@@ -644,9 +652,9 @@ useEffect(() => {
                     background: "rgba(15,23,42,0.35)"
                   }}
                 >
-                  <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{item.symbol}</strong>
+                  <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{symbol}</strong>
                   <span style={{ fontSize: "12px", color: "#94a3b8" }}>
-                    {formatEarningsDate(item.nextEarnings || item.earningsText)}
+                    {formatEarningsDate(item?.nextEarnings || item?.earningsText)}
                   </span>
                 </div>
               ))}
@@ -655,27 +663,6 @@ useEffect(() => {
           {earningsStale && earningsNotice ? (
             <div className="snapshot-inline-note">{earningsNotice}</div>
           ) : null}
-          {earningsTotalPages > 1 && (
-            <div className="pagination-controls" style={{ marginTop: "10px", paddingTop: 0 }}>
-              <button
-                className="pagination-button"
-                disabled={earningsPage === 1}
-                onClick={() => setEarningsPage((p) => Math.max(1, p - 1))}
-              >
-                Previous
-              </button>
-              <div className="pagination-label">
-                Page {earningsPage} of {earningsTotalPages}
-              </div>
-              <button
-                className="pagination-button"
-                disabled={earningsPage === earningsTotalPages}
-                onClick={() => setEarningsPage((p) => Math.min(earningsTotalPages, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          )}
         </section>
       )}
 

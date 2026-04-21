@@ -186,27 +186,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
     markers: { size: 0 }
   };
 
-  // Category breakdown for pie chart
-  const categoryMap = {};
-  portfolio.forEach(item => {
-    const cat = item.category || item.type || "Other";
-    const val = (item.price || 0) * (item.quantity || 0);
-    categoryMap[cat] = (categoryMap[cat] || 0) + val;
-  });
-  const categoryLabels = Object.keys(categoryMap);
-  const categorySeries = Object.values(categoryMap).map(v => parseFloat(v.toFixed(2)));
-
-  const pieOptions = {
-    chart: { type: "donut", background: "transparent" },
-    theme: { mode: "dark" },
-    labels: categoryLabels,
-    stroke: { show: false },
-    legend: { position: "right", fontSize: "11px", labels: { colors: "#94a3b8" } },
-    dataLabels: { enabled: true, style: { fontSize: "11px" } },
-    plotOptions: { pie: { donut: { size: "65%" } } },
-    tooltip: { y: { formatter: v => `$${v.toLocaleString(undefined, { minimumFractionDigits: 2 })}` } }
-  };
-
   const diversificationRows = useMemo(() => {
     const stockLikeHoldings = (Array.isArray(portfolio) ? portfolio : []).filter((item) => {
       const type = String(item?.type || "").trim().toLowerCase();
@@ -296,6 +275,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
         .sort((a, b) => b.weight - a.weight);
     return [...normalize(groups.sector, "Sector"), ...normalize(groups.country, "Country"), ...normalize(groups.currency, "Currency")];
   }, [portfolio]);
+
+  const attributionSummary = useMemo(() => {
+    const sectorTop = attributionRows?.sector?.[0] || null;
+    const regionTop = attributionRows?.region?.[0] || null;
+    return {
+      sectorTop,
+      regionTop
+    };
+  }, [attributionRows]);
 
   // Performance Metrics
   const metrics = useMemo(() => {
@@ -528,38 +516,66 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   className="metric-card glass clickable"
                   style={{ overflow: "hidden", cursor: "pointer" }}
                   onClick={() => setShowDiversificationModal(true)}
-                  title="View diversification by theme"
+                  title="View exposure heatmap details"
                 >
-                  <label>Diversification</label>
-                  {categorySeries.length > 0 ? (
-                    <ReactApexChart
-                      options={{
-                        ...pieOptions,
-                        chart: { ...pieOptions.chart, sparkline: { enabled: false } },
-                        legend: { show: false },
-                        dataLabels: { enabled: false },
-                        plotOptions: { pie: { donut: { size: "70%" } } },
-                        labels: categoryLabels
-                      }}
-                      series={categorySeries}
-                      type="donut"
-                      height={80}
-                      width="100%"
-                    />
+                  <label>Exposure Heatmap</label>
+                  {exposureRows.length > 0 ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "6px", marginTop: "4px" }}>
+                      {exposureRows.slice(0, 4).map((row) => (
+                        <div
+                          key={`heat-preview-${row.bucket}-${row.name}`}
+                          style={{
+                            borderRadius: "6px",
+                            padding: "6px",
+                            border: "1px solid rgba(148,163,184,0.16)",
+                            background: row.weight > 25 ? "rgba(239,68,68,0.15)" : row.weight > 15 ? "rgba(245,158,11,0.12)" : "rgba(34,197,94,0.12)"
+                          }}
+                        >
+                          <div style={{ fontSize: "9px", color: "#94a3b8", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {row.bucket}
+                          </div>
+                          <div style={{ fontSize: "10px", color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {row.name}
+                          </div>
+                          <div style={{ fontSize: "11px", fontWeight: 700, color: "#e2e8f0" }}>
+                            {row.weight.toFixed(1)}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     <div className="value" style={{ fontSize: "14px" }}>No holdings</div>
                   )}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
-                    {categoryLabels.slice(0, 4).map((label, i) => (
-                      <span key={label} style={{
+                    {exposureRows.slice(0, 4).map((row) => (
+                      <span key={`heat-chip-${row.bucket}-${row.name}`} style={{
                         fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
                         background: "rgba(255,255,255,0.06)", color: "var(--color-text-secondary)"
-                      }}>{label}</span>
+                      }}>{row.name}</span>
                     ))}
-                    {categoryLabels.length > 4 && (
-                      <span style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>+{categoryLabels.length - 4} more</span>
+                    {exposureRows.length > 4 && (
+                      <span style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>+{exposureRows.length - 4} more</span>
                     )}
                   </div>
+                </div>
+
+                <div className="metric-card glass" style={{ minWidth: 0 }}>
+                  <label>Performance Attribution</label>
+                  {attributionSummary.sectorTop ? (
+                    <>
+                      <div className="value" style={{ fontSize: "1.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {attributionSummary.sectorTop.name}
+                      </div>
+                      <div className={`change ${attributionSummary.sectorTop.pnl >= 0 ? "positive" : "negative"}`} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        Sector {attributionSummary.sectorTop.pnl >= 0 ? "+" : ""}${Math.abs(attributionSummary.sectorTop.pnl).toFixed(2)}
+                      </div>
+                      <div className={`change ${Number(attributionSummary.regionTop?.pnl || 0) >= 0 ? "positive" : "negative"}`} style={{ marginTop: "6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        Region {attributionSummary.regionTop ? `${attributionSummary.regionTop.name} (${attributionSummary.regionTop.pnl >= 0 ? "+" : ""}$${Math.abs(attributionSummary.regionTop.pnl).toFixed(2)})` : "N/A"}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="value" style={{ fontSize: "14px" }}>No attribution data</div>
+                  )}
                 </div>
               </div>
 

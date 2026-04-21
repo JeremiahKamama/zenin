@@ -507,25 +507,38 @@ useEffect(() => {
 
   const refreshSymbolsForCategory = async (category, symbols = []) => {
     prunePriceCache();
-    if (!symbols.length || category === "crypto") return;
+    if (!symbols.length || category === "crypto" || category === "indicators") return;
+    const normalizedSymbols = [...new Set(
+      (Array.isArray(symbols) ? symbols : [])
+        .map((symbol) => normalizeSymbolKey(symbol))
+        .filter(Boolean)
+    )];
+    if (!normalizedSymbols.length) return;
     const now = Date.now();
-    const uncachedSymbols = symbols.filter((symbol) => {
+    const uncachedSymbols = normalizedSymbols.filter((symbol) => {
       const cached = priceCacheRef.current.get(symbol);
       return !cached || now - cached.ts > PRICE_CACHE_TTL_MS;
     });
 
     if (uncachedSymbols.length > 0) {
       try {
-        const res = await zeninFetch(`/watchlist?category=${category}&symbols=${encodeURIComponent(uncachedSymbols.join(","))}`);
+        const quoteType = category === "crypto" ? "crypto" : "tradfi";
+        const res = await zeninFetch(
+          `/prices?type=${encodeURIComponent(quoteType)}&symbols=${encodeURIComponent(uncachedSymbols.join(","))}`
+        );
         const priceData = await res.json();
-        (priceData.assets || []).forEach((asset) => {
-          if (asset.price != null || asset.priceChangePercent != null) {
-            priceCacheRef.current.set(asset.symbol, {
-              price: asset.price ?? null,
-              priceChangePercent: asset.priceChangePercent ?? null,
-              ts: Date.now()
-            });
-          }
+        const priceMap = priceData?.prices && typeof priceData.prices === "object" ? priceData.prices : {};
+        Object.entries(priceMap).forEach(([symbol, quote]) => {
+          const normalized = normalizeSymbolKey(symbol);
+          if (!normalized) return;
+          const price = Number(quote?.price);
+          const priceChangePercent = Number(quote?.priceChangePercent);
+          if (!Number.isFinite(price) && !Number.isFinite(priceChangePercent)) return;
+          priceCacheRef.current.set(normalized, {
+            price: Number.isFinite(price) ? price : null,
+            priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+            ts: Date.now()
+          });
         });
       } catch (err) {
         console.error("Price refresh failed:", err);
@@ -533,8 +546,9 @@ useEffect(() => {
     }
 
     setAssets((prev) => prev.map((asset) => {
-      if (!symbols.includes(asset.symbol)) return asset;
-      const cached = priceCacheRef.current.get(asset.symbol);
+      const normalizedSymbol = normalizeSymbolKey(asset?.symbol);
+      if (!normalizedSymbols.includes(normalizedSymbol)) return asset;
+      const cached = priceCacheRef.current.get(normalizedSymbol);
       if (!cached) return asset;
       return {
         ...asset,
@@ -619,7 +633,7 @@ useEffect(() => {
     const visibleSymbols = themeAssets.slice(0, 10).map((a) => a.symbol);
     if (!visibleSymbols.length) return;
     refreshSymbolsForCategory("stocks", visibleSymbols);
-  }, [activeTheme]);
+  }, [activeTheme, activeCategory, assets]);
 
   const handlePageChange = (page, visibleSymbols) => {
   if (!visibleSymbols.length) return;
