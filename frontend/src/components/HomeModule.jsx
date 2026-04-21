@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
+import { calculateOptionPnL } from "../utils/optionsPnL";
 
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
@@ -19,6 +20,9 @@ export function HomeModule({
   assets,
   marketMovers = [],
   watchlistAssets = [],
+  activeOptionsTrades = [],
+  multiChainCache = {},
+  spotPrices = {},
   onSelectAsset,
   accountMetrics = null,
   calculatePortfolioValue,
@@ -32,9 +36,35 @@ export function HomeModule({
   const [moversLoading, setMoversLoading] = useState(false);
   const moversPerfCacheRef = useRef(new Map());
 
-  const topPositions = [...portfolio]
-    .sort((a, b) => ((b.price || 0) * (b.quantity || 0)) - ((a.price || 0) * (a.quantity || 0)))
-    .slice(0, 8);
+  const topPositions = useMemo(() => {
+    const spotPositions = (Array.isArray(portfolio) ? portfolio : []).map((asset) => ({
+      ...asset,
+      __isOptionPosition: false,
+      __positionValue: (Number(asset?.price) || 0) * (Number(asset?.quantity) || 0)
+    }));
+
+    const optionPositions = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).map((trade) => {
+      const chain = multiChainCache?.[trade.asset];
+      const spot = spotPrices?.[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      const mark = Number(metrics?.currentMark || 0);
+      const qty = Number(trade?.qty || trade?.quantity || 1);
+      const markValue = Math.abs(mark * qty);
+      return {
+        id: `opt-top-${trade.id || `${trade.asset}-${trade.strategy}`}`,
+        symbol: String(trade?.asset || "OPT").toUpperCase(),
+        strategy: trade?.strategy || "Options Strategy",
+        quantity: qty,
+        __isOptionPosition: true,
+        __positionValue: Number.isFinite(markValue) ? markValue : 0,
+        __optionPnl: Number(metrics?.pnl || 0)
+      };
+    });
+
+    return [...spotPositions, ...optionPositions]
+      .sort((a, b) => (Number(b.__positionValue) || 0) - (Number(a.__positionValue) || 0))
+      .slice(0, 8);
+  }, [portfolio, activeOptionsTrades, multiChainCache, spotPrices]);
 
   const resolveMoverType = (asset) => {
     const type = String(asset?.type || "").toLowerCase();
@@ -219,6 +249,23 @@ export function HomeModule({
   const totalAccountEquity = Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
     ? Number(activeAccountMetrics.totalAccountEquity)
     : (liveAvailableBalance + portfolioValue);
+
+  const optionTimelineAdjustments = useMemo(() => {
+    return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : [])
+      .map((trade) => {
+        const openedAtRaw = trade?.executedAt || trade?.openedAt || trade?.createdAt || trade?.date;
+        const openedAt = new Date(openedAtRaw || 0).getTime();
+        if (!Number.isFinite(openedAt) || openedAt <= 0) return null;
+        const chain = multiChainCache?.[trade.asset];
+        const spot = spotPrices?.[trade.asset];
+        const metrics = calculateOptionPnL(trade, chain, spot);
+        const currentPnl = Number(metrics?.pnl || 0);
+        if (!Number.isFinite(currentPnl)) return null;
+        return { openedAt, currentPnl };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.openedAt - b.openedAt);
+  }, [activeOptionsTrades, multiChainCache, spotPrices]);
   const isTreasuryAsset = (asset) => {
     const symbol = (asset?.symbol || "").toUpperCase();
     return asset?.market === "Treasury" || /^USTY?\d+Y$/.test(symbol);
@@ -254,14 +301,30 @@ export function HomeModule({
       .find((trade) => trade.t < start && Number.isFinite(trade.equity));
     const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
 
+    const optionOpenAnchors = optionTimelineAdjustments.map((entry, idx) => ({
+      t: entry.openedAt,
+      equity: Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : startEquity,
+      id: `opt-open-${idx}`
+    }));
+
     const anchors = [
       { t: start, equity: startEquity },
       ...inRangeTrades.map((trade) => ({ t: trade.t, equity: trade.equity })),
+      ...optionOpenAnchors.filter((entry) => entry.t >= start && entry.t <= now),
       { t: now, equity: totalAccountEquity }
     ].sort((a, b) => a.t - b.t);
 
     let anchorIdx = 0;
     const step = points > 1 ? (now - start) / (points - 1) : 0;
+
+    const getOptionAdjustmentAt = (timestamp) => {
+      return optionTimelineAdjustments.reduce((sum, entry) => {
+        if (timestamp <= entry.openedAt) return sum;
+        const horizon = Math.max(1, now - entry.openedAt);
+        const progress = Math.max(0, Math.min(1, (timestamp - entry.openedAt) / horizon));
+        return sum + (entry.currentPnl * progress);
+      }, 0);
+    };
 
     const toSeriesValue = (equity) => {
       if (chartMode === "equity") return equity;
@@ -274,13 +337,14 @@ export function HomeModule({
       while (anchorIdx + 1 < anchors.length && anchors[anchorIdx + 1].t <= t) {
         anchorIdx += 1;
       }
-      const equity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
+      const baseEquity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
+      const equity = baseEquity + getOptionAdjustmentAt(t);
       return [
         t,
         Number(toSeriesValue(equity).toFixed(2))
       ];
     });
-  }, [chartInterval, chartMode, tradeTimeline, totalAccountEquity]);
+  }, [chartInterval, chartMode, tradeTimeline, totalAccountEquity, optionTimelineAdjustments, initialBalance]);
   const isProfitable = totalAccountEquity >= initialBalance;
 
   const chartColor = chartMode === "pnl"
@@ -396,19 +460,33 @@ export function HomeModule({
           <div className="home-asset-list">
             {topPositions.length > 0 ? (
               topPositions.map((asset) => {
-                const value = (asset.price || 0) * (asset.quantity || 0);
+                const value = Number(asset.__positionValue || ((asset.price || 0) * (asset.quantity || 0)));
+                const isOptionRow = Boolean(asset.__isOptionPosition);
                 return (
-                  <div key={asset.id} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
+                  <div
+                    key={asset.id}
+                    className={`home-asset-item ${isOptionRow ? "" : "clickable"}`}
+                    onClick={() => {
+                      if (!isOptionRow) onSelectAsset(asset);
+                    }}
+                  >
                     <div className="symbol-info">
                       <span className="symbol">{asset.symbol}</span>
+                      {isOptionRow ? (
+                        <div className="meta" style={{ fontSize: "11px" }}>{asset.strategy}</div>
+                      ) : null}
                     </div>
                     <div className="value-info">
                       <div className="price">
-                        {isTreasuryAsset(asset)
+                        {isOptionRow
+                          ? `${asset.__optionPnl >= 0 ? "+" : ""}$${Number(asset.__optionPnl || 0).toFixed(2)}`
+                          : isTreasuryAsset(asset)
                           ? `${Number(asset.price || 0).toFixed(2)}%`
                           : `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                       </div>
-                      <div className="qty">{asset.quantity}</div>
+                      <div className="qty">
+                        {isOptionRow ? `${Number(asset.quantity || 0).toFixed(2)} opt` : asset.quantity}
+                      </div>
                     </div>
                   </div>
                 );

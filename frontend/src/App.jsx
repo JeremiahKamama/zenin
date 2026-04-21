@@ -2091,6 +2091,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             assets={assets}
             marketMovers={homeMarketMovers}
             watchlistAssets={watchlistAssets}
+            activeOptionsTrades={activeOptionsTrades}
+            multiChainCache={multiChainCache}
+            spotPrices={spotPrices}
             onSelectAsset={setSelectedAsset}
             accountMetrics={accountMetrics}
             calculatePortfolioValue={calculatePortfolioValue}

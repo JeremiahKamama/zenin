@@ -16,6 +16,7 @@ export function JournalModule({
   spotPrices = {}
 }) {
   const [reportPage, setReportPage] = useState(1);
+  const [recentPage, setRecentPage] = useState(1);
   const [calendarCursor, setCalendarCursor] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -48,6 +49,7 @@ export function JournalModule({
 
   useEffect(() => {
     setReportPage(1);
+    setRecentPage(1);
   }, [trades]);
 
   const handleCloseOption = (tradeId) => {
@@ -634,6 +636,14 @@ export function JournalModule({
     safeReportPage * reportRowsPerPage
   );
 
+  const recentRowsPerPage = 10;
+  const recentTotalPages = Math.max(1, Math.ceil(executionRows.length / recentRowsPerPage));
+  const safeRecentPage = Math.min(recentPage, recentTotalPages);
+  const pagedExecutionRows = executionRows.slice(
+    (safeRecentPage - 1) * recentRowsPerPage,
+    safeRecentPage * recentRowsPerPage
+  );
+
   const frequentTradedSymbols = analytics.tradedAssetsReport
     .filter((row) => row.tradeCount > 0)
     .map((row) => row.symbol);
@@ -741,6 +751,148 @@ export function JournalModule({
     setCalendarCursor((prev) => new Date(prev.getFullYear() + delta, prev.getMonth(), 1));
   };
 
+  const reportExportRows = useMemo(
+    () => (Array.isArray(analytics?.tradedAssetsReport) ? analytics.tradedAssetsReport : []),
+    [analytics?.tradedAssetsReport]
+  );
+
+  const downloadBlob = (blob, fileName) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportTradedAssetsToExcel = () => {
+    if (!reportExportRows.length) return;
+    const generatedAt = new Date().toISOString();
+    const rowsHtml = reportExportRows
+      .map((row) => `
+        <tr>
+          <td>${row.symbol || ""}</td>
+          <td>${Number(row.tradeCount || 0)}</td>
+          <td>${Number(row.tradedNotional || 0).toFixed(2)}</td>
+          <td>${Number(row.netPosition || 0).toFixed(4)}</td>
+          <td>${Number(row.winRate || 0).toFixed(1)}%</td>
+          <td>${formatDurationFromDays(row.tradeDuration || 0)}</td>
+          <td>${Number(row.avgGain || 0).toFixed(2)}</td>
+          <td>${Number(row.totalGain || 0).toFixed(2)}</td>
+        </tr>
+      `)
+      .join("");
+
+    const html = `
+      <html>
+        <head><meta charset="utf-8" /></head>
+        <body>
+          <table border="1">
+            <caption>Traded Assets Report - Generated ${generatedAt}</caption>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Trade Count</th>
+                <th>Traded Notional</th>
+                <th>Current Position</th>
+                <th>Win Rate</th>
+                <th>Trade Duration</th>
+                <th>Avg Gain</th>
+                <th>Total Gain</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
+
+    const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+    downloadBlob(blob, `traded-assets-report-${new Date().toISOString().slice(0, 10)}.xls`);
+  };
+
+  const createSimplePdfBlob = (lines = []) => {
+    const escapePdfText = (value) => String(value || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/\(/g, "\\(")
+      .replace(/\)/g, "\\)");
+
+    const pageWidth = 595;
+    const pageHeight = 842;
+    const leftX = 40;
+    const topY = pageHeight - 50;
+    const lineHeight = 14;
+
+    const contentLines = [];
+    contentLines.push("BT");
+    contentLines.push("/F1 10 Tf");
+    contentLines.push(`${leftX} ${topY} Td`);
+    lines.forEach((line, idx) => {
+      if (idx === 0) {
+        contentLines.push(`(${escapePdfText(line)}) Tj`);
+      } else {
+        contentLines.push(`0 -${lineHeight} Td`);
+        contentLines.push(`(${escapePdfText(line)}) Tj`);
+      }
+    });
+    contentLines.push("ET");
+    const contentStream = contentLines.join("\n");
+
+    const objects = [
+      "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+      "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+      `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`,
+      "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+      `5 0 obj\n<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream\nendobj\n`
+    ];
+
+    let pdf = "%PDF-1.4\n";
+    const offsets = [0];
+    for (const obj of objects) {
+      offsets.push(pdf.length);
+      pdf += obj;
+    }
+    const xrefStart = pdf.length;
+    pdf += `xref\n0 ${objects.length + 1}\n`;
+    pdf += "0000000000 65535 f \n";
+    for (let i = 1; i <= objects.length; i += 1) {
+      pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+    }
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+    return new Blob([pdf], { type: "application/pdf" });
+  };
+
+  const exportTradedAssetsToPdf = () => {
+    if (!reportExportRows.length) return;
+    const header = "Symbol | Trades | Traded Notional | Position | Win Rate | Duration | Avg Gain | Total Gain";
+    const separator = "-".repeat(120);
+    const lines = [
+      `Traded Assets Report - ${new Date().toLocaleString()}`,
+      separator,
+      header,
+      separator,
+      ...reportExportRows.map((row) => {
+        const symbol = String(row.symbol || "").padEnd(8, " ").slice(0, 8);
+        const tradesCount = String(Number(row.tradeCount || 0)).padStart(3, " ");
+        const tradedNotional = Number(row.tradedNotional || 0).toFixed(2).padStart(12, " ");
+        const position = Number(row.netPosition || 0).toFixed(4).padStart(10, " ");
+        const winRate = `${Number(row.winRate || 0).toFixed(1)}%`.padStart(7, " ");
+        const duration = formatDurationFromDays(row.tradeDuration || 0).padStart(7, " ");
+        const avgGain = Number(row.avgGain || 0).toFixed(2).padStart(10, " ");
+        const totalGain = Number(row.totalGain || 0).toFixed(2).padStart(10, " ");
+        return `${symbol} | ${tradesCount} | ${tradedNotional} | ${position} | ${winRate} | ${duration} | ${avgGain} | ${totalGain}`;
+      })
+    ];
+
+    const blob = createSimplePdfBlob(lines.slice(0, 45));
+    downloadBlob(blob, `traded-assets-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+
   return (
     <div className="view-container journal-dashboard">
       <div className="portfolio-analytics-row journal-top-cards">
@@ -802,8 +954,8 @@ export function JournalModule({
             <div className="asset-count">{executionRows.length} Records</div>
           </div>
           <div className="trade-list">
-            {executionRows.length > 0 ? (
-              executionRows.map((trade) => (
+            {pagedExecutionRows.length > 0 ? (
+              pagedExecutionRows.map((trade) => (
                 <div key={trade.clientId || trade.id} className="trade-item">
                   <div className="trade-date greek">{trade.executionDate}</div>
                   <div className="trade-asset" style={{fontWeight: 700}}>{trade.asset}</div>
@@ -822,6 +974,25 @@ export function JournalModule({
               </div>
             )}
           </div>
+          {executionRows.length > recentRowsPerPage ? (
+            <div className="pagination-controls">
+              <button
+                className="pagination-button"
+                onClick={() => setRecentPage((prev) => Math.max(1, prev - 1))}
+                disabled={safeRecentPage <= 1}
+              >
+                Previous
+              </button>
+              <div className="pagination-label">Page {safeRecentPage} of {recentTotalPages}</div>
+              <button
+                className="pagination-button"
+                onClick={() => setRecentPage((prev) => Math.min(recentTotalPages, prev + 1))}
+                disabled={safeRecentPage >= recentTotalPages}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -902,9 +1073,27 @@ export function JournalModule({
       <div className="watchlist-panel glass">
         <div className="section-header">
           <h2>Traded Assets Report</h2>
-          <div className="asset-count">
-            {analytics.tradedAssetsReport.length} Assets
-            {lastReportPriceRefreshAt ? ` · Prices refreshed ${new Date(lastReportPriceRefreshAt).toLocaleString()}` : ""}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <div className="asset-count">
+              {analytics.tradedAssetsReport.length} Assets
+              {lastReportPriceRefreshAt ? ` · Prices refreshed ${new Date(lastReportPriceRefreshAt).toLocaleString()}` : ""}
+            </div>
+            <button
+              className="pagination-button"
+              onClick={exportTradedAssetsToExcel}
+              disabled={analytics.tradedAssetsReport.length === 0}
+              title="Export traded assets report as Excel (.xls)"
+            >
+              Export Excel
+            </button>
+            <button
+              className="pagination-button"
+              onClick={exportTradedAssetsToPdf}
+              disabled={analytics.tradedAssetsReport.length === 0}
+              title="Export traded assets report as PDF"
+            >
+              Export PDF
+            </button>
           </div>
         </div>
         {analytics.tradedAssetsReport.length === 0 ? (

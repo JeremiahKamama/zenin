@@ -63,6 +63,23 @@ const totalOptionsValue = (Array.isArray(activeOptionsTrades)
   return acc + (Number.isFinite(value) ? value : 0);
 }, 0);
 
+const optionTimelineAdjustments = useMemo(() => {
+  return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : [])
+    .map((trade) => {
+      const openedAtRaw = trade?.executedAt || trade?.openedAt || trade?.createdAt || trade?.date;
+      const openedAt = new Date(openedAtRaw || 0).getTime();
+      if (!Number.isFinite(openedAt) || openedAt <= 0) return null;
+      const chain = multiChainCache?.[trade.asset];
+      const spot = spotPrices?.[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      const currentPnl = Number(metrics?.pnl || 0);
+      if (!Number.isFinite(currentPnl)) return null;
+      return { openedAt, currentPnl };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.openedAt - b.openedAt);
+}, [activeOptionsTrades, multiChainCache, spotPrices]);
+
 // ✅ 5) now totalAccountEquity is safe
 const totalAccountEquity =
   liveAvailableBalance + portfolioValue + totalOptionsValue;
@@ -97,14 +114,30 @@ const isProfitable = currentAccountEquity >= initialBalance;
       .find((trade) => trade.t < start && Number.isFinite(trade.equity));
     const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
 
+    const optionOpenAnchors = optionTimelineAdjustments.map((entry, idx) => ({
+      t: entry.openedAt,
+      equity: Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : startEquity,
+      id: `opt-open-${idx}`
+    }));
+
     const anchors = [
       { t: start, equity: startEquity },
       ...inRangeTrades.map((trade) => ({ t: trade.t, equity: trade.equity })),
+      ...optionOpenAnchors.filter((entry) => entry.t >= start && entry.t <= now),
       { t: now, equity: currentAccountEquity }
     ].sort((a, b) => a.t - b.t);
 
     let anchorIdx = 0;
     const step = points > 1 ? (now - start) / (points - 1) : 0;
+
+    const getOptionAdjustmentAt = (timestamp) => {
+      return optionTimelineAdjustments.reduce((sum, entry) => {
+        if (timestamp <= entry.openedAt) return sum;
+        const horizon = Math.max(1, now - entry.openedAt);
+        const progress = Math.max(0, Math.min(1, (timestamp - entry.openedAt) / horizon));
+        return sum + (entry.currentPnl * progress);
+      }, 0);
+    };
 
     const toSeriesValue = (equity) => {
       if (chartMode === "equity") return equity;
@@ -117,13 +150,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
       while (anchorIdx + 1 < anchors.length && anchors[anchorIdx + 1].t <= t) {
         anchorIdx += 1;
       }
-      const equity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
+      const baseEquity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
+      const equity = baseEquity + getOptionAdjustmentAt(t);
       return [
         t, // timestamp in ms for ApexCharts datetime axis
         Number(toSeriesValue(equity).toFixed(2))
       ];
     });
-  }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity]);
+  }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity, optionTimelineAdjustments, initialBalance]);
   const yFormatter = (val) => {
     if (chartMode === "percentage") return `${val.toFixed(2)}%`;
     if (chartMode === "pnl") return `$${val.toFixed(2)}`;
@@ -329,6 +363,41 @@ const isProfitable = currentAccountEquity >= initialBalance;
       .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
   }, [trades]);
 
+  const combinedHoldings = useMemo(() => {
+    const spotRows = (Array.isArray(portfolio) ? portfolio : []).map((item) => {
+      const positionValue = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
+      const entryPrice = Number(item?.entryPrice);
+      const basisPrice = Number.isFinite(entryPrice) ? entryPrice : Number(item?.price) || 0;
+      const positionGain = positionValue - (basisPrice * (Number(item?.quantity) || 0));
+      return {
+        kind: "spot",
+        key: `spot-${item.id}`,
+        positionValue,
+        positionGain,
+        row: item
+      };
+    });
+
+    const optionRows = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).map((trade) => {
+      const chain = multiChainCache[trade.asset];
+      const spot = spotPrices[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      const currentMark = Number(metrics?.currentMark || 0);
+      const qty = Number(trade?.qty || trade?.quantity || 1);
+      const pnl = Number(metrics?.pnl || 0);
+      return {
+        kind: "options",
+        key: `opt-${trade.id}`,
+        positionValue: Math.abs(currentMark * qty),
+        positionGain: pnl,
+        row: trade,
+        metrics
+      };
+    });
+
+    return [...spotRows, ...optionRows].sort((a, b) => (b.positionValue || 0) - (a.positionValue || 0));
+  }, [portfolio, activeOptionsTrades, multiChainCache, spotPrices]);
+
   return (
     <div className="portfolio-module" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
         <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
@@ -434,22 +503,22 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <div className="watchlist-panel glass">
             <div className="section-header">
               <h2>Holdings</h2>
-              <div className="asset-count">{portfolio.length} Positions</div>
+              <div className="asset-count">{combinedHoldings.length} Positions</div>
             </div>
-            {portfolio.length === 0 ? (
+            {combinedHoldings.length === 0 ? (
               <p style={{ padding: "20px", color: "var(--color-text-secondary)" }}>No holdings yet.</p>
             ) : (
               <>
                 <div className="portfolio-list">
-                  {portfolio.map((item) => {
-                    const positionValue = (item.price || 0) * (item.quantity || 0);
-                    const entryPrice = Number(item.entryPrice);
-                    const basisPrice = Number.isFinite(entryPrice) ? entryPrice : Number(item.price) || 0;
-                    const positionGain = (item.price || 0) * (item.quantity || 0) - basisPrice * (item.quantity || 0);
-                    const gainPercent = item.priceChangePercent || 0;
-                    return (
+                  {combinedHoldings.map((holding) => {
+                    if (holding.kind === "spot") {
+                      const item = holding.row;
+                      const gainPercent = item.priceChangePercent || 0;
+                      const positionValue = holding.positionValue;
+                      const positionGain = holding.positionGain;
+                      return (
                       <div
-                        key={item.id}
+                        key={holding.key}
                         className="portfolio-card clickable"
                         onClick={() => onSelectAsset?.({ ...item, _fromHoldings: true })}
                       >
@@ -475,20 +544,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
                           </div>
                         </div>
                       </div>
-                    );
-                  })}
+                      );
+                    }
 
-                  {/* Active Options Positions */}
-                  {activeOptionsTrades.map((trade) => {
-                    const chain = multiChainCache[trade.asset];
-                    const spot = spotPrices[trade.asset];
-                    const metrics = calculateOptionPnL(trade, chain, spot);
-                    const { currentMark, pnl, isStale } = metrics;
+                    const trade = holding.row;
+                    const { currentMark, pnl, isStale } = holding.metrics || {};
                     const pnlColor = (pnl || 0) >= 0 ? "#22c55e" : "#ef4444";
-
                     return (
                       <div
-                        key={trade.id}
+                        key={holding.key}
                         className={`portfolio-card ${isStale ? "stale-row" : ""}`}
                         style={{ borderLeft: `3px solid ${pnlColor}` }}
                       >
@@ -517,7 +581,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                              {pnl >= 0 ? "+" : ""}${ (pnl || 0).toFixed(2) }
                            </div>
                            <div style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>
-                             Options PnL
+                             Options PnL | Mark ${Number(currentMark || 0).toFixed(2)}
                            </div>
                         </div>
                       </div>
