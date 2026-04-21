@@ -24,7 +24,7 @@ function parseRouteFromLocation() {
   if (typeof window === "undefined") {
     return { type: "app", symbol: "" };
   }
-  const match = window.location.pathname.match(/^\/company\/([^/]+)$/i);
+  const match = window.location.pathname.match(/^\/app\/company\/([^/]+)$/i);
   if (!match) return { type: "app", symbol: "" };
   try {
     return {
@@ -642,8 +642,8 @@ useEffect(() => {
   const navigateToAppRoute = () => {
     setRouteState({ type: "app", symbol: "" });
     setCompanyRouteAsset(null);
-    if (typeof window !== "undefined" && window.location.pathname !== "/") {
-      window.history.pushState({ page: "app" }, "", "/");
+    if (typeof window !== "undefined" && window.location.pathname !== "/app") {
+      window.history.pushState({ page: "app" }, "", "/app");
     }
   };
 
@@ -655,7 +655,7 @@ useEffect(() => {
     setSelectedAsset(null);
     setRouteState({ type: "company", symbol });
     if (typeof window !== "undefined") {
-      window.history.pushState({ page: "company", symbol }, "", `/company/${encodeURIComponent(symbol)}`);
+      window.history.pushState({ page: "company", symbol }, "", `/app/company/${encodeURIComponent(symbol)}`);
     }
   };
 
@@ -862,7 +862,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       clientId: `${normalizedSymbol}-${normalizedMarketType}-${Date.now()}`
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+    const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(tradePayload)
@@ -909,7 +909,7 @@ const handleOptionTradeExecuted = async (tradePayload) => {
       executedAt: new Date().toISOString()
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+    const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(atomicPayload)
@@ -998,7 +998,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       executedAt: new Date().toISOString()
     };
 
-    const response = await fetch(`${BACKEND_URL}/db/execute-trade`, {
+    const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(atomicPayload)
@@ -1029,7 +1029,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const removeFromPortfolio = async (id) => {
     try {
-      await fetch(`${BACKEND_URL}/db/portfolio/${id}`, { method: "DELETE" });
+      await zeninFetch(`/db/portfolio/${id}`, { method: "DELETE" });
       setPortfolio((prev) => prev.filter((item) => item.id !== id));
     } catch (err) {
       console.error("Failed to remove from portfolio:", err);
@@ -1040,7 +1040,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const holding = portfolio.find(item => item.id === id);
       if (holding) {
-        const response = await fetch(`${BACKEND_URL}/db/portfolio/${id}`, {
+        const response = await zeninFetch(`/db/portfolio/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...holding, quantity: Math.max(0, quantity) })
@@ -1259,7 +1259,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return [...next, payload];
     });
     try {
-      const res = await fetch(`${BACKEND_URL}/db/watchlist`, {
+      const res = await zeninFetch(`/db/watchlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1291,8 +1291,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (category) params.set("category", String(category).trim().toLowerCase());
     if (theme) params.set("theme", String(theme).trim());
     try {
-      const res = await fetch(
-        `${BACKEND_URL}/db/watchlist/${encodeURIComponent(normalizedSymbol)}?${params.toString()}`,
+      const res = await zeninFetch(
+        `/db/watchlist/${encodeURIComponent(normalizedSymbol)}?${params.toString()}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error("Failed to remove from watchlist");

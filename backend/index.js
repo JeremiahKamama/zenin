@@ -11,6 +11,8 @@ const {
   portfolio,
   watchlist,
   optionsCalculations,
+  userAuth,
+  userWorkspace,
   serviceSnapshots,
   tradeExecutions,
   balance,
@@ -162,9 +164,111 @@ const writeLimiter = rateLimit({
   message: { error: "Too many write requests." }
 });
 
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many authentication attempts. Please try again later." }
+});
+
 
 app.use(express.json({ limit: "100kb" }));
 
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
+const AUTH_HASH_KEY = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "zenin-dev-secret").trim();
+const OAUTH_PROVIDERS = ["google", "apple", "github", "microsoft"];
+
+function hashToken(token) {
+  return crypto.createHmac("sha256", AUTH_HASH_KEY).update(String(token || "")).digest("hex");
+}
+
+function derivePasswordHash(password, salt = null) {
+  const safeSalt = salt || crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password || ""), safeSalt, 64).toString("hex");
+  return { salt: safeSalt, hash: `scrypt:${safeSalt}:${hash}` };
+}
+
+function verifyPassword(password, storedHash) {
+  const raw = String(storedHash || "");
+  if (!raw.startsWith("scrypt:")) return false;
+  const [, salt, expectedHash] = raw.split(":");
+  if (!salt || !expectedHash) return false;
+  const computed = crypto.scryptSync(String(password || ""), salt, 64).toString("hex");
+  return crypto.timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(computed, "hex"));
+}
+
+function isStrongPassword(password) {
+  const value = String(password || "");
+  return (
+    value.length >= 10 &&
+    /[a-z]/i.test(value) &&
+    /\d/.test(value) &&
+    /[^a-z0-9]/i.test(value)
+  );
+}
+
+function sanitizeAuthUser(user = null) {
+  if (!user) return null;
+  return {
+    id: Number(user.id),
+    email: String(user.email || "").toLowerCase(),
+    displayName: user.displayName || null,
+    authProvider: user.authProvider || "email",
+    emailVerified: Boolean(user.emailVerified),
+    twoFactorEnabled: Boolean(user.twoFactorEnabled),
+    twoFactorMethod: user.twoFactorMethod || null,
+    passkeys: Array.isArray(user.passkeys) ? user.passkeys : [],
+    createdAt: user.createdAt || null
+  };
+}
+
+function getBearerToken(req) {
+  const authHeader = String(req.headers.authorization || "").trim();
+  if (!authHeader.toLowerCase().startsWith("bearer ")) return null;
+  return authHeader.slice(7).trim() || null;
+}
+
+function resolveClientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.ip || null;
+}
+
+async function resolveAuthContext(req) {
+  const token = getBearerToken(req);
+  if (!token) {
+    return { isGuest: true, userId: 1, user: null, token: null };
+  }
+  const tokenHash = hashToken(token);
+  const session = await userAuth.findSessionByTokenHash(tokenHash);
+  if (!session) return { isGuest: true, userId: 1, user: null, token: null };
+  if (session.revokedAt) return { isGuest: true, userId: 1, user: null, token: null };
+  if (new Date(session.expiresAt).getTime() <= Date.now()) return { isGuest: true, userId: 1, user: null, token: null };
+
+  return {
+    isGuest: false,
+    userId: Number(session.userId),
+    user: sanitizeAuthUser(session),
+    token
+  };
+}
+
+app.use(async (req, _res, next) => {
+  try {
+    req.auth = await resolveAuthContext(req);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+function requireSignedIn(req, res, next) {
+  if (!req.auth || req.auth.isGuest) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  return next();
+}
 
 
 
@@ -1103,7 +1207,7 @@ async function searchYahooFinance(query, type = "tradfi") {
 
 app.get("/api/db/balance", async (_req, res) => {
   try {
-    const current = await balance.get();
+    const current = await userWorkspace.balance.get(_req.auth?.userId || 1);
     res.json({ balance: current });
   } catch (err) {
     handleServerError(res, "Balance read failed", err);
@@ -1115,13 +1219,271 @@ app.post("/api/db/balance", writeLimiter, async (req, res) => {
     const { amount, type } = req.body;
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
     if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
-    const newBalance = await balance.applyChange(amount, type);
+    const newBalance = await userWorkspace.balance.applyChange(req.auth?.userId || 1, amount, type);
     res.json({ balance: newBalance });
   } catch (err) {
     if (err.code === "INSUFFICIENT_BALANCE") {
       return res.status(400).json({ error: "Insufficient balance" });
     }
     handleServerError(res, "Balance update failed", err);
+  }
+});
+
+async function issueSessionForUser(userId, req) {
+  const rawToken = crypto.randomBytes(48).toString("hex");
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  await userAuth.createSession({
+    userId,
+    tokenHash,
+    expiresAt,
+    ipAddress: resolveClientIp(req),
+    userAgent: String(req.headers["user-agent"] || "").slice(0, 512)
+  });
+  return { token: rawToken, expiresAt };
+}
+
+app.get("/api/auth/me", async (req, res) => {
+  if (!req.auth || req.auth.isGuest) {
+    return res.json({ authenticated: false, user: null });
+  }
+  const user = await userAuth.findUserById(req.auth.userId);
+  return res.json({ authenticated: true, user: sanitizeAuthUser(user) });
+});
+
+app.post("/api/auth/signup", authLimiter, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    const displayName = String(req.body?.displayName || "").trim() || null;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email." });
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({ error: "Password must be 10+ chars with letters, numbers, and symbols." });
+    }
+    const existing = await userAuth.findUserByEmail(email);
+    if (existing) return res.status(409).json({ error: "An account with this email already exists." });
+
+    const { hash } = derivePasswordHash(password);
+    const created = await userAuth.createUser({
+      email,
+      passwordHash: hash,
+      displayName,
+      authProvider: "email",
+      emailVerified: false
+    });
+    const session = await issueSessionForUser(created.id, req);
+    return res.status(201).json({
+      token: session.token,
+      expiresAt: session.expiresAt,
+      user: sanitizeAuthUser(created)
+    });
+  } catch (error) {
+    return handleServerError(res, "Signup failed", error);
+  }
+});
+
+app.post("/api/auth/signin", authLimiter, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
+
+    const user = await userAuth.findUserByEmail(email);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    if (user.twoFactorEnabled) {
+      if (user.twoFactorMethod === "passkey") {
+        const passkeyId = String(req.body?.passkeyId || "").trim();
+        const knownPasskey = Array.isArray(user.passkeys)
+          ? user.passkeys.some((entry) => String(entry?.id || "") === passkeyId)
+          : false;
+        if (!knownPasskey) {
+          return res.status(401).json({ error: "Passkey verification required." });
+        }
+      } else {
+        const otpCode = String(req.body?.otpCode || "").trim();
+        if (!/^\d{6}$/.test(otpCode) || hashToken(otpCode) !== String(user.twoFactorSecretHash || "")) {
+          return res.status(401).json({ error: "Invalid verification code." });
+        }
+      }
+    }
+
+    const session = await issueSessionForUser(user.id, req);
+    return res.json({
+      token: session.token,
+      expiresAt: session.expiresAt,
+      user: sanitizeAuthUser(user)
+    });
+  } catch (error) {
+    return handleServerError(res, "Signin failed", error);
+  }
+});
+
+app.post("/api/auth/signout", async (req, res) => {
+  try {
+    const token = getBearerToken(req);
+    if (token) {
+      await userAuth.revokeSessionByTokenHash(hashToken(token));
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    return handleServerError(res, "Signout failed", error);
+  }
+});
+
+app.post("/api/auth/forgot-password/request", authLimiter, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: "Email is required." });
+
+    const user = await userAuth.findUserByEmail(email);
+    let devResetToken = null;
+    if (user) {
+      const rawToken = crypto.randomBytes(40).toString("hex");
+      devResetToken = rawToken;
+      await userAuth.createPasswordResetToken({
+        userId: user.id,
+        tokenHash: hashToken(rawToken),
+        expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString()
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "If an account exists for that email, a reset link/code has been issued.",
+      ...(process.env.NODE_ENV !== "production" && devResetToken ? { devResetToken } : {})
+    });
+  } catch (error) {
+    return handleServerError(res, "Forgot password request failed", error);
+  }
+});
+
+app.post("/api/auth/forgot-password/confirm", authLimiter, async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const newPassword = String(req.body?.newPassword || "");
+    if (!token) return res.status(400).json({ error: "Reset token is required." });
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({ error: "Password must be 10+ chars with letters, numbers, and symbols." });
+    }
+    const consumed = await userAuth.consumePasswordResetToken(hashToken(token));
+    if (!consumed) return res.status(400).json({ error: "Reset token is invalid or expired." });
+
+    const { hash } = derivePasswordHash(newPassword);
+    await userAuth.updatePassword(consumed.userId, hash);
+    const session = await issueSessionForUser(consumed.userId, req);
+    const user = await userAuth.findUserById(consumed.userId);
+    return res.json({
+      success: true,
+      token: session.token,
+      expiresAt: session.expiresAt,
+      user: sanitizeAuthUser(user)
+    });
+  } catch (error) {
+    return handleServerError(res, "Forgot password confirm failed", error);
+  }
+});
+
+app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    const method = String(req.body?.method || "").trim().toLowerCase();
+    if (!["authenticator", "sms", "email"].includes(method)) {
+      return res.status(400).json({ error: "Unsupported 2FA method." });
+    }
+    const verificationCode = String(req.body?.verificationCode || "").trim();
+    if (!/^\d{6}$/.test(verificationCode)) {
+      return res.status(400).json({ error: "Enter a valid 6-digit verification code." });
+    }
+    await userAuth.upsertTwoFactor({
+      userId: req.auth.userId,
+      enabled: true,
+      method,
+      secretHash: hashToken(verificationCode)
+    });
+    const user = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, user: sanitizeAuthUser(user) });
+  } catch (error) {
+    return handleServerError(res, "Enable 2FA failed", error);
+  }
+});
+
+app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    await userAuth.upsertTwoFactor({
+      userId: req.auth.userId,
+      enabled: false,
+      method: null,
+      secretHash: null
+    });
+    const user = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, user: sanitizeAuthUser(user) });
+  } catch (error) {
+    return handleServerError(res, "Disable 2FA failed", error);
+  }
+});
+
+app.post("/api/auth/passkeys/register", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim() || "Primary Device";
+    const provider = String(req.body?.provider || "Platform Authenticator").trim();
+    const passkey = {
+      id: crypto.randomBytes(10).toString("hex"),
+      name: name.slice(0, 120),
+      provider: provider.slice(0, 120),
+      createdAt: new Date().toISOString()
+    };
+    await userAuth.addPasskey({ userId: req.auth.userId, passkey });
+    const user = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, passkey, user: sanitizeAuthUser(user) });
+  } catch (error) {
+    return handleServerError(res, "Passkey registration failed", error);
+  }
+});
+
+app.get("/api/auth/oauth/providers", (_req, res) => {
+  return res.json({ providers: OAUTH_PROVIDERS });
+});
+
+app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
+  const provider = String(req.body?.provider || "").trim().toLowerCase();
+  if (!OAUTH_PROVIDERS.includes(provider)) {
+    return res.status(400).json({ error: "Unsupported provider." });
+  }
+  const redirectUri = String(req.body?.redirectUri || "").trim() || null;
+  return res.json({
+    provider,
+    redirectUri,
+    configured: false,
+    authorizationUrl: null,
+    message: `${provider} OAuth is scaffolded but not configured. Use /api/auth/oauth/mock during local testing.`
+  });
+});
+
+app.post("/api/auth/oauth/mock", authLimiter, async (req, res) => {
+  try {
+    const provider = String(req.body?.provider || "").trim().toLowerCase();
+    if (!OAUTH_PROVIDERS.includes(provider)) {
+      return res.status(400).json({ error: "Unsupported provider." });
+    }
+    const email = `${provider}.user.${Date.now()}@zenin.local`;
+    const created = await userAuth.createUser({
+      email,
+      passwordHash: "",
+      displayName: `${provider[0].toUpperCase()}${provider.slice(1)} User`,
+      authProvider: provider,
+      emailVerified: true
+    });
+    const session = await issueSessionForUser(created.id, req);
+    return res.status(201).json({
+      token: session.token,
+      expiresAt: session.expiresAt,
+      user: sanitizeAuthUser(created),
+      mode: "mock"
+    });
+  } catch (error) {
+    return handleServerError(res, "OAuth mock sign-in failed", error);
   }
 });
 
@@ -4222,7 +4584,7 @@ app.get("/api/prediction/market-details/:marketId", async (req, res) => {
 app.get("/api/db/options-calculations", async (req, res) => {
   try {
     const { limit = 20, symbol } = req.query;
-    const records = (await optionsCalculations.getRecent(limit, symbol || null)).map((row) => ({
+    const records = (await userWorkspace.options.getRecent(req.auth?.userId || 1, limit, symbol || null)).map((row) => ({
       ...row,
       breakevens: (() => {
         try { return JSON.parse(row.breakevens || "[]"); } catch { return []; }
@@ -4240,7 +4602,7 @@ app.get("/api/db/options-calculations", async (req, res) => {
 app.post("/api/db/options-calculations", writeLimiter, validateOptionsCalculation, async (req, res) => {
   try {
     const payload = req.body || {};
-    const record = await optionsCalculations.add(payload);
+    const record = await userWorkspace.options.add(req.auth?.userId || 1, payload);
     res.status(201).json(record);
   } catch (error) {
     handleServerError(res, "Options calculation write failed", error);
@@ -4297,7 +4659,7 @@ app.get("/api/crypto-market", async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/db/portfolio", async (req, res) => {
   try {
-    const holdings = await portfolio.getAll();
+    const holdings = await userWorkspace.portfolio.getAll(req.auth?.userId || 1);
     res.json({ holdings });
   } catch (error) {
     handleServerError(res, "Portfolio read failed", error);
@@ -4307,7 +4669,7 @@ app.get("/api/db/portfolio", async (req, res) => {
 app.post("/api/db/portfolio",writeLimiter, validatePortfolioHolding, async (req, res) => {
   try {
     const holding = req.body;
-    const result = await portfolio.add(holding);
+    const result = await userWorkspace.portfolio.add(req.auth?.userId || 1, holding);
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Portfolio write failed", error);
@@ -4319,7 +4681,7 @@ app.put("/api/db/portfolio/:id", writeLimiter, validatePortfolioUpdate, async (r
     const { id } = req.params;
     if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: "Invalid id" });
     const holding = req.body;
-    const result = await portfolio.update(id, holding);
+    const result = await userWorkspace.portfolio.update(req.auth?.userId || 1, id, holding);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio update failed", error);
@@ -4329,7 +4691,7 @@ app.put("/api/db/portfolio/:id", writeLimiter, validatePortfolioUpdate, async (r
 app.delete("/api/db/portfolio/:id", writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await portfolio.delete(id);
+    const result = await userWorkspace.portfolio.delete(req.auth?.userId || 1, id);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio delete failed", error);
@@ -4345,7 +4707,7 @@ app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const holdings = await portfolio.findBySymbol(symbol, marketType);
+    const holdings = await userWorkspace.portfolio.findBySymbol(req.auth?.userId || 1, symbol, marketType);
     res.json({ holdings });
   } catch (error) {
     handleServerError(res, "Portfolio symbol lookup failed", error);
@@ -4357,7 +4719,7 @@ app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/db/trades", async (req, res) => {
   try {
-    const trades = await tradeExecutions.getAll(req.query.limit);
+    const trades = await userWorkspace.trades.getAll(req.auth?.userId || 1, req.query.limit);
     res.json({ trades });
   } catch (error) {
     handleServerError(res, "Trades read failed", error);
@@ -4376,7 +4738,7 @@ app.post("/api/db/trades", writeLimiter, async (req, res) => {
     if (!Number.isFinite(Number(payload.price)) || Number(payload.price) < 0) {
       return res.status(400).json({ error: "price must be a non-negative number" });
     }
-    const saved = await tradeExecutions.add(payload);
+    const saved = await userWorkspace.trades.add(req.auth?.userId || 1, payload);
     res.status(201).json(saved);
   } catch (error) {
     handleServerError(res, "Trade write failed", error);
@@ -4388,7 +4750,7 @@ app.post("/api/db/trades", writeLimiter, async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/db/watchlist", async (req, res) => {
   try {
-    const assets = await watchlist.getAll();
+    const assets = await userWorkspace.watchlist.getAll(req.auth?.userId || 1);
     res.json({ assets });
   } catch (error) {
     handleServerError(res, "Watchlist read failed", error);
@@ -4398,7 +4760,7 @@ app.get("/api/db/watchlist", async (req, res) => {
 app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, async (req, res) => {
   try {
     const asset = req.body;
-    const result = await watchlist.add(asset);
+    const result = await userWorkspace.watchlist.add(req.auth?.userId || 1, asset);
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Watchlist write failed", error);
@@ -4413,7 +4775,7 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const result = await watchlist.delete(symbol, marketType, category, theme);
+    const result = await userWorkspace.watchlist.delete(req.auth?.userId || 1, symbol, marketType, category, theme);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Watchlist delete failed", error);
@@ -4428,7 +4790,7 @@ app.get("/api/db/watchlist/check/:symbol", async (req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const exists = await watchlist.exists(symbol, marketType, category, theme);
+    const exists = await userWorkspace.watchlist.exists(req.auth?.userId || 1, symbol, marketType, category, theme);
     res.json({ exists });
   } catch (error) {
     handleServerError(res, "Watchlist exists check failed", error);
@@ -4731,7 +5093,7 @@ app.get('/api/analytics/equities', async (req, res) => {
 app.post("/api/db/execute-trade", writeLimiter, validatePortfolioHolding, async (req, res) => {
   try {
     const payload = req.body || {};
-    const result = await trading.executeTrade(payload);
+    const result = await userWorkspace.trading.executeTrade(req.auth?.userId || 1, payload);
     res.status(201).json(result);
   } catch (error) {
     if (error?.code === "INSUFFICIENT_BALANCE") {
@@ -4798,7 +5160,7 @@ wss.on("connection", (ws) => {
 
 const WS_PING_INTERVAL_MS = 30000;
 const WS_IDLE_TIMEOUT_MS = 90000;
-setInterval(() => {
+const wsHeartbeatTimer = setInterval(() => {
   const now = Date.now();
   wss.clients.forEach((ws) => {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -4811,17 +5173,51 @@ setInterval(() => {
     try { ws.ping(); } catch {}
   });
 }, WS_PING_INTERVAL_MS);
+if (typeof wsHeartbeatTimer.unref === "function") {
+  wsHeartbeatTimer.unref();
+}
 
 async function startServer() {
-  try {
-    await initializeDatabase();
+  await initializeDatabase();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
     server.listen(port, "0.0.0.0", () => {
+      server.removeListener("error", reject);
       console.log(`Portfolio manager backend listening on port ${port}`);
+      resolve();
     });
-  } catch (error) {
-    console.error("Failed to initialize PostgreSQL database:", error.message);
-    process.exit(1);
+  });
+}
+
+async function stopServer() {
+  clearInterval(wsHeartbeatTimer);
+  try {
+    wss.clients.forEach((ws) => {
+      try { ws.terminate(); } catch {}
+    });
+    await new Promise((resolve) => wss.close(() => resolve()));
+  } catch {}
+
+  if (server.listening) {
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) return reject(error);
+        return resolve();
+      });
+    });
   }
 }
 
-startServer();
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error("Failed to initialize PostgreSQL database:", error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app,
+  server,
+  startServer,
+  stopServer
+};

@@ -173,6 +173,12 @@ function normalizeMarketType(type, marketType) {
   return cleanType === "crypto" ? "spot" : "equity";
 }
 
+function toUserId(userId) {
+  const parsed = Number(userId);
+  if (!Number.isInteger(parsed) || parsed <= 0) return 1;
+  return parsed;
+}
+
 async function initializeDatabase() {
   const client = await pool.connect();
 
@@ -344,6 +350,189 @@ async function initializeDatabase() {
       ALTER TABLE trade_executions
       ADD COLUMN IF NOT EXISTS legs_json JSONB;
     `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_users (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL DEFAULT '',
+        display_name TEXT,
+        auth_provider TEXT NOT NULL DEFAULT 'email',
+        email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        two_factor_method TEXT,
+        two_factor_secret_hash TEXT,
+        passkeys_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        ip_address TEXT,
+        user_agent TEXT,
+        expires_at TIMESTAMPTZ NOT NULL,
+        revoked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_balance (
+        user_id INTEGER PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+        balance DOUBLE PRECISION NOT NULL DEFAULT 10000,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_portfolio (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL,
+        price DOUBLE PRECISION NOT NULL,
+        quantity DOUBLE PRECISION NOT NULL,
+        entry_price DOUBLE PRECISION,
+        opened_at TIMESTAMPTZ,
+        type TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        order_type TEXT NOT NULL,
+        strategy_name TEXT,
+        legs_json JSONB,
+        date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id, symbol, market_type, strategy_name)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_watchlist (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        category TEXT,
+        theme TEXT,
+        market_type TEXT NOT NULL,
+        date_added TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id, symbol, market_type, category, theme)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_trades (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        client_id TEXT,
+        date DATE NOT NULL,
+        executed_at TIMESTAMPTZ,
+        asset TEXT NOT NULL,
+        name TEXT,
+        type TEXT NOT NULL,
+        side TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        quantity DOUBLE PRECISION NOT NULL,
+        price DOUBLE PRECISION NOT NULL,
+        notional DOUBLE PRECISION NOT NULL,
+        balance_after DOUBLE PRECISION,
+        portfolio_value_after DOUBLE PRECISION,
+        account_equity_after DOUBLE PRECISION,
+        position_after DOUBLE PRECISION,
+        strategy_name TEXT,
+        legs_json JSONB,
+        UNIQUE(user_id, client_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_options_calculations (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        net_pnl DOUBLE PRECISION NOT NULL,
+        delta DOUBLE PRECISION NOT NULL,
+        gamma DOUBLE PRECISION NOT NULL,
+        theta DOUBLE PRECISION NOT NULL,
+        vega DOUBLE PRECISION NOT NULL,
+        max_profit DOUBLE PRECISION,
+        max_loss DOUBLE PRECISION,
+        breakevens TEXT,
+        legs_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_active
+      ON auth_sessions (user_id, revoked_at, expires_at);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_active
+      ON password_reset_tokens (user_id, expires_at, used_at);
+    `);
+
+    await client.query(`
+      INSERT INTO app_users (id, email, password_hash, display_name, auth_provider, email_verified)
+      VALUES (1, 'guest@zenin.app', '', 'Guest User', 'guest', TRUE)
+      ON CONFLICT (id) DO UPDATE
+      SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, auth_provider = EXCLUDED.auth_provider, email_verified = TRUE;
+    `);
+
+    await client.query(`
+      SELECT setval(
+        pg_get_serial_sequence('app_users', 'id'),
+        GREATEST((SELECT COALESCE(MAX(id), 1) FROM app_users), 1),
+        true
+      );
+    `);
+
+    await client.query(`
+      INSERT INTO user_workspace_balance (user_id, balance)
+      VALUES (1, $1)
+      ON CONFLICT (user_id) DO NOTHING;
+    `, [DEFAULT_BALANCE]);
+
+    const guestWatchlistCountResult = await client.query(`
+      SELECT COUNT(*)::int AS count
+      FROM user_workspace_watchlist
+      WHERE user_id = 1;
+    `);
+
+    const guestWatchlistCount = Number(guestWatchlistCountResult.rows[0]?.count || 0);
+    if (guestWatchlistCount === 0) {
+      await client.query(`
+        INSERT INTO user_workspace_watchlist (user_id, symbol, name, type, category, theme, market_type, date_added)
+        SELECT
+          1 AS user_id,
+          symbol,
+          name,
+          type,
+          category,
+          theme,
+          market_type,
+          date_added
+        FROM watchlist_assets;
+      `);
+    }
 
     const countResult = await client.query("SELECT COUNT(*)::int AS count FROM watchlist_assets");
     const watchlistCount = Number(countResult.rows[0]?.count || 0);
@@ -1333,6 +1522,1018 @@ const serviceSnapshots = {
   }
 };
 
+const userAuth = {
+  createUser: async ({ email, passwordHash, displayName = null, authProvider = "email", emailVerified = false }) => {
+    const result = await pool.query(`
+      INSERT INTO app_users (email, password_hash, display_name, auth_provider, email_verified)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING
+        id,
+        email,
+        display_name AS "displayName",
+        auth_provider AS "authProvider",
+        email_verified AS "emailVerified",
+        two_factor_enabled AS "twoFactorEnabled",
+        two_factor_method AS "twoFactorMethod",
+        passkeys_json AS passkeys,
+        created_at AS "createdAt";
+    `, [
+      String(email || "").trim().toLowerCase(),
+      String(passwordHash || ""),
+      displayName ? String(displayName) : null,
+      String(authProvider || "email"),
+      Boolean(emailVerified)
+    ]);
+
+    await pool.query(`
+      INSERT INTO user_workspace_balance (user_id, balance)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id) DO NOTHING;
+    `, [result.rows[0].id, DEFAULT_BALANCE]);
+
+    return {
+      ...result.rows[0],
+      passkeys: parseJsonPayload(result.rows[0].passkeys, [])
+    };
+  },
+
+  findUserByEmail: async (email) => {
+    const result = await pool.query(`
+      SELECT
+        id,
+        email,
+        password_hash AS "passwordHash",
+        display_name AS "displayName",
+        auth_provider AS "authProvider",
+        email_verified AS "emailVerified",
+        two_factor_enabled AS "twoFactorEnabled",
+        two_factor_method AS "twoFactorMethod",
+        two_factor_secret_hash AS "twoFactorSecretHash",
+        passkeys_json AS passkeys,
+        created_at AS "createdAt"
+      FROM app_users
+      WHERE email = $1
+      LIMIT 1;
+    `, [String(email || "").trim().toLowerCase()]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      ...row,
+      passkeys: parseJsonPayload(row.passkeys, [])
+    };
+  },
+
+  findUserById: async (userId) => {
+    const result = await pool.query(`
+      SELECT
+        id,
+        email,
+        display_name AS "displayName",
+        auth_provider AS "authProvider",
+        email_verified AS "emailVerified",
+        two_factor_enabled AS "twoFactorEnabled",
+        two_factor_method AS "twoFactorMethod",
+        passkeys_json AS passkeys,
+        created_at AS "createdAt"
+      FROM app_users
+      WHERE id = $1
+      LIMIT 1;
+    `, [toUserId(userId)]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      ...row,
+      passkeys: parseJsonPayload(row.passkeys, [])
+    };
+  },
+
+  createSession: async ({ userId, tokenHash, expiresAt, ipAddress = null, userAgent = null }) => {
+    const result = await pool.query(`
+      INSERT INTO auth_sessions (user_id, token_hash, ip_address, user_agent, expires_at)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, user_id AS "userId", expires_at AS "expiresAt", created_at AS "createdAt";
+    `, [
+      toUserId(userId),
+      String(tokenHash || ""),
+      ipAddress ? String(ipAddress) : null,
+      userAgent ? String(userAgent).slice(0, 512) : null,
+      expiresAt
+    ]);
+    return result.rows[0];
+  },
+
+  findSessionByTokenHash: async (tokenHash) => {
+    const result = await pool.query(`
+      SELECT
+        s.id,
+        s.user_id AS "userId",
+        s.expires_at AS "expiresAt",
+        s.revoked_at AS "revokedAt",
+        u.email,
+        u.display_name AS "displayName",
+        u.email_verified AS "emailVerified",
+        u.two_factor_enabled AS "twoFactorEnabled",
+        u.two_factor_method AS "twoFactorMethod",
+        u.passkeys_json AS passkeys
+      FROM auth_sessions s
+      JOIN app_users u ON u.id = s.user_id
+      WHERE s.token_hash = $1
+      LIMIT 1;
+    `, [String(tokenHash || "")]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      ...row,
+      passkeys: parseJsonPayload(row.passkeys, [])
+    };
+  },
+
+  revokeSessionByTokenHash: async (tokenHash) => {
+    await pool.query(`
+      UPDATE auth_sessions
+      SET revoked_at = NOW()
+      WHERE token_hash = $1 AND revoked_at IS NULL;
+    `, [String(tokenHash || "")]);
+  },
+
+  updatePassword: async (userId, passwordHash) => {
+    await pool.query(`
+      UPDATE app_users
+      SET password_hash = $2, updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId), String(passwordHash || "")]);
+  },
+
+  createPasswordResetToken: async ({ userId, tokenHash, expiresAt }) => {
+    await pool.query(`
+      INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+      VALUES ($1, $2, $3);
+    `, [toUserId(userId), String(tokenHash || ""), expiresAt]);
+  },
+
+  consumePasswordResetToken: async (tokenHash) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const found = await client.query(`
+        SELECT id, user_id AS "userId", expires_at AS "expiresAt", used_at AS "usedAt"
+        FROM password_reset_tokens
+        WHERE token_hash = $1
+        LIMIT 1
+        FOR UPDATE;
+      `, [String(tokenHash || "")]);
+      const row = found.rows[0];
+      if (!row || row.usedAt) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      if (new Date(row.expiresAt).getTime() <= Date.now()) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      await client.query(`
+        UPDATE password_reset_tokens
+        SET used_at = NOW()
+        WHERE id = $1;
+      `, [row.id]);
+      await client.query("COMMIT");
+      return row;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  upsertTwoFactor: async ({ userId, enabled, method = null, secretHash = null }) => {
+    await pool.query(`
+      UPDATE app_users
+      SET
+        two_factor_enabled = $2,
+        two_factor_method = $3,
+        two_factor_secret_hash = $4,
+        updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId), Boolean(enabled), method, secretHash]);
+  },
+
+  addPasskey: async ({ userId, passkey }) => {
+    const user = await userAuth.findUserById(userId);
+    const current = Array.isArray(user?.passkeys) ? user.passkeys : [];
+    const next = [passkey, ...current].slice(0, 20);
+    await pool.query(`
+      UPDATE app_users
+      SET
+        passkeys_json = $2::jsonb,
+        two_factor_enabled = TRUE,
+        two_factor_method = 'passkey',
+        updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId), JSON.stringify(next)]);
+  }
+};
+
+const userWorkspace = {
+  balance: {
+    get: async (userId) => {
+      const resolvedUserId = toUserId(userId);
+      const result = await pool.query(`
+        SELECT balance FROM user_workspace_balance WHERE user_id = $1 LIMIT 1;
+      `, [resolvedUserId]);
+      const current = result.rows[0]?.balance;
+      if (current == null) {
+        await pool.query(`
+          INSERT INTO user_workspace_balance (user_id, balance)
+          VALUES ($1, $2)
+          ON CONFLICT (user_id) DO NOTHING;
+        `, [resolvedUserId, DEFAULT_BALANCE]);
+        return DEFAULT_BALANCE;
+      }
+      return toNumber(current, DEFAULT_BALANCE);
+    },
+
+    applyChange: async (userId, amount, type) => {
+      const resolvedUserId = toUserId(userId);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(`
+          SELECT balance FROM user_workspace_balance WHERE user_id = $1 FOR UPDATE;
+        `, [resolvedUserId]);
+        let currentBalance = result.rows[0]?.balance;
+        if (currentBalance == null) {
+          currentBalance = DEFAULT_BALANCE;
+          await client.query(`
+            INSERT INTO user_workspace_balance (user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id) DO NOTHING;
+          `, [resolvedUserId, DEFAULT_BALANCE]);
+        }
+        const current = toNumber(currentBalance, DEFAULT_BALANCE);
+        const next = type === "deposit" ? current + amount : current - amount;
+        if (next < 0) {
+          const err = new Error("Insufficient balance");
+          err.code = "INSUFFICIENT_BALANCE";
+          throw err;
+        }
+        await client.query(`
+          UPDATE user_workspace_balance
+          SET balance = $2, updated_at = NOW()
+          WHERE user_id = $1;
+        `, [resolvedUserId, next]);
+        await client.query("COMMIT");
+        return next;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+  },
+
+  portfolio: {
+    getAll: async (userId) => {
+      const resolvedUserId = toUserId(userId);
+      await pool.query(`
+        DELETE FROM user_workspace_portfolio
+        WHERE user_id = $1 AND ABS(quantity) <= $2;
+      `, [resolvedUserId, QTY_EPSILON]);
+      const result = await pool.query(`
+        SELECT
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson",
+          date_added
+        FROM user_workspace_portfolio
+        WHERE user_id = $1 AND quantity > $2
+        ORDER BY date_added DESC;
+      `, [resolvedUserId, QTY_EPSILON]);
+      return result.rows.map(mapPortfolioRow);
+    },
+
+    add: async (userId, holding) => {
+      const resolvedUserId = toUserId(userId);
+      const symbol = String(holding.symbol || "").trim().toUpperCase();
+      const type = String(holding.type || "").trim().toLowerCase();
+      const marketType = normalizeMarketType(type, holding.marketType);
+      const orderType = String(holding.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+      const quantity = Math.abs(toNumber(holding.quantity));
+      const price = toNumber(holding.price);
+      const dateAdded = holding.date_added || new Date().toISOString();
+      const name = String(holding.name || symbol || "Unknown");
+      const strategyName = holding.strategyName || holding.strategy_name || null;
+      const legsJson = parseJsonPayload(holding.legsJson || holding.legs_json);
+      const isSell = orderType === "sell";
+      const client = await pool.connect();
+
+      try {
+        await client.query("BEGIN");
+        const existingResult = await client.query(`
+          SELECT
+            id,
+            symbol,
+            name,
+            price,
+            quantity,
+            entry_price AS "entryPrice",
+            opened_at AS "openedAt",
+            type,
+            market_type AS "marketType",
+            order_type AS "orderType",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson",
+            date_added
+          FROM user_workspace_portfolio
+          WHERE user_id = $1
+            AND symbol = $2
+            AND market_type = $3
+            AND (strategy_name IS NOT DISTINCT FROM $4)
+          FOR UPDATE;
+        `, [resolvedUserId, symbol, marketType, strategyName]);
+
+        const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
+        if (existing) {
+          const nextQuantity = isSell ? existing.quantity - quantity : existing.quantity + quantity;
+          if (nextQuantity <= QTY_EPSILON) {
+            await client.query(`
+              DELETE FROM user_workspace_portfolio
+              WHERE id = $1 AND user_id = $2;
+            `, [existing.id, resolvedUserId]);
+            await client.query("COMMIT");
+            return { id: existing.id, symbol, marketType, quantity: 0, closed: true };
+          }
+
+          const existingEntry = Number.isFinite(Number(existing.entryPrice))
+            ? Number(existing.entryPrice)
+            : Number(existing.price);
+          const nextEntryPrice = isSell
+            ? existingEntry
+            : ((existingEntry * existing.quantity) + (price * quantity)) / Math.max(nextQuantity, QTY_EPSILON);
+          const nextOpenedAt = existing.openedAt || dateAdded;
+          const updatedResult = await client.query(`
+            UPDATE user_workspace_portfolio
+            SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
+            WHERE id = $10 AND user_id = $11
+            RETURNING
+              id,
+              symbol,
+              name,
+              price,
+              quantity,
+              entry_price AS "entryPrice",
+              opened_at AS "openedAt",
+              type,
+              market_type AS "marketType",
+              order_type AS "orderType",
+              strategy_name AS "strategyName",
+              legs_json AS "legsJson",
+              date_added;
+          `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedUserId]);
+          await client.query("COMMIT");
+          return mapPortfolioRow(updatedResult.rows[0]);
+        }
+
+        if (isSell) {
+          throw new Error(`No existing position for ${symbol} (${marketType}) to sell`);
+        }
+
+        const insertedResult = await client.query(`
+          INSERT INTO user_workspace_portfolio (user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          RETURNING
+            id,
+            symbol,
+            name,
+            price,
+            quantity,
+            entry_price AS "entryPrice",
+            opened_at AS "openedAt",
+            type,
+            market_type AS "marketType",
+            order_type AS "orderType",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson",
+            date_added;
+        `, [resolvedUserId, symbol, name, price, quantity, price, dateAdded, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
+        await client.query("COMMIT");
+        return mapPortfolioRow(insertedResult.rows[0]);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    update: async (userId, id, holding) => {
+      const resolvedUserId = toUserId(userId);
+      const price = toNumber(holding.price);
+      const quantity = toNumber(holding.quantity);
+      const result = await pool.query(`
+        UPDATE user_workspace_portfolio
+        SET price = $1, quantity = $2
+        WHERE id = $3 AND user_id = $4
+        RETURNING
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson",
+          date_added;
+      `, [price, quantity, id, resolvedUserId]);
+      if (result.rows.length === 0) throw new Error("Holding not found");
+      return mapPortfolioRow(result.rows[0]);
+    },
+
+    delete: async (userId, id) => {
+      await pool.query(`
+        DELETE FROM user_workspace_portfolio
+        WHERE id = $1 AND user_id = $2;
+      `, [id, toUserId(userId)]);
+      return { success: true, id: Number(id) };
+    },
+
+    findBySymbol: async (userId, symbol, marketType) => {
+      const resolvedUserId = toUserId(userId);
+      const cleanSymbol = String(symbol || "").trim().toUpperCase();
+      const cleanMarketType = String(marketType || "").trim().toLowerCase();
+      const result = await pool.query(`
+        SELECT
+          id,
+          symbol,
+          name,
+          price,
+          quantity,
+          entry_price AS "entryPrice",
+          opened_at AS "openedAt",
+          type,
+          market_type AS "marketType",
+          order_type AS "orderType",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson",
+          date_added
+        FROM user_workspace_portfolio
+        WHERE user_id = $1 AND symbol = $2 AND market_type = $3
+        ORDER BY date_added DESC;
+      `, [resolvedUserId, cleanSymbol, cleanMarketType]);
+      return result.rows.map(mapPortfolioRow);
+    }
+  },
+
+  trades: {
+    getAll: async (userId, limit = 1000) => {
+      const resolvedUserId = toUserId(userId);
+      const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 1000));
+      const result = await pool.query(`
+        SELECT
+          id,
+          client_id AS "clientId",
+          date,
+          executed_at AS "executedAt",
+          asset,
+          name,
+          type,
+          side,
+          market_type AS "marketType",
+          status,
+          quantity,
+          price,
+          notional,
+          balance_after AS "balanceAfter",
+          portfolio_value_after AS "portfolioValueAfter",
+          account_equity_after AS "accountEquityAfter",
+          position_after AS "positionAfter",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson"
+        FROM user_workspace_trades
+        WHERE user_id = $1
+        ORDER BY COALESCE(executed_at, date::timestamptz) DESC, id DESC
+        LIMIT $2;
+      `, [resolvedUserId, safeLimit]);
+      return result.rows.map(mapTradeRow);
+    },
+
+    add: async (userId, trade) => {
+      const resolvedUserId = toUserId(userId);
+      const normalized = {
+        client_id: trade.clientId || null,
+        date: toDateString(trade.date || new Date().toISOString()) || new Date().toISOString().slice(0, 10),
+        executed_at: trade.executedAt || null,
+        asset: String(trade.asset || "UNKNOWN").trim().toUpperCase(),
+        name: String(trade.name || trade.asset || "UNKNOWN"),
+        type: String(trade.type || "BUY").toUpperCase() === "SELL" ? "SELL" : "BUY",
+        side: String(trade.side || "buy").toLowerCase() === "sell" ? "sell" : "buy",
+        marketType: normalizeMarketType(trade.type || trade.marketType, trade.marketType || "spot"),
+        status: String(trade.status || "Filled"),
+        quantity: Math.abs(toNumber(trade.quantity)),
+        price: toNumber(trade.price),
+        notional: Math.abs(toNumber(trade.notional)),
+        balance_after: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
+        portfolio_value_after: Number.isFinite(Number(trade.portfolioValueAfter)) ? Number(trade.portfolioValueAfter) : null,
+        account_equity_after: Number.isFinite(Number(trade.accountEquityAfter)) ? Number(trade.accountEquityAfter) : null,
+        position_after: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null,
+        strategy_name: trade.strategyName || trade.strategy_name || null,
+        legs_json: parseJsonPayload(trade.legsJson || trade.legs_json)
+      };
+
+      try {
+        const result = await pool.query(`
+          INSERT INTO user_workspace_trades (
+            user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
+            quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after,
+            strategy_name, legs_json
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          RETURNING
+            id,
+            client_id AS "clientId",
+            date,
+            executed_at AS "executedAt",
+            asset,
+            name,
+            type,
+            side,
+            market_type AS "marketType",
+            status,
+            quantity,
+            price,
+            notional,
+            balance_after AS "balanceAfter",
+            portfolio_value_after AS "portfolioValueAfter",
+            account_equity_after AS "accountEquityAfter",
+            position_after AS "positionAfter",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson";
+        `, [
+          resolvedUserId,
+          normalized.client_id,
+          normalized.date,
+          normalized.executed_at,
+          normalized.asset,
+          normalized.name,
+          normalized.type,
+          normalized.side,
+          normalized.marketType,
+          normalized.status,
+          normalized.quantity,
+          normalized.price,
+          normalized.notional,
+          normalized.balance_after,
+          normalized.portfolio_value_after,
+          normalized.account_equity_after,
+          normalized.position_after,
+          normalized.strategy_name,
+          JSON.stringify(normalized.legs_json)
+        ]);
+        return mapTradeRow(result.rows[0]);
+      } catch (error) {
+        if (error.code === "23505" && normalized.client_id) {
+          const existing = await pool.query(`
+            SELECT
+              id,
+              client_id AS "clientId",
+              date,
+              executed_at AS "executedAt",
+              asset,
+              name,
+              type,
+              side,
+              market_type AS "marketType",
+              status,
+              quantity,
+              price,
+              notional,
+              balance_after AS "balanceAfter",
+              portfolio_value_after AS "portfolioValueAfter",
+              account_equity_after AS "accountEquityAfter",
+              position_after AS "positionAfter",
+              strategy_name AS "strategyName",
+              legs_json AS "legsJson"
+            FROM user_workspace_trades
+            WHERE user_id = $1 AND client_id = $2
+            LIMIT 1;
+          `, [resolvedUserId, normalized.client_id]);
+          if (existing.rows[0]) return mapTradeRow(existing.rows[0]);
+        }
+        throw error;
+      }
+    }
+  },
+
+  watchlist: {
+    getAll: async (userId) => {
+      const result = await pool.query(`
+        SELECT
+          id,
+          symbol,
+          name,
+          type,
+          category,
+          theme,
+          market_type AS "marketType",
+          date_added
+        FROM user_workspace_watchlist
+        WHERE user_id = $1
+        ORDER BY date_added DESC;
+      `, [toUserId(userId)]);
+      return result.rows.map(mapWatchlistRow);
+    },
+
+    add: async (userId, asset) => {
+      const resolvedUserId = toUserId(userId);
+      const symbol = String(asset.symbol || "").trim().toUpperCase();
+      const type = String(asset.type || "stock").trim().toLowerCase();
+      const category = String(asset.category || "").trim().toLowerCase() || null;
+      const theme = String(asset.theme || "").trim() || null;
+      const marketType = normalizeMarketType(type, asset.marketType);
+      const dateAdded = asset.date_added || new Date().toISOString();
+      const updateResult = await pool.query(`
+        UPDATE user_workspace_watchlist
+        SET
+          name = $3,
+          type = $4,
+          category = $5,
+          theme = $6,
+          date_added = $8
+        WHERE user_id = $1
+          AND symbol = $2
+          AND market_type = $7
+          AND COALESCE(category, '') = COALESCE($5, '')
+          AND COALESCE(theme, '') = COALESCE($6, '')
+        RETURNING
+          id,
+          symbol,
+          name,
+          type,
+          category,
+          theme,
+          market_type AS "marketType",
+          date_added;
+      `, [resolvedUserId, symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
+      if (updateResult.rows[0]) return mapWatchlistRow(updateResult.rows[0]);
+
+      const insertResult = await pool.query(`
+        INSERT INTO user_workspace_watchlist (user_id, symbol, name, type, category, theme, market_type, date_added)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (user_id, symbol, market_type, category, theme)
+        DO UPDATE SET
+          name = EXCLUDED.name,
+          type = EXCLUDED.type,
+          date_added = EXCLUDED.date_added
+        RETURNING
+          id,
+          symbol,
+          name,
+          type,
+          category,
+          theme,
+          market_type AS "marketType",
+          date_added;
+      `, [resolvedUserId, symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
+      return mapWatchlistRow(insertResult.rows[0]);
+    },
+
+    delete: async (userId, symbol, marketType, category = null, theme = null) => {
+      const resolvedUserId = toUserId(userId);
+      const cleanSymbol = String(symbol || "").trim().toUpperCase();
+      const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
+      const cleanCategory = String(category || "").trim().toLowerCase() || null;
+      const cleanTheme = String(theme || "").trim() || null;
+      if (cleanCategory || cleanTheme) {
+        await pool.query(`
+          DELETE FROM user_workspace_watchlist
+          WHERE user_id = $1
+            AND symbol = $2
+            AND market_type = $3
+            AND COALESCE(category, '') = COALESCE($4, '')
+            AND COALESCE(theme, '') = COALESCE($5, '');
+        `, [resolvedUserId, cleanSymbol, cleanMarketType, cleanCategory, cleanTheme]);
+        return { success: true, symbol: cleanSymbol, marketType: cleanMarketType, category: cleanCategory, theme: cleanTheme };
+      }
+      await pool.query(`
+        DELETE FROM user_workspace_watchlist
+        WHERE user_id = $1 AND symbol = $2 AND market_type = $3;
+      `, [resolvedUserId, cleanSymbol, cleanMarketType]);
+      return { success: true, symbol: cleanSymbol, marketType: cleanMarketType, category: null, theme: null };
+    },
+
+    exists: async (userId, symbol, marketType, category = null, theme = null) => {
+      const resolvedUserId = toUserId(userId);
+      const cleanSymbol = String(symbol || "").trim().toUpperCase();
+      const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
+      const cleanCategory = String(category || "").trim().toLowerCase() || null;
+      const cleanTheme = String(theme || "").trim() || null;
+      const result = cleanCategory || cleanTheme
+        ? await pool.query(`
+            SELECT id
+            FROM user_workspace_watchlist
+            WHERE user_id = $1
+              AND symbol = $2
+              AND market_type = $3
+              AND COALESCE(category, '') = COALESCE($4, '')
+              AND COALESCE(theme, '') = COALESCE($5, '')
+            LIMIT 1
+          `, [resolvedUserId, cleanSymbol, cleanMarketType, cleanCategory, cleanTheme])
+        : await pool.query(`
+            SELECT id
+            FROM user_workspace_watchlist
+            WHERE user_id = $1 AND symbol = $2 AND market_type = $3
+            LIMIT 1;
+          `, [resolvedUserId, cleanSymbol, cleanMarketType]);
+      return result.rows.length > 0;
+    }
+  },
+
+  options: {
+    add: async (userId, payload) => {
+      const {
+        symbol,
+        strategy = "Custom",
+        netPnl = 0,
+        delta = 0,
+        gamma = 0,
+        theta = 0,
+        vega = 0,
+        maxProfit = null,
+        maxLoss = null,
+        breakevens = [],
+        legs = [],
+        createdAt = new Date().toISOString()
+      } = payload;
+      const result = await pool.query(`
+        INSERT INTO user_workspace_options_calculations (
+          user_id, symbol, strategy, net_pnl, delta, gamma, theta, vega, max_profit, max_loss, breakevens, legs_json, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING *;
+      `, [
+        toUserId(userId),
+        String(symbol || "").trim().toUpperCase(),
+        strategy,
+        toNumber(netPnl),
+        toNumber(delta),
+        toNumber(gamma),
+        toNumber(theta),
+        toNumber(vega),
+        Number.isFinite(Number(maxProfit)) ? Number(maxProfit) : null,
+        Number.isFinite(Number(maxLoss)) ? Number(maxLoss) : null,
+        JSON.stringify(Array.isArray(breakevens) ? breakevens : []),
+        JSON.stringify(Array.isArray(legs) ? legs : []),
+        createdAt
+      ]);
+      const row = result.rows[0];
+      return { ...row, created_at: toIsoString(row.created_at) };
+    },
+
+    getRecent: async (userId, limit = 20, symbol = null) => {
+      const safeLimit = Math.max(1, Math.min(200, Number(limit) || 20));
+      const resolvedUserId = toUserId(userId);
+      if (symbol) {
+        const result = await pool.query(`
+          SELECT * FROM user_workspace_options_calculations
+          WHERE user_id = $1 AND symbol = $2
+          ORDER BY created_at DESC, id DESC
+          LIMIT $3;
+        `, [resolvedUserId, String(symbol).trim().toUpperCase(), safeLimit]);
+        return result.rows.map((row) => ({ ...row, created_at: toIsoString(row.created_at) }));
+      }
+      const result = await pool.query(`
+        SELECT * FROM user_workspace_options_calculations
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2;
+      `, [resolvedUserId, safeLimit]);
+      return result.rows.map((row) => ({ ...row, created_at: toIsoString(row.created_at) }));
+    }
+  },
+
+  trading: {
+    executeTrade: async (userId, payload) => {
+      const resolvedUserId = toUserId(userId);
+      const symbol = String(payload.symbol || "").trim().toUpperCase();
+      const name = String(payload.name || symbol || "UNKNOWN");
+      const type = String(payload.type || "stock").trim().toLowerCase();
+      const marketType = normalizeMarketType(type, payload.marketType);
+      const orderType = String(payload.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+      const quantity = Math.abs(toNumber(payload.quantity));
+      const price = toNumber(payload.price);
+      const notional = Number((price * quantity).toFixed(8));
+      const dateAdded = payload.date_added || new Date().toISOString();
+      const executionTimestamp = payload.executedAt || new Date().toISOString();
+      const executionDate = toDateString(payload.date || executionTimestamp) || new Date().toISOString().slice(0, 10);
+      const clientId = payload.clientId || null;
+      const strategyName = payload.strategyName || payload.strategy_name || null;
+      const legsJson = parseJsonPayload(payload.legsJson || payload.legs_json);
+
+      if (!symbol) throw new Error("Invalid symbol");
+      if (!Number.isFinite(quantity) || quantity <= QTY_EPSILON) throw new Error("Invalid quantity");
+      if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const balanceRow = await client.query(`
+          SELECT balance
+          FROM user_workspace_balance
+          WHERE user_id = $1
+          FOR UPDATE;
+        `, [resolvedUserId]);
+        let currentBalance = balanceRow.rows[0]?.balance;
+        if (currentBalance == null) {
+          currentBalance = DEFAULT_BALANCE;
+          await client.query(`
+            INSERT INTO user_workspace_balance (user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id) DO NOTHING;
+          `, [resolvedUserId, DEFAULT_BALANCE]);
+        }
+        const current = toNumber(currentBalance, DEFAULT_BALANCE);
+        const nextBalance = orderType === "buy" ? current - notional : current + notional;
+        if (nextBalance < 0) {
+          const err = new Error("Insufficient balance");
+          err.code = "INSUFFICIENT_BALANCE";
+          throw err;
+        }
+
+        const existingResult = await client.query(`
+          SELECT
+            id,
+            symbol,
+            name,
+            price,
+            quantity,
+            entry_price AS "entryPrice",
+            opened_at AS "openedAt",
+            type,
+            market_type AS "marketType",
+            order_type AS "orderType",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson",
+            date_added
+          FROM user_workspace_portfolio
+          WHERE user_id = $1
+            AND symbol = $2
+            AND market_type = $3
+            AND (strategy_name IS NOT DISTINCT FROM $4)
+          FOR UPDATE;
+        `, [resolvedUserId, symbol, marketType, strategyName]);
+
+        const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
+        let positionAfter = 0;
+        if (existing) {
+          if (orderType === "sell" && quantity > existing.quantity + QTY_EPSILON) {
+            const err = new Error(`You can only sell up to ${existing.quantity} ${symbol}.`);
+            err.code = "INSUFFICIENT_POSITION";
+            throw err;
+          }
+          const nextQuantity = orderType === "sell" ? existing.quantity - quantity : existing.quantity + quantity;
+          if (nextQuantity <= QTY_EPSILON) {
+            await client.query(`
+              DELETE FROM user_workspace_portfolio
+              WHERE id = $1 AND user_id = $2;
+            `, [existing.id, resolvedUserId]);
+            positionAfter = 0;
+          } else {
+            const existingEntry = Number.isFinite(Number(existing.entryPrice))
+              ? Number(existing.entryPrice)
+              : Number(existing.price);
+            const nextEntryPrice = orderType === "sell"
+              ? existingEntry
+              : ((existingEntry * existing.quantity) + (price * quantity)) / Math.max(nextQuantity, QTY_EPSILON);
+            const nextOpenedAt = existing.openedAt || executionTimestamp || dateAdded;
+            const updated = await client.query(`
+              UPDATE user_workspace_portfolio
+              SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
+              WHERE id = $10 AND user_id = $11
+              RETURNING quantity;
+            `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedUserId]);
+            positionAfter = toNumber(updated.rows[0]?.quantity, 0);
+          }
+        } else {
+          if (orderType === "sell") {
+            const err = new Error(`No existing position for ${symbol} (${marketType}) to sell`);
+            err.code = "NO_POSITION";
+            throw err;
+          }
+          const inserted = await client.query(`
+            INSERT INTO user_workspace_portfolio (user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            RETURNING quantity;
+          `, [resolvedUserId, symbol, name, price, quantity, price, executionTimestamp, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
+          positionAfter = toNumber(inserted.rows[0]?.quantity, 0);
+        }
+
+        await client.query(`
+          UPDATE user_workspace_balance
+          SET balance = $2, updated_at = NOW()
+          WHERE user_id = $1;
+        `, [resolvedUserId, nextBalance]);
+
+        const holdingsResult = await client.query(`
+          SELECT
+            id,
+            symbol,
+            name,
+            price,
+            quantity,
+            entry_price AS "entryPrice",
+            opened_at AS "openedAt",
+            type,
+            market_type AS "marketType",
+            order_type AS "orderType",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson",
+            date_added
+          FROM user_workspace_portfolio
+          WHERE user_id = $1 AND quantity > $2
+          ORDER BY date_added DESC;
+        `, [resolvedUserId, QTY_EPSILON]);
+        const holdings = holdingsResult.rows.map(mapPortfolioRow);
+        const portfolioValueAfter = holdings.reduce((total, h) => total + (toNumber(h.price) * toNumber(h.quantity)), 0);
+
+        const tradeResult = await client.query(`
+          INSERT INTO user_workspace_trades (
+            user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
+            quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after,
+            strategy_name, legs_json
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          RETURNING
+            id,
+            client_id AS "clientId",
+            date,
+            executed_at AS "executedAt",
+            asset,
+            name,
+            type,
+            side,
+            market_type AS "marketType",
+            status,
+            quantity,
+            price,
+            notional,
+            balance_after AS "balanceAfter",
+            portfolio_value_after AS "portfolioValueAfter",
+            account_equity_after AS "accountEquityAfter",
+            position_after AS "positionAfter",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson";
+        `, [
+          resolvedUserId,
+          clientId,
+          executionDate,
+          executionTimestamp,
+          symbol,
+          name,
+          orderType === "sell" ? "SELL" : "BUY",
+          orderType,
+          marketType,
+          "Filled",
+          quantity,
+          price,
+          Math.abs(notional),
+          nextBalance,
+          portfolioValueAfter,
+          nextBalance + portfolioValueAfter,
+          positionAfter,
+          strategyName,
+          JSON.stringify(legsJson)
+        ]);
+
+        await client.query("COMMIT");
+        return {
+          balance: nextBalance,
+          holdings,
+          trade: mapTradeRow(tradeResult.rows[0])
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+  }
+};
+
 async function clearAllData() {
   await pool.query("DELETE FROM portfolio_holdings");
   await pool.query("DELETE FROM watchlist_assets");
@@ -1350,6 +2551,8 @@ module.exports = {
   portfolio,
   watchlist,
   optionsCalculations,
+  userAuth,
+  userWorkspace,
   serviceSnapshots,
   tradeExecutions,
   trading,

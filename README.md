@@ -4,15 +4,28 @@ Zenin is a multi-asset trading dashboard that combines portfolio management, opt
 
 This README reflects the current implementation in this repository.
 
+## Entry flows
+
+- `GET /` shows the public homepage (marketing/overview).
+- `GET /app` opens the trading app.
+- `GET /auth` opens sign up / sign in / forgot-password and account-security flows.
+- For now auth is **not enforced** to enter the app: clicking `Sign up` on the public homepage routes directly to `/app`.
+
 ## What the web app can do
 
-#### 1) Home
+### 1) Public homepage and app entry
+- Public landing page at `/` with product overview and quick entry CTAs
+- Dedicated auth workspace at `/auth` for sign up/sign in/password recovery and security actions
+- Full app workspace at `/app` (including company deep-dive routes at `/app/company/:symbol`)
+- Current onboarding behavior: users can still enter `/app` directly while auth hard-enforcement is pending
+
+### 2) Home
 - Account and balance summary cards with trend indicators
 - Portfolio performance chart with interval (`1D` to `MAX`) and mode controls (Area, Bar, Line)
 - Top positions by value with live price/gain overlays
 - Top movers (gainers/losers) with timeframe selector (`daily`, `weekly`, `quarterly`, `ytd`, `yearly`)
 
-### 2) Watchlist
+### 3) Watchlist
 - Category-based asset browsing (stocks, crypto, bonds, metals, commodities, indicators)
 - Starred/watchlist-only views with ordering preserved from DB
 - TradFi/crypto/indicator search with fuzzy matching
@@ -20,7 +33,7 @@ This README reflects the current implementation in this repository.
 - Earnings calendar cards for stock watchlist symbols
 - Macro indicators view for G7 countries (USA, CAN, GBR, FRA, DEU, ITA, JPN)
 
-### 3) Company Profile
+### 4) Company Profile
 - Deep-dive fundamental research framework for stocks (Defense, Energy, AI, Robotics, Pharma, etc.)
 - Integrated **Finviz Market Intel**:
   - Analyst ratings & price targets
@@ -30,13 +43,13 @@ This README reflects the current implementation in this repository.
 - Leadership background with automated Wikipedia research links
 - Intelligent session-based caching (refreshes once per calendar day)
 
-### 4) Portfolio
+### 5) Portfolio
 - Buy/sell via asset modal and persisted trade execution
 - Live holdings valuation and aggregate gain/loss metrics
 - Portfolio charts and performance snapshots
 - Per-position entry-price aware gain calculations
 
-### 5) Options
+### 6) Options
 - Crypto options chain (Derive/Lyra-style provider route)
 - Spot price fallback via Hyperliquid when needed
 - Whale options trades table with min-notional filtering and pagination
@@ -49,13 +62,13 @@ This README reflects the current implementation in this repository.
   - Interactive payoff charts
   - Saved calculations persisted to DB
 
-### 6) Predictions
+### 7) Predictions
 - Prediction market snapshots for Polymarket
 - Category browsing (`geopolitics`, `crypto`, `tech`, `politics`, `finance`)
 - Whale transaction table with sort/filter/pagination
 - Market details modal with holder distribution and position splits
 
-### 7) Journal & Analytics
+### 8) Journal & Analytics
 - Recent execution history with asset detail expansion
 - **Calendar PnL visualization**: Daily profit/loss heatmap with symbol filtering
 - **Advanced Analytics**:
@@ -63,24 +76,39 @@ This README reflects the current implementation in this repository.
   - Portfolio distribution and risk metrics
 - **Traded Assets Report**: Paginated overview with live price refresh and total volume tracking
 
-### 8) Tax Estimator
+### 9) Tax Estimator
 - Capital gains estimates for 40+ global jurisdictions (US, UK, India, Brazil, UAE, etc.)
 - Short-term vs. Long-term liability logic per region
 - **Jurisdiction Recommendation**: Suggests lower-tax alternatives based on your declared gains
 - CSV and PDF export support
 
-### 9) Settings & account panel
-- Profile and security controls (email/password/2FA/passkeys placeholders)
+### 10) Account and security
+- Backend auth endpoints for sign up/sign in/sign out/session lookup (`/api/auth/*`)
+- Forgot-password request/confirm flow with token validation
+- 2FA and passkey scaffolding routes
+- OAuth provider discovery + mock social sign-in route for local/dev flow testing
+
+### 11) Settings & account panel
+- Profile and security controls (email/password/2FA/passkeys UI scaffolding in settings/auth)
 - General preferences (timezone, refresh cadence, visibility controls)
 - Connected accounts modal for exchange/prediction market metadata
 - Notification + layout preference toggles
 
-## Known limitations / In progress (as of April 20, 2026)
+## Current progress (as of April 21, 2026)
+
+- **Auth foundation implemented**: Server-side auth/session/reset-token flows exist and are rate-limited.
+- **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
+- **Guest fallback retained**: Existing app usage remains available without forced sign-in while onboarding rollout continues.
+- **Integration test harness added**: Backend integration suite exists for auth lifecycle, password reset, and user-isolation scenarios.
+
+## Current limitations (as of April 21, 2026)
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
 - **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
-- **Security Logic**: Account/Security controls are currently frontend-level UI state (localStorage synchronized); full backend-enforced JWT/Session security for individual user accounts is pending.
-- **Multi-Tenant Support**: The current persistence model uses a fixed `user_id` for balance and trades; full multi-user isolation is not active.
+- **Auth enforcement mode**: App entry currently allows `/app` access without mandatory sign-in by design for current rollout.
+- **OAuth provider setup**: Google/Apple/GitHub/Microsoft routes are scaffolded in backend; production OAuth client credentials/callback exchange are not yet configured.
+- **Passkey implementation depth**: Passkey flows are scaffolded for registration + login testing, but full WebAuthn challenge/attestation verification is still a next step.
+- **MFA delivery**: OTP verification is wired, but SMS/email delivery integrations are not yet connected to external providers.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 
@@ -172,16 +200,40 @@ This interactive script logs in and prints a `TELEGRAM_SESSION_STRING` value.
 - `GET /api/db/balance`
 - `POST /api/db/balance`
 
+### Auth & account security
+- `GET /api/auth/me`
+- `POST /api/auth/signup`
+- `POST /api/auth/signin`
+- `POST /api/auth/signout`
+- `POST /api/auth/forgot-password/request`
+- `POST /api/auth/forgot-password/confirm`
+- `POST /api/auth/2fa/enable`
+- `POST /api/auth/2fa/disable`
+- `POST /api/auth/passkeys/register`
+- `GET /api/auth/oauth/providers`
+- `POST /api/auth/oauth/start` (scaffold response)
+- `POST /api/auth/oauth/mock` (local/dev social sign-in simulation)
+
 ## Persistence
 
 Primary datastore: PostgreSQL.
 
 Main tables used by the app:
-- `portfolio_holdings`
-- `watchlist_assets`
-- `user_balance`
-- `options_calculations`
-- `trade_executions`
+- Legacy/shared tables:
+  - `portfolio_holdings`
+  - `watchlist_assets`
+  - `user_balance`
+  - `options_calculations`
+  - `trade_executions`
+- Auth and user-scoped tables:
+  - `app_users`
+  - `auth_sessions`
+  - `password_reset_tokens`
+  - `user_workspace_balance`
+  - `user_workspace_portfolio`
+  - `user_workspace_watchlist`
+  - `user_workspace_trades`
+  - `user_workspace_options_calculations`
 
 ## Local development
 
@@ -224,6 +276,20 @@ cd frontend
 npm run dev
 ```
 
+## Backend integration tests
+
+Run:
+
+```bash
+cd backend
+npm run test:integration
+```
+
+Notes:
+- These tests exercise auth + per-user data isolation through HTTP endpoints.
+- They require PostgreSQL connectivity (`DATABASE_URL` or local PG config).
+- If the test server cannot connect to Postgres, tests auto-skip and report the connection error.
+
 ## Environment variables
 
 ### Frontend
@@ -233,6 +299,7 @@ npm run dev
 - `PORT` (default `4000`)
 - `FRONTEND_URL` (CORS allowlist origin)
 - `DATABASE_URL` (recommended)
+- `AUTH_HASH_KEY` (strong secret used for session/reset/OTP hashing)
 - `EODHD_API_TOKEN` (macro indicators)
 - `DERIVE_API_URL` (optional provider override)
 
@@ -249,6 +316,14 @@ Telegram MTProto optional vars:
 - `TELEGRAM_CACHE_TTL_MS`
 
 See `backend/.env.example` for template values.
+
+## Next steps
+
+1. Replace `/api/auth/oauth/mock` with real OAuth code exchange (Google/Apple/GitHub/Microsoft) and provider-specific scopes.
+2. Upgrade passkeys from scaffolded IDs to full WebAuthn challenge generation + verification (`navigator.credentials.create/get` + server attestation/assertion checks).
+3. Integrate trusted delivery providers for MFA and password reset notifications (email + SMS) and remove dev token exposure in non-production paths.
+4. Add refresh-token rotation / short-lived access tokens and account-level security telemetry (device/session management UI).
+5. Add automated backend tests for auth, session expiry/revocation, and per-user data isolation on all `/api/db/*` endpoints.
 
 ## Deployment
 
