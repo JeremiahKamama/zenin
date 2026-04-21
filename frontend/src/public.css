@@ -67,7 +67,7 @@
   top: 0;
   z-index: 100;
   backdrop-filter: blur(16px);
-  background: rgba(4, 9, 21, 0.78);
+  background: rgba(4, 9, 21, 0.92);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
@@ -553,6 +553,39 @@
   height: 160px;
 }
 
+.zc-home .company-summary-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(4, 13, 28, 0.85);
+}
+
+.zc-home .company-summary-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.zc-home .company-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.zc-home .company-summary-grid small {
+  display: block;
+  color: var(--muted-2);
+  font-size: 0.68rem;
+}
+
+.zc-home .company-summary-grid b {
+  font-size: 0.82rem;
+  color: #dbe8ff;
+}
+
 .zc-home .axis-labels {
   margin-top: 10px;
   display: flex;
@@ -780,12 +813,42 @@
   background-size: 100% 33%, 20% 100%, auto;
   position: relative;
   overflow: hidden;
+  padding: 12px;
 }
 
-.zc-home .laptop-track {
-  position: absolute;
-  inset: auto 10px 16px 10px;
-  height: 70px;
+.zc-home .screen-label {
+  font-size: 0.7rem;
+  color: #9ab7ff;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.zc-home .screen-options-grid {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.zc-home .options-pill {
+  border: 1px solid rgba(104, 149, 255, 0.26);
+  background: rgba(46, 108, 255, 0.16);
+  color: #cfe0ff;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.7rem;
+}
+
+.zc-home .screen-options-bars {
+  display: grid;
+  gap: 7px;
+}
+
+.zc-home .screen-options-bars span {
+  display: block;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(46, 108, 255, 0.75), rgba(46, 108, 255, 0.2));
 }
 
 .zc-home .phone {
@@ -805,6 +868,44 @@
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(8, 16, 30, 0.98), rgba(7, 14, 27, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 10px;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 8px;
+}
+
+.zc-home .analytics-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.zc-home .analytics-kpi-row div {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 7px 8px;
+  background: rgba(16, 28, 52, 0.8);
+}
+
+.zc-home .analytics-kpi-row small {
+  display: block;
+  color: #93a5c9;
+  font-size: 0.6rem;
+}
+
+.zc-home .analytics-kpi-row b {
+  color: #def;
+  font-size: 0.8rem;
+}
+
+.zc-home .analytics-trend {
+  align-self: end;
+  height: 82px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(46, 108, 255, 0.35), rgba(46, 108, 255, 0.04)),
+    linear-gradient(180deg, rgba(8, 16, 30, 0.95), rgba(8, 16, 30, 0.95));
 }
 
 .zc-home .footer {
@@ -865,19 +966,30 @@
 
 @media (max-width: 940px) {
   .zc-home .nav {
-    grid-template-columns: auto auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
   }
 
   .zc-home .menu-toggle {
     display: inline-grid;
     place-items: center;
+    margin-left: auto;
+    order: 2;
+    position: relative;
+    top: -4px;
+    right: 0;
   }
 
   .zc-home .nav-links,
   .zc-home .nav-actions {
     display: none;
-    grid-column: 1 / -1;
+    order: 3;
     width: 100%;
+    background: rgba(4, 9, 21, 0.96);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 10px;
   }
 
   .zc-home .nav-links.open,
@@ -885,7 +997,8 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    padding-bottom: 18px;
+    padding-bottom: 14px;
+    margin-top: 6px;
   }
 
   .zc-home .nav-links.open {
@@ -1017,6 +1130,10 @@
 
   .zc-home .bottom-cta {
     padding: 22px;
+  }
+
+  .zc-home .company-summary-grid {
+    grid-template-columns: 1fr;
   }
 }
 

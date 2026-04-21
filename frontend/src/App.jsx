@@ -1430,18 +1430,14 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
 
-  const [themeMode, setThemeMode] = useState(() => localStorage.getItem("zenin_global_theme") || "dark");
+  const [themeMode, setThemeMode] = useState("dark");
 
   useEffect(() => {
-    localStorage.setItem("zenin_global_theme", themeMode);
-    if (themeMode === "light") {
-      document.documentElement.classList.add("light-theme-active");
-    } else {
-      document.documentElement.classList.remove("light-theme-active");
-    }
+    localStorage.setItem("zenin_global_theme", "dark");
+    document.documentElement.classList.remove("light-theme-active");
   }, [themeMode]);
 
-  const toggleTheme = () => setThemeMode((prev) => prev === "dark" ? "light" : "dark");
+  const toggleTheme = () => setThemeMode("dark");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
@@ -2052,9 +2048,9 @@ const handleOptionTradeClosed = async (tradeId) => {
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem',
               transition: 'all 0.2s'
             }}
-            title={themeMode === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            title="Dark mode enforced"
           >
-            {themeMode === "dark" ? '☀️' : '🌙'}
+            🌙
           </button>
         </div>
 

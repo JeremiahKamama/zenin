@@ -1,7 +1,11 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 export default function PublicHomepage() {
   const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.remove("light-theme-active");
+  }, []);
 
   return (
     <div className="zc-home">
@@ -131,6 +135,18 @@ export default function PublicHomepage() {
                         <div className="axis-labels">
                           <span>Mar</span><span>Apr</span><span>May</span><span>Jun</span>
                         </div>
+                        <div className="company-summary-card">
+                          <div className="company-summary-head">
+                            <strong>Company Snapshot</strong>
+                            <span className="up">AAPL +2.15%</span>
+                          </div>
+                          <div className="company-summary-grid">
+                            <div><small>Market Cap</small><b>$2.94T</b></div>
+                            <div><small>P/E</small><b>31.4x</b></div>
+                            <div><small>EPS (TTM)</small><b>$6.57</b></div>
+                            <div><small>Revenue YoY</small><b className="up">+7.8%</b></div>
+                          </div>
+                        </div>
                       </div>
 
                       <div className="table-panel">
@@ -224,20 +240,28 @@ export default function PublicHomepage() {
               <div className="device-preview">
                 <div className="laptop">
                   <div className="laptop-screen">
-                    <svg className="laptop-track" viewBox="0 0 500 120" preserveAspectRatio="none" aria-hidden="true">
-                      <defs>
-                        <linearGradient id="fillLine2" x1="0" x2="0" y1="0" y2="1">
-                          <stop offset="0%" stopColor="rgba(46,108,255,0.42)" />
-                          <stop offset="100%" stopColor="rgba(46,108,255,0.02)" />
-                        </linearGradient>
-                      </defs>
-                      <path d="M0 88 C44 76, 80 62, 120 67 S194 101, 236 72 S320 48, 360 55 S436 39, 500 26 L500 120 L0 120 Z" fill="url(#fillLine2)" />
-                      <path d="M0 88 C44 76, 80 62, 120 67 S194 101, 236 72 S320 48, 360 55 S436 39, 500 26" fill="none" stroke="#2e6cff" strokeWidth="4" strokeLinecap="round" />
-                    </svg>
+                    <div className="screen-label">Options</div>
+                    <div className="screen-options-grid">
+                      <div className="options-pill">Bull Call Spread</div>
+                      <div className="options-pill">Iron Condor</div>
+                      <div className="options-pill">Straddle</div>
+                    </div>
+                    <div className="screen-options-bars">
+                      <span style={{ width: "72%" }} />
+                      <span style={{ width: "54%" }} />
+                      <span style={{ width: "88%" }} />
+                    </div>
                   </div>
                 </div>
                 <div className="phone">
-                  <div className="phone-screen" />
+                  <div className="phone-screen">
+                    <div className="screen-label">Analytics</div>
+                    <div className="analytics-kpi-row">
+                      <div><small>Win Rate</small><b>62%</b></div>
+                      <div><small>Sharpe</small><b>1.38</b></div>
+                    </div>
+                    <div className="analytics-trend" />
+                  </div>
                 </div>
               </div>
             </div>

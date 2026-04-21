@@ -155,6 +155,7 @@ export function AnalyticsModule({ backendUrl }) {
   
   const [etfAssetToggle, setEtfAssetToggle] = useState("All");
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
+  const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
   const [annualReturnsPageIndex, setAnnualReturnsPageIndex] = useState(0);
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
 

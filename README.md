@@ -18,6 +18,11 @@ This README reflects the current implementation in this repository.
 - Dedicated auth workspace at `/auth` for sign up/sign in/password recovery and security actions
 - Full app workspace at `/app` (including company deep-dive routes at `/app/company/:symbol`)
 - Current onboarding behavior: users can still enter `/app` directly while auth hard-enforcement is pending
+- Responsive homepage mock dashboard now includes:
+  - portfolio performance card + company profile summary card
+  - top positions/top movers percentage-only preview rows
+  - no buying-power card in the homepage snapshot
+  - responsive mobile menu behavior with right-aligned menu toggle
 
 ### 2) Home
 - Account and balance summary cards with trend indicators
@@ -100,6 +105,9 @@ This README reflects the current implementation in this repository.
 - **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
 - **Guest fallback retained**: Existing app usage remains available without forced sign-in while onboarding rollout continues.
 - **Integration test harness added**: Backend integration suite exists for auth lifecycle, password reset, and user-isolation scenarios.
+- **Homepage responsive refactor completed**: Snapshot cards and footer device preview were updated to prevent overlap and improve mobile behavior.
+- **Dark theme hardening completed**: Homepage/app surfaces (including sidebar) are now enforced to dark-theme styling.
+- **Analytics runtime fix shipped**: Resolved `selectedPerpExchange is not defined` crash in the Analytics module.
 
 ## Current limitations (as of April 21, 2026)
 
@@ -111,6 +119,7 @@ This README reflects the current implementation in this repository.
 - **MFA delivery**: OTP verification is wired, but SMS/email delivery integrations are not yet connected to external providers.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
+- **Homepage device preview assets**: Footer laptop/phone visuals currently use themed mock content (not live in-app screenshots).
 
 ## Data sources and integrations
 
@@ -324,6 +333,7 @@ See `backend/.env.example` for template values.
 3. Integrate trusted delivery providers for MFA and password reset notifications (email + SMS) and remove dev token exposure in non-production paths.
 4. Add refresh-token rotation / short-lived access tokens and account-level security telemetry (device/session management UI).
 5. Add automated backend tests for auth, session expiry/revocation, and per-user data isolation on all `/api/db/*` endpoints.
+6. Replace homepage footer mock device content with captured in-app Options and Analytics screenshots for production marketing parity.
 
 ## Deployment
 
