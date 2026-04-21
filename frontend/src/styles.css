@@ -5926,15 +5926,17 @@ button {
   .summary-value.negative { color: #f87171; }
 
   /* Table Enhancements */
-  .intel-table .rating-cell {
-    font-weight: 700;
-    color: #e2e8f0;
-  }
+.intel-table .rating-cell {
+  font-weight: 700;
+  color: #e2e8f0;
+}
+.intel-table .rating-cell.positive { color: #4ade80; }
+.intel-table .rating-cell.negative { color: #f87171; }
 
-  .intel-table .owner-cell {
-    color: #38bdf8;
-    font-weight: 500;
-  }
+.intel-table .owner-cell {
+  color: #38bdf8;
+  font-weight: 500;
+}
 
   .empty-table-msg, .empty-news-msg {
     padding: 20px;
@@ -6128,6 +6130,56 @@ button {
 
 .intel-table tr:hover td {
   background: rgba(148, 163, 184, 0.05);
+}
+
+.analyst-ratings-table {
+  table-layout: fixed;
+}
+
+.analyst-ratings-table th:nth-child(1),
+.analyst-ratings-table td:nth-child(1) {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.analyst-ratings-table th:nth-child(2),
+.analyst-ratings-table td:nth-child(2) {
+  width: min(32vw, 300px);
+}
+
+.analyst-ratings-table th:nth-child(3),
+.analyst-ratings-table td:nth-child(3) {
+  width: 120px;
+}
+
+.analyst-ratings-table th:nth-child(4),
+.analyst-ratings-table td:nth-child(4) {
+  width: 140px;
+}
+
+.analyst-ratings-table th:nth-child(5),
+.analyst-ratings-table td:nth-child(5),
+.analyst-ratings-table th:nth-child(6),
+.analyst-ratings-table td:nth-child(6) {
+  width: 110px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.analyst-firm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analyst-target.previous {
+  color: #94a3b8;
+}
+
+@media (max-width: 640px) {
+  .analyst-ratings-table {
+    min-width: 760px;
+  }
 }
 
 .intel-status {

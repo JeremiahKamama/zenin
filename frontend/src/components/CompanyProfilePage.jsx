@@ -1016,6 +1016,81 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
     : Array.isArray(finvizData?.analystRatings)
     ? finvizData.analystRatings
     : [];
+  const normalizedFinvizRatings = useMemo(
+    () =>
+      finvizRatings
+        .map((row, idx) => {
+          const rawAction =
+            row?.action ||
+            row?.change ||
+            row?.update ||
+            row?.actionType ||
+            row?.rating_change ||
+            "";
+          const action = String(rawAction || "").trim();
+          const rating = String(
+            row?.rating ||
+              row?.to ||
+              row?.new_rating ||
+              row?.recommendation ||
+              row?.consensus ||
+              ""
+          ).trim();
+          const analyst = String(
+            row?.analyst ||
+              row?.firm ||
+              row?.broker ||
+              row?.company ||
+              row?.source ||
+              "—"
+          ).trim();
+          const date = row?.date || row?.published || row?.timestamp || row?.time || "—";
+          const targetValue =
+            row?.price_target ??
+            row?.target ??
+            row?.pt ??
+            row?.target_price ??
+            row?.new_target ??
+            null;
+          const previousTarget =
+            row?.prior_target ??
+            row?.from_target ??
+            row?.old_target ??
+            row?.previous_target ??
+            null;
+          const toneSource = `${action} ${rating}`.toLowerCase();
+          const tone = toneSource.includes("buy") ||
+            toneSource.includes("outperform") ||
+            toneSource.includes("overweight") ||
+            toneSource.includes("upgrade")
+            ? "positive"
+            : toneSource.includes("sell") ||
+              toneSource.includes("underperform") ||
+              toneSource.includes("underweight") ||
+              toneSource.includes("downgrade")
+            ? "negative"
+            : "neutral";
+
+          return {
+            id: `rating-${idx}`,
+            date,
+            action: action || "Update",
+            analyst,
+            rating: rating || "—",
+            target:
+              targetValue !== null && targetValue !== undefined && String(targetValue).trim()
+                ? String(targetValue)
+                : "—",
+            previousTarget:
+              previousTarget !== null && previousTarget !== undefined && String(previousTarget).trim()
+                ? String(previousTarget)
+                : "—",
+            tone,
+          };
+        })
+        .filter((row) => row.analyst !== "—" || row.rating !== "—" || row.target !== "—"),
+    [finvizRatings]
+  );
 
   const toggleSection = (key) => {
     setOpenSections((prev) => {
@@ -1222,27 +1297,33 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 <section className="intel-section">
                   <h3 className="intel-title">Analyst Ratings</h3>
                   <div className="intel-table-wrap">
-                    <table className="intel-table">
+                    <table className="intel-table analyst-ratings-table">
                       <thead>
                         <tr>
                           <th>Date</th>
+                          <th>Firm</th>
                           <th>Action</th>
-                          <th>Analyst</th>
                           <th>Rating</th>
                           <th>Target</th>
+                          <th>Prior</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {finvizRatings.slice(0, 10).map((r, i) => (
-                          <tr key={`rate-${i}`}>
-                            <td>{r.date}</td>
-                            <td><span className={`intel-status ${String(r.action).toLowerCase().includes('up') ? 'positive' : String(r.action).toLowerCase().includes('down') ? 'negative' : ''}`}>{r.action}</span></td>
-                            <td>{r.analyst}</td>
-                            <td className="rating-cell">{r.rating}</td>
-                            <td>{r.price_target || r.target || r.pt || "—"}</td>
+                        {normalizedFinvizRatings.slice(0, 12).map((r) => (
+                          <tr key={r.id}>
+                            <td className="analyst-date">{r.date}</td>
+                            <td className="analyst-firm">{r.analyst}</td>
+                            <td>
+                              <span className={`intel-status ${r.tone === "positive" ? "positive" : r.tone === "negative" ? "negative" : ""}`}>
+                                {r.action}
+                              </span>
+                            </td>
+                            <td className={`rating-cell ${r.tone}`}>{r.rating}</td>
+                            <td className="analyst-target">{r.target}</td>
+                            <td className="analyst-target previous">{r.previousTarget}</td>
                           </tr>
                         ))}
-                        {!finvizRatings.length && <tr><td colSpan="5" className="empty-table-msg">No recent ratings found.</td></tr>}
+                        {!normalizedFinvizRatings.length && <tr><td colSpan="6" className="empty-table-msg">No recent ratings found.</td></tr>}
                       </tbody>
                     </table>
                   </div>

@@ -58,6 +58,39 @@ const EMPTY_EQUITIES = {
   fundsList: [],
 };
 
+const EMPTY_EQUITIES_SPEC = {
+  overview: null,
+  categories: [],
+  searchResults: [],
+  stocks: [],
+  stockDetails: null,
+  stockPeers: [],
+  stockFundamentals: [],
+  stockMarketContext: [],
+  funds: [],
+  fundDetail: null,
+  fundCompare: [],
+  fundHoldings: [],
+  fundRisk: [],
+  fundFlows: [],
+  mmf: [],
+  mmfDetail: null,
+  mmfYieldHistory: [],
+  mmfLiquidity: [],
+  mmfComposition: [],
+  reits: [],
+  reitDetail: null,
+  reitCompare: [],
+  reitExposure: [],
+  reitIncome: [],
+  marketSnapshot: [],
+  marketBenchmarks: [],
+  marketSectors: [],
+  marketRegions: [],
+  marketBreadth: null,
+  marketActions: [],
+};
+
 const EMPTY_MACRO = {
   updatedAt: null,
   macroData: [],
@@ -261,6 +294,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [cryptoData, setCryptoData] = useState(EMPTY_CRYPTO);
   const [optionsData, setOptionsData] = useState(EMPTY_OPTIONS);
   const [equitiesData, setEquitiesData] = useState(EMPTY_EQUITIES);
+  const [equitiesSpecData, setEquitiesSpecData] = useState(EMPTY_EQUITIES_SPEC);
   const [macroData, setMacroData] = useState(EMPTY_MACRO);
   const [loading, setLoading] = useState({ crypto: false, options: false, equities: false, macro: false });
   const [errors, setErrors] = useState({ crypto: "", options: "", equities: "", macro: "" });
@@ -269,8 +303,16 @@ export function AnalyticsModule({ backendUrl }) {
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
   const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
   const [annualReturnsPageIndex, setAnnualReturnsPageIndex] = useState(0);
-  const [equityHorizon, setEquityHorizon] = useState("yr1");
-  const [equitiesDetailSelector, setEquitiesDetailSelector] = useState("");
+  const [selectedMainCategory, setSelectedMainCategory] = useState("hub");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSymbol, setSelectedSymbol] = useState("");
+  const [selectedFundId, setSelectedFundId] = useState("");
+  const [selectedMMFId, setSelectedMMFId] = useState("");
+  const [selectedMarketView, setSelectedMarketView] = useState("benchmarks");
+  const [compareItems, setCompareItems] = useState([]);
+  const [timeRange, setTimeRange] = useState("1Y");
+  const [equitiesSavedViews, setEquitiesSavedViews] = useState([]);
+  const [equitiesAlerts, setEquitiesAlerts] = useState([]);
   const [selectedGeoType, setSelectedGeoType] = useState("Country");
   const [selectedGeoCode, setSelectedGeoCode] = useState("USA");
   const [selectedCategory, setSelectedCategory] = useState("growth");
@@ -322,7 +364,9 @@ export function AnalyticsModule({ backendUrl }) {
   const [macroCorrelationRows, setMacroCorrelationRows] = useState([]);
   const [macroSourceInfo, setMacroSourceInfo] = useState(null);
   const [sourceDrawerOpen, setSourceDrawerOpen] = useState(false);
+  const [macroTimeseriesPageIndex, setMacroTimeseriesPageIndex] = useState(0);
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
+  const MACRO_TIMESERIES_PAGE_SIZE = 10;
 
   const macroGeoTypePath = selectedGeoType === "Country" ? "country" : selectedGeoType === "Region" ? "region" : "global";
 
@@ -558,6 +602,10 @@ export function AnalyticsModule({ backendUrl }) {
   }, [macroOverview]);
 
   useEffect(() => {
+    setMacroTimeseriesPageIndex(0);
+  }, [selectedGeoCode, selectedIndicator, chartRange, chartMode, macroTimeseries.length]);
+
+  useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
 
@@ -605,6 +653,104 @@ export function AnalyticsModule({ backendUrl }) {
       controller.abort();
     };
   }, [activeTab, backendUrl]);
+
+  useEffect(() => {
+    if (activeTab !== "equities") return;
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const fetchJson = async (path) => {
+      try {
+        const res = await fetch(`${backendUrl}${path}`, { signal: controller.signal });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    };
+
+    const loadSpec = async () => {
+      const selectedStock = selectedSymbol || undefined;
+      const selectedFund = selectedFundId || undefined;
+      const selectedMmf = selectedMMFId || undefined;
+      const [overview, categories, stocks, funds, mmf, reits, marketSnapshot, marketBenchmarks, marketSectors, marketRegions, marketBreadth, marketActions, searchResults] = await Promise.all([
+        fetchJson("/equities/overview"),
+        fetchJson("/equities/categories"),
+        fetchJson("/equities/stocks"),
+        fetchJson("/equities/funds"),
+        fetchJson("/equities/mmf"),
+        fetchJson("/equities/reits"),
+        fetchJson("/equities/market/snapshot"),
+        fetchJson("/equities/market/benchmarks"),
+        fetchJson("/equities/market/sectors"),
+        fetchJson("/equities/market/regions"),
+        fetchJson("/equities/market/breadth"),
+        fetchJson("/equities/market/actions"),
+        searchQuery ? fetchJson(`/equities/search?q=${encodeURIComponent(searchQuery)}`) : Promise.resolve([]),
+      ]);
+
+      const [stockDetails, stockPeers, stockFundamentals, stockMarketContext, fundDetail, fundCompare, fundHoldings, fundRisk, fundFlows, mmfDetail, mmfYieldHistory, mmfLiquidity, mmfComposition, reitDetail, reitCompare, reitExposure, reitIncome] = await Promise.all([
+        selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}`) : Promise.resolve(null),
+        selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}/peers`) : Promise.resolve([]),
+        selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}/fundamentals`) : Promise.resolve([]),
+        selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}/market-context`) : Promise.resolve([]),
+        selectedFund ? fetchJson(`/equities/funds/${encodeURIComponent(selectedFund)}`) : Promise.resolve(null),
+        compareItems.length ? fetchJson(`/equities/funds/compare?ids=${encodeURIComponent(compareItems.join(","))}`) : Promise.resolve([]),
+        selectedFund ? fetchJson(`/equities/funds/${encodeURIComponent(selectedFund)}/holdings`) : Promise.resolve([]),
+        selectedFund ? fetchJson(`/equities/funds/${encodeURIComponent(selectedFund)}/risk`) : Promise.resolve([]),
+        fetchJson("/equities/funds/flows"),
+        selectedMmf ? fetchJson(`/equities/mmf/${encodeURIComponent(selectedMmf)}`) : Promise.resolve(null),
+        selectedMmf ? fetchJson(`/equities/mmf/${encodeURIComponent(selectedMmf)}/yield-history`) : Promise.resolve([]),
+        selectedMmf ? fetchJson(`/equities/mmf/${encodeURIComponent(selectedMmf)}/liquidity`) : Promise.resolve([]),
+        selectedMmf ? fetchJson(`/equities/mmf/${encodeURIComponent(selectedMmf)}/composition`) : Promise.resolve([]),
+        selectedStock && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/${encodeURIComponent(selectedStock)}`) : Promise.resolve(null),
+        compareItems.length && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/compare?ids=${encodeURIComponent(compareItems.join(","))}`) : Promise.resolve([]),
+        selectedStock && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/${encodeURIComponent(selectedStock)}/exposure`) : Promise.resolve([]),
+        selectedStock && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/${encodeURIComponent(selectedStock)}/income`) : Promise.resolve([]),
+      ]);
+
+      if (cancelled) return;
+      setEquitiesSpecData((prev) => ({
+        ...prev,
+        overview: overview || prev.overview,
+        categories: Array.isArray(categories) ? categories : prev.categories,
+        searchResults: Array.isArray(searchResults) ? searchResults : prev.searchResults,
+        stocks: Array.isArray(stocks) ? stocks : prev.stocks,
+        stockDetails: stockDetails || prev.stockDetails,
+        stockPeers: Array.isArray(stockPeers) ? stockPeers : prev.stockPeers,
+        stockFundamentals: Array.isArray(stockFundamentals) ? stockFundamentals : prev.stockFundamentals,
+        stockMarketContext: Array.isArray(stockMarketContext) ? stockMarketContext : prev.stockMarketContext,
+        funds: Array.isArray(funds) ? funds : prev.funds,
+        fundDetail: fundDetail || prev.fundDetail,
+        fundCompare: Array.isArray(fundCompare) ? fundCompare : prev.fundCompare,
+        fundHoldings: Array.isArray(fundHoldings) ? fundHoldings : prev.fundHoldings,
+        fundRisk: Array.isArray(fundRisk) ? fundRisk : prev.fundRisk,
+        fundFlows: Array.isArray(fundFlows) ? fundFlows : prev.fundFlows,
+        mmf: Array.isArray(mmf) ? mmf : prev.mmf,
+        mmfDetail: mmfDetail || prev.mmfDetail,
+        mmfYieldHistory: Array.isArray(mmfYieldHistory) ? mmfYieldHistory : prev.mmfYieldHistory,
+        mmfLiquidity: Array.isArray(mmfLiquidity) ? mmfLiquidity : prev.mmfLiquidity,
+        mmfComposition: Array.isArray(mmfComposition) ? mmfComposition : prev.mmfComposition,
+        reits: Array.isArray(reits) ? reits : prev.reits,
+        reitDetail: reitDetail || prev.reitDetail,
+        reitCompare: Array.isArray(reitCompare) ? reitCompare : prev.reitCompare,
+        reitExposure: Array.isArray(reitExposure) ? reitExposure : prev.reitExposure,
+        reitIncome: Array.isArray(reitIncome) ? reitIncome : prev.reitIncome,
+        marketSnapshot: Array.isArray(marketSnapshot) ? marketSnapshot : prev.marketSnapshot,
+        marketBenchmarks: Array.isArray(marketBenchmarks) ? marketBenchmarks : prev.marketBenchmarks,
+        marketSectors: Array.isArray(marketSectors) ? marketSectors : prev.marketSectors,
+        marketRegions: Array.isArray(marketRegions) ? marketRegions : prev.marketRegions,
+        marketBreadth: marketBreadth || prev.marketBreadth,
+        marketActions: Array.isArray(marketActions) ? marketActions : prev.marketActions,
+      }));
+    };
+
+    loadSpec();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeTab, backendUrl, compareItems, searchQuery, selectedFundId, selectedMMFId, selectedMainCategory, selectedSymbol]);
 
   const cryptoPerps = useMemo(() => {
     if (!cryptoData || !cryptoData.perpMetrics || !selectedPerpExchange) {
@@ -680,6 +826,86 @@ export function AnalyticsModule({ backendUrl }) {
       return out;
     });
   }, [equitiesData.correlationLabels, equitiesData.correlationMatrix]);
+
+  const equitiesSearch = useMemo(
+    () => String(searchQuery || "").trim().toLowerCase(),
+    [searchQuery]
+  );
+
+  const rangeKey = useMemo(() => {
+    if (timeRange === "1D") return "daily";
+    if (timeRange === "1W") return "weekly";
+    if (timeRange === "1M") return "monthly";
+    if (timeRange === "YTD") return "ytd";
+    if (timeRange === "1Y") return "yr1";
+    if (timeRange === "5Y") return "yr5";
+    if (timeRange === "MAX") return "annual";
+    return "yr1";
+  }, [timeRange]);
+
+  const filteredEquities = useMemo(() => {
+    const filterRows = (rows, fields) => {
+      if (!Array.isArray(rows)) return [];
+      if (!equitiesSearch) return rows;
+      return rows.filter((row) =>
+        fields.some((field) =>
+          String(row?.[field] ?? "")
+            .toLowerCase()
+            .includes(equitiesSearch)
+        )
+      );
+    };
+
+    return {
+      benchmarkIndexHistory: filterRows(equitiesData.benchmarkIndexHistory, ["name", "symbol", "region", "currency"]),
+      sectorPerformance: filterRows(equitiesData.sectorPerformance, ["sector"]),
+      regionalPerformance: filterRows(equitiesData.regionalPerformance, ["region", "currency"]),
+      styleFactors: filterRows(equitiesData.styleFactors, ["factor"]),
+      rebalanceSignals: filterRows(equitiesData.rebalanceSignals, ["bucket", "signal"]),
+      volatilityMetrics: filterRows(equitiesData.volatilityMetrics, ["asset"]),
+      benchmarkPerformance: filterRows(equitiesData.benchmarkPerformance, ["name"]),
+      annualReturns: filterRows(equitiesData.annualReturns, ["year"]),
+      reitBenchmarks: filterRows(equitiesData.reitData?.benchmarks, ["name"]),
+      mmfYields: filterRows(equitiesData.mmfYields, ["country", "currency", "note"]),
+      fundsList: filterRows(equitiesData.fundsList, ["provider", "name", "domicile", "assetClass", "type", "structure"]),
+      dividendData: filterRows(equitiesData.dividendData, ["symbol"]),
+      earningsCalendar: filterRows(equitiesData.earningsCalendar, ["date", "symbol", "period", "revisionTrend"]),
+      valuationData: filterRows(equitiesData.valuationData, ["scope"]),
+      fundFlows: filterRows(equitiesData.fundFlows, ["segment", "assetClass", "region", "period"]),
+      corporateActions: filterRows(equitiesData.corporateActions, ["date", "symbol", "action", "detail"]),
+      correlationRows: filterRows(correlationRows, ["asset"]),
+      stocks: filterRows(
+        (equitiesSpecData.stocks || []).length
+          ? equitiesSpecData.stocks
+          : (equitiesData.dividendData || []).map((row, idx) => ({
+              id: row.id || `stk-${idx}`,
+              symbol: row.symbol,
+              dividendYield: row.dividendYield,
+              payoutRatio: row.payoutRatio,
+              exDividendDate: row.exDividendDate,
+            })),
+        ["symbol", "name", "sector", "exchange", "assetClass"]
+      ),
+      funds: filterRows(
+        (equitiesSpecData.funds || []).length ? equitiesSpecData.funds : equitiesData.fundsList,
+        ["ticker", "name", "provider", "domicile", "assetClass", "type", "structure"]
+      ),
+      mmf: filterRows(
+        (equitiesSpecData.mmf || []).length ? equitiesSpecData.mmf : equitiesData.mmfYields,
+        ["id", "name", "fundName", "country", "currency", "provider"]
+      ),
+      reits: filterRows(
+        (equitiesSpecData.reits || []).length
+          ? equitiesSpecData.reits
+          : (equitiesData.reitData?.benchmarks || []).map((row, idx) => ({ id: `reit-${idx}`, symbol: row.name, ...row })),
+        ["symbol", "name", "region", "propertyType"]
+      ),
+      marketSnapshot: filterRows(
+        (equitiesSpecData.marketSnapshot || []).length ? equitiesSpecData.marketSnapshot : [],
+        ["group", "name", "metric", "value"]
+      ),
+    };
+  }, [equitiesData, equitiesSpecData, correlationRows, equitiesSearch]);
 
   const currentUpdatedAt =
     activeTab === "crypto"
@@ -1269,395 +1495,886 @@ export function AnalyticsModule({ backendUrl }) {
           ) : activeTab === "equities" ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 13, color: "#94a3b8" }}>
-                    Equities intelligence across benchmarks, sectors, regions, factors, risk, macro, flows and corporate actions.
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 10,
+                    background: "rgba(2,6,23,0.55)",
+                    border: "1px solid rgba(148,163,184,0.2)",
+                    borderRadius: 14,
+                    padding: 12,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 13, color: "#cbd5e1" }}>
+                      Equities command center
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[
+                        { key: "1D", label: "1D" },
+                        { key: "1W", label: "1W" },
+                        { key: "1M", label: "1M" },
+                        { key: "YTD", label: "YTD" },
+                        { key: "1Y", label: "1Y" },
+                        { key: "5Y", label: "5Y" },
+                        { key: "MAX", label: "MAX" },
+                      ].map((h) => (
+                        <button
+                          key={h.key}
+                          onClick={() => setTimeRange(h.key)}
+                          style={{
+                            padding: "5px 10px",
+                            borderRadius: 8,
+                            border: `1px solid ${timeRange === h.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                            background: timeRange === h.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                            color: timeRange === h.key ? "#7dd3fc" : "#cbd5e1",
+                            cursor: "pointer",
+                            fontSize: 12
+                          }}
+                        >
+                          {h.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[
-                      { key: "daily", label: "Daily" },
-                      { key: "ytd", label: "YTD" },
-                      { key: "yr1", label: "1Y" },
-                      { key: "yr3", label: "3Y" },
-                      { key: "yr5", label: "5Y" },
-                      { key: "yr10", label: "10Y" },
-                    ].map((h) => (
-                      <button
-                        key={h.key}
-                        onClick={() => setEquityHorizon(h.key)}
-                        style={{
-                          padding: "5px 10px",
-                          borderRadius: 8,
-                          border: `1px solid ${equityHorizon === h.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                          background: equityHorizon === h.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                          color: equityHorizon === h.key ? "#7dd3fc" : "#cbd5e1",
-                          cursor: "pointer",
-                          fontSize: 12
-                        }}
-                      >
-                        {h.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-                  {(equitiesData.benchmarkIndexHistory || []).slice(0, 4).map((row, idx) => (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Universal search across equities data..."
+                      style={{
+                        flex: "1 1 280px",
+                        minWidth: 200,
+                        background: "rgba(15,23,42,0.75)",
+                        border: "1px solid rgba(148,163,184,0.2)",
+                        color: "#e2e8f0",
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        fontSize: 12,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEquitiesSavedViews((prev) => [
+                          ...prev.slice(-4),
+                          {
+                            id: `view-${Date.now()}`,
+                            section: selectedMainCategory,
+                            horizon: timeRange,
+                            query: searchQuery,
+                          },
+                        ])
+                      }
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid rgba(148,163,184,0.2)",
+                        background: "rgba(15,23,42,0.7)",
+                        color: "#cbd5e1",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Save View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEquitiesAlerts((prev) => [
+                          ...prev.slice(-5),
+                          {
+                            id: `alert-${Date.now()}`,
+                            section: selectedMainCategory,
+                            rule: `Monitor ${selectedMainCategory} / ${timeRange}`,
+                          },
+                        ])
+                      }
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid rgba(148,163,184,0.2)",
+                        background: "rgba(15,23,42,0.7)",
+                        color: "#cbd5e1",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Create Alert
+                    </button>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
                     <AnalyticsStatCard
-                      key={row.id || `eq-bmk-${idx}`}
-                      title={`${row.name} (${row.currency || "USD"})`}
-                      value={formatPercent(row?.[equityHorizon])}
-                      subvalue={`${String(equityHorizon).toUpperCase()} · ${row.region || "Region N/A"}`}
-                      source={row.symbol}
-                      tone={Number(row?.[equityHorizon]) >= 0 ? "positive" : "negative"}
+                      title="Benchmarks"
+                      value={String(filteredEquities.benchmarkIndexHistory.length)}
+                      subvalue="Tracked index rows"
+                      source="Snapshot"
+                      tone="info"
                     />
-                  ))}
-                </div>
+                    <AnalyticsStatCard
+                      title="Sectors"
+                      value={String(filteredEquities.sectorPerformance.length)}
+                      subvalue="Performance slices"
+                      source="Snapshot"
+                      tone="neutral"
+                    />
+                    <AnalyticsStatCard
+                      title="Regions"
+                      value={String(filteredEquities.regionalPerformance.length)}
+                      subvalue="Country/region return rows"
+                      source="Snapshot"
+                      tone="neutral"
+                    />
+                    <AnalyticsStatCard
+                      title="Needs Attention"
+                      value={
+                        equitiesData.marketBreadth
+                          ? `${equitiesData.marketBreadth.newLows ?? 0} lows`
+                          : "0"
+                      }
+                      subvalue="Breadth stress proxy"
+                      source="Snapshot"
+                      tone="negative"
+                    />
+                  </div>
 
-                <AnalyticsTableCard
-                  title="Benchmark Index History"
-                  subtitle="Daily, weekly, monthly and annual returns with horizon selector and sparkline trend"
-                  emptyText="No benchmark index history data."
-                  columns={[
-                    { key: "name", label: "Benchmark" },
-                    { key: "currency", label: "CCY" },
-                    { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
-                    { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
-                    { key: "monthly", label: "Monthly", align: "right", render: (v) => formatPercent(v) },
-                    { key: "annual", label: "Annual", align: "right", render: (v) => formatPercent(v) },
-                    { key: "horizon", label: String(equityHorizon).toUpperCase(), align: "right", render: (_v, row) => formatPercent(row?.[equityHorizon]) },
-                    {
-                      key: "sparkline",
-                      label: "Trend",
-                      align: "right",
-                      render: (_v, row) => (
-                        <MiniSparkline
-                          points={row.sparkline || []}
-                          color={Number(row?.[equityHorizon]) >= 0 ? "#4ade80" : "#f87171"}
-                        />
-                      ),
-                    },
-                  ]}
-                  rows={(equitiesData.benchmarkIndexHistory || []).map((row, idx) => ({ id: row.id || `bmk-h-${idx}`, ...row }))}
-                />
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Sector Performance"
-                    subtitle="Rotation and net flows by sector"
-                    emptyText="No sector performance data."
-                    columns={[
-                      { key: "sector", label: "Sector" },
-                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
-                      { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
-                      { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
-                      { key: "flowUsdBn", label: "Flow ($bn)", align: "right", render: (v) => Number(v).toFixed(2) },
-                    ]}
-                    rows={(equitiesData.sectorPerformance || []).map((row, idx) => ({ id: `sec-${idx}`, ...row }))}
-                  />
-
-                  <AnalyticsTableCard
-                    title="Regional Performance"
-                    subtitle="Country/region return spread with currency-aware context"
-                    emptyText="No regional performance data."
-                    columns={[
-                      { key: "region", label: "Region" },
-                      { key: "currency", label: "CCY" },
-                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
-                      { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
-                      { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
-                      { key: "yr3", label: "3Y", align: "right", render: (v) => formatPercent(v) },
-                    ]}
-                    rows={(equitiesData.regionalPerformance || []).map((row, idx) => ({ id: `reg-${idx}`, ...row }))}
-                  />
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Style Factor Exposures"
-                    subtitle="Value, growth, momentum, quality, low-volatility and size"
-                    emptyText="No style factor rows."
-                    columns={[
-                      { key: "factor", label: "Factor" },
-                      { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
-                      { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
-                      { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
-                    ]}
-                    rows={(equitiesData.styleFactors || []).map((row, idx) => ({ id: `factor-${idx}`, ...row }))}
-                  />
-                  <AnalyticsTableCard
-                    title="Rebalance Signals"
-                    subtitle="Target drift and rule-based actions"
-                    emptyText="No rebalance signals."
-                    columns={[
-                      { key: "bucket", label: "Bucket" },
-                      { key: "targetWeight", label: "Target %", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                      { key: "currentWeight", label: "Current %", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                      { key: "driftPct", label: "Drift %", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                      { key: "signal", label: "Signal", align: "right" },
-                    ]}
-                    rows={(equitiesData.rebalanceSignals || []).map((row, idx) => ({ id: `drift-${idx}`, ...row }))}
-                  />
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 13, color: "#94a3b8" }}>Equities Detail Selector</div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[
-                      { key: "metrics", label: "Metrics" },
-                      { key: "moneyMarket", label: "Money Market" },
-                      { key: "reit", label: "REIT" },
-                    ].map((item) => (
-                      <button
-                        key={item.key}
-                        onClick={() => setEquitiesDetailSelector((prev) => (prev === item.key ? "" : item.key))}
-                        style={{
-                          padding: "5px 10px",
-                          borderRadius: 8,
-                          border: `1px solid ${equitiesDetailSelector === item.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                          background: equitiesDetailSelector === item.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                          color: equitiesDetailSelector === item.key ? "#7dd3fc" : "#cbd5e1",
-                          cursor: "pointer",
-                          fontSize: 12
-                        }}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                      {[
+                        { key: "hub", label: "Hub" },
+                        { key: "stocks", label: "Stock Metrics" },
+                        { key: "funds", label: "Funds" },
+                        { key: "mmf", label: "MMF" },
+                        { key: "reits", label: "REITs" },
+                        { key: "market", label: "General Market" },
+                      ].map((section) => {
+                      const active = selectedMainCategory === section.key;
+                      return (
+                        <button
+                          key={section.key}
+                          type="button"
+                          onClick={() => setSelectedMainCategory(section.key)}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: 8,
+                            border: `1px solid ${active ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                            background: active ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                            color: active ? "#7dd3fc" : "#cbd5e1",
+                            cursor: "pointer",
+                            fontSize: 12,
+                          }}
+                        >
+                          {section.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                </div>
 
-                {equitiesDetailSelector === "metrics" ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                  {searchQuery ? (
                     <AnalyticsTableCard
-                      title="Correlation Matrix"
-                      subtitle="Cross-asset diversification matrix"
-                      emptyText="No correlation matrix data."
-                      columns={correlationColumns}
-                      rows={correlationRows}
-                    />
-                    <AnalyticsTableCard
-                      title="Volatility Metrics"
-                      subtitle="Annualized vol, max drawdown, Sharpe and Sortino"
-                      emptyText="No volatility metrics."
+                      title="Universal Search Matches"
+                      subtitle="Stocks, funds, MMFs, REITs and market terms"
+                      emptyText="No matches for current query."
                       columns={[
-                        { key: "asset", label: "Asset" },
-                        { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                        { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                        { key: "sharpe", label: "Sharpe", align: "right", render: (v) => Number(v).toFixed(2) },
-                        { key: "sortino", label: "Sortino", align: "right", render: (v) => Number(v).toFixed(2) },
+                        { key: "type", label: "Type" },
+                        { key: "name", label: "Name" },
+                        { key: "symbol", label: "Symbol", align: "right" },
                       ]}
-                      rows={(equitiesData.volatilityMetrics || []).map((row, idx) => ({ id: `vol-${idx}`, ...row }))}
+                      rows={((equitiesSpecData.searchResults || []).length
+                        ? equitiesSpecData.searchResults
+                        : [
+                            ...filteredEquities.stocks.map((row) => ({ type: "Stock", name: row.name || row.symbol, symbol: row.symbol })),
+                            ...filteredEquities.funds.map((row) => ({ type: "Fund", name: row.name, symbol: row.ticker || row.symbol })),
+                            ...filteredEquities.mmf.map((row) => ({ type: "MMF", name: row.fundName || row.name, symbol: row.id || row.symbol })),
+                            ...filteredEquities.reits.map((row) => ({ type: "REIT", name: row.name || row.symbol, symbol: row.symbol })),
+                          ]
+                      ).slice(0, 10).map((row, idx) => ({
+                        id: `sr-eq-${idx}`,
+                        type: row.type || row.category || "Result",
+                        name: row.name || row.label || row.title || "N/A",
+                        symbol: row.symbol || row.ticker || "—",
+                      }))}
                     />
-                  </div>
-                ) : null}
+                  ) : null}
 
-                {/* Benchmark Performance Summary */}
-                <AnalyticsTableCard
-                  title="Benchmark Performance (CAGR)"
-                  subtitle="Periodic returns for major equity and REIT indices"
-                  emptyText="No benchmark performance data."
-                  columns={[
-                    { key: "name", label: "Index Name" },
-                    { key: "yr1", label: "1Y", align: "right", render: v => formatPercent(v) },
-                    { key: "yr3", label: "3Y", align: "right", render: v => formatPercent(v) },
-                    { key: "yr5", label: "5Y", align: "right", render: v => formatPercent(v) },
-                    { key: "yr10", label: "10Y", align: "right", render: v => formatPercent(v) },
-                    { key: "yr20", label: "20Y", align: "right", render: v => formatPercent(v) },
-                  ]}
-                  rows={equitiesData.benchmarkPerformance}
-                />
-
-                {/* Annual Returns Series */}
-                <AnalyticsTableCard
-                  title="Historical Annual Total Returns"
-                  subtitle="20-year annual series (USD Total Return)"
-                  emptyText="No historical returns data."
-                  headerExtra={
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
-                        {annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE + 1} - {Math.min((annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE, equitiesData.annualReturns.length)} of {equitiesData.annualReturns.length}
-                      </span>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        <button 
-                          disabled={annualReturnsPageIndex === 0}
-                          onClick={() => setAnnualReturnsPageIndex(p => Math.max(0, p - 1))}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 6,
-                            background: "rgba(30,41,59,0.7)",
-                            border: "1px solid rgba(148,163,184,0.2)",
-                            color: annualReturnsPageIndex === 0 ? "#475569" : "#e2e8f0",
-                            cursor: annualReturnsPageIndex === 0 ? "default" : "pointer",
-                            fontSize: 12
-                          }}
-                        >
-                          Prev
-                        </button>
-                        <button 
-                          disabled={(annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= equitiesData.annualReturns.length}
-                          onClick={() => setAnnualReturnsPageIndex(p => p + 1)}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 6,
-                            background: "rgba(30,41,59,0.7)",
-                            border: "1px solid rgba(148,163,184,0.2)",
-                            color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= equitiesData.annualReturns.length ? "#475569" : "#e2e8f0",
-                            cursor: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= equitiesData.annualReturns.length ? "default" : "pointer",
-                            fontSize: 12
-                          }}
-                        >
-                          Next
-                        </button>
+                  {(equitiesSavedViews.length > 0 || equitiesAlerts.length > 0) ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                        Saved views: {equitiesSavedViews.length}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "right" }}>
+                        Alerts: {equitiesAlerts.length}
                       </div>
                     </div>
-                  }
-                  columns={[
-                    { key: "year", label: "Year" },
-                    { key: "sp500", label: "S&P 500", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                    { key: "msciWorld", label: "MSCI World", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                    { key: "msciEm", label: "MSCI EM", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                    { key: "reits", label: "REITs (Global)", align: "right", render: v => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                  ]}
-                  rows={equitiesData.annualReturns.slice(
-                    annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE,
-                    (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE
-                  )}
-                />
-
-                {equitiesDetailSelector === "reit" ? (
-                  <AnalyticsTableCard
-                    title={`REIT Benchmarks (${equitiesData.reitData?.provider || ""})`}
-                    subtitle="FTSE EPRA/Nareit Regional & Country indices"
-                    emptyText="No REIT benchmark data."
-                    columns={[
-                      { key: "name", label: "Region / Country" },
-                      { key: "yr1", label: "1Y", align: "right", render: v => formatPercent(v) },
-                      { key: "yr3", label: "3Y", align: "right", render: v => formatPercent(v) },
-                      { key: "yr5", label: "5Y", align: "right", render: v => formatPercent(v) },
-                    ]}
-                    rows={equitiesData.reitData?.benchmarks || []}
-                  />
-                ) : null}
-
-                {equitiesDetailSelector === "moneyMarket" ? (
-                  <AnalyticsTableCard
-                    title="Money Market Fund (MMF) Yields"
-                    subtitle="Yield ranges for local currency markets"
-                    emptyText="No MMF yield data."
-                    columns={[
-                      { key: "country", label: "Jurisdiction" },
-                      { key: "currency", label: "Currency" },
-                      { key: "yieldRange", label: "Yield Range", align: "right" },
-                      { key: "note", label: "Notes", align: "right" },
-                    ]}
-                    rows={equitiesData.mmfYields}
-                  />
-                ) : null}
-
-                {/* Funds List */}
-                <AnalyticsTableCard
-                  title="Institutional Fund Directory"
-                  subtitle="Representative funds with AUM, fee, domicile and structure metadata"
-                  emptyText="No funds directory data."
-                  columns={[
-                    { key: "provider", label: "Provider" },
-                    { key: "name", label: "Fund Name" },
-                    { key: "domicile", label: "Domicile" },
-                    { key: "assetClass", label: "Asset Class" },
-                    { key: "type", label: "Type" },
-                    { key: "structure", label: "Structure" },
-                    { key: "feeBps", label: "Fee (bps)", align: "right", render: (v) => Number(v).toFixed(0) },
-                    { key: "aum", label: "AUM", align: "right" },
-                  ]}
-                  rows={equitiesData.fundsList}
-                />
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Dividend Data"
-                    subtitle="Yield, payout ratio, ex-dividend date and growth"
-                    emptyText="No dividend rows."
-                    columns={[
-                      { key: "symbol", label: "Symbol" },
-                      { key: "dividendYield", label: "Yield", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                      { key: "payoutRatio", label: "Payout", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                      { key: "exDividendDate", label: "Ex-Date", align: "right" },
-                      { key: "dividendGrowth5Y", label: "5Y Growth", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                    ]}
-                    rows={(equitiesData.dividendData || []).map((row, idx) => ({ id: `dvd-${idx}`, ...row }))}
-                  />
-                  <AnalyticsTableCard
-                    title="Earnings Calendar"
-                    subtitle="Upcoming earnings, revisions and surprise context"
-                    emptyText="No earnings calendar rows."
-                    columns={[
-                      { key: "date", label: "Date" },
-                      { key: "symbol", label: "Ticker" },
-                      { key: "period", label: "Period", align: "right" },
-                      { key: "estimateEPS", label: "Est. EPS", align: "right", render: (v) => Number(v).toFixed(2) },
-                      { key: "previousSurprisePct", label: "Prev Surprise", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                      { key: "revisionTrend", label: "Revision", align: "right" },
-                    ]}
-                    rows={(equitiesData.earningsCalendar || []).map((row, idx) => ({ id: `earn-${idx}`, ...row }))}
-                  />
+                  ) : null}
                 </div>
 
-                <AnalyticsTableCard
-                  title="Valuation Comparison"
-                  subtitle="P/E, P/B, EV/EBITDA, yield and FCF yield"
-                  emptyText="No valuation rows."
-                  columns={[
-                    { key: "scope", label: "Scope" },
-                    { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(1) },
-                    { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(1) },
-                    { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => Number(v).toFixed(1) },
-                    { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                    { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                  ]}
-                  rows={(equitiesData.valuationData || []).map((row, idx) => ({ id: `val-${idx}`, ...row }))}
-                />
+                {selectedMainCategory === "hub" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
+                      {[
+                        { key: "stocks", title: "Stock Metrics", body: "Screener, benchmark, risk and valuation views." },
+                        { key: "funds", title: "Funds", body: "Directory, AUM, fee structure, and REIT links." },
+                        { key: "mmf", title: "MMF", body: "Money market yields and short-duration cash views." },
+                        { key: "reits", title: "REITs", body: "Income, FFO/AFFO, occupancy and property exposure." },
+                        { key: "market", title: "General Market", body: "Sector, region, breadth, flows and actions." },
+                      ].map((card) => (
+                        <button
+                          key={card.key}
+                          type="button"
+                          onClick={() => setSelectedMainCategory(card.key)}
+                          style={{
+                            textAlign: "left",
+                            background: "rgba(0,0,0,0.82)",
+                            border: "1px solid rgba(148,163,184,0.16)",
+                            borderRadius: 12,
+                            padding: 12,
+                            color: "#e2e8f0",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{card.title}</div>
+                          <div style={{ marginTop: 6, fontSize: 12, color: "#94a3b8", lineHeight: 1.4 }}>{card.body}</div>
+                        </button>
+                      ))}
+                    </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Fund Flows"
-                    subtitle="ETF and fund inflows/outflows by segment"
-                    emptyText="No flow rows."
-                    columns={[
-                      { key: "segment", label: "Segment" },
-                      { key: "assetClass", label: "Asset Class" },
-                      { key: "region", label: "Region" },
-                      { key: "period", label: "Period", align: "right" },
-                      { key: "netFlowUsdBn", label: "Net Flow ($bn)", align: "right", render: (v) => Number(v).toFixed(2) },
-                    ]}
-                    rows={(equitiesData.fundFlows || []).map((row, idx) => ({ id: `flow-${idx}`, ...row }))}
-                  />
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Corporate Actions"
-                    subtitle="Splits, buybacks, M&A and special distributions"
-                    emptyText="No corporate action rows."
-                    columns={[
-                      { key: "date", label: "Date" },
-                      { key: "symbol", label: "Ticker" },
-                      { key: "action", label: "Action" },
-                      { key: "detail", label: "Detail", align: "right" },
-                    ]}
-                    rows={(equitiesData.corporateActions || []).map((row, idx) => ({ id: `ca-${idx}`, ...row }))}
-                  />
-                </div>
-
-                {equitiesData.marketBreadth ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-                    <AnalyticsStatCard title="A/D Line" value={String(equitiesData.marketBreadth.adLine ?? "—")} subvalue="Advance/decline line level" source="Breadth" tone="info" />
-                    <AnalyticsStatCard title="New Highs/Lows" value={`${equitiesData.marketBreadth.newHighs ?? 0} / ${equitiesData.marketBreadth.newLows ?? 0}`} subvalue="52-week highs vs lows" source="Breadth" tone="neutral" />
-                    <AnalyticsStatCard title="% Above 50DMA" value={formatPercent(equitiesData.marketBreadth.above50dmaPct ?? 0)} subvalue="Market participation (short trend)" source="Breadth" tone="positive" />
-                    <AnalyticsStatCard title="% Above 200DMA" value={formatPercent(equitiesData.marketBreadth.above200dmaPct ?? 0)} subvalue="Market participation (long trend)" source="Breadth" tone="positive" />
+                    <AnalyticsTableCard
+                      title="Market Snapshot Strip"
+                      subtitle="Top benchmark, sector, region and flow context"
+                      emptyText="No snapshot rows."
+                      columns={[
+                        { key: "group", label: "Group" },
+                        { key: "name", label: "Name" },
+                        { key: "metric", label: timeRange, align: "right" },
+                      ]}
+                      rows={[
+                        ...(filteredEquities.benchmarkIndexHistory || []).slice(0, 2).map((row, idx) => ({
+                          id: `hub-bmk-${idx}`,
+                          group: "Benchmark",
+                          name: row.name,
+                          metric: formatPercent(row?.[rangeKey]),
+                        })),
+                        ...(filteredEquities.sectorPerformance || []).slice(0, 2).map((row, idx) => ({
+                          id: `hub-sec-${idx}`,
+                          group: "Sector",
+                          name: row.sector,
+                          metric: formatPercent(row?.[rangeKey]),
+                        })),
+                        ...(filteredEquities.regionalPerformance || []).slice(0, 2).map((row, idx) => ({
+                          id: `hub-reg-${idx}`,
+                          group: "Region",
+                          name: row.region,
+                          metric: formatPercent(row?.[rangeKey]),
+                        })),
+                      ]}
+                    />
                   </div>
                 ) : null}
 
+                {selectedMainCategory === "stocks" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <AnalyticsTableCard
+                      title="Stock Screener"
+                      subtitle="Filterable list for symbol-level research"
+                      emptyText="No stock rows returned."
+                      columns={[
+                        {
+                          key: "symbol",
+                          label: "Symbol",
+                          render: (v, row) => (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSymbol(String(v || row?.ticker || ""))}
+                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                            >
+                              {v || row?.ticker || "—"}
+                            </button>
+                          ),
+                        },
+                        { key: "name", label: "Name" },
+                        { key: "marketCap", label: "Mkt Cap", align: "right", render: (v) => formatCompactMoney(v) },
+                        { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(2) },
+                        { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(2) },
+                        {
+                          key: "compare",
+                          label: "Compare",
+                          align: "right",
+                          render: (_v, row) => {
+                            const id = String(row?.symbol || row?.ticker || "");
+                            const selected = compareItems.includes(id);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setCompareItems((prev) =>
+                                    selected ? prev.filter((x) => x !== id) : [...prev.slice(-3), id]
+                                  )
+                                }
+                                style={{
+                                  padding: "2px 8px",
+                                  borderRadius: 999,
+                                  border: "1px solid rgba(148,163,184,0.25)",
+                                  background: selected ? "rgba(56,189,248,0.16)" : "rgba(15,23,42,0.4)",
+                                  color: selected ? "#7dd3fc" : "#cbd5e1",
+                                  fontSize: 11,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {selected ? "Added" : "Add"}
+                              </button>
+                            );
+                          },
+                        },
+                      ]}
+                      rows={(filteredEquities.stocks || []).map((row, idx) => ({ id: row.id || `stk-row-${idx}`, ...row }))}
+                    />
+
+                    <AnalyticsTableCard
+                      title="Benchmark Index History"
+                      subtitle="Daily, weekly, monthly and annual returns with sparkline trend"
+                      emptyText="No benchmark index history data."
+                      columns={[
+                        { key: "name", label: "Benchmark" },
+                        { key: "currency", label: "CCY" },
+                        { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                        { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
+                        { key: "monthly", label: "Monthly", align: "right", render: (v) => formatPercent(v) },
+                        { key: "annual", label: "Annual", align: "right", render: (v) => formatPercent(v) },
+                        { key: "horizon", label: timeRange, align: "right", render: (_v, row) => formatPercent(row?.[rangeKey]) },
+                        {
+                          key: "sparkline",
+                          label: "Trend",
+                          align: "right",
+                          render: (_v, row) => (
+                            <MiniSparkline
+                              points={row.sparkline || []}
+                              color={Number(row?.[rangeKey]) >= 0 ? "#4ade80" : "#f87171"}
+                            />
+                          ),
+                        },
+                      ]}
+                      rows={(filteredEquities.benchmarkIndexHistory || []).map((row, idx) => ({ id: row.id || `bmk-h-${idx}`, ...row }))}
+                    />
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                      <AnalyticsTableCard
+                        title="Correlation Matrix"
+                        subtitle="Cross-asset diversification matrix"
+                        emptyText="No correlation matrix data."
+                        columns={correlationColumns}
+                        rows={filteredEquities.correlationRows}
+                      />
+                      <AnalyticsTableCard
+                        title="Volatility Metrics"
+                        subtitle="Annualized vol, max drawdown, Sharpe and Sortino"
+                        emptyText="No volatility metrics."
+                        columns={[
+                          { key: "asset", label: "Asset" },
+                          { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                          { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                          { key: "sharpe", label: "Sharpe", align: "right", render: (v) => Number(v).toFixed(2) },
+                          { key: "sortino", label: "Sortino", align: "right", render: (v) => Number(v).toFixed(2) },
+                        ]}
+                        rows={(filteredEquities.volatilityMetrics || []).map((row, idx) => ({ id: `vol-${idx}`, ...row }))}
+                      />
+                    </div>
+
+                    <AnalyticsTableCard
+                      title="Valuation Comparison"
+                      subtitle="P/E, P/B, EV/EBITDA, yield and FCF yield"
+                      emptyText="No valuation rows."
+                      columns={[
+                        { key: "scope", label: "Scope" },
+                        { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(1) },
+                        { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(1) },
+                        { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => Number(v).toFixed(1) },
+                        { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                        { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                      ]}
+                      rows={(filteredEquities.valuationData || []).map((row, idx) => ({ id: `val-${idx}`, ...row }))}
+                    />
+
+                    {selectedSymbol ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                        <AnalyticsTableCard
+                          title={`Stock Detail: ${selectedSymbol}`}
+                          subtitle="Price history, valuation and ownership snapshot"
+                          emptyText="No stock detail rows."
+                          columns={[
+                            { key: "field", label: "Field" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={Object.entries(equitiesSpecData.stockDetails || {}).map(([field, value], idx) => ({
+                            id: `std-${idx}`,
+                            field,
+                            value: typeof value === "number" ? Number(value).toLocaleString() : String(value),
+                          }))}
+                        />
+                        <AnalyticsTableCard
+                          title="Peer Compare"
+                          subtitle="Selected symbol vs peer set"
+                          emptyText="No peer rows."
+                          columns={[
+                            { key: "symbol", label: "Peer" },
+                            { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(2) },
+                            { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(2) },
+                            { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                          ]}
+                          rows={(equitiesSpecData.stockPeers || []).map((row, idx) => ({ id: `peer-${idx}`, ...row }))}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "funds" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <AnalyticsTableCard
+                      title="Institutional Fund Directory"
+                      subtitle="Representative funds with AUM, fee, domicile and structure metadata"
+                      emptyText="No funds directory data."
+                      columns={[
+                        {
+                          key: "ticker",
+                          label: "Ticker",
+                          render: (v, row) => (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFundId(String(v || row?.symbol || row?.id || ""))}
+                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                            >
+                              {v || row?.symbol || row?.id || "—"}
+                            </button>
+                          ),
+                        },
+                        { key: "provider", label: "Provider" },
+                        { key: "name", label: "Fund Name" },
+                        { key: "domicile", label: "Domicile" },
+                        { key: "assetClass", label: "Asset Class" },
+                        { key: "type", label: "Type" },
+                        { key: "structure", label: "Structure" },
+                        { key: "feeBps", label: "Fee (bps)", align: "right", render: (v) => Number(v).toFixed(0) },
+                        { key: "aum", label: "AUM", align: "right" },
+                        {
+                          key: "compare",
+                          label: "Compare",
+                          align: "right",
+                          render: (_v, row) => {
+                            const id = String(row?.ticker || row?.symbol || row?.id || "");
+                            const selected = compareItems.includes(id);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setCompareItems((prev) =>
+                                    selected ? prev.filter((x) => x !== id) : [...prev.slice(-3), id]
+                                  )
+                                }
+                                style={{
+                                  padding: "2px 8px",
+                                  borderRadius: 999,
+                                  border: "1px solid rgba(148,163,184,0.25)",
+                                  background: selected ? "rgba(56,189,248,0.16)" : "rgba(15,23,42,0.4)",
+                                  color: selected ? "#7dd3fc" : "#cbd5e1",
+                                  fontSize: 11,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {selected ? "Added" : "Add"}
+                              </button>
+                            );
+                          },
+                        },
+                      ]}
+                      rows={filteredEquities.funds}
+                    />
+
+                    <AnalyticsTableCard
+                      title={`REIT Benchmarks (${equitiesData.reitData?.provider || "Provider"})`}
+                      subtitle="Cross-linked from funds allocation context"
+                      emptyText="No REIT benchmark data."
+                      columns={[
+                        { key: "name", label: "Region / Country" },
+                        { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                        { key: "yr3", label: "3Y", align: "right", render: (v) => formatPercent(v) },
+                        { key: "yr5", label: "5Y", align: "right", render: (v) => formatPercent(v) },
+                      ]}
+                      rows={filteredEquities.reitBenchmarks}
+                    />
+
+                    {selectedFundId ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                        <AnalyticsTableCard
+                          title={`Fund Detail: ${selectedFundId}`}
+                          subtitle="NAV, benchmark, AUM, expense and inception"
+                          emptyText="No fund detail available."
+                          columns={[
+                            { key: "field", label: "Field" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={Object.entries(equitiesSpecData.fundDetail || {}).map(([field, value], idx) => ({
+                            id: `fd-${idx}`,
+                            field,
+                            value: typeof value === "number" ? Number(value).toLocaleString() : String(value),
+                          }))}
+                        />
+                        <AnalyticsTableCard
+                          title="Fund Holdings"
+                          subtitle="Top holdings transparency"
+                          emptyText="No holdings returned."
+                          columns={[
+                            { key: "symbol", label: "Holding" },
+                            { key: "weight", label: "Weight", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                            { key: "sector", label: "Sector" },
+                            { key: "region", label: "Region", align: "right" },
+                          ]}
+                          rows={(equitiesSpecData.fundHoldings || []).map((row, idx) => ({ id: `fh-${idx}`, ...row }))}
+                        />
+                      </div>
+                    ) : null}
+
+                    {compareItems.length > 1 ? (
+                      <AnalyticsTableCard
+                        title="Fund Compare View"
+                        subtitle="Side-by-side comparison for selected items"
+                        emptyText="No compare rows."
+                        columns={[
+                          { key: "id", label: "ID" },
+                          { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                          { key: "aum", label: "AUM", align: "right" },
+                          { key: "feeBps", label: "Fee (bps)", align: "right", render: (v) => Number(v).toFixed(0) },
+                        ]}
+                        rows={(equitiesSpecData.fundCompare || []).map((row, idx) => ({ id: row.id || `fc-${idx}`, ...row }))}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "mmf" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <AnalyticsTableCard
+                      title="MMF Directory"
+                      subtitle="Dedicated lane for money market funds"
+                      emptyText="No MMF rows."
+                      columns={[
+                        {
+                          key: "id",
+                          label: "Fund",
+                          render: (v, row) => (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedMMFId(String(v || row?.symbol || row?.fundName || ""))}
+                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                            >
+                              {row?.fundName || row?.name || v || "MMF"}
+                            </button>
+                          ),
+                        },
+                        { key: "currency", label: "Currency" },
+                        { key: "yield", label: "Yield", align: "right", render: (v, row) => row?.yieldRange || v || "—" },
+                        { key: "maturity", label: "Maturity", align: "right" },
+                        { key: "liquidity", label: "Liquidity", align: "right" },
+                        { key: "provider", label: "Provider", align: "right" },
+                      ]}
+                      rows={filteredEquities.mmf}
+                    />
+
+                    {selectedMMFId ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                        <AnalyticsTableCard
+                          title={`MMF Detail: ${selectedMMFId}`}
+                          subtitle="Yield, DLA/WLA, WAM/WAL and redemption terms"
+                          emptyText="No MMF detail returned."
+                          columns={[
+                            { key: "field", label: "Field" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={Object.entries(equitiesSpecData.mmfDetail || {}).map(([field, value], idx) => ({
+                            id: `md-${idx}`,
+                            field,
+                            value: typeof value === "number" ? Number(value).toLocaleString() : String(value),
+                          }))}
+                        />
+                        <AnalyticsTableCard
+                          title="MMF Liquidity Panel"
+                          subtitle="Daily and weekly liquid assets"
+                          emptyText="No liquidity rows."
+                          columns={[
+                            { key: "date", label: "Date" },
+                            { key: "dla", label: "DLA", align: "right" },
+                            { key: "wla", label: "WLA", align: "right" },
+                            { key: "timeToLiquidate", label: "Time to Liquidate", align: "right" },
+                          ]}
+                          rows={(equitiesSpecData.mmfLiquidity || []).map((row, idx) => ({ id: `ml-${idx}`, ...row }))}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "reits" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <AnalyticsTableCard
+                      title="REIT Directory"
+                      subtitle="Dedicated REIT lane with property and income metrics"
+                      emptyText="No REIT rows."
+                      columns={[
+                        {
+                          key: "symbol",
+                          label: "Symbol",
+                          render: (v) => (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSymbol(String(v || ""))}
+                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                            >
+                              {v || "—"}
+                            </button>
+                          ),
+                        },
+                        { key: "propertyType", label: "Property Type" },
+                        { key: "region", label: "Region" },
+                        { key: "dividendYield", label: "Yield", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                        { key: "marketCap", label: "Mkt Cap", align: "right", render: (v) => formatCompactMoney(v) },
+                      ]}
+                      rows={(filteredEquities.reits || []).map((row, idx) => ({ id: row.id || `reit-row-${idx}`, ...row }))}
+                    />
+
+                    {selectedSymbol ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                        <AnalyticsTableCard
+                          title={`REIT Detail: ${selectedSymbol}`}
+                          subtitle="FFO, AFFO, payout ratio, leverage and occupancy"
+                          emptyText="No REIT detail returned."
+                          columns={[
+                            { key: "field", label: "Field" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={Object.entries(equitiesSpecData.reitDetail || {}).map(([field, value], idx) => ({
+                            id: `rd-${idx}`,
+                            field,
+                            value: typeof value === "number" ? Number(value).toLocaleString() : String(value),
+                          }))}
+                        />
+                        <AnalyticsTableCard
+                          title="REIT Income Metrics"
+                          subtitle="Dividend history and FFO/AFFO trend rows"
+                          emptyText="No REIT income rows."
+                          columns={[
+                            { key: "period", label: "Period" },
+                            { key: "dividend", label: "Dividend", align: "right" },
+                            { key: "payoutRatio", label: "Payout", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                            { key: "ffo", label: "FFO", align: "right" },
+                          ]}
+                          rows={(equitiesSpecData.reitIncome || []).map((row, idx) => ({ id: `ri-${idx}`, ...row }))}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "market" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[
+                        { key: "benchmarks", label: "Benchmarks" },
+                        { key: "sectors", label: "Sectors" },
+                        { key: "regions", label: "Regions" },
+                        { key: "breadth", label: "Breadth" },
+                        { key: "flows", label: "Flows" },
+                        { key: "actions", label: "Actions" },
+                      ].map((item) => (
+                        <button
+                          key={item.key}
+                          type="button"
+                          onClick={() => setSelectedMarketView(item.key)}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: 8,
+                            border: `1px solid ${selectedMarketView === item.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                            background: selectedMarketView === item.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                            color: selectedMarketView === item.key ? "#7dd3fc" : "#cbd5e1",
+                            cursor: "pointer",
+                            fontSize: 12,
+                          }}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {selectedMarketView === "benchmarks" ? (
+                      <AnalyticsTableCard
+                        title="Benchmark History Table"
+                        subtitle="Broad market performance and trend"
+                        emptyText="No benchmark rows."
+                        columns={[
+                          { key: "name", label: "Benchmark" },
+                          { key: "currency", label: "CCY" },
+                          { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                          { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
+                          { key: "monthly", label: "Monthly", align: "right", render: (v) => formatPercent(v) },
+                          { key: "annual", label: "Annual", align: "right", render: (v) => formatPercent(v) },
+                          { key: "horizon", label: timeRange, align: "right", render: (_v, row) => formatPercent(row?.[rangeKey]) },
+                        ]}
+                        rows={((equitiesSpecData.marketBenchmarks || []).length ? equitiesSpecData.marketBenchmarks : filteredEquities.benchmarkIndexHistory).map((row, idx) => ({ id: row.id || `mb-${idx}`, ...row }))}
+                      />
+                    ) : null}
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                      {selectedMarketView === "sectors" ? (
+                      <AnalyticsTableCard
+                        title="Sector Performance"
+                        subtitle="Rotation and net flows by sector"
+                        emptyText="No sector performance data."
+                        columns={[
+                          { key: "sector", label: "Sector" },
+                          { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                          { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
+                          { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                          { key: "flowUsdBn", label: "Flow ($bn)", align: "right", render: (v) => Number(v).toFixed(2) },
+                        ]}
+                        rows={((equitiesSpecData.marketSectors || []).length ? equitiesSpecData.marketSectors : filteredEquities.sectorPerformance).map((row, idx) => ({ id: `sec-${idx}`, ...row }))}
+                      />
+                      ) : null}
+
+                      {selectedMarketView === "regions" ? (
+                      <AnalyticsTableCard
+                        title="Regional Performance"
+                        subtitle="Country/region return spread with currency-aware context"
+                        emptyText="No regional performance data."
+                        columns={[
+                          { key: "region", label: "Region" },
+                          { key: "currency", label: "CCY" },
+                          { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
+                          { key: "ytd", label: "YTD", align: "right", render: (v) => formatPercent(v) },
+                          { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                          { key: "yr3", label: "3Y", align: "right", render: (v) => formatPercent(v) },
+                        ]}
+                        rows={((equitiesSpecData.marketRegions || []).length ? equitiesSpecData.marketRegions : filteredEquities.regionalPerformance).map((row, idx) => ({ id: `reg-${idx}`, ...row }))}
+                      />
+                      ) : null}
+                    </div>
+
+                    {selectedMarketView === "flows" ? (
+                    <AnalyticsTableCard
+                      title="Fund Flows"
+                      subtitle="ETF and fund inflows/outflows by segment"
+                      emptyText="No flow rows."
+                      columns={[
+                        { key: "segment", label: "Segment" },
+                        { key: "assetClass", label: "Asset Class" },
+                        { key: "region", label: "Region" },
+                        { key: "period", label: "Period", align: "right" },
+                        { key: "netFlowUsdBn", label: "Net Flow ($bn)", align: "right", render: (v) => Number(v).toFixed(2) },
+                      ]}
+                      rows={((equitiesSpecData.fundFlows || []).length ? equitiesSpecData.fundFlows : filteredEquities.fundFlows).map((row, idx) => ({ id: `flow-${idx}`, ...row }))}
+                    />
+                    ) : null}
+
+                    {selectedMarketView === "actions" ? (
+                    <AnalyticsTableCard
+                      title="Corporate Actions"
+                      subtitle="Splits, buybacks, M&A and special distributions"
+                      emptyText="No corporate action rows."
+                      columns={[
+                        { key: "date", label: "Date" },
+                        { key: "symbol", label: "Ticker" },
+                        { key: "action", label: "Action" },
+                        { key: "detail", label: "Detail", align: "right" },
+                      ]}
+                      rows={((equitiesSpecData.marketActions || []).length ? equitiesSpecData.marketActions : filteredEquities.corporateActions).map((row, idx) => ({ id: `ca-${idx}`, ...row }))}
+                    />
+                    ) : null}
+
+                    {selectedMarketView === "breadth" && (equitiesSpecData.marketBreadth || equitiesData.marketBreadth) ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+                        <AnalyticsStatCard title="A/D Line" value={String((equitiesSpecData.marketBreadth || equitiesData.marketBreadth)?.adLine ?? "—")} subvalue="Advance/decline line level" source="Breadth" tone="info" />
+                        <AnalyticsStatCard title="New Highs/Lows" value={`${(equitiesSpecData.marketBreadth || equitiesData.marketBreadth)?.newHighs ?? 0} / ${(equitiesSpecData.marketBreadth || equitiesData.marketBreadth)?.newLows ?? 0}`} subvalue="52-week highs vs lows" source="Breadth" tone="neutral" />
+                        <AnalyticsStatCard title="% Above 50DMA" value={formatPercent((equitiesSpecData.marketBreadth || equitiesData.marketBreadth)?.above50dmaPct ?? 0)} subvalue="Market participation (short trend)" source="Breadth" tone="positive" />
+                        <AnalyticsStatCard title="% Above 200DMA" value={formatPercent((equitiesSpecData.marketBreadth || equitiesData.marketBreadth)?.above200dmaPct ?? 0)} subvalue="Market participation (long trend)" source="Breadth" tone="positive" />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {selectedMainCategory !== "hub" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <AnalyticsTableCard
+                      title="Benchmark Performance (CAGR)"
+                      subtitle="Periodic returns for major equity and REIT indices"
+                      emptyText="No benchmark performance data."
+                      columns={[
+                        { key: "name", label: "Index Name" },
+                        { key: "yr1", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                        { key: "yr3", label: "3Y", align: "right", render: (v) => formatPercent(v) },
+                        { key: "yr5", label: "5Y", align: "right", render: (v) => formatPercent(v) },
+                        { key: "yr10", label: "10Y", align: "right", render: (v) => formatPercent(v) },
+                        { key: "yr20", label: "20Y", align: "right", render: (v) => formatPercent(v) },
+                      ]}
+                      rows={filteredEquities.benchmarkPerformance}
+                    />
+
+                    <AnalyticsTableCard
+                      title="Historical Annual Total Returns"
+                      subtitle="20-year annual series (USD Total Return)"
+                      emptyText="No historical returns data."
+                      headerExtra={
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                            {filteredEquities.annualReturns.length ? annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE + 1 : 0} - {Math.min((annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE, filteredEquities.annualReturns.length)} of {filteredEquities.annualReturns.length}
+                          </span>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              disabled={annualReturnsPageIndex === 0}
+                              onClick={() => setAnnualReturnsPageIndex((p) => Math.max(0, p - 1))}
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                background: "rgba(30,41,59,0.7)",
+                                border: "1px solid rgba(148,163,184,0.2)",
+                                color: annualReturnsPageIndex === 0 ? "#475569" : "#e2e8f0",
+                                cursor: annualReturnsPageIndex === 0 ? "default" : "pointer",
+                                fontSize: 12
+                              }}
+                            >
+                              Prev
+                            </button>
+                            <button
+                              disabled={(annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length}
+                              onClick={() => setAnnualReturnsPageIndex((p) => p + 1)}
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                background: "rgba(30,41,59,0.7)",
+                                border: "1px solid rgba(148,163,184,0.2)",
+                                color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "#475569" : "#e2e8f0",
+                                cursor: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "default" : "pointer",
+                                fontSize: 12
+                              }}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      }
+                      columns={[
+                        { key: "year", label: "Year" },
+                        { key: "sp500", label: "S&P 500", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                        { key: "msciWorld", label: "MSCI World", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                        { key: "msciEm", label: "MSCI EM", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                        { key: "reits", label: "REITs (Global)", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                      ]}
+                      rows={filteredEquities.annualReturns.slice(
+                        annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE,
+                        (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE
+                      )}
+                    />
+                  </div>
+                ) : null}
               </div>
             </>
           ) : (
@@ -1874,11 +2591,58 @@ export function AnalyticsModule({ backendUrl }) {
                   title="Macro Time Series"
                   subtitle={`${selectedIndicator} · ${selectedGeoCode} · ${chartRange} (${chartMode})`}
                   emptyText="No time-series rows."
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        {(macroTimeseries || []).length === 0
+                          ? "0 - 0"
+                          : `${(macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE) + 1} - ${Math.min((macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE, (macroTimeseries || []).length)}`
+                        } of {(macroTimeseries || []).length}
+                      </span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button
+                          disabled={macroTimeseriesPageIndex === 0}
+                          onClick={() => setMacroTimeseriesPageIndex((p) => Math.max(0, p - 1))}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            background: "rgba(30,41,59,0.7)",
+                            border: "1px solid rgba(148,163,184,0.2)",
+                            color: macroTimeseriesPageIndex === 0 ? "#475569" : "#e2e8f0",
+                            cursor: macroTimeseriesPageIndex === 0 ? "default" : "pointer",
+                            fontSize: 12
+                          }}
+                        >
+                          Prev
+                        </button>
+                        <button
+                          disabled={(macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length}
+                          onClick={() => setMacroTimeseriesPageIndex((p) => p + 1)}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            background: "rgba(30,41,59,0.7)",
+                            border: "1px solid rgba(148,163,184,0.2)",
+                            color: (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length ? "#475569" : "#e2e8f0",
+                            cursor: (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length ? "default" : "pointer",
+                            fontSize: 12
+                          }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  }
                   columns={[
                     { key: "date", label: "Date" },
                     { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
                   ]}
-                  rows={(macroTimeseries || []).map((row, idx) => ({ id: row.id || `ts-${idx}`, ...row }))}
+                  rows={(macroTimeseries || [])
+                    .slice(
+                      macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE,
+                      (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE
+                    )
+                    .map((row, idx) => ({ id: row.id || `ts-${idx}`, ...row }))}
                 />
               ) : null}
 
