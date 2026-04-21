@@ -109,6 +109,12 @@ export const OptionsModule = ({
   const [simulatorError, setSimulatorError] = useState("");
   const [strikeWindow, setStrikeWindow] = useState("all");
   const [earningsCalendar, setEarningsCalendar] = useState([]);
+  const supplementalFetchStateRef = useRef({
+    chainInFlight: new Set(),
+    spotInFlight: new Set(),
+    lastChainFetchAt: {},
+    lastSpotFetchAt: {}
+  });
   
 // strategy states removed, now handled inline
 const [strategySubmitting, setStrategySubmitting] = useState(false);
@@ -129,6 +135,22 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
     return calculateOptionPnL(trade, tradeChain, tradeSpot);
   };
 
+  const getTradeEntryPremium = (trade) => {
+    const direct = Number(trade?.netPremiumAtEntry);
+    if (Number.isFinite(direct)) return direct;
+    const entry = Number(trade?.entryPrice);
+    if (Number.isFinite(entry)) return entry;
+    const price = Number(trade?.price);
+    if (Number.isFinite(price)) return price;
+    if (!Array.isArray(trade?.legs)) return 0;
+    const fromLegs = trade.legs.reduce((acc, leg) => {
+      const v = Number(leg?.entryPrice);
+      if (!Number.isFinite(v)) return acc;
+      return acc + (String(leg?.side || "").toLowerCase() === "short" ? -v : v);
+    }, 0);
+    return Number.isFinite(fromLegs) ? fromLegs : 0;
+  };
+
   const syncActiveTradeSnapshots = (assetSymbol, syncedChain, syncedSpot) => {
     if (!setActiveOptionsTrades) return;
     setActiveOptionsTrades((prev) => {
@@ -138,13 +160,7 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
         if (String(trade?.asset || "").toUpperCase() !== String(assetSymbol || "").toUpperCase()) {
           return trade;
         }
-        const entryPremium = Number.isFinite(Number(trade?.netPremiumAtEntry))
-          ? Number(trade.netPremiumAtEntry)
-          : Number.isFinite(Number(trade?.entryPrice))
-          ? Number(trade.entryPrice)
-          : Number.isFinite(Number(trade?.price))
-          ? Number(trade.price)
-          : 0;
+        const entryPremium = getTradeEntryPremium(trade);
         const qty = Number(trade?.qty ?? trade?.quantity);
         const normalizedQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
         const metrics = calculateOptionPnL(trade, syncedChain, syncedSpot);
@@ -315,45 +331,68 @@ useEffect(() => {
     if (!activeOptionsTrades || activeOptionsTrades.length === 0) return;
     
     const assetsWithTrades = Array.from(new Set(activeOptionsTrades.map(t => t.asset)));
+    const fetchState = supplementalFetchStateRef.current;
+    const now = Date.now();
     
     assetsWithTrades.forEach(asset => {
+      const symbol = String(asset || "").toUpperCase();
+      if (!symbol) return;
       // If not in cache and not the active asset
-      if (!multiChainCache[asset] && asset !== activeAsset) {
+      if (!multiChainCache[symbol] && symbol !== String(activeAsset || "").toUpperCase()) {
+        const lastFetchAt = Number(fetchState.lastChainFetchAt[symbol] || 0);
+        if (fetchState.chainInFlight.has(symbol) || now - lastFetchAt < OPTIONS_CHAIN_REFRESH_MS) {
+          return;
+        }
+        fetchState.chainInFlight.add(symbol);
+        fetchState.lastChainFetchAt[symbol] = now;
         fetch(`${BACKEND_URL}/options/crypto`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ currency: asset })
+          body: JSON.stringify({ currency: symbol })
         })
           .then(res => res.json())
           .then(data => {
             if (data && data.chain) {
-              setMultiChainCache(prev => ({ ...prev, [asset]: data.chain }));
-              const spot = Number(spotPrices?.[asset]) || null;
-              syncActiveTradeSnapshots(asset, data.chain, spot);
+              setMultiChainCache(prev => ({ ...prev, [symbol]: data.chain }));
+              const spot = Number(spotPrices?.[symbol]) || Number(data?.market_price) || Number(data?.spot) || null;
+              if (Number.isFinite(spot) && spot > 0) {
+                setSpotPrices(prev => ({ ...prev, [symbol]: spot }));
+              }
+              syncActiveTradeSnapshots(symbol, data.chain, spot);
             }
           })
-          .catch(err => console.error(`Failed to fetch supplementary chain for ${asset}`, err));
+          .catch(err => console.error(`Failed to fetch supplementary chain for ${symbol}`, err))
+          .finally(() => {
+            fetchState.chainInFlight.delete(symbol);
+          });
       }
     });
 
     // Also sync multiChainCache with the current active chain
     if (chain && chain.length > 0) {
-       setMultiChainCache(prev => ({ ...prev, [activeAsset]: chain }));
+       setMultiChainCache(prev => (prev[activeAsset] === chain ? prev : { ...prev, [activeAsset]: chain }));
     }
 
     // NEW: Also ensure we have spot prices for these assets
     assetsWithTrades.forEach(asset => {
-      if (!spotPrices[asset]) {
-        fetch(`${BACKEND_URL}/prices?type=crypto&symbols=${asset}`)
+      const symbol = String(asset || "").toUpperCase();
+      if (!symbol || Number(spotPrices[symbol]) > 0) return;
+      const lastFetchAt = Number(fetchState.lastSpotFetchAt[symbol] || 0);
+      if (fetchState.spotInFlight.has(symbol) || now - lastFetchAt < 120000) return;
+      fetchState.spotInFlight.add(symbol);
+      fetchState.lastSpotFetchAt[symbol] = now;
+      fetch(`${BACKEND_URL}/prices?type=crypto&symbols=${symbol}`)
           .then(res => res.json())
           .then(data => {
-             const price = Number(data?.prices?.[asset]?.price);
+             const price = Number(data?.prices?.[symbol]?.price);
              if (price) {
-               setSpotPrices(prev => ({ ...prev, [asset]: price }));
+               setSpotPrices(prev => ({ ...prev, [symbol]: price }));
              }
           })
-          .catch(err => console.error(`Failed to fetch spot price for ${asset}`, err));
-      }
+          .catch(err => console.error(`Failed to fetch spot price for ${symbol}`, err))
+          .finally(() => {
+            fetchState.spotInFlight.delete(symbol);
+          });
     });
   }, [activeOptionsTrades, activeAsset, chain]);
 
@@ -719,6 +758,41 @@ useEffect(() => {
     return totals;
   }, [activeOptionsTrades, multiChainCache, chain, spotPrices, activeAsset]);
 
+  const marketGreekSummary = useMemo(() => {
+    const rows = Array.isArray(filteredChain) && filteredChain.length > 0 ? filteredChain : chain;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 };
+    }
+    const centerSpot = Number(activeSpot) > 0 ? Number(activeSpot) : Number(rows[Math.floor(rows.length / 2)]?.strike || 0);
+    const nearest = rows.reduce((best, row) => {
+      if (!best) return row;
+      const currentDist = Math.abs(Number(row?.strike || 0) - centerSpot);
+      const bestDist = Math.abs(Number(best?.strike || 0) - centerSpot);
+      return currentDist < bestDist ? row : best;
+    }, null);
+    const call = nearest?.call || {};
+    const put = nearest?.put || {};
+    const callDelta = Number(call?.delta);
+    const putDelta = Number(put?.delta);
+    const callGamma = Number(call?.gamma);
+    const putGamma = Number(put?.gamma);
+    const callTheta = Number(call?.theta);
+    const putTheta = Number(put?.theta);
+    const callVega = Number(call?.vega);
+    const putVega = Number(put?.vega);
+    return {
+      delta: (Number.isFinite(callDelta) ? callDelta : 0) + (Number.isFinite(putDelta) ? putDelta : 0),
+      gamma: (Number.isFinite(callGamma) ? callGamma : 0) + (Number.isFinite(putGamma) ? putGamma : 0),
+      theta: (Number.isFinite(callTheta) ? callTheta : 0) + (Number.isFinite(putTheta) ? putTheta : 0),
+      vega: (Number.isFinite(callVega) ? callVega : 0) + (Number.isFinite(putVega) ? putVega : 0),
+      rho: 0
+    };
+  }, [filteredChain, chain, activeSpot]);
+
+  const hasActiveTrades = Array.isArray(activeOptionsTrades) && activeOptionsTrades.length > 0;
+  const hasPortfolioGreeks = Object.values(greekSummary).some((v) => Math.abs(Number(v) || 0) > 1e-6);
+  const displayGreeks = hasActiveTrades && hasPortfolioGreeks ? greekSummary : marketGreekSummary;
+
   const termStructureRows = useMemo(() => {
     return (availableExpiries || []).map((expiryTs) => {
       const days = Math.max(1, Math.round((Number(expiryTs) * 1000 - Date.now()) / (24 * 60 * 60 * 1000)));
@@ -826,7 +900,7 @@ useEffect(() => {
                         {trade.legs?.[0]?.expiry || "—"}
                       </td>
                       <td style={{ color: "#94a3b8" }}>
-                        ${(trade.netPremiumAtEntry || 0).toFixed(2)}
+                        ${getTradeEntryPremium(trade).toFixed(2)}
                       </td>
                       <td style={{ fontWeight: 600, color: "#e2e8f0" }}>
                         ${(currentMark || 0).toFixed(2)}
@@ -888,15 +962,19 @@ useEffect(() => {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px", marginBottom: "10px" }}>
           {[
-            { label: "Portfolio Delta", value: greekSummary.delta },
-            { label: "Portfolio Theta", value: greekSummary.theta },
-            { label: "Portfolio Gamma", value: greekSummary.gamma },
-            { label: "Portfolio Vega", value: greekSummary.vega },
-            { label: "Portfolio Rho", value: greekSummary.rho }
+            { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Delta" : "Market Delta (ATM)", value: displayGreeks.delta },
+            { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Theta" : "Market Theta (ATM)", value: displayGreeks.theta },
+            { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Gamma" : "Market Gamma (ATM)", value: displayGreeks.gamma },
+            { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Vega" : "Market Vega (ATM)", value: displayGreeks.vega },
+            { label: "Implied Volatility", value: Number(metrics?.iv || 0) }
           ].map((item) => (
             <div key={item.label} className="journal-stat-card">
               <span className="journal-stat-label">{item.label}</span>
-              <span className="journal-stat-value">{Number(item.value || 0).toFixed(3)}</span>
+              <span className="journal-stat-value">
+                {item.label === "Implied Volatility"
+                  ? `${(Number(item.value || 0) * 100).toFixed(2)}%`
+                  : Number(item.value || 0).toFixed(3)}
+              </span>
             </div>
           ))}
         </div>

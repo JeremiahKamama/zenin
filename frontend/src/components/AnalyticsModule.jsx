@@ -417,8 +417,10 @@ export function AnalyticsModule({ backendUrl }) {
   const [commodityFlowMode, setCommodityFlowMode] = useState("etf");
   const [commoditySearchQuery, setCommoditySearchQuery] = useState("");
   const [commoditySearchRows, setCommoditySearchRows] = useState([]);
+  const [commodityAssetsPageIndex, setCommodityAssetsPageIndex] = useState(0);
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
   const MACRO_TIMESERIES_PAGE_SIZE = 10;
+  const COMMODITY_ASSETS_PAGE_SIZE = 5;
 
   const macroGeoTypePath = selectedGeoType === "Country" ? "country" : selectedGeoType === "Region" ? "region" : "global";
 
@@ -697,6 +699,32 @@ export function AnalyticsModule({ backendUrl }) {
         { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", latestPrice: 2.34, dailyChangePct: 1.1, ytdChangePct: -3.2, oneYearReturnPct: -8.6 },
       ];
       const fallbackSeries = Array.from({ length: 20 }, (_, i) => ({ date: `T-${20 - i}`, value: 100 + i * 0.6 + Math.sin(i / 3) * 2.4 }));
+      const fallbackFundamentals = [
+        { metric: "Inventory Level", value: 412.4, unit: "M bbl", sourceType: "Inventory, production, supply-demand datasets", sourceWhy: "Core commodity drivers" },
+        { metric: "Production Level", value: 99.8, unit: "M bpd", sourceType: "Inventory, production, supply-demand datasets", sourceWhy: "Core commodity drivers" },
+        { metric: "Demand Level", value: 101.2, unit: "M bpd", sourceType: "Inventory, production, supply-demand datasets", sourceWhy: "Core commodity drivers" },
+      ];
+      const fallbackFlows = [
+        { date: new Date().toISOString().slice(0, 10), type: "ETF Flow", value: 230000000, trend: "Inflow", sourceType: "ETF/fund flow data + futures positioning", sourceWhy: "Captures both capital and sentiment" },
+        { date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), type: "Futures Positioning", value: -180000000, trend: "Reduce longs", sourceType: "ETF/fund flow data + futures positioning", sourceWhy: "Captures both capital and sentiment" },
+      ];
+      const fallbackSeasonality = [
+        { month: "Jan", avgReturnPct: 1.1, seasonalityScore: 0.62, sourceType: "Historical futures settlement data", sourceWhy: "Best for custom seasonal charts" },
+        { month: "Feb", avgReturnPct: 0.4, seasonalityScore: 0.54, sourceType: "Historical futures settlement data", sourceWhy: "Best for custom seasonal charts" },
+        { month: "Mar", avgReturnPct: -0.3, seasonalityScore: 0.47, sourceType: "Historical futures settlement data", sourceWhy: "Best for custom seasonal charts" },
+      ];
+      const fallbackCurve = [
+        { contract: "Front Month", price: 82.1, spread: 0, curveStructure: "Contango", sourceType: "Futures chain / contract data", sourceWhy: "Needed for contango/backwardation/spreads" },
+        { contract: "3M", price: 83.0, spread: 1.1, curveStructure: "Contango", sourceType: "Futures chain / contract data", sourceWhy: "Needed for contango/backwardation/spreads" },
+        { contract: "6M", price: 83.8, spread: 2.0, curveStructure: "Contango", sourceType: "Futures chain / contract data", sourceWhy: "Needed for contango/backwardation/spreads" },
+      ];
+      const fallbackCalendar = [
+        { date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), event: "EIA Weekly Petroleum Status Report", importance: "high", sourceType: "Economic calendar API", sourceWhy: "Release timing and actual vs forecast" },
+        { date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), event: "USDA WASDE Update", importance: "high", sourceType: "Economic calendar API", sourceWhy: "Release timing and actual vs forecast" },
+      ];
+      const fallbackAlerts = [
+        { id: "cmd-default-alert", symbol: selectedCommoditySymbol, rule: `Alert when ${selectedCommoditySymbol} moves > 2%`, status: "active", sourceType: "Your own rule engine", sourceWhy: "Flexible user-defined triggers" },
+      ];
 
       const rowsFrom = (payload, key) =>
         Array.isArray(payload?.[key]) ? payload[key] : Array.isArray(payload) ? payload : [];
@@ -711,16 +739,16 @@ export function AnalyticsModule({ backendUrl }) {
         overview: overviewRes?.overview || overviewRes || prev.overview,
         list: rowsFrom(listRes, "items").length ? rowsFrom(listRes, "items") : rowsFrom(listRes, "list").length ? rowsFrom(listRes, "list") : fallbackList,
         priceSeries: rowsFrom(priceRes, "series").length ? rowsFrom(priceRes, "series") : fallbackSeries,
-        fundamentals: rowsFrom(fundamentalsRes, "items").length ? rowsFrom(fundamentalsRes, "items") : rowsFrom(fundamentalsRes, "metrics"),
-        flows: rowsFrom(flowsRes, "items").length ? rowsFrom(flowsRes, "items") : rowsFrom(flowsRes, "flows"),
-        seasonality: rowsFrom(seasonalityRes, "items").length ? rowsFrom(seasonalityRes, "items") : rowsFrom(seasonalityRes, "seasonality"),
-        curve: rowsFrom(curveRes, "points").length ? rowsFrom(curveRes, "points") : rowsFrom(curveRes, "curve"),
+        fundamentals: rowsFrom(fundamentalsRes, "items").length ? rowsFrom(fundamentalsRes, "items") : rowsFrom(fundamentalsRes, "metrics").length ? rowsFrom(fundamentalsRes, "metrics") : fallbackFundamentals,
+        flows: rowsFrom(flowsRes, "items").length ? rowsFrom(flowsRes, "items") : rowsFrom(flowsRes, "flows").length ? rowsFrom(flowsRes, "flows") : fallbackFlows,
+        seasonality: rowsFrom(seasonalityRes, "items").length ? rowsFrom(seasonalityRes, "items") : rowsFrom(seasonalityRes, "seasonality").length ? rowsFrom(seasonalityRes, "seasonality") : fallbackSeasonality,
+        curve: rowsFrom(curveRes, "points").length ? rowsFrom(curveRes, "points") : rowsFrom(curveRes, "curve").length ? rowsFrom(curveRes, "curve") : fallbackCurve,
         compare: rowsFrom(compareRes, "rows").length ? rowsFrom(compareRes, "rows") : rowsFrom(compareRes, "compare"),
-        calendar: rowsFrom(calendarRes, "events").length ? rowsFrom(calendarRes, "events") : rowsFrom(calendarRes, "calendar"),
-        alerts: rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : rowsFrom(alertsRes, "alerts"),
+        calendar: rowsFrom(calendarRes, "events").length ? rowsFrom(calendarRes, "events") : rowsFrom(calendarRes, "calendar").length ? rowsFrom(calendarRes, "calendar") : fallbackCalendar,
+        alerts: rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : rowsFrom(alertsRes, "alerts").length ? rowsFrom(alertsRes, "alerts") : fallbackAlerts,
         correlation: rowsFrom(correlationRes, "rows").length ? rowsFrom(correlationRes, "rows") : rowsFrom(correlationRes, "correlation"),
       }));
-      setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items")));
+      setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : fallbackAlerts));
     };
 
     loadCommodities();
@@ -1087,6 +1115,10 @@ export function AnalyticsModule({ backendUrl }) {
     const movers = [...rows].sort((a, b) => Math.abs(Number(b?.dailyChangePct) || 0) - Math.abs(Number(a?.dailyChangePct) || 0)).slice(0, 5);
     return { rows, movers };
   }, [commoditiesData.list, commoditySearchQuery, selectedCommodityGroup]);
+
+  useEffect(() => {
+    setCommodityAssetsPageIndex(0);
+  }, [selectedCommodityGroup, commoditySearchQuery, commoditiesData.list.length]);
 
   const currentUpdatedAt =
     activeTab === "crypto"
@@ -3337,6 +3369,49 @@ export function AnalyticsModule({ backendUrl }) {
                 title="Commodities Landing Hub"
                 subtitle="Group, region, pricing and return context"
                 emptyText="No commodity rows."
+                headerExtra={
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                      {(commodityAssetsPageIndex * COMMODITY_ASSETS_PAGE_SIZE) + 1}
+                      {" - "}
+                      {Math.min((commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE, (filteredCommodities.rows || []).length)}
+                      {" of "}
+                      {(filteredCommodities.rows || []).length}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={commodityAssetsPageIndex === 0}
+                      onClick={() => setCommodityAssetsPageIndex((p) => Math.max(0, p - 1))}
+                      style={{
+                        padding: "4px 8px",
+                        borderRadius: 6,
+                        background: "rgba(30,41,59,0.7)",
+                        border: "1px solid rgba(148,163,184,0.2)",
+                        color: commodityAssetsPageIndex === 0 ? "#475569" : "#e2e8f0",
+                        cursor: commodityAssetsPageIndex === 0 ? "default" : "pointer",
+                        fontSize: 12
+                      }}
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      disabled={(commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length}
+                      onClick={() => setCommodityAssetsPageIndex((p) => p + 1)}
+                      style={{
+                        padding: "4px 8px",
+                        borderRadius: 6,
+                        background: "rgba(30,41,59,0.7)",
+                        border: "1px solid rgba(148,163,184,0.2)",
+                        color: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "#475569" : "#e2e8f0",
+                        cursor: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "default" : "pointer",
+                        fontSize: 12
+                      }}
+                    >
+                      Next
+                    </button>
+                  </div>
+                }
                 columns={[
                   {
                     key: "symbol",
@@ -3358,7 +3433,12 @@ export function AnalyticsModule({ backendUrl }) {
                   { key: "ytdChangePct", label: "YTD", align: "right", render: (v) => formatPercent(v) },
                   { key: "oneYearReturnPct", label: "1Y", align: "right", render: (v) => formatPercent(v) },
                 ]}
-                rows={(filteredCommodities.rows || []).map((row, idx) => ({ id: row.id || `cmd-${idx}`, ...row }))}
+                rows={(filteredCommodities.rows || [])
+                  .slice(
+                    commodityAssetsPageIndex * COMMODITY_ASSETS_PAGE_SIZE,
+                    (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE
+                  )
+                  .map((row, idx) => ({ id: row.id || `cmd-${idx}`, ...row }))}
               />
 
               {selectedCommodityView === "price" ? (
@@ -3384,6 +3464,7 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "type", label: "Type" },
                     { key: "value", label: "Value", align: "right", render: (v) => formatCompactMoney(v) },
                     { key: "trend", label: "Trend", align: "right" },
+                    { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
                   rows={(commoditiesData.flows || []).map((row, idx) => ({ id: row.id || `cmd-fl-${idx}`, ...row }))}
                 />
@@ -3398,6 +3479,7 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "month", label: "Month" },
                     { key: "avgReturnPct", label: "Avg Return", align: "right", render: (v) => formatPercent(v) },
                     { key: "seasonalityScore", label: "Score", align: "right", render: (v) => Number(v).toFixed(2) },
+                    { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
                   rows={(commoditiesData.seasonality || []).map((row, idx) => ({ id: row.id || `cmd-sn-${idx}`, ...row }))}
                 />
@@ -3413,6 +3495,7 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "price", label: "Price", align: "right", render: (v) => formatMoney(v, 2) },
                     { key: "spread", label: "Spread", align: "right", render: (v) => formatPercent(v) },
                     { key: "curveStructure", label: "Structure", align: "right" },
+                    { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
                   rows={(commoditiesData.curve || []).map((row, idx) => ({ id: row.id || `cmd-cv-${idx}`, ...row }))}
                 />
@@ -3443,6 +3526,7 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "metric", label: "Metric" },
                     { key: "value", label: "Value", align: "right", render: (v) => Number(v).toLocaleString() },
                     { key: "unit", label: "Unit", align: "right" },
+                    { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
                   rows={(commoditiesData.fundamentals || []).map((row, idx) => ({ id: row.id || `cmd-fn-${idx}`, ...row }))}
                 />
@@ -3461,6 +3545,7 @@ export function AnalyticsModule({ backendUrl }) {
                             symbol: selectedCommoditySymbol,
                             rule: `Trigger when ${selectedCommoditySymbol} daily change > 2%`,
                             status: "active",
+                            sourceType: "Your own rule engine",
                           },
                         ])
                       }
@@ -3473,10 +3558,11 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "date", label: "Date" },
                     { key: "event", label: "Event" },
                     { key: "importance", label: "Importance", align: "right" },
+                    { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
                   rows={[
-                    ...(commoditiesData.calendar || []).map((row, idx) => ({ id: row.id || `cmd-cal-${idx}`, date: row.date, event: row.event || row.title, importance: row.importance || "medium" })),
-                    ...(commodityAlertRules || []).map((row, idx) => ({ id: row.id || `cmd-al-${idx}`, date: "Alert", event: row.rule || row.name, importance: row.status || "active" })),
+                    ...(commoditiesData.calendar || []).map((row, idx) => ({ id: row.id || `cmd-cal-${idx}`, date: row.date, event: row.event || row.title, importance: row.importance || "medium", sourceType: row.sourceType || "Economic calendar API" })),
+                    ...(commodityAlertRules || []).map((row, idx) => ({ id: row.id || `cmd-al-${idx}`, date: "Alert", event: row.rule || row.name, importance: row.status || "active", sourceType: row.sourceType || "Your own rule engine" })),
                   ]}
                 />
               </div>

@@ -4157,10 +4157,20 @@ app.post("/api/options/crypto", async (req, res) => {
         t?.underlying_price,
         0
       );
+      const normalizedBid = Number(rawBid);
+      const normalizedAsk = Number(rawAsk);
+      const normalizedFallback = Number(fallbackPx);
+      const bid = Number.isFinite(normalizedBid) && normalizedBid > 0
+        ? normalizedBid
+        : (Number.isFinite(normalizedFallback) && normalizedFallback > 0 ? normalizedFallback : 0);
+      const ask = Number.isFinite(normalizedAsk) && normalizedAsk > 0
+        ? normalizedAsk
+        : (Number.isFinite(normalizedFallback) && normalizedFallback > 0 ? normalizedFallback : 0);
 
       const data = {
-        bid: firstFiniteNumber(t?.best_bid_price, t?.bid_price, t?.best_bid, t?.bid, t?.bids?.[0]?.price, fallbackPx, 0),
-        ask: firstFiniteNumber(t?.best_ask_price, t?.ask_price, t?.best_ask, t?.ask, t?.asks?.[0]?.price, fallbackPx, 0),
+        bid,
+        ask,
+        mark: Number.isFinite(normalizedFallback) ? normalizedFallback : 0,
         delta: firstFiniteNumber(t?.greeks?.delta, t?.stats?.delta, t?.delta, 0),
         gamma: firstFiniteNumber(t?.greeks?.gamma, t?.stats?.gamma, t?.gamma, 0),
         vega: firstFiniteNumber(t?.greeks?.vega, t?.stats?.vega, t?.vega, 0),
@@ -5086,6 +5096,204 @@ app.get('/api/analytics/options', async (req, res) => {
   } catch (error) {
     handleServerError(res, "Analytics Options fetch failed", error);
   }
+});
+
+const COMMODITY_UNIVERSE = [
+  { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global", latestPrice: 82.1, dailyChangePct: -0.55, ytdChangePct: 6.8, oneYearReturnPct: 11.2 },
+  { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", latestPrice: 2.34, dailyChangePct: 1.1, ytdChangePct: -3.2, oneYearReturnPct: -8.6 },
+  { symbol: "RB", name: "RBOB Gasoline", group: "energy", region: "usa", latestPrice: 2.61, dailyChangePct: 0.4, ytdChangePct: 3.7, oneYearReturnPct: 6.2 },
+  { symbol: "GC", name: "Gold", group: "metals", region: "global", latestPrice: 2378.2, dailyChangePct: 0.41, ytdChangePct: 12.9, oneYearReturnPct: 19.4 },
+  { symbol: "SI", name: "Silver", group: "metals", region: "global", latestPrice: 29.4, dailyChangePct: 0.78, ytdChangePct: 10.2, oneYearReturnPct: 14.1 },
+  { symbol: "HG", name: "Copper", group: "industrial", region: "global", latestPrice: 4.48, dailyChangePct: -0.2, ytdChangePct: 7.1, oneYearReturnPct: 9.9 },
+  { symbol: "ZC", name: "Corn", group: "agriculture", region: "global", latestPrice: 4.85, dailyChangePct: -0.63, ytdChangePct: 1.9, oneYearReturnPct: -2.4 },
+  { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", latestPrice: 5.78, dailyChangePct: 0.33, ytdChangePct: 2.4, oneYearReturnPct: 1.1 },
+  { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", latestPrice: 11.93, dailyChangePct: 0.12, ytdChangePct: 3.2, oneYearReturnPct: 4.8 },
+  { symbol: "UAN", name: "Urea Ammonium Nitrate", group: "fertilizers", region: "global", latestPrice: 318.0, dailyChangePct: 0.28, ytdChangePct: 4.1, oneYearReturnPct: 8.0 },
+];
+
+const COMMODITY_SOURCE_MAP = {
+  flows: {
+    sourceType: "ETF/fund flow data + futures positioning",
+    why: "Captures both capital and sentiment",
+  },
+  seasonality: {
+    sourceType: "Historical futures settlement data",
+    why: "Best for building custom seasonal charts",
+  },
+  curve: {
+    sourceType: "Futures chain / contract data",
+    why: "Needed for contango, backwardation, spreads",
+  },
+  fundamentals: {
+    sourceType: "Inventory, production, supply-demand datasets",
+    why: "Core commodity drivers",
+  },
+  calendar: {
+    sourceType: "Economic calendar API",
+    why: "Release timing, actual vs forecast",
+  },
+  alerts: {
+    sourceType: "Your own rule engine",
+    why: "Flexible user-defined triggers",
+  },
+};
+
+function getCommodity(symbol) {
+  const key = String(symbol || "").toUpperCase();
+  return COMMODITY_UNIVERSE.find((row) => row.symbol === key) || COMMODITY_UNIVERSE[0];
+}
+
+function buildCommoditySeries(basePrice, range) {
+  const points = range === "1M" ? 20 : range === "3M" ? 45 : range === "5Y" ? 60 : range === "MAX" ? 84 : 36;
+  return Array.from({ length: points }, (_v, i) => {
+    const step = points - i;
+    const date = new Date(Date.now() - step * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const value = basePrice * (1 + Math.sin(i / 7) * 0.012 + i * 0.0009);
+    return { date, value: Number(value.toFixed(4)) };
+  });
+}
+
+app.get("/api/commodities/overview", async (_req, res) => {
+  const topMovers = [...COMMODITY_UNIVERSE]
+    .sort((a, b) => Math.abs(b.dailyChangePct) - Math.abs(a.dailyChangePct))
+    .slice(0, 5);
+  const byGroup = COMMODITY_UNIVERSE.reduce((acc, row) => {
+    const key = row.group;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  res.json({
+    updatedAt: new Date().toISOString(),
+    overview: {
+      categoryCounts: byGroup,
+      topMovers,
+      favorites: ["GC", "CL", "NG"],
+      recentViews: ["GC", "HG", "CL"],
+      dataSources: COMMODITY_SOURCE_MAP,
+    },
+  });
+});
+
+app.get("/api/commodities/search", async (req, res) => {
+  const q = String(req.query.q || "").trim().toLowerCase();
+  if (!q) return res.json({ items: [] });
+  const items = COMMODITY_UNIVERSE.filter((row) =>
+    `${row.symbol} ${row.name} ${row.group} ${row.region}`.toLowerCase().includes(q)
+  ).slice(0, 12);
+  res.json({ items, updatedAt: new Date().toISOString() });
+});
+
+app.get("/api/commodities/list", async (req, res) => {
+  const group = String(req.query.group || "all").toLowerCase();
+  const items = COMMODITY_UNIVERSE.filter((row) => group === "all" || row.group === group);
+  res.json({ updatedAt: new Date().toISOString(), items, list: items });
+});
+
+app.get("/api/commodities/:symbol/price", async (req, res) => {
+  const range = String(req.query.range || "1Y").toUpperCase();
+  const item = getCommodity(req.params.symbol);
+  res.json({
+    updatedAt: new Date().toISOString(),
+    symbol: item.symbol,
+    series: buildCommoditySeries(item.latestPrice, range),
+  });
+});
+
+app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
+  const item = getCommodity(req.params.symbol);
+  const src = COMMODITY_SOURCE_MAP.fundamentals;
+  const metrics = [
+    { metric: "Inventory Level", value: Number((320 + item.latestPrice * 0.8).toFixed(2)), unit: "Index", sourceType: src.sourceType, sourceWhy: src.why },
+    { metric: "Production Level", value: Number((95 + item.ytdChangePct * 0.4).toFixed(2)), unit: "Index", sourceType: src.sourceType, sourceWhy: src.why },
+    { metric: "Demand Level", value: Number((97 + item.oneYearReturnPct * 0.25).toFixed(2)), unit: "Index", sourceType: src.sourceType, sourceWhy: src.why },
+  ];
+  res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, metrics, items: metrics });
+});
+
+app.get("/api/commodities/:symbol/flows", async (req, res) => {
+  const mode = String(req.query.mode || "etf").toLowerCase();
+  const item = getCommodity(req.params.symbol);
+  const src = COMMODITY_SOURCE_MAP.flows;
+  const sign = item.dailyChangePct >= 0 ? 1 : -1;
+  const items = [
+    { date: new Date().toISOString().slice(0, 10), type: mode === "futures" ? "Futures Positioning" : mode === "fund" ? "Fund Flow" : "ETF Flow", value: Math.round((180 + item.latestPrice * 2.1) * 1_000_000 * sign), trend: sign > 0 ? "Inflow" : "Outflow", sourceType: src.sourceType, sourceWhy: src.why },
+    { date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), type: "Cross-venue Aggregate", value: Math.round((110 + item.latestPrice * 1.4) * 1_000_000), trend: "Neutral", sourceType: src.sourceType, sourceWhy: src.why },
+  ];
+  res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, items, flows: items });
+});
+
+app.get("/api/commodities/:symbol/seasonality", async (req, res) => {
+  const src = COMMODITY_SOURCE_MAP.seasonality;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const items = months.map((month, idx) => ({
+    month,
+    avgReturnPct: Number((Math.sin((idx + 1) / 2.3) * 1.4).toFixed(2)),
+    seasonalityScore: Number((0.5 + Math.cos((idx + 1) / 3.7) * 0.2).toFixed(2)),
+    sourceType: src.sourceType,
+    sourceWhy: src.why,
+  }));
+  res.json({ updatedAt: new Date().toISOString(), items, seasonality: items });
+});
+
+app.get("/api/commodities/:symbol/curve", async (req, res) => {
+  const item = getCommodity(req.params.symbol);
+  const src = COMMODITY_SOURCE_MAP.curve;
+  const points = [
+    { contract: "Spot", price: Number((item.latestPrice * 0.998).toFixed(3)), spread: 0, curveStructure: "Flat", sourceType: src.sourceType, sourceWhy: src.why },
+    { contract: "Front Month", price: Number(item.latestPrice.toFixed(3)), spread: 0.22, curveStructure: item.dailyChangePct > 0 ? "Backwardation" : "Contango", sourceType: src.sourceType, sourceWhy: src.why },
+    { contract: "3M", price: Number((item.latestPrice * 1.012).toFixed(3)), spread: 0.84, curveStructure: "Contango", sourceType: src.sourceType, sourceWhy: src.why },
+    { contract: "6M", price: Number((item.latestPrice * 1.021).toFixed(3)), spread: 1.36, curveStructure: "Contango", sourceType: src.sourceType, sourceWhy: src.why },
+  ];
+  res.json({ updatedAt: new Date().toISOString(), points, curve: points });
+});
+
+app.get("/api/commodities/compare", async (req, res) => {
+  const symbols = String(req.query.symbols || "")
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  const rows = (symbols.length ? symbols : ["GC", "CL"]).map((symbol) => {
+    const item = getCommodity(symbol);
+    return {
+      symbol: item.symbol,
+      name: item.name,
+      dailyChangePct: item.dailyChangePct,
+      ytdChangePct: item.ytdChangePct,
+      volatility: Number((12 + Math.abs(item.dailyChangePct) * 8.5).toFixed(2)),
+    };
+  });
+  res.json({ updatedAt: new Date().toISOString(), rows, compare: rows });
+});
+
+app.get("/api/commodities/calendar", async (req, res) => {
+  const group = String(req.query.group || "all").toLowerCase();
+  const src = COMMODITY_SOURCE_MAP.calendar;
+  const events = [
+    { date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), event: "EIA Weekly Inventory", importance: "high", group: "energy", sourceType: src.sourceType, sourceWhy: src.why },
+    { date: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10), event: "COT Positioning Update", importance: "medium", group: "all", sourceType: src.sourceType, sourceWhy: src.why },
+    { date: new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10), event: "USDA Crop Progress", importance: "high", group: "agriculture", sourceType: src.sourceType, sourceWhy: src.why },
+  ].filter((row) => group === "all" || row.group === group);
+  res.json({ updatedAt: new Date().toISOString(), events, calendar: events });
+});
+
+app.get("/api/commodities/alerts", async (_req, res) => {
+  const src = COMMODITY_SOURCE_MAP.alerts;
+  const items = [
+    { id: "cmd-alert-1", symbol: "GC", rule: "Price crosses 2400", status: "active", sourceType: src.sourceType, sourceWhy: src.why },
+    { id: "cmd-alert-2", symbol: "CL", rule: "Inventory surprise > 2σ", status: "active", sourceType: src.sourceType, sourceWhy: src.why },
+  ];
+  res.json({ updatedAt: new Date().toISOString(), items, alerts: items });
+});
+
+app.get("/api/commodities/correlation", async (req, res) => {
+  const symbol = String(req.query.symbol || "GC").toUpperCase();
+  const asset = String(req.query.asset || "SPY").toUpperCase();
+  const rows = [
+    { pair: `${symbol} vs ${asset}`, coefficient: 0.32, window: "180d" },
+    { pair: `${symbol} vs DXY`, coefficient: -0.44, window: "180d" },
+    { pair: `${symbol} vs US10Y`, coefficient: -0.16, window: "180d" },
+  ];
+  res.json({ updatedAt: new Date().toISOString(), rows, correlation: rows });
 });
 
 app.get('/api/analytics/equities', async (req, res) => {
