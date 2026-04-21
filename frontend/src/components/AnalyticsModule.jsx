@@ -65,6 +65,45 @@ const EMPTY_MACRO = {
   riskIndicators: [],
 };
 
+const MACRO_CATEGORY_OPTIONS = [
+  { key: "growth", label: "Growth" },
+  { key: "inflation", label: "Inflation" },
+  { key: "labor", label: "Labor" },
+  { key: "rates", label: "Rates" },
+  { key: "external", label: "External" },
+  { key: "fiscal", label: "Fiscal" },
+  { key: "credit", label: "Credit" },
+  { key: "sentiment", label: "Sentiment" },
+];
+
+const MACRO_VIEW_OPTIONS = [
+  { key: "chart", label: "Chart" },
+  { key: "compare", label: "Compare" },
+  { key: "map", label: "Map" },
+  { key: "calendar", label: "Calendar" },
+  { key: "ranking", label: "Ranking" },
+  { key: "forecast", label: "Forecast" },
+];
+
+const FALLBACK_MACRO_GEOS = [
+  { type: "Country", name: "United States", code: "USA", regionCode: "NAM", members: [], parent: "Global" },
+  { type: "Country", name: "Germany", code: "DEU", regionCode: "EUR", members: [], parent: "Europe" },
+  { type: "Country", name: "Japan", code: "JPN", regionCode: "ASI", members: [], parent: "Asia" },
+  { type: "Country", name: "Kenya", code: "KEN", regionCode: "AFR", members: [], parent: "Africa" },
+  { type: "Region", name: "North America", code: "NAM", members: ["USA", "CAN", "MEX"], parent: "Global" },
+  { type: "Region", name: "Europe", code: "EUR", members: ["DEU", "FRA", "ITA"], parent: "Global" },
+  { type: "Region", name: "Asia", code: "ASI", members: ["JPN", "CHN", "IND"], parent: "Global" },
+  { type: "Global", name: "Global Aggregate", code: "GLB", members: [], parent: null },
+];
+
+const FALLBACK_MACRO_INDICATORS = [
+  { code: "GDP_GROWTH_YOY", name: "GDP Growth YoY", category: "growth", unit: "%" },
+  { code: "CPI_YOY", name: "CPI Inflation YoY", category: "inflation", unit: "%" },
+  { code: "UNEMP_RATE", name: "Unemployment Rate", category: "labor", unit: "%" },
+  { code: "POLICY_RATE", name: "Policy Rate", category: "rates", unit: "%" },
+  { code: "PMI_MANUFACTURING", name: "Manufacturing PMI", category: "sentiment", unit: "idx" },
+];
+
 function formatMoney(value, digits = 2) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "—";
@@ -231,7 +270,292 @@ export function AnalyticsModule({ backendUrl }) {
   const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
   const [annualReturnsPageIndex, setAnnualReturnsPageIndex] = useState(0);
   const [equityHorizon, setEquityHorizon] = useState("yr1");
+  const [equitiesDetailSelector, setEquitiesDetailSelector] = useState("");
+  const [selectedGeoType, setSelectedGeoType] = useState("Country");
+  const [selectedGeoCode, setSelectedGeoCode] = useState("USA");
+  const [selectedCategory, setSelectedCategory] = useState("growth");
+  const [selectedIndicator, setSelectedIndicator] = useState("GDP_GROWTH_YOY");
+  const [countrySearch, setCountrySearch] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [indicatorSearch, setIndicatorSearch] = useState("");
+  const [chartRange, setChartRange] = useState("5Y");
+  const [chartMode, setChartMode] = useState("levels");
+  const [compareGeos, setCompareGeos] = useState(["USA", "DEU"]);
+  const [calendarFilters, setCalendarFilters] = useState({
+    from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    to: new Date().toISOString().slice(0, 10),
+    importance: "all",
+    geography: "all",
+    indicatorType: "all",
+  });
+  const [alertRules, setAlertRules] = useState([]);
+  const [alertChannels, setAlertChannels] = useState(["in-app"]);
+  const [alertStatus, setAlertStatus] = useState("active");
+  const [regimeLabel, setRegimeLabel] = useState("expansion");
+  const [regimeScore, setRegimeScore] = useState(null);
+  const [regimeExplain, setRegimeExplain] = useState("");
+  const [globalTrendMode, setGlobalTrendMode] = useState("weighted");
+  const [macroView, setMacroView] = useState("chart");
+  const [geoSearchQuery, setGeoSearchQuery] = useState("");
+  const [favoriteGeoCodes, setFavoriteGeoCodes] = useState([]);
+  const [recentGeoCodes, setRecentGeoCodes] = useState(["USA"]);
+  const [recentCountries, setRecentCountries] = useState(["USA"]);
+  const [macroGeographies, setMacroGeographies] = useState(FALLBACK_MACRO_GEOS);
+  const [macroIndicators, setMacroIndicators] = useState(FALLBACK_MACRO_INDICATORS);
+  const [macroOverview, setMacroOverview] = useState([]);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [macroTimeseries, setMacroTimeseries] = useState([]);
+  const [macroCompareRows, setMacroCompareRows] = useState([]);
+  const [macroCalendarRows, setMacroCalendarRows] = useState([]);
+  const [macroMapRows, setMacroMapRows] = useState([]);
+  const [mapIndicator, setMapIndicator] = useState("GDP_GROWTH_YOY");
+  const [mapDate, setMapDate] = useState(new Date().toISOString().slice(0, 10));
+  const [mapLayer, setMapLayer] = useState("choropleth");
+  const [macroRankingRows, setMacroRankingRows] = useState([]);
+  const [rankingSort, setRankingSort] = useState("value_desc");
+  const [rankingScope, setRankingScope] = useState("all");
+  const [macroForecastRows, setMacroForecastRows] = useState([]);
+  const [forecastToggle, setForecastToggle] = useState(true);
+  const [consensusVisible, setConsensusVisible] = useState(true);
+  const [selectedMacroAsset, setSelectedMacroAsset] = useState("SPY");
+  const [correlationWindow, setCorrelationWindow] = useState("180d");
+  const [macroCorrelationRows, setMacroCorrelationRows] = useState([]);
+  const [macroSourceInfo, setMacroSourceInfo] = useState(null);
+  const [sourceDrawerOpen, setSourceDrawerOpen] = useState(false);
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
+
+  const macroGeoTypePath = selectedGeoType === "Country" ? "country" : selectedGeoType === "Region" ? "region" : "global";
+
+  const filteredMacroIndicators = useMemo(() => {
+    const scoped = (macroIndicators || []).filter((row) => String(row?.category || "").toLowerCase() === String(selectedCategory || "").toLowerCase());
+    const q = String(indicatorSearch || "").trim().toLowerCase();
+    if (!q) return scoped;
+    return scoped.filter((row) => String(row?.name || row?.code || "").toLowerCase().includes(q));
+  }, [macroIndicators, selectedCategory, indicatorSearch]);
+
+  useEffect(() => {
+    if (!filteredMacroIndicators.length) return;
+    if (filteredMacroIndicators.some((row) => row.code === selectedIndicator)) return;
+    setSelectedIndicator(filteredMacroIndicators[0]?.code || "GDP_GROWTH_YOY");
+  }, [filteredMacroIndicators, selectedIndicator]);
+
+  useEffect(() => {
+    if (activeTab !== "macro") return;
+    let cancelled = false;
+    const fetchJson = async (path) => {
+      try {
+        const res = await fetch(`${backendUrl}${path}`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    };
+
+    const loadMacroMetadata = async () => {
+      const [geos, indicators, alerts] = await Promise.all([
+        fetchJson("/macro/geographies"),
+        fetchJson("/macro/indicators"),
+        fetchJson("/macro/alerts"),
+      ]);
+      if (cancelled) return;
+
+      const geoRows = Array.isArray(geos) ? geos : Array.isArray(geos?.items) ? geos.items : [];
+      const indicatorRows = Array.isArray(indicators) ? indicators : Array.isArray(indicators?.items) ? indicators.items : [];
+      const alertRows = Array.isArray(alerts) ? alerts : Array.isArray(alerts?.items) ? alerts.items : [];
+
+      if (geoRows.length) setMacroGeographies(geoRows);
+      if (indicatorRows.length) setMacroIndicators(indicatorRows);
+      if (alertRows.length) setAlertRules(alertRows);
+    };
+
+    loadMacroMetadata();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, backendUrl]);
+
+  useEffect(() => {
+    if (activeTab !== "macro") return;
+    const q = String(countrySearch || "").trim();
+    if (!q) {
+      setSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    const loadSearch = async () => {
+      try {
+        const res = await fetch(`${backendUrl}/macro/geographies?query=${encodeURIComponent(q)}`);
+        if (!res.ok) return;
+        const payload = await res.json();
+        if (cancelled) return;
+        const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+        setSearchResults(rows);
+      } catch {
+        if (cancelled) return;
+        const ql = q.toLowerCase();
+        setSearchResults(
+          (macroGeographies || []).filter((row) =>
+            String(row?.name || "").toLowerCase().includes(ql) ||
+            String(row?.code || "").toLowerCase().includes(ql)
+          ).slice(0, 8)
+        );
+      }
+    };
+    loadSearch();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, backendUrl, countrySearch, macroGeographies]);
+
+  useEffect(() => {
+    if (activeTab !== "macro") return;
+    let cancelled = false;
+    const fetchJson = async (path) => {
+      try {
+        const res = await fetch(`${backendUrl}${path}`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    };
+
+    const rangePoints = chartRange === "1Y" ? 12 : chartRange === "5Y" ? 24 : chartRange === "10Y" ? 40 : 60;
+    const buildFallbackSeries = () => {
+      const now = Date.now();
+      return Array.from({ length: rangePoints }, (_, i) => {
+        const ts = now - ((rangePoints - i) * 30 * 24 * 60 * 60 * 1000);
+        const level = 100 + (i * 0.65) + Math.sin(i / 2) * 2.2;
+        return { date: new Date(ts).toISOString().slice(0, 10), value: Number(level.toFixed(2)) };
+      });
+    };
+
+    const loadMacroData = async () => {
+      setOverviewLoading(true);
+      const overviewPath = selectedGeoType === "Global"
+        ? "/macro/global/overview"
+        : `/macro/${macroGeoTypePath}/${selectedGeoCode}/overview`;
+
+      const compareGeoParam = (compareGeos || []).join(",");
+      const [overviewRes, tsRes, compareRes, calendarRes, mapRes, rankingsRes, forecastRes, sourceRes, regimeRes, corrRes] = await Promise.all([
+        fetchJson(overviewPath),
+        fetchJson(`/macro/timeseries?geo=${encodeURIComponent(selectedGeoCode)}&indicator=${encodeURIComponent(selectedIndicator)}&range=${encodeURIComponent(chartRange)}&mode=${encodeURIComponent(chartMode)}`),
+        fetchJson(`/macro/compare?geos=${encodeURIComponent(compareGeoParam)}&indicator=${encodeURIComponent(selectedIndicator)}`),
+        fetchJson(`/macro/calendar?geo=${encodeURIComponent(calendarFilters.geography === "all" ? selectedGeoCode : calendarFilters.geography)}&from=${encodeURIComponent(calendarFilters.from)}&to=${encodeURIComponent(calendarFilters.to)}&importance=${encodeURIComponent(calendarFilters.importance)}&type=${encodeURIComponent(calendarFilters.indicatorType)}`),
+        fetchJson(`/macro/map?indicator=${encodeURIComponent(mapIndicator || selectedIndicator)}&date=${encodeURIComponent(mapDate || calendarFilters.to)}`),
+        fetchJson(`/macro/rankings?indicator=${encodeURIComponent(selectedIndicator)}&date=${encodeURIComponent(calendarFilters.to)}&scope=${encodeURIComponent(rankingScope)}&sort=${encodeURIComponent(rankingSort)}`),
+        fetchJson(`/macro/forecast?geo=${encodeURIComponent(selectedGeoCode)}&indicator=${encodeURIComponent(selectedIndicator)}`),
+        fetchJson(`/macro/source/${encodeURIComponent(selectedIndicator)}`),
+        fetchJson(`/macro/regime?geo=${encodeURIComponent(selectedGeoCode)}&mode=${encodeURIComponent(globalTrendMode)}`),
+        fetchJson(`/macro/correlation?indicator=${encodeURIComponent(selectedIndicator)}&asset=${encodeURIComponent(selectedMacroAsset)}&window=${encodeURIComponent(correlationWindow)}`),
+      ]);
+
+      if (cancelled) return;
+
+      const overviewRows = Array.isArray(overviewRes?.items) ? overviewRes.items : Array.isArray(overviewRes) ? overviewRes : [];
+      setMacroOverview(overviewRows.length ? overviewRows : (macroData.macroData || []).map((row, idx) => ({ id: `ov-${idx}`, ...row })));
+
+      const tsRows = Array.isArray(tsRes?.series) ? tsRes.series : Array.isArray(tsRes) ? tsRes : [];
+      setMacroTimeseries(tsRows.length ? tsRows : buildFallbackSeries());
+
+      const compareRows = Array.isArray(compareRes?.rows) ? compareRes.rows : Array.isArray(compareRes) ? compareRes : [];
+      setMacroCompareRows(compareRows.length ? compareRows : (compareGeos || []).map((code, idx) => ({ id: `cmp-${idx}`, geo: code, value: 95 + idx * 1.8, delta: (idx - 1) * 0.5 })));
+
+      const calendarRows = Array.isArray(calendarRes?.events) ? calendarRes.events : Array.isArray(calendarRes) ? calendarRes : [];
+      setMacroCalendarRows(calendarRows.length ? calendarRows : [
+        { id: "cal-1", date: calendarFilters.from, geo: selectedGeoCode, indicator: selectedIndicator, importance: "high", event: "Data release window opens" },
+        { id: "cal-2", date: calendarFilters.to, geo: selectedGeoCode, indicator: selectedIndicator, importance: "medium", event: "Consensus update due" },
+      ]);
+
+      const mapRows = Array.isArray(mapRes?.rows) ? mapRes.rows : Array.isArray(mapRes) ? mapRes : [];
+      setMacroMapRows(mapRows.length ? mapRows : [
+        { id: "map-usa", geo: "USA", value: 102.4 },
+        { id: "map-eur", geo: "EUR", value: 98.7 },
+        { id: "map-asi", geo: "ASI", value: 105.2 },
+      ]);
+
+      const rankingRows = Array.isArray(rankingsRes?.rows) ? rankingsRes.rows : Array.isArray(rankingsRes) ? rankingsRes : [];
+      setMacroRankingRows(rankingRows.length ? rankingRows : [
+        { id: "rk-1", rank: 1, geo: "USA", value: 104.2 },
+        { id: "rk-2", rank: 2, geo: "DEU", value: 101.1 },
+        { id: "rk-3", rank: 3, geo: "JPN", value: 99.6 },
+      ]);
+
+      const forecastRows = Array.isArray(forecastRes?.points) ? forecastRes.points : Array.isArray(forecastRes) ? forecastRes : [];
+      setMacroForecastRows(forecastRows.length ? forecastRows : [
+        { id: "f-1", horizon: "3M", base: 101.2, bull: 103.5, bear: 98.4 },
+        { id: "f-2", horizon: "6M", base: 102.1, bull: 105.1, bear: 97.2 },
+        { id: "f-3", horizon: "12M", base: 104.4, bull: 108.8, bear: 95.5 },
+      ]);
+
+      setMacroSourceInfo(sourceRes || { source: "Fallback synthetic blend", updatedAt: new Date().toISOString(), methodology: "Demo mode with available analytics macro dataset." });
+
+      const corrRows = Array.isArray(corrRes?.rows) ? corrRes.rows : Array.isArray(corrRes) ? corrRes : [];
+      setMacroCorrelationRows(corrRows.length ? corrRows : [
+        { id: "corr-1", pair: `${selectedIndicator} vs ${selectedMacroAsset}`, coefficient: 0.42, window: correlationWindow },
+      ]);
+
+      const regimeFromApi = regimeRes?.label || regimeRes?.regime || null;
+      const regimeScoreVal = Number(regimeRes?.score);
+      const regimeNote = regimeRes?.explain || regimeRes?.note || "";
+      if (regimeFromApi) setRegimeLabel(String(regimeFromApi).toLowerCase());
+      if (Number.isFinite(regimeScoreVal)) setRegimeScore(regimeScoreVal);
+      if (regimeNote) setRegimeExplain(regimeNote);
+      setOverviewLoading(false);
+    };
+
+    loadMacroData();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeTab,
+    backendUrl,
+    selectedGeoType,
+    selectedGeoCode,
+    selectedIndicator,
+    chartRange,
+    chartMode,
+    compareGeos,
+    calendarFilters,
+    mapIndicator,
+    mapDate,
+    rankingSort,
+    rankingScope,
+    globalTrendMode,
+    selectedMacroAsset,
+    correlationWindow,
+    macroGeoTypePath,
+    macroData.macroData
+  ]);
+
+  useEffect(() => {
+    const current = Number((macroOverview || [])[0]?.value);
+    const inflation = (macroOverview || []).find((row) => String(row?.indicator || "").toLowerCase().includes("inflation"));
+    const inflationVal = Number(inflation?.value);
+    if (Number.isFinite(inflationVal) && inflationVal > 4) {
+      setRegimeLabel("inflationary");
+      setRegimeScore(35);
+      setRegimeExplain("Inflation indicators are elevated relative to trend.");
+    } else if (Number.isFinite(current) && current < 0) {
+      setRegimeLabel("recession risk");
+      setRegimeScore(20);
+      setRegimeExplain("Composite growth proxy is negative.");
+    } else if (Number.isFinite(current) && current < 1) {
+      setRegimeLabel("slowdown");
+      setRegimeScore(45);
+      setRegimeExplain("Growth is positive but below long-term trend.");
+    } else if (Number.isFinite(current) && current > 3) {
+      setRegimeLabel("expansion");
+      setRegimeScore(75);
+      setRegimeExplain("Growth and macro momentum are in expansionary territory.");
+    } else {
+      setRegimeLabel("easing");
+      setRegimeScore(58);
+      setRegimeExplain("Macro prints are mixed with easing pressure.");
+    }
+  }, [macroOverview]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1076,28 +1400,57 @@ export function AnalyticsModule({ backendUrl }) {
                   />
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                  <AnalyticsTableCard
-                    title="Correlation Matrix"
-                    subtitle="Cross-asset diversification matrix"
-                    emptyText="No correlation matrix data."
-                    columns={correlationColumns}
-                    rows={correlationRows}
-                  />
-                  <AnalyticsTableCard
-                    title="Volatility Metrics"
-                    subtitle="Annualized vol, max drawdown, Sharpe and Sortino"
-                    emptyText="No volatility metrics."
-                    columns={[
-                      { key: "asset", label: "Asset" },
-                      { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                      { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                      { key: "sharpe", label: "Sharpe", align: "right", render: (v) => Number(v).toFixed(2) },
-                      { key: "sortino", label: "Sortino", align: "right", render: (v) => Number(v).toFixed(2) },
-                    ]}
-                    rows={(equitiesData.volatilityMetrics || []).map((row, idx) => ({ id: `vol-${idx}`, ...row }))}
-                  />
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 13, color: "#94a3b8" }}>Equities Detail Selector</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[
+                      { key: "metrics", label: "Metrics" },
+                      { key: "moneyMarket", label: "Money Market" },
+                      { key: "reit", label: "REIT" },
+                    ].map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => setEquitiesDetailSelector((prev) => (prev === item.key ? "" : item.key))}
+                        style={{
+                          padding: "5px 10px",
+                          borderRadius: 8,
+                          border: `1px solid ${equitiesDetailSelector === item.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                          background: equitiesDetailSelector === item.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                          color: equitiesDetailSelector === item.key ? "#7dd3fc" : "#cbd5e1",
+                          cursor: "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                {equitiesDetailSelector === "metrics" ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                    <AnalyticsTableCard
+                      title="Correlation Matrix"
+                      subtitle="Cross-asset diversification matrix"
+                      emptyText="No correlation matrix data."
+                      columns={correlationColumns}
+                      rows={correlationRows}
+                    />
+                    <AnalyticsTableCard
+                      title="Volatility Metrics"
+                      subtitle="Annualized vol, max drawdown, Sharpe and Sortino"
+                      emptyText="No volatility metrics."
+                      columns={[
+                        { key: "asset", label: "Asset" },
+                        { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                        { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
+                        { key: "sharpe", label: "Sharpe", align: "right", render: (v) => Number(v).toFixed(2) },
+                        { key: "sortino", label: "Sortino", align: "right", render: (v) => Number(v).toFixed(2) },
+                      ]}
+                      rows={(equitiesData.volatilityMetrics || []).map((row, idx) => ({ id: `vol-${idx}`, ...row }))}
+                    />
+                  </div>
+                ) : null}
 
                 {/* Benchmark Performance Summary */}
                 <AnalyticsTableCard
@@ -1172,8 +1525,7 @@ export function AnalyticsModule({ backendUrl }) {
                   )}
                 />
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(350px, 1fr))", gap: 20 }}>
-                  {/* REIT Detailed Data */}
+                {equitiesDetailSelector === "reit" ? (
                   <AnalyticsTableCard
                     title={`REIT Benchmarks (${equitiesData.reitData?.provider || ""})`}
                     subtitle="FTSE EPRA/Nareit Regional & Country indices"
@@ -1186,8 +1538,9 @@ export function AnalyticsModule({ backendUrl }) {
                     ]}
                     rows={equitiesData.reitData?.benchmarks || []}
                   />
+                ) : null}
 
-                  {/* MMF Table */}
+                {equitiesDetailSelector === "moneyMarket" ? (
                   <AnalyticsTableCard
                     title="Money Market Fund (MMF) Yields"
                     subtitle="Yield ranges for local currency markets"
@@ -1200,7 +1553,7 @@ export function AnalyticsModule({ backendUrl }) {
                     ]}
                     rows={equitiesData.mmfYields}
                   />
-                </div>
+                ) : null}
 
                 {/* Funds List */}
                 <AnalyticsTableCard
@@ -1309,6 +1662,392 @@ export function AnalyticsModule({ backendUrl }) {
             </>
           ) : (
             <>
+              <div style={{ display: "grid", gap: 14 }}>
+                <GeographySwitcher
+                  selectedGeoType={selectedGeoType}
+                  onChange={setSelectedGeoType}
+                  regimeLabel={regimeLabel}
+                  regimeScore={regimeScore}
+                  regimeExplain={regimeExplain}
+                />
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+                  <GeographySearch
+                    geographies={macroGeographies}
+                    selectedGeoType={selectedGeoType}
+                    selectedGeoCode={selectedGeoCode}
+                    searchQuery={geoSearchQuery}
+                    onSearchChange={setGeoSearchQuery}
+                    onSelectGeo={(code) => {
+                      setSelectedGeoCode(code);
+                      setRecentGeoCodes((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 6));
+                      if (selectedGeoType === "Country") {
+                        setRecentCountries((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 8));
+                      }
+                    }}
+                    favoriteGeoCodes={favoriteGeoCodes}
+                    recentGeoCodes={recentGeoCodes}
+                    onToggleFavorite={(code) =>
+                      setFavoriteGeoCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]))
+                    }
+                  />
+
+                  <div style={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(148,163,184,0.16)", borderRadius: 14, padding: 12 }}>
+                    <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Indicator Configuration</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <input
+                        type="text"
+                        value={countrySearch}
+                        onChange={(e) => setCountrySearch(e.target.value)}
+                        placeholder="Country search (ISO3/name)"
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
+                      />
+                      {searchResults.length > 0 ? (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {searchResults.slice(0, 6).map((row, idx) => {
+                            const code = row?.code || row?.iso3 || row?.id || `geo-${idx}`;
+                            return (
+                              <button
+                                key={`sr-${code}-${idx}`}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedGeoCode(code);
+                                  setCountrySearch("");
+                                  setSearchResults([]);
+                                  setRecentCountries((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 8));
+                                }}
+                                style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+                              >
+                                {row?.name || code} ({code})
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {recentCountries.length > 0 ? (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {recentCountries.slice(0, 5).map((code) => (
+                            <button
+                              key={`rc-${code}`}
+                              type="button"
+                              onClick={() => setSelectedGeoCode(code)}
+                              style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+                            >
+                              Recent country: {code}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      <input
+                        type="text"
+                        value={indicatorSearch}
+                        onChange={(e) => setIndicatorSearch(e.target.value)}
+                        placeholder="Search indicators..."
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
+                      />
+                      <select
+                        value={selectedCategory}
+                        onChange={(e) => setSelectedCategory(e.target.value)}
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
+                      >
+                        {MACRO_CATEGORY_OPTIONS.map((cat) => (
+                          <option key={cat.key} value={cat.key}>{cat.label}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={selectedIndicator}
+                        onChange={(e) => setSelectedIndicator(e.target.value)}
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
+                      >
+                        {(filteredMacroIndicators.length ? filteredMacroIndicators : macroIndicators).map((indicator) => (
+                          <option key={indicator.code} value={indicator.code}>{indicator.name || indicator.code}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={globalTrendMode}
+                        onChange={(e) => setGlobalTrendMode(e.target.value)}
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
+                      >
+                        <option value="weighted">Global trend mode: Weighted</option>
+                        <option value="equal">Global trend mode: Equal-weighted</option>
+                      </select>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {["1Y", "5Y", "10Y", "MAX"].map((range) => (
+                          <button
+                            key={range}
+                            onClick={() => setChartRange(range)}
+                            style={{
+                              padding: "5px 10px",
+                              borderRadius: 8,
+                              border: `1px solid ${chartRange === range ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                              background: chartRange === range ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                              color: chartRange === range ? "#7dd3fc" : "#cbd5e1",
+                              cursor: "pointer",
+                              fontSize: 12
+                            }}
+                          >
+                            {range}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {["levels", "change", "YoY", "MoM"].map((mode) => (
+                          <button
+                            key={mode}
+                            onClick={() => setChartMode(mode)}
+                            style={{
+                              padding: "5px 10px",
+                              borderRadius: 8,
+                              border: `1px solid ${chartMode === mode ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                              background: chartMode === mode ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                              color: chartMode === mode ? "#7dd3fc" : "#cbd5e1",
+                              cursor: "pointer",
+                              fontSize: 12
+                            }}
+                          >
+                            {mode}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {MACRO_VIEW_OPTIONS.map((view) => (
+                    <button
+                      key={view.key}
+                      onClick={() => setMacroView(view.key)}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: 8,
+                        border: `1px solid ${macroView === view.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+                        background: macroView === view.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+                        color: macroView === view.key ? "#7dd3fc" : "#cbd5e1",
+                        cursor: "pointer",
+                        fontSize: 12
+                      }}
+                    >
+                      {view.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>
+                    Overview cards {overviewLoading ? "• Loading..." : ""}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                    {(macroOverview || []).slice(0, 8).map((row, idx) => (
+                      <button
+                        key={row.id || `ovc-${idx}`}
+                        type="button"
+                        onClick={() => {
+                          if (row?.indicatorCode) setSelectedIndicator(row.indicatorCode);
+                          setMacroView("chart");
+                        }}
+                        style={{
+                          background: "rgba(0,0,0,0.85)",
+                          border: "1px solid rgba(148,163,184,0.16)",
+                          borderRadius: 12,
+                          padding: "10px 12px",
+                          textAlign: "left",
+                          cursor: "pointer"
+                        }}
+                      >
+                        <div style={{ fontSize: 11, color: "#94a3b8", textTransform: "uppercase" }}>
+                          {row?.indicator || row?.name || row?.indicatorCode || "Indicator"}
+                        </div>
+                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 700, color: "#e2e8f0" }}>
+                          {Number.isFinite(Number(row?.value)) ? Number(row.value).toFixed(2) : "—"}
+                          {row?.unit ? <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 4 }}>{row.unit}</span> : null}
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#7dd3fc" }}>Click to drill into chart</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {macroView === "chart" ? (
+                <AnalyticsTableCard
+                  title="Macro Time Series"
+                  subtitle={`${selectedIndicator} · ${selectedGeoCode} · ${chartRange} (${chartMode})`}
+                  emptyText="No time-series rows."
+                  columns={[
+                    { key: "date", label: "Date" },
+                    { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
+                  ]}
+                  rows={(macroTimeseries || []).map((row, idx) => ({ id: row.id || `ts-${idx}`, ...row }))}
+                />
+              ) : null}
+
+              {macroView === "compare" ? (
+                <AnalyticsTableCard
+                  title="Geography Compare"
+                  subtitle="Compare selected indicator across geographies"
+                  emptyText="No compare rows."
+                  headerExtra={
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <select
+                        multiple
+                        value={compareGeos}
+                        onChange={(e) => setCompareGeos(Array.from(e.target.selectedOptions).map((o) => o.value))}
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
+                      >
+                        {macroGeographies
+                          .filter((g) => selectedGeoType === "Global" ? g.type === "Global" : g.type === selectedGeoType)
+                          .map((g) => (
+                            <option key={g.code} value={g.code}>{g.name} ({g.code})</option>
+                          ))}
+                      </select>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {(compareGeos || []).map((code) => (
+                          <button
+                            key={`cmp-chip-${code}`}
+                            type="button"
+                            onClick={() => setCompareGeos((prev) => prev.filter((c) => c !== code))}
+                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.55)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+                          >
+                            {code} ×
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  }
+                  columns={[
+                    { key: "geo", label: "Geo" },
+                    { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
+                    { key: "delta", label: "Delta", align: "right", render: (v) => formatPercent(v) },
+                  ]}
+                  rows={(macroCompareRows || []).map((row, idx) => ({ id: row.id || `cmp-${idx}`, ...row }))}
+                />
+              ) : null}
+
+              {macroView === "map" ? (
+                <AnalyticsTableCard
+                  title="Map View Data"
+                  subtitle={`Indicator snapshot map feed · ${selectedIndicator}`}
+                  emptyText="No map rows."
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        {(macroIndicators || []).map((ind) => <option key={`map-ind-${ind.code}`} value={ind.code}>{ind.name || ind.code}</option>)}
+                      </select>
+                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        <option value="choropleth">Choropleth</option>
+                        <option value="bubble">Bubble</option>
+                      </select>
+                    </div>
+                  }
+                  columns={[
+                    { key: "geo", label: "Geo" },
+                    { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
+                  ]}
+                  rows={(macroMapRows || []).map((row, idx) => ({ id: row.id || `map-${idx}`, ...row }))}
+                />
+              ) : null}
+
+              {macroView === "calendar" ? (
+                <AnalyticsTableCard
+                  title="Macro Event Calendar"
+                  subtitle="Economic releases and event tracking"
+                  emptyText="No calendar events."
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        <option value="all">All Importance</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                      </select>
+                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        <option value="all">All Geographies</option>
+                        {macroGeographies.map((geo) => <option key={`cal-geo-${geo.code}`} value={geo.code}>{geo.code}</option>)}
+                      </select>
+                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        <option value="all">All Types</option>
+                        {MACRO_CATEGORY_OPTIONS.map((cat) => <option key={`cal-type-${cat.key}`} value={cat.key}>{cat.label}</option>)}
+                      </select>
+                    </div>
+                  }
+                  columns={[
+                    { key: "date", label: "Date" },
+                    { key: "geo", label: "Geo" },
+                    { key: "indicator", label: "Indicator" },
+                    { key: "importance", label: "Importance", align: "right" },
+                    { key: "event", label: "Event", align: "right" },
+                  ]}
+                  rows={(macroCalendarRows || []).map((row, idx) => ({ id: row.id || `cal-${idx}`, ...row }))}
+                />
+              ) : null}
+
+              {macroView === "ranking" ? (
+                <AnalyticsTableCard
+                  title="Indicator Rankings"
+                  subtitle={`${selectedIndicator} rank ordering`}
+                  emptyText="No rankings rows."
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        <option value="all">Scope: All</option>
+                        <option value="g20">G20</option>
+                        <option value="dm">Developed</option>
+                        <option value="em">Emerging</option>
+                      </select>
+                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                        <option value="value_desc">Sort: Highest</option>
+                        <option value="value_asc">Sort: Lowest</option>
+                        <option value="delta_desc">Sort: Delta</option>
+                      </select>
+                    </div>
+                  }
+                  columns={[
+                    { key: "rank", label: "Rank" },
+                    { key: "geo", label: "Geo" },
+                    { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
+                  ]}
+                  rows={(macroRankingRows || []).map((row, idx) => ({ id: row.id || `rk-${idx}`, ...row }))}
+                />
+              ) : null}
+
+              {macroView === "forecast" ? (
+                <AnalyticsTableCard
+                  title="Forecast View"
+                  subtitle={`${selectedGeoCode} forward scenarios for ${selectedIndicator}`}
+                  emptyText="No forecast rows."
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => setForecastToggle((v) => !v)}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: forecastToggle ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)", color: forecastToggle ? "#7dd3fc" : "#cbd5e1", cursor: "pointer", fontSize: 12 }}
+                      >
+                        Forecast {forecastToggle ? "On" : "Off"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConsensusVisible((v) => !v)}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: consensusVisible ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)", color: consensusVisible ? "#7dd3fc" : "#cbd5e1", cursor: "pointer", fontSize: 12 }}
+                      >
+                        Consensus {consensusVisible ? "Shown" : "Hidden"}
+                      </button>
+                    </div>
+                  }
+                  columns={[
+                    { key: "horizon", label: "Horizon" },
+                    { key: "base", label: "Base", align: "right", render: (v) => forecastToggle ? Number(v).toFixed(2) : "—" },
+                    { key: "bull", label: "Bull", align: "right", render: (v) => forecastToggle ? Number(v).toFixed(2) : "—" },
+                    { key: "bear", label: "Bear", align: "right", render: (v) => Number(v).toFixed(2) },
+                    { key: "consensus", label: "Consensus", align: "right", render: (v, row) => consensusVisible ? Number(v ?? row.base ?? 0).toFixed(2) : "—" },
+                  ]}
+                  rows={(macroForecastRows || []).map((row, idx) => ({ id: row.id || `fc-${idx}`, ...row }))}
+                />
+              ) : null}
+
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
                 <AnalyticsTableCard
                   title="Macro Indicators"
@@ -1335,10 +2074,32 @@ export function AnalyticsModule({ backendUrl }) {
                   rows={(macroData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
                 />
               </div>
+
               <AnalyticsTableCard
                 title="Risk Indicators"
                 subtitle="Volatility, credit and liquidity stress indicators"
                 emptyText="No risk indicator rows."
+                headerExtra={
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = `alrt-${Date.now()}`;
+                      const next = [...alertRules, { id, geo: selectedGeoCode, indicator: selectedIndicator, rule: `Alert when ${selectedIndicator} changes > 2%`, channel: alertChannels.join(","), status: alertStatus }];
+                      setAlertRules(next);
+                    }}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(56,189,248,0.5)",
+                      background: "rgba(56,189,248,0.16)",
+                      color: "#7dd3fc",
+                      cursor: "pointer",
+                      fontSize: 12
+                    }}
+                  >
+                    Create Alert
+                  </button>
+                }
                 columns={[
                   { key: "indicator", label: "Indicator" },
                   { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
@@ -1346,10 +2107,270 @@ export function AnalyticsModule({ backendUrl }) {
                 ]}
                 rows={(macroData.riskIndicators || []).map((row, idx) => ({ id: `risk-${idx}`, ...row }))}
               />
+
+              <AnalyticsTableCard
+                title="Asset Correlation"
+                subtitle="Macro indicator linkage to selected market asset"
+                emptyText="No correlation rows."
+                headerExtra={
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <select value={selectedMacroAsset} onChange={(e) => setSelectedMacroAsset(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      {["SPY", "QQQ", "DXY", "TLT", "BTC"].map((asset) => <option key={asset} value={asset}>{asset}</option>)}
+                    </select>
+                    <select value={correlationWindow} onChange={(e) => setCorrelationWindow(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <option value="90d">90D</option>
+                      <option value="180d">180D</option>
+                      <option value="1y">1Y</option>
+                    </select>
+                  </div>
+                }
+                columns={[
+                  { key: "pair", label: "Pair" },
+                  { key: "coefficient", label: "Correlation", align: "right", render: (v) => Number(v).toFixed(2) },
+                  { key: "window", label: "Window", align: "right" },
+                ]}
+                rows={(macroCorrelationRows || []).map((row, idx) => ({ id: row.id || `mcor-${idx}`, ...row }))}
+              />
+
+              <AnalyticsTableCard
+                title="Saved Alert Rules"
+                subtitle="Threshold and event-based macro alerts"
+                emptyText="No alert rules yet."
+                headerExtra={
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <select value={alertStatus} onChange={(e) => setAlertStatus(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <option value="active">Status: Active</option>
+                      <option value="paused">Status: Paused</option>
+                    </select>
+                    <select
+                      value={alertChannels[0] || "in-app"}
+                      onChange={(e) => setAlertChannels([e.target.value])}
+                      style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                    >
+                      <option value="in-app">Channel: In-App</option>
+                      <option value="email">Channel: Email</option>
+                      <option value="webhook">Channel: Webhook</option>
+                    </select>
+                  </div>
+                }
+                columns={[
+                  { key: "geo", label: "Geo" },
+                  { key: "indicator", label: "Indicator" },
+                  { key: "rule", label: "Rule", align: "right" },
+                  { key: "channel", label: "Channel", align: "right" },
+                  { key: "status", label: "Status", align: "right" },
+                  {
+                    key: "actions",
+                    label: "Actions",
+                    align: "right",
+                    render: (_v, row) => (
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          onClick={() => setAlertRules((prev) => prev.map((item) => item.id === row.id ? { ...item, status: item.status === "active" ? "paused" : "active" } : item))}
+                          style={{ padding: "2px 6px", borderRadius: 6, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.55)", color: "#cbd5e1", cursor: "pointer", fontSize: 11 }}
+                        >
+                          {row.status === "active" ? "Pause" : "Activate"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAlertRules((prev) => prev.filter((item) => item.id !== row.id))}
+                          style={{ padding: "2px 6px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: "rgba(127,29,29,0.35)", color: "#fca5a5", cursor: "pointer", fontSize: 11 }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )
+                  },
+                ]}
+                rows={(alertRules || []).map((row, idx) => ({ id: row.id || `alert-${idx}`, ...row }))}
+              />
+
+              <div
+                style={{
+                  background: "rgba(0, 0, 0, 0.85)",
+                  backdropFilter: "blur(12px)",
+                  border: "1px solid rgba(148, 163, 184, 0.16)",
+                  borderRadius: 14,
+                  padding: 16,
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>Source Drawer</div>
+                    <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>Methodology and source notes for trust and transparency</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSourceDrawerOpen((v) => !v)}
+                    style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.55)", color: "#cbd5e1", cursor: "pointer", fontSize: 12 }}
+                  >
+                    {sourceDrawerOpen ? "Hide Source" : "Show Source"}
+                  </button>
+                </div>
+                {sourceDrawerOpen ? (
+                  <div style={{ marginTop: 12 }}>
+                    <AnalyticsTableCard
+                      title="Data Source"
+                      subtitle="Source and methodology for selected indicator"
+                      emptyText="No source data."
+                      columns={[
+                        { key: "field", label: "Field" },
+                        { key: "value", label: "Value", align: "right" },
+                      ]}
+                      rows={macroSourceInfo ? [
+                        { id: "src-1", field: "Source", value: macroSourceInfo.source || macroSourceInfo.provider || "—" },
+                        { id: "src-2", field: "Updated", value: formatDateTime(macroSourceInfo.updatedAt) },
+                        { id: "src-3", field: "Methodology", value: macroSourceInfo.methodology || macroSourceInfo.note || "—" },
+                      ] : []}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore, regimeExplain }) {
+  return (
+    <div
+      style={{
+        background: "rgba(0, 0, 0, 0.85)",
+        backdropFilter: "blur(12px)",
+        border: "1px solid rgba(148, 163, 184, 0.16)",
+        borderRadius: 14,
+        padding: 12,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 10,
+        flexWrap: "wrap"
+      }}
+    >
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {["Country", "Region", "Global"].map((type) => (
+          <button
+            key={type}
+            onClick={() => onChange(type)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              border: `1px solid ${selectedGeoType === type ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
+              background: selectedGeoType === type ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
+              color: selectedGeoType === type ? "#7dd3fc" : "#cbd5e1",
+              cursor: "pointer",
+              fontSize: 12
+            }}
+          >
+            {type}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: 12, color: "#94a3b8", textTransform: "capitalize" }}>
+        Regime: <span style={{ color: "#e2e8f0", fontWeight: 600 }}>{regimeLabel}</span>
+        {Number.isFinite(Number(regimeScore)) ? (
+          <span style={{ marginLeft: 8, color: "#7dd3fc" }}>Score {Number(regimeScore).toFixed(0)}</span>
+        ) : null}
+      </div>
+      {regimeExplain ? (
+        <div style={{ width: "100%", fontSize: 11, color: "#94a3b8" }}>{regimeExplain}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function GeographySearch({
+  geographies,
+  selectedGeoType,
+  selectedGeoCode,
+  searchQuery,
+  onSearchChange,
+  onSelectGeo,
+  favoriteGeoCodes,
+  recentGeoCodes,
+  onToggleFavorite,
+}) {
+  const scoped = (geographies || []).filter((g) => selectedGeoType === "Global" ? g.type === "Global" : g.type === selectedGeoType);
+  const filtered = scoped.filter((geo) => {
+    const q = String(searchQuery || "").trim().toLowerCase();
+    if (!q) return true;
+    return String(geo?.name || "").toLowerCase().includes(q) || String(geo?.code || "").toLowerCase().includes(q);
+  });
+
+  return (
+    <div
+      style={{
+        background: "rgba(0, 0, 0, 0.85)",
+        backdropFilter: "blur(12px)",
+        border: "1px solid rgba(148, 163, 184, 0.16)",
+        borderRadius: 14,
+        padding: 12,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+      }}
+    >
+      <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Geography Search</div>
+      <input
+        type="text"
+        placeholder={`Search ${selectedGeoType.toLowerCase()}...`}
+        value={searchQuery}
+        onChange={(e) => onSearchChange(e.target.value)}
+        style={{ width: "100%", background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
+      />
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+        {recentGeoCodes.slice(0, 5).map((code) => (
+          <button
+            key={`recent-${code}`}
+            type="button"
+            onClick={() => onSelectGeo(code)}
+            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+          >
+            Recent: {code}
+          </button>
+        ))}
+      </div>
+      <div style={{ maxHeight: 200, overflowY: "auto", display: "grid", gap: 6 }}>
+        {filtered.map((geo) => {
+          const active = selectedGeoCode === geo.code;
+          const fav = favoriteGeoCodes.includes(geo.code);
+          return (
+            <div
+              key={geo.code}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                borderRadius: 8,
+                padding: "7px 8px",
+                border: `1px solid ${active ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.16)"}`,
+                background: active ? "rgba(56,189,248,0.12)" : "rgba(15,23,42,0.45)"
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => onSelectGeo(geo.code)}
+                style={{ background: "transparent", border: "none", color: active ? "#7dd3fc" : "#e2e8f0", textAlign: "left", padding: 0, cursor: "pointer", fontSize: 12, flex: 1 }}
+              >
+                {geo.name} ({geo.code})
+              </button>
+              <button
+                type="button"
+                onClick={() => onToggleFavorite(geo.code)}
+                style={{ background: "transparent", border: "none", color: fav ? "#fbbf24" : "#64748b", cursor: "pointer", fontSize: 13 }}
+                title={fav ? "Unpin favorite" : "Pin favorite"}
+              >
+                ★
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
