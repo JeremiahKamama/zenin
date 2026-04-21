@@ -1,23 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 
 export default function PublicHomepage() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const openAppHref = useMemo(() => {
-    const configured = import.meta.env.VITE_OPEN_APP_URL;
-    if (configured) return configured;
-    if (typeof window === "undefined") return "/app";
-
-    const { protocol, hostname } = window.location;
-    const isLocalHost =
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "0.0.0.0";
-
-    if (isLocalHost) return "/app";
-    if (hostname.startsWith("app.")) return `${protocol}//${hostname}`;
-    if (hostname.endsWith(".app")) return `${protocol}//app.${hostname}`;
-    return "/app";
-  }, []);
 
   return (
     <div className="zc-home">
@@ -40,7 +24,7 @@ export default function PublicHomepage() {
           </nav>
 
           <div className={`nav-actions ${menuOpen ? "open" : ""}`}>
-            <a className="btn btn-primary" href={openAppHref}>Open App →</a>
+            <a className="btn btn-primary" href="/app">Open App →</a>
           </div>
 
           <button
@@ -68,7 +52,7 @@ export default function PublicHomepage() {
                 in one place.
               </p>
               <div className="hero-actions">
-                <a className="btn btn-primary" href={openAppHref}>Open App →</a>
+                <a className="btn btn-primary" href="/app">Open App →</a>
                 <a className="btn btn-secondary" href="#features">Explore Features</a>
               </div>
 
@@ -100,23 +84,6 @@ export default function PublicHomepage() {
             <div className="hero-visual" id="screens">
               <div className="dashboard-shell">
                 <div className="dashboard">
-                  <aside className="sidebar">
-                    <div>
-                      <div className="app-logo">Z</div>
-                      <div className="side-links">
-                        <div className="side-link active" title="Home"><span className="side-icon" /></div>
-                        <div className="side-link" title="Watchlist"><span className="side-icon" /></div>
-                        <div className="side-link" title="Portfolio"><span className="side-icon" /></div>
-                        <div className="side-link" title="Options"><span className="side-icon" /></div>
-                        <div className="side-link" title="Predictions"><span className="side-icon" /></div>
-                        <div className="side-link" title="Journal"><span className="side-icon" /></div>
-                        <div className="side-link" title="Tax"><span className="side-icon" /></div>
-                        <div className="side-link" title="Settings"><span className="side-icon" /></div>
-                      </div>
-                    </div>
-                    <div className="sidebar-bottom side-link" title="Log out"><span className="side-icon" /></div>
-                  </aside>
-
                   <div className="dashboard-main">
                     <div className="welcome-row">
                       <div>
@@ -145,17 +112,9 @@ export default function PublicHomepage() {
                     </div>
 
                     <div className="main-panels">
-                      <div className="panel">
+                      <div className="panel panel-performance">
                         <div className="panel-head">
                           <h4>Portfolio Performance</h4>
-                        </div>
-                        <div className="panel-head panel-head-tight">
-                          <div />
-                          <div className="chart-modes">
-                            <span className="tab active">Area</span>
-                            <span className="tab">Bar</span>
-                            <span className="tab">Line</span>
-                          </div>
                         </div>
                         <div className="chart">
                           <svg viewBox="0 0 700 260" preserveAspectRatio="none" aria-hidden="true">
@@ -257,7 +216,7 @@ export default function PublicHomepage() {
                   Whether you’re analyzing markets, building strategies, or optimizing taxes, Zenin brings it all together so you can focus on what matters — performance.
                 </p>
                 <div className="cta-actions">
-                  <a className="btn btn-primary" href={openAppHref}>Open App →</a>
+                  <a className="btn btn-primary" href="/app">Open App →</a>
                   <a className="btn btn-secondary" href="#screens">See Screens</a>
                 </div>
               </div>

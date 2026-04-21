@@ -342,11 +342,11 @@
 
 .zc-home .dashboard {
   display: grid;
-  grid-template-columns: 96px 1fr;
+  grid-template-columns: 1fr;
   min-height: 600px;
 }
 
-.zc-home .sidebar {
+.zc-home .mock-sidebar {
   border-right: 1px solid rgba(255, 255, 255, 0.06);
   padding: 18px 12px;
   display: flex;
@@ -368,12 +368,12 @@
   margin-bottom: 18px;
 }
 
-.zc-home .side-links {
+.zc-home .mock-side-links {
   display: grid;
   gap: 8px;
 }
 
-.zc-home .side-link {
+.zc-home .mock-side-link {
   min-height: 38px;
   border-radius: 10px;
   width: 38px;
@@ -386,12 +386,12 @@
   color: #cad8f8;
 }
 
-.zc-home .side-link.active {
+.zc-home .mock-side-link.active {
   background: rgba(46, 108, 255, 0.22);
   color: #fff;
 }
 
-.zc-home .side-icon {
+.zc-home .mock-side-icon {
   width: 14px;
   height: 14px;
   border-radius: 4px;
@@ -479,6 +479,7 @@
   display: grid;
   grid-template-columns: 1.35fr 0.9fr;
   gap: 12px;
+  align-items: start;
 }
 
 .zc-home .panel {
@@ -546,6 +547,10 @@
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.zc-home .panel-performance .chart {
+  height: 160px;
 }
 
 .zc-home .axis-labels {
@@ -894,18 +899,17 @@
   }
 
   .zc-home .dashboard {
-    grid-template-columns: 80px minmax(0, 1fr);
     min-height: 0;
   }
 
-  .zc-home .sidebar {
+  .zc-home .mock-sidebar {
     border-right: 1px solid rgba(255, 255, 255, 0.06);
     border-bottom: 0;
     gap: 12px;
     padding: 14px 8px;
   }
 
-  .zc-home .side-links {
+  .zc-home .mock-side-links {
     gap: 6px;
   }
 }
@@ -934,7 +938,7 @@
   .zc-home .hero-features,
   .zc-home .proof-grid,
   .zc-home .cards-grid,
-  .zc-home .side-links {
+  .zc-home .mock-side-links {
     grid-template-columns: 1fr;
   }
 
@@ -962,11 +966,7 @@
     flex-direction: column;
   }
 
-  .zc-home .dashboard {
-    grid-template-columns: 1fr;
-  }
-
-  .zc-home .sidebar {
+  .zc-home .mock-sidebar {
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     padding: 10px;
@@ -983,19 +983,19 @@
     flex: 0 0 auto;
   }
 
-  .zc-home .side-links {
+  .zc-home .mock-side-links {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
 
-  .zc-home .side-link {
+  .zc-home .mock-side-link {
     width: 28px;
     min-height: 28px;
     border-radius: 8px;
   }
 
-  .zc-home .sidebar-bottom {
+  .zc-home .mock-sidebar-bottom {
     margin-left: auto;
   }
 
@@ -1034,7 +1034,7 @@
     min-height: auto;
   }
 
-  .zc-home .sidebar {
+  .zc-home .mock-sidebar {
     gap: 8px;
     padding: 8px;
   }
