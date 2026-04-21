@@ -157,6 +157,8 @@ if __name__ == "__main__":
     try:
         # Expecting list of {symbol, type}
         data_in = json.loads(raw)
+        if not isinstance(data_in, list):
+            data_in = []
         # Compatibility with old array of strings
         if data_in and isinstance(data_in[0], str):
             data_in = [{"symbol": s, "type": "stock"} for s in data_in]
@@ -165,4 +167,3 @@ if __name__ == "__main__":
         print(json.dumps(prices))
     except Exception as e:
         print(json.dumps({"error": str(e)}))
-umps({"error": str(e)}))

@@ -112,52 +112,88 @@ const FOREX_FACTORY_COUNTRY_MAP = [
 ];
 
 const MACRO_INDICATOR_CONFIG = [
-  { 
-    key: "consumer_price_index", 
-    label: "CPI", 
-    unit: "Index", 
-    aliases: ["cpi", "consumer_prices"] 
+  {
+    key: "gdp_growth_rate",
+    label: "GDP Growth Rate",
+    unit: "%",
+    aliases: ["gdp", "gdp growth", "real gdp", "gdp growth rate"]
   },
-  { 
-    key: "inflation_consumer_prices_annual", 
-    label: "Inflation Rate", 
-    unit: "%", 
-    aliases: ["inflation_rate", "inflation_consumer_prices_annual_pct"] 
+  {
+    key: "interest_rate",
+    label: "Interest Rate",
+    unit: "%",
+    aliases: ["interest rate", "policy rate", "central bank rate", "cash rate", "fed funds"]
   },
-  { 
-    key: "gdp_growth_annual", 
-    label: "GDP Growth Rate", 
-    unit: "%", 
-    aliases: ["gdp_growth_rate", "real_gdp_growth", "gdp_growth_annual_pct"] 
+  {
+    key: "inflation_rate",
+    label: "Inflation Rate",
+    unit: "%",
+    aliases: ["inflation", "inflation rate", "cpi yoy", "headline inflation"]
   },
-  { 
-    key: "real_interest_rate", 
-    label: "Real Interest Rate", 
-    unit: "%", 
-    aliases: ["real_interest_rates"] 
+  {
+    key: "unemployment_rate",
+    label: "Unemployment Rate",
+    unit: "%",
+    aliases: ["unemployment", "jobless rate", "unemployment rate"]
   },
-  { 
-    key: "unemployment_total_percent", 
-    label: "Unemployment Rate", 
-    unit: "%", 
-    aliases: ["unemployment_rate", "unemployment_total"] 
+  {
+    key: "consumer_confidence",
+    label: "Consumer Confidence",
+    unit: "Index",
+    aliases: ["consumer confidence", "consumer sentiment", "confidence index"]
   },
-  { 
-    key: "inflation_gdp_deflator_annual", 
-    label: "Inflation Rate (GDP Deflator)", 
-    unit: "%", 
-    aliases: ["gdp_deflator_inflation_rate"] 
+  {
+    key: "balance_of_trade",
+    label: "Balance of Trade",
+    unit: "B",
+    aliases: ["balance of trade", "trade balance", "current account"]
+  },
+  {
+    key: "cpi",
+    label: "CPI",
+    unit: "Index",
+    aliases: ["cpi", "consumer price index", "consumer prices"]
+  },
+  {
+    key: "core_inflation_rate",
+    label: "Core Inflation Rate",
+    unit: "%",
+    aliases: ["core inflation", "core cpi", "core inflation rate"]
   }
 ];
 
 const WORLD_BANK_INDICATOR_MAP = {
-  consumer_price_index: "FP.CPI.TOTL",
-  inflation_consumer_prices_annual: "FP.CPI.TOTL.ZG",
-  gdp_growth_annual: "NY.GDP.MKTP.KD.ZG",
-  real_interest_rate: "FR.INR.RINR",
-  unemployment_total_percent: "SL.UEM.TOTL.ZS",
-  inflation_gdp_deflator_annual: "NY.GDP.DEFL.KD.ZG"
+  gdp_growth_rate: "NY.GDP.MKTP.KD.ZG",
+  interest_rate: "FR.INR.RINR",
+  inflation_rate: "FP.CPI.TOTL.ZG",
+  unemployment_rate: "SL.UEM.TOTL.ZS",
+  balance_of_trade: "NE.RSB.GNFS.CD",
+  cpi: "FP.CPI.TOTL"
 };
+
+function sanitizeMacroMetrics(metrics = []) {
+  const templateMap = new Map(MACRO_INDICATOR_CONFIG.map((config) => [config.key, config]));
+  const byKey = new Map(
+    (Array.isArray(metrics) ? metrics : [])
+      .filter((row) => row && templateMap.has(String(row.key || "")))
+      .map((row) => [String(row.key), row])
+  );
+  return MACRO_INDICATOR_CONFIG.map((config) => {
+    const row = byKey.get(config.key) || {};
+    return {
+      key: config.key,
+      label: config.label,
+      unit: config.unit || "",
+      current: Number.isFinite(Number(row.current)) ? Number(row.current) : null,
+      previous: Number.isFinite(Number(row.previous)) ? Number(row.previous) : null,
+      expectation: Number.isFinite(Number(row.expectation)) ? Number(row.expectation) : null,
+      change: Number.isFinite(Number(row.change)) ? Number(row.change) : null,
+      changePercent: Number.isFinite(Number(row.changePercent)) ? Number(row.changePercent) : null,
+      asOf: row.asOf || null,
+      series: Array.isArray(row.series) ? row.series : []
+    };
+  });
+}
 // --------------------------------------------
 
 
@@ -2562,18 +2598,7 @@ app.get("/api/macro-indicators", async (req, res) => {
     updatedAt: new Date().toISOString(),
     stale: true,
     unavailable: true,
-    metrics: MACRO_INDICATOR_CONFIG.map((config) => ({
-      key: config.key,
-      label: config.label,
-      unit: config.unit || "",
-      current: null,
-      previous: null,
-      expectation: null,
-      change: null,
-      changePercent: null,
-      asOf: null,
-      series: []
-    })),
+    metrics: sanitizeMacroMetrics([]),
     diagnostics: {
       reason: String(reason || "country_resolution_failed")
     }
@@ -2606,7 +2631,10 @@ app.get("/api/macro-indicators", async (req, res) => {
           }
         : null);
     if (cached?.payload && now - cached.cachedAt < MACRO_CACHE_TTL_MS) {
-      return res.json(cached.payload);
+      return res.json({
+        ...cached.payload,
+        metrics: sanitizeMacroMetrics(cached.payload?.metrics)
+      });
     }
 
     const buildFallbackPayload = (reason) => ({
@@ -2616,62 +2644,31 @@ app.get("/api/macro-indicators", async (req, res) => {
       updatedAt: new Date().toISOString(),
       stale: true,
       unavailable: true,
-      metrics: MACRO_INDICATOR_CONFIG.map((config) => ({
-        key: config.key,
-        label: config.label,
-        unit: config.unit || "",
-        current: null,
-        previous: null,
-        expectation: null,
-        change: null,
-        changePercent: null,
-        asOf: null,
-        series: []
-      })),
+      metrics: sanitizeMacroMetrics([]),
       diagnostics: {
         reason: String(reason || "upstream_unavailable")
       }
     });
 
     try {
-      const ffCountry = resolveForexFactoryCountry(country) || resolveForexFactoryCountry(countryName) || resolveForexFactoryCountry(requestedCountry);
-      if (!ffCountry) {
-        throw new Error("forex_factory_country_not_supported");
-      }
-
-      const events = await fetchForexFactoryEvents(false);
-      const currencyEvents = events
-        .filter((event) => String(event?.country || "").toUpperCase() === String(ffCountry.currency || "").toUpperCase())
-        .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
-
-      const metrics = MACRO_INDICATOR_CONFIG.map((config, idx) => {
-        const event = currencyEvents[idx] || null;
-        return {
-          key: config.key,
-          label: event?.title || config.label,
-          unit: config.unit || "",
-          previous: parseForexFactoryNumeric(event?.previous),
-          current: parseForexFactoryNumeric(event?.actual) ?? parseForexFactoryNumeric(event?.forecast),
-          expectation: parseForexFactoryNumeric(event?.forecast),
-          asOf: event?.asOf || null,
-          series: []
-        };
-      });
-
-      const missingKeys = metrics.filter((m) => m.current == null && m.previous == null && m.expectation == null).map((m) => m.key);
+      const wbMetrics = await fetchWorldBankMacroMetrics(country);
+      const metrics = sanitizeMacroMetrics(wbMetrics);
+      const missingKeys = metrics
+        .filter((m) => m.current == null && m.previous == null && m.expectation == null)
+        .map((m) => m.key);
       if (missingKeys.length === metrics.length) {
-        throw new Error("forex_factory_no_usable_values_for_currency");
+        throw new Error("world_bank_no_usable_values_for_country");
       }
 
       const payload = {
-        country: ffCountry.code,
-        countryName: ffCountry.name,
-        source: "Forex Factory Calendar",
+        country,
+        countryName,
+        source: "World Bank (country-level series)",
         updatedAt: new Date().toISOString(),
         metrics,
         diagnostics: {
-          currency: ffCountry.currency,
-          eventCount: currencyEvents.length,
+          countryCode: country,
+          provider: "world_bank",
           missingIndicatorKeys: missingKeys
         }
       };
@@ -2682,9 +2679,13 @@ app.get("/api/macro-indicators", async (req, res) => {
     } catch (error) {
       console.error("Macro indicators fetch failed:", error.message);
       if (cached?.payload) {
-        return res.json(applyStaleMeta(cached.payload, {
+        const stalePayload = applyStaleMeta(cached.payload, {
           updatedAt: persisted?.updatedAt || new Date(cached.cachedAt).toISOString()
-        }, error?.message || "macro_fetch_failed"));
+        }, error?.message || "macro_fetch_failed");
+        return res.json({
+          ...stalePayload,
+          metrics: sanitizeMacroMetrics(stalePayload?.metrics)
+        });
       }
       return res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
     }
@@ -2850,6 +2851,13 @@ app.get("/api/prices", async (req, res) => {
       const prices = await fetchYFinancePrices(symbols);
       payload = { type: "tradfi", prices, updatedAt: new Date().toISOString(), stale: false };
     }
+
+    const priceRows = payload?.prices && typeof payload.prices === "object" ? Object.values(payload.prices) : [];
+    const hasAnyFinitePrice = priceRows.some((row) => Number.isFinite(Number(row?.price)));
+    if (!hasAnyFinitePrice) {
+      throw new Error("prices_empty_from_provider");
+    }
+
     await writeServiceSnapshot("prices", snapshotParams, payload);
     return res.json(payload);
   } catch (error) {
@@ -4916,21 +4924,6 @@ app.post("/api/db/options-calculations", writeLimiter, validateOptionsCalculatio
     res.status(201).json(record);
   } catch (error) {
     handleServerError(res, "Options calculation write failed", error);
-  }
-});
-
-// Keep /api/prices alive for any direct calls from the frontend
-app.get("/api/prices", async (req, res) => {
-  const { symbols } = req.query;
-  if (!symbols) {
-    return res.status(400).json({ error: "symbols parameter required" });
-  }
-  const symbolList = symbols.split(",").map((s) => s.trim()).filter(Boolean);
-  try {
-    const prices = await fetchYFinancePrices(symbolList);
-    res.json(prices);
-  } catch (error) {
-    res.status(502).json({ error: error.message });
   }
 });
 

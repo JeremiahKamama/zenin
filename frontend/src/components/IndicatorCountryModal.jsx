@@ -7,6 +7,25 @@ import { IndicatorMetricModal } from "./IndicatorMetricModal";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
+const ALLOWED_MACRO_INDICATOR_KEYS = [
+  "gdp_growth_rate",
+  "interest_rate",
+  "inflation_rate",
+  "unemployment_rate",
+  "consumer_confidence",
+  "balance_of_trade",
+  "cpi",
+  "core_inflation_rate"
+];
+
+const sanitizeMacroSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== "object") return snapshot;
+  const allowed = new Set(ALLOWED_MACRO_INDICATOR_KEYS);
+  const metrics = Array.isArray(snapshot.metrics)
+    ? snapshot.metrics.filter((row) => allowed.has(String(row?.key || "")))
+    : [];
+  return { ...snapshot, metrics };
+};
 
 export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleStar }) {
   const countryCode = String(asset?.symbol || "").trim().toUpperCase();
@@ -22,7 +41,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
     let isMounted = true;
     const controller = new AbortController();
     const cached = readResilientCache("macro-indicators", { country: countryCode });
-    const cachedPayload = cached?.payload || null;
+    const cachedPayload = sanitizeMacroSnapshot(cached?.payload || null);
     const cachedAt = cached?.updatedAt ? new Date(cached.updatedAt).getTime() : 0;
 
     if (cachedPayload) {
@@ -48,10 +67,11 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
           throw new Error(data?.error || `HTTP ${res.status}`);
         }
         if (!isMounted) return;
-        setSnapshot(data || null);
-        setStale(Boolean(data?.stale || data?.unavailable));
-        setNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
-        writeResilientCache("macro-indicators", { country: countryCode }, data || null);
+        const sanitized = sanitizeMacroSnapshot(data || null);
+        setSnapshot(sanitized);
+        setStale(Boolean(sanitized?.stale || sanitized?.unavailable));
+        setNotice(Boolean(sanitized?.stale || sanitized?.unavailable) ? getSnapshotFallbackMessage(sanitized) : "");
+        writeResilientCache("macro-indicators", { country: countryCode }, sanitized);
       } catch (error) {
         if (error.name === "AbortError" || !isMounted) return;
         if (!cachedPayload) setSnapshot(null);

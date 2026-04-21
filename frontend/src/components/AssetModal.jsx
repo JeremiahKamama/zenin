@@ -142,7 +142,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
     const fetchQuote = async () => {
       try {
-        const quoteType = assetType === "crypto" ? "crypto" : "stock";
+        const quoteType = assetType === "crypto" ? "crypto" : "tradfi";
         const params = new URLSearchParams({ type: quoteType, symbols: assetSymbol });
         const res = await fetch(`${BACKEND_URL}/prices?${params.toString()}`);
         const data = await res.json();
@@ -249,7 +249,11 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     ? Number(asset.price)
     : Number.isFinite(Number(liveQuote.price))
       ? Number(liveQuote.price)
-      : 0;
+      : (() => {
+          const lastPoint = [...history].reverse().find((row) => Number.isFinite(Number(row?.close ?? row?.price)));
+          const fallback = Number(lastPoint?.close ?? lastPoint?.price);
+          return Number.isFinite(fallback) ? fallback : 0;
+        })();
   const displayedChangePercent = Number.isFinite(Number(asset?.priceChangePercent))
     ? Number(asset.priceChangePercent)
     : Number.isFinite(Number(liveQuote.priceChangePercent))
@@ -349,17 +353,25 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   };
 
   const chartData = useMemo(() => {
+    const normalizeTime = (row) => {
+      const candidate = row?.time ?? row?.date ?? row?.datetime ?? null;
+      if (candidate == null) return null;
+      const parsed = typeof candidate === "number" ? candidate : new Date(candidate).getTime();
+      if (!Number.isFinite(parsed)) return null;
+      return parsed > 10000000000 ? Math.floor(parsed / 1000) : Math.floor(parsed);
+    };
+
     if (chartType === "candlestick") {
       return [{
         name: "Price",
         type: "candlestick",
         data: history.map(h => ({
-          time: Math.floor(new Date(h.time).getTime() / 1000),
+          time: normalizeTime(h),
           open: Number(h.open),
           high: Number(h.high),
           low: Number(h.low),
           close: Number(h.close)
-        }))
+        })).filter((row) => row.time != null && [row.open, row.high, row.low, row.close].every(Number.isFinite))
       }];
     }
     return [{
@@ -367,9 +379,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       type: "area",
       color: "#38bdf8",
       data: history.map(h => ({
-        time: Math.floor(new Date(h.time).getTime() / 1000),
+        time: normalizeTime(h),
         value: Number(h.close || h.price)
-      }))
+      })).filter((row) => row.time != null && Number.isFinite(row.value))
     }];
   }, [history, chartType]);
 

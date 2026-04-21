@@ -8,6 +8,25 @@ const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onre
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const EARNINGS_CLIENT_CACHE_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
+const ALLOWED_MACRO_INDICATOR_KEYS = [
+  "gdp_growth_rate",
+  "interest_rate",
+  "inflation_rate",
+  "unemployment_rate",
+  "consumer_confidence",
+  "balance_of_trade",
+  "cpi",
+  "core_inflation_rate"
+];
+
+const sanitizeMacroSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== "object") return snapshot;
+  const allowed = new Set(ALLOWED_MACRO_INDICATOR_KEYS);
+  const metrics = Array.isArray(snapshot.metrics)
+    ? snapshot.metrics.filter((row) => allowed.has(String(row?.key || "")))
+    : [];
+  return { ...snapshot, metrics };
+};
 
 export function Watchlist({
   categories,
@@ -274,7 +293,7 @@ useEffect(() => {
     const now = Date.now();
     const stateCachedEntry = macroByCountry[indicatorCountry];
     const storageCached = readResilientCache("macro-indicators", { country: indicatorCountry });
-    const cachedPayload = stateCachedEntry?.data || storageCached?.payload || null;
+    const cachedPayload = sanitizeMacroSnapshot(stateCachedEntry?.data || storageCached?.payload || null);
     const cachedAt = Number(stateCachedEntry?.cachedAt || (storageCached?.updatedAt ? new Date(storageCached.updatedAt).getTime() : 0));
     if (cachedPayload) {
       setMacroSnapshot(cachedPayload);
@@ -308,17 +327,18 @@ useEffect(() => {
         }
         const data = await res.json();
         if (!isMounted) return;
-        setMacroSnapshot(data || null);
-        setMacroStale(Boolean(data?.stale || data?.unavailable));
-        setMacroNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
+        const sanitized = sanitizeMacroSnapshot(data || null);
+        setMacroSnapshot(sanitized);
+        setMacroStale(Boolean(sanitized?.stale || sanitized?.unavailable));
+        setMacroNotice(Boolean(sanitized?.stale || sanitized?.unavailable) ? getSnapshotFallbackMessage(sanitized) : "");
         setMacroByCountry((prev) => ({
           ...prev,
           [indicatorCountry]: {
-            data: data || null,
+            data: sanitized,
             cachedAt: Date.now()
           }
         }));
-        writeResilientCache("macro-indicators", { country: indicatorCountry }, data || null);
+        writeResilientCache("macro-indicators", { country: indicatorCountry }, sanitized);
       } catch (err) {
         if (err.name === "AbortError") return;
         if (!isMounted) return;

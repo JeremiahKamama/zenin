@@ -35,8 +35,8 @@ This README reflects the current implementation in this repository.
 - Starred/watchlist-only views with ordering preserved from DB
 - TradFi/crypto/indicator search with fuzzy matching
 - Stock theme filters (default + custom themes)
-- Earnings calendar cards for stock watchlist symbols
-- Macro indicators view for G7 countries (USA, CAN, GBR, FRA, DEU, ITA, JPN)
+- Earnings calendar cards for stock watchlist symbols (cached with long refresh cadence to avoid reload-time re-pulls)
+- Macro indicators + country indicator search powered by Forex Factory calendar data mapping
 
 ### 4) Company Profile
 - Deep-dive fundamental research framework for stocks (Defense, Energy, AI, Robotics, Pharma, etc.)
@@ -75,6 +75,8 @@ This README reflects the current implementation in this repository.
 
 ### 8) Journal & Analytics
 - Recent execution history with asset detail expansion
+- Trade Entry Journal persistence with `Entry Form` + `View Entries` workflow
+- Auto-journal draft creation from executed trades, with editable thesis/review fields
 - **Calendar PnL visualization**: Daily profit/loss heatmap with symbol filtering
 - **Advanced Analytics**:
   - Success metrics (Win rate, Profit Factor, Expectancy)
@@ -108,6 +110,8 @@ This README reflects the current implementation in this repository.
 - **Homepage responsive refactor completed**: Snapshot cards and footer device preview were updated to prevent overlap and improve mobile behavior.
 - **Dark theme hardening completed**: Homepage/app surfaces (including sidebar) are now enforced to dark-theme styling.
 - **Analytics runtime fix shipped**: Resolved `selectedPerpExchange is not defined` crash in the Analytics module.
+- **Watchlist earnings fetch optimization shipped**: Earnings calendar now uses extended caching windows (frontend + backend) to avoid unnecessary reload fetches.
+- **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
 
 ## Current limitations (as of April 21, 2026)
 
@@ -128,7 +132,7 @@ This README reflects the current implementation in this repository.
 - **Finviz**: Market Intel (Insider trades, Ratings, News) and supplemental fundamental metrics.
 - **Yahoo Finance (`yfinance`)**: TradFi symbol search, history, earnings, and fundamentals.
 - **Derive/Lyra**: Options chain data and whale trade tape.
-- **EODHD**: Macro indicators and general pricing fallback.
+- **Forex Factory Calendar Feed**: Indicator-country search and macro indicator event mapping in Watchlist.
 - **CoinGecko**: Supplemental crypto metadata.
 - **Telegram MTProto**: Optional ingestion for Derive whale flow.
 
@@ -309,7 +313,6 @@ Notes:
 - `FRONTEND_URL` (CORS allowlist origin)
 - `DATABASE_URL` (recommended)
 - `AUTH_HASH_KEY` (strong secret used for session/reset/OTP hashing)
-- `EODHD_API_TOKEN` (macro indicators)
 - `DERIVE_API_URL` (optional provider override)
 
 Optional Postgres discrete vars (if not using `DATABASE_URL`):
