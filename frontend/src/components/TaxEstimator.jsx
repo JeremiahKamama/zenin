@@ -86,18 +86,96 @@ function calcLiability(key, gains) {
   return { liability, details };
 }
 
-export function TaxEstimator() {
-  const [jurisdictions, setJurisdictions] = useState(['USA']);
-  const [jurisdictionSearch, setJurisdictionSearch] = useState('');
-  const [activeRegion, setActiveRegion] = useState('All');
-  const [taxYear, setTaxYear] = useState('2025');
-  const [gains, setGains] = useState({
+function emptyGains() {
+  return {
     Equities: { shortTerm: 0, longTerm: 0 },
     Bonds: { standard: 0 },
     'Special Funds': { standard: 0 },
     MMFs: { standard: 0 },
     Crypto: { shortTerm: 0, longTerm: 0 }
+  };
+}
+
+function normalizeMarketBucket(trade = {}) {
+  const marketType = String(trade?.marketType || trade?.market_type || "").toLowerCase();
+  const type = String(trade?.type || "").toLowerCase();
+  const name = String(trade?.name || "").toLowerCase();
+  const symbol = String(trade?.asset || trade?.symbol || "").toLowerCase();
+  const raw = `${marketType} ${type} ${name} ${symbol}`;
+
+  if (raw.includes("crypto") || raw.includes("perp") || raw.includes("spot")) return "Crypto";
+  if (raw.includes("bond")) return "Bonds";
+  if (raw.includes("mmf") || raw.includes("money market")) return "MMFs";
+  if (raw.includes("fund") || raw.includes("reit") || raw.includes("structured")) return "Special Funds";
+  return "Equities";
+}
+
+function deriveGainsFromTrades(trades = []) {
+  const rows = Array.isArray(trades) ? trades : [];
+  const sorted = [...rows]
+    .map((trade) => {
+      const qty = Math.abs(Number(trade?.quantity) || 0);
+      const px = Number(trade?.price);
+      const ts = new Date(trade?.executedAt || trade?.executed_at || trade?.date || 0).getTime();
+      const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+      if (!Number.isFinite(qty) || qty <= 0) return null;
+      if (!Number.isFinite(px) || px < 0) return null;
+      if (!Number.isFinite(ts) || ts <= 0) return null;
+      const symbol = String(trade?.asset || trade?.symbol || "").toUpperCase();
+      const marketType = String(trade?.marketType || trade?.market_type || "").toLowerCase();
+      return { ...trade, qty, px, ts, side, symbol, marketType };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+
+  const gains = emptyGains();
+  const lotsByKey = new Map();
+
+  sorted.forEach((trade) => {
+    const key = `${trade.symbol}:${trade.marketType}`;
+    const bucket = normalizeMarketBucket(trade);
+    const lots = lotsByKey.get(key) || [];
+
+    if (trade.side === "buy") {
+      lots.push({ qty: trade.qty, px: trade.px, ts: trade.ts });
+      lotsByKey.set(key, lots);
+      return;
+    }
+
+    let remaining = trade.qty;
+    while (remaining > 0 && lots.length > 0) {
+      const lot = lots[0];
+      const matchedQty = Math.min(remaining, lot.qty);
+      const proceeds = matchedQty * trade.px;
+      const basis = matchedQty * lot.px;
+      const pnl = proceeds - basis;
+      const holdMs = Math.max(0, trade.ts - lot.ts);
+      const isLongTerm = holdMs >= 365 * 24 * 60 * 60 * 1000;
+
+      if (bucket === "Crypto" || bucket === "Equities") {
+        gains[bucket][isLongTerm ? "longTerm" : "shortTerm"] += pnl;
+      } else if (bucket === "Bonds" || bucket === "MMFs" || bucket === "Special Funds") {
+        gains[bucket].standard += pnl;
+      }
+
+      lot.qty -= matchedQty;
+      remaining -= matchedQty;
+      if (lot.qty <= 1e-8) lots.shift();
+    }
+
+    lotsByKey.set(key, lots);
   });
+
+  return gains;
+}
+
+export function TaxEstimator({ trades = [] }) {
+  const [jurisdictions, setJurisdictions] = useState(['USA']);
+  const [jurisdictionSearch, setJurisdictionSearch] = useState('');
+  const [activeRegion, setActiveRegion] = useState('All');
+  const [taxYear, setTaxYear] = useState('2025');
+  const [gains, setGains] = useState(emptyGains);
+  const [hasManualGainEdit, setHasManualGainEdit] = useState(false);
   const [results, setResults] = useState([]);
   const [savedEstimates, setSavedEstimates] = useState([]);
   const [fileName, setFileName] = useState('');
@@ -117,8 +195,16 @@ export function TaxEstimator() {
 
   const handleGainChange = (category, type, value) => {
     const numeric = parseFloat(value) || 0;
+    setHasManualGainEdit(true);
     setGains(prev => ({ ...prev, [category]: { ...prev[category], [type]: numeric } }));
   };
+
+  useEffect(() => {
+    if (hasManualGainEdit) return;
+    if (!Array.isArray(trades) || trades.length === 0) return;
+    const derived = deriveGainsFromTrades(trades);
+    setGains(derived);
+  }, [trades, hasManualGainEdit]);
 
   const handleCalculate = () => {
     if (jurisdictions.length === 0) { alert('Select at least one jurisdiction.'); return; }

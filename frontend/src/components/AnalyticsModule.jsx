@@ -339,15 +339,6 @@ export function AnalyticsModule({ backendUrl }) {
                 }}
               >
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{tab.label}</div>
-                <div
-                  style={{
-                    marginTop: 4,
-                    fontSize: 12,
-                    color: active ? "#bae6fd" : "#94a3b8",
-                  }}
-                >
-                  {tab.description}
-                </div>
               </button>
             );
           })}

@@ -4802,9 +4802,10 @@ app.get('/api/analytics/crypto', async (req, res) => {
     const fetch = await resolveFetch();
     const assets = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
     
-    const [bybitRes, binanceFundingRes, hlRes, ...binanceOIPromises] = await Promise.allSettled([
+    const [bybitRes, binanceFundingRes, binanceMarkRes, hlRes, ...binanceOIPromises] = await Promise.allSettled([
       fetch("https://api.bybit.com/v5/market/tickers?category=linear").then(r => r.json()),
       fetch("https://fapi.binance.com/fapi/v1/premiumIndex").then(r => r.json()),
+      fetch("https://fapi.binance.com/fapi/v1/ticker/price").then(r => r.json()),
       postHyperliquidInfo({ type: "metaAndAssetCtxs" }),
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT`).then(r => r.json()).catch(() => null),
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=ETHUSDT`).then(r => r.json()).catch(() => null),
@@ -4822,10 +4823,20 @@ app.get('/api/analytics/crypto', async (req, res) => {
       universe.forEach((u, idx) => {
         const symbol = String(u?.name || "").toUpperCase();
         if (assets.includes(symbol) && ctxs[idx]) {
+          const markPx = firstFiniteNumber(ctxs[idx]?.markPx, ctxs[idx]?.midPx, 0) || 0;
+          const oiCoins = firstFiniteNumber(ctxs[idx]?.openInterest, ctxs[idx]?.open_interest, 0) || 0;
+          const funding = firstFiniteNumber(
+            ctxs[idx]?.funding,
+            ctxs[idx]?.fundingRate,
+            ctxs[idx]?.funding_rate,
+            ctxs[idx]?.funding8h,
+            ctxs[idx]?.funding_8h,
+            0
+          ) || 0;
           perpMetrics.push({
             symbol,
-            openInterestUsd: Number(ctxs[idx].openInterest || 0) * Number(ctxs[idx].markPx || 0),
-            fundingRate: Number(ctxs[idx].funding || 0),
+            openInterestUsd: oiCoins * markPx,
+            fundingRate: funding,
             exchange: "Hyperliquid"
           });
         }
@@ -4836,12 +4847,28 @@ app.get('/api/analytics/crypto', async (req, res) => {
     if (bybitRes.status === "fulfilled" && bybitRes.value?.result?.list) {
       const list = bybitRes.value.result.list;
       list.forEach(item => {
-        const symbol = item.symbol.replace(/USDT$/, "");
+        const symbol = String(item?.symbol || "").replace(/USDT$/, "").replace(/USDC$/, "");
         if (assets.includes(symbol)) {
+          const lastPx = firstFiniteNumber(item?.lastPrice, item?.markPrice, item?.indexPrice, 0) || 0;
+          const oiUsd = firstFiniteNumber(
+            item?.openInterestValue,
+            item?.open_interest_value,
+            item?.openInterestUsd,
+            item?.open_interest_usd,
+            (firstFiniteNumber(item?.openInterest, item?.open_interest, 0) || 0) * lastPx,
+            0
+          ) || 0;
+          const funding = firstFiniteNumber(
+            item?.fundingRate,
+            item?.funding_rate,
+            item?.nextFundingRate,
+            item?.next_funding_rate,
+            0
+          ) || 0;
           perpMetrics.push({
             symbol,
-            openInterestUsd: Number(item.openInterestValue || 0),
-            fundingRate: Number(item.fundingRate || 0),
+            openInterestUsd: oiUsd,
+            fundingRate: funding,
             exchange: "Bybit"
           });
         }
@@ -4850,6 +4877,9 @@ app.get('/api/analytics/crypto', async (req, res) => {
 
     // Binance parsing
     if (binanceFundingRes.status === "fulfilled" && Array.isArray(binanceFundingRes.value)) {
+      const markRows = binanceMarkRes.status === "fulfilled" && Array.isArray(binanceMarkRes.value)
+        ? binanceMarkRes.value
+        : [];
       const ois = [
         binanceOIPromises[0]?.value, // BTC
         binanceOIPromises[1]?.value, // ETH
@@ -4860,14 +4890,20 @@ app.get('/api/analytics/crypto', async (req, res) => {
       const symbolsToMap = ["BTC", "ETH", "SOL", "BNB"];
       symbolsToMap.forEach((sym, i) => {
         const fundingItem = binanceFundingRes.value.find(f => f.symbol === `${sym}USDT`);
+        const markItem = markRows.find(f => f.symbol === `${sym}USDT`);
         const oiItem = ois[i];
         if (fundingItem || oiItem) {
-          const markPx = Number(fundingItem?.markPrice || 0);
-          const oiCoins = Number(oiItem?.openInterest || 0);
+          const markPx = firstFiniteNumber(fundingItem?.markPrice, markItem?.price, oiItem?.price, 0) || 0;
+          const oiCoins = firstFiniteNumber(oiItem?.openInterest, oiItem?.open_interest, 0) || 0;
           perpMetrics.push({
             symbol: sym,
             openInterestUsd: oiCoins * markPx,
-            fundingRate: Number(fundingItem?.lastFundingRate || 0),
+            fundingRate: firstFiniteNumber(
+              fundingItem?.lastFundingRate,
+              fundingItem?.fundingRate,
+              fundingItem?.last_funding_rate,
+              0
+            ) || 0,
             exchange: "Binance"
           });
         }

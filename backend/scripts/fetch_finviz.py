@@ -4,6 +4,25 @@ import json
 import requests
 from bs4 import BeautifulSoup
 
+def _find_ratings_table(soup: BeautifulSoup):
+    # Primary selector used historically by Finviz.
+    table = soup.find("table", class_="fullview-ratings-outer")
+    if table:
+        return table
+
+    # Fallback: locate a table by expected ratings headers in case class names changed.
+    for candidate in soup.find_all("table"):
+        header_cells = candidate.find_all("th")
+        headers = " ".join(cell.get_text(" ", strip=True).lower() for cell in header_cells)
+        if not headers:
+            # Some table variants use first row td as header-like labels.
+            first_row = candidate.find("tr")
+            if first_row:
+                headers = " ".join(cell.get_text(" ", strip=True).lower() for cell in first_row.find_all(["td", "th"]))
+        if "analyst" in headers and "rating" in headers and ("target" in headers or "price" in headers):
+            return candidate
+    return None
+
 def fetch_finviz_data(symbol: str) -> dict:
     # Normalize symbol for Finviz (e.g. BRK.B -> BRK-B)
     normalized_symbol = symbol.replace('.', '-').upper()
@@ -44,17 +63,22 @@ def fetch_finviz_data(symbol: str) -> dict:
         if country_link: data["header_meta"]["country"] = country_link.get_text(strip=True)
 
         # 2. Analyst Ratings
-        ratings_table = soup.find("table", class_="fullview-ratings-outer")
+        ratings_table = _find_ratings_table(soup)
         if ratings_table:
             for row in ratings_table.find_all("tr"):
                 cols = row.find_all("td")
                 if len(cols) >= 5:
+                    parsed = [col.get_text(" ", strip=True) for col in cols]
+                    # Skip header-like rows rendered with td tags.
+                    joined = " ".join(parsed).lower()
+                    if "date" in joined and "analyst" in joined and "rating" in joined:
+                        continue
                     data["ratings"].append({
-                        "date": cols[0].get_text(strip=True),
-                        "action": cols[1].get_text(strip=True),
-                        "analyst": cols[2].get_text(strip=True),
-                        "rating": cols[3].get_text(strip=True),
-                        "price_target": cols[4].get_text(strip=True),
+                        "date": parsed[0] if len(parsed) > 0 else "",
+                        "action": parsed[1] if len(parsed) > 1 else "",
+                        "analyst": parsed[2] if len(parsed) > 2 else "",
+                        "rating": parsed[3] if len(parsed) > 3 else "",
+                        "price_target": parsed[4] if len(parsed) > 4 else "",
                     })
 
         # 3. Insider Trading

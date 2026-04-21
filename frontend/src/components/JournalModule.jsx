@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 
@@ -28,10 +28,32 @@ export function JournalModule({
   const [livePriceBySymbol, setLivePriceBySymbol] = useState({});
   const [lastReportPriceRefreshAt, setLastReportPriceRefreshAt] = useState(null);
   const [nowTs, setNowTs] = useState(Date.now());
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
 
   useEffect(() => {
     const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
     return () => clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event) => {
+      if (!exportMenuRef.current) return;
+      if (!exportMenuRef.current.contains(event.target)) {
+        setIsExportMenuOpen(false);
+      }
+    };
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setIsExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, []);
 
   const reportSymbols = useMemo(() => {
@@ -201,6 +223,20 @@ export function JournalModule({
       const d = new Date(dateStr);
       return Number.isNaN(d.getTime()) ? null : d;
     };
+    const normalizeStrategy = (value) => String(value || "").trim();
+    const isOptionTrade = (trade) => {
+      const marketType = String(trade?.marketType || trade?.market_type || "").toLowerCase();
+      if (marketType.includes("option")) return true;
+      if (trade?.legs && typeof trade.legs === "object") return true;
+      if (trade?.optionType || trade?.expiry || trade?.strike != null) return true;
+      const strategy = String(trade?.strategyName || trade?.strategy || "").trim();
+      return strategy.length > 0;
+    };
+    const buildReportKey = (asset, trade) => {
+      if (!isOptionTrade(trade)) return `${asset}::spot`;
+      const strategy = normalizeStrategy(trade?.strategyName || trade?.strategy || "Options");
+      return `${asset}::options::${strategy}`;
+    };
 
     const sortedTrades = [...trades].sort((a, b) => {
       const ta = parseTradeDate(a.executedAt || a.date)?.getTime() ?? 0;
@@ -218,6 +254,9 @@ export function JournalModule({
     for (const trade of sortedTrades) {
       const type = (trade.type || "").toUpperCase();
       const asset = normalizeSymbol(trade.asset);
+      const reportKey = buildReportKey(asset, trade);
+      const optionTrade = isOptionTrade(trade);
+      const strategy = normalizeStrategy(trade?.strategyName || trade?.strategy || "");
       const qty = Math.max(0, safeNum(trade.quantity));
       const price = safeNum(trade.price);
       const dateObj = parseTradeDate(trade.executedAt || trade.date);
@@ -228,14 +267,14 @@ export function JournalModule({
       totalVolume += tradeNotional;
 
       if (type === "BUY") {
-        const lots = lotsByAsset.get(asset) || [];
+        const lots = lotsByAsset.get(reportKey) || [];
         lots.push({ qty, price, date: dateObj });
-        lotsByAsset.set(asset, lots);
+        lotsByAsset.set(reportKey, lots);
         continue;
       }
 
       if (type === "SELL") {
-        const lots = lotsByAsset.get(asset) || [];
+        const lots = lotsByAsset.get(reportKey) || [];
         let remaining = qty;
         while (remaining > 0 && lots.length > 0) {
           const lot = lots[0];
@@ -250,7 +289,11 @@ export function JournalModule({
             : (dateObj ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}` : "");
 
           realized.push({
+            reportKey,
             asset,
+            strategy,
+            isOption: optionTrade,
+            marketType: optionTrade ? "options" : (trade.marketType || trade.market_type || ""),
             pnl,
             holdDays,
             qty: matchedQty,
@@ -264,7 +307,7 @@ export function JournalModule({
           remaining -= matchedQty;
           if (lot.qty <= 0) lots.shift();
         }
-        lotsByAsset.set(asset, lots);
+        lotsByAsset.set(reportKey, lots);
       }
     }
 
@@ -333,17 +376,20 @@ export function JournalModule({
 
     const symbolStats = new Map();
     const bumpSymbolExecution = (trade) => {
-      const isOption = String(trade.marketType || trade.market_type || "").toLowerCase() === "options";
-      const strat = trade.strategyName || trade.strategy || "";
-      const key = isOption ? `${normalizeSymbol(trade.asset)} (${strat})` : normalizeSymbol(trade.asset);
+      const asset = normalizeSymbol(trade.asset);
+      const isOption = isOptionTrade(trade);
+      const strat = normalizeStrategy(trade.strategyName || trade.strategy || "");
+      const key = buildReportKey(asset, trade);
       const type = (trade.type || "").toUpperCase();
       const qty = Math.max(0, safeNum(trade.quantity));
       const price = safeNum(trade.price);
       const row = symbolStats.get(key) || {
-        symbol: key,
-        asset: normalizeSymbol(trade.asset),
+        reportKey: key,
+        symbol: isOption ? `${asset} (Options)` : asset,
+        asset,
         strategy: strat,
         isOption,
+        assetClass: isOption ? "Options" : "Spot/Other",
         executionCount: 0,
         realizedCount: 0,
         wins: 0,
@@ -376,14 +422,16 @@ export function JournalModule({
     }
 
     for (const r of realized) {
-      const isOption = String(r.marketType || r.market_type || "").toLowerCase() === "options";
-      const strat = r.strategyName || r.strategy || "";
-      const key = isOption ? `${normalizeSymbol(r.asset)} (${strat})` : (r.asset || "UNKNOWN");
+      const isOption = !!r.isOption;
+      const strat = normalizeStrategy(r.strategy || "");
+      const key = r.reportKey || (r.asset || "UNKNOWN");
       const row = symbolStats.get(key) || {
-        symbol: key,
+        reportKey: key,
+        symbol: isOption ? `${normalizeSymbol(r.asset)} (Options)` : normalizeSymbol(r.asset),
         asset: normalizeSymbol(r.asset),
         strategy: strat,
         isOption,
+        assetClass: isOption ? "Options" : "Spot/Other",
         executionCount: 0,
         realizedCount: 0,
         wins: 0,
@@ -409,9 +457,14 @@ export function JournalModule({
       symbolStats.set(key, row);
     }
 
-    for (const [symbol, lots] of lotsByAsset.entries()) {
-      const row = symbolStats.get(symbol) || {
-        symbol,
+    for (const [reportKey, lots] of lotsByAsset.entries()) {
+      const row = symbolStats.get(reportKey) || {
+        reportKey,
+        symbol: reportKey,
+        asset: reportKey.split("::")[0] || reportKey,
+        strategy: "",
+        isOption: reportKey.includes("::options::"),
+        assetClass: reportKey.includes("::options::") ? "Options" : "Spot/Other",
         executionCount: 0,
         realizedCount: 0,
         wins: 0,
@@ -433,7 +486,7 @@ export function JournalModule({
         row.holdDurationQty += lotQty;
         row.holdDurationQtyDays += holdDays * lotQty;
       }
-      symbolStats.set(symbol, row);
+      symbolStats.set(reportKey, row);
     }
 
     const portfolioPositionMap = new Map();
@@ -467,34 +520,40 @@ export function JournalModule({
         const decisive = row.wins + row.losses;
         const winRate = decisive ? (row.wins / decisive) * 100 : 0;
         const avgDuration = row.holdDurationQty > eps ? (row.holdDurationQtyDays / row.holdDurationQty) : 0;
-        const openLots = lotsByAsset.get(row.symbol) || [];
+        const openLots = lotsByAsset.get(row.reportKey) || [];
         const openQty = openLots.reduce((sum, lot) => sum + safeNum(lot.qty), 0);
         const openCost = openLots.reduce((sum, lot) => sum + (safeNum(lot.qty) * safeNum(lot.price)), 0);
         const avgPurchasePrice = openQty > eps
           ? openCost / openQty
-          : (lastBuyPriceBySymbol.get(row.symbol) || 0);
+          : (lastBuyPriceBySymbol.get(row.asset) || 0);
         const currentPrice =
-          safeNum(livePriceBySymbol[row.symbol]) ||
-          portfolioPriceMap.get(row.symbol) ||
+          safeNum(livePriceBySymbol[row.asset]) ||
+          portfolioPriceMap.get(row.asset) ||
           0;
         const priceMove = (avgPurchasePrice > 0 && currentPrice > 0)
           ? (currentPrice - avgPurchasePrice)
           : 0;
-        const currentPosition = portfolioPositionMap.has(row.symbol)
-          ? portfolioPositionMap.get(row.symbol)
+        const currentPosition = row.isOption
+          ? row.netQtyFromTrades
+          : portfolioPositionMap.has(row.asset)
+          ? portfolioPositionMap.get(row.asset)
           : row.netQtyFromTrades;
         const totalGain = currentPosition > eps ? priceMove * currentPosition : 0;
         const avgGain = priceMove;
 
         return {
+          reportKey: row.reportKey,
           symbol: row.symbol,
           asset: row.asset || row.symbol,
           strategy: row.strategy || "",
           isOption: !!row.isOption,
+          assetClass: row.assetClass || (row.isOption ? "Options" : "Spot/Other"),
           tradeCount: row.executionCount,
           tradedNotional: row.tradedNotional,
-          netPosition: portfolioPositionMap.has(row.symbol)
-            ? portfolioPositionMap.get(row.symbol)
+          netPosition: row.isOption
+            ? row.netQtyFromTrades
+            : portfolioPositionMap.has(row.asset)
+            ? portfolioPositionMap.get(row.asset)
             : row.netQtyFromTrades,
           winRate,
           tradeDuration: avgDuration,
@@ -774,6 +833,7 @@ export function JournalModule({
       .map((row) => `
         <tr>
           <td>${row.symbol || ""}</td>
+          <td>${row.assetClass || ""}</td>
           <td>${Number(row.tradeCount || 0)}</td>
           <td>${Number(row.tradedNotional || 0).toFixed(2)}</td>
           <td>${Number(row.netPosition || 0).toFixed(4)}</td>
@@ -794,6 +854,7 @@ export function JournalModule({
             <thead>
               <tr>
                 <th>Symbol</th>
+                <th>Asset Class</th>
                 <th>Trade Count</th>
                 <th>Traded Notional</th>
                 <th>Current Position</th>
@@ -869,7 +930,7 @@ export function JournalModule({
 
   const exportTradedAssetsToPdf = () => {
     if (!reportExportRows.length) return;
-    const header = "Symbol | Trades | Traded Notional | Position | Win Rate | Duration | Avg Gain | Total Gain";
+    const header = "Symbol | Class | Trades | Traded Notional | Position | Win Rate | Duration | Avg Gain | Total Gain";
     const separator = "-".repeat(120);
     const lines = [
       `Traded Assets Report - ${new Date().toLocaleString()}`,
@@ -885,7 +946,8 @@ export function JournalModule({
         const duration = formatDurationFromDays(row.tradeDuration || 0).padStart(7, " ");
         const avgGain = Number(row.avgGain || 0).toFixed(2).padStart(10, " ");
         const totalGain = Number(row.totalGain || 0).toFixed(2).padStart(10, " ");
-        return `${symbol} | ${tradesCount} | ${tradedNotional} | ${position} | ${winRate} | ${duration} | ${avgGain} | ${totalGain}`;
+        const assetClass = String(row.assetClass || "").padEnd(8, " ").slice(0, 8);
+        return `${symbol} | ${assetClass} | ${tradesCount} | ${tradedNotional} | ${position} | ${winRate} | ${duration} | ${avgGain} | ${totalGain}`;
       })
     ];
 
@@ -1073,27 +1135,31 @@ export function JournalModule({
       <div className="watchlist-panel glass">
         <div className="section-header">
           <h2>Traded Assets Report</h2>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <div className="report-header-meta">
             <div className="asset-count">
               {analytics.tradedAssetsReport.length} Assets
               {lastReportPriceRefreshAt ? ` · Prices refreshed ${new Date(lastReportPriceRefreshAt).toLocaleString()}` : ""}
             </div>
-            <button
-              className="pagination-button"
-              onClick={exportTradedAssetsToExcel}
-              disabled={analytics.tradedAssetsReport.length === 0}
-              title="Export traded assets report as Excel (.xls)"
-            >
-              Export Excel
-            </button>
-            <button
-              className="pagination-button"
-              onClick={exportTradedAssetsToPdf}
-              disabled={analytics.tradedAssetsReport.length === 0}
-              title="Export traded assets report as PDF"
-            >
-              Export PDF
-            </button>
+            <div className="export-menu-anchor" ref={exportMenuRef}>
+              <button
+                className="pagination-button"
+                onClick={() => setIsExportMenuOpen((prev) => !prev)}
+                disabled={analytics.tradedAssetsReport.length === 0}
+                title="Export traded assets report"
+              >
+                Export
+              </button>
+              {isExportMenuOpen && analytics.tradedAssetsReport.length > 0 ? (
+                <div className="export-menu">
+                  <button className="pagination-button" onClick={() => { exportTradedAssetsToPdf(); setIsExportMenuOpen(false); }}>
+                    PDF
+                  </button>
+                  <button className="pagination-button" onClick={() => { exportTradedAssetsToExcel(); setIsExportMenuOpen(false); }}>
+                    Excel
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
         {analytics.tradedAssetsReport.length === 0 ? (
@@ -1107,6 +1173,7 @@ export function JournalModule({
                 <thead>
                   <tr>
                     <th>Symbol</th>
+                    <th>Asset Class</th>
                     <th>Trade Count</th>
                     <th>Traded Notional</th>
                     <th>Current Position</th>
@@ -1118,7 +1185,7 @@ export function JournalModule({
                 </thead>
                 <tbody>
                   {pagedReportRows.map((row) => (
-                    <tr key={row.symbol}>
+                    <tr key={row.reportKey || row.symbol}>
                       <td>
                         {row.symbol}
                         {row.isOption && row.strategy && (
@@ -1127,6 +1194,7 @@ export function JournalModule({
                           </div>
                         )}
                       </td>
+                      <td>{row.assetClass}</td>
                       <td>{row.tradeCount}</td>
                       <td>{formatValue(row.tradedNotional, true)}</td>
                       <td>{Number(row.netPosition || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>

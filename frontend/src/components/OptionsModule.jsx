@@ -127,6 +127,53 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
     return calculateOptionPnL(trade, tradeChain, tradeSpot);
   };
 
+  const syncActiveTradeSnapshots = (assetSymbol, syncedChain, syncedSpot) => {
+    if (!setActiveOptionsTrades) return;
+    setActiveOptionsTrades((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      let changed = false;
+      const next = prev.map((trade) => {
+        if (String(trade?.asset || "").toUpperCase() !== String(assetSymbol || "").toUpperCase()) {
+          return trade;
+        }
+        const entryPremium = Number.isFinite(Number(trade?.netPremiumAtEntry))
+          ? Number(trade.netPremiumAtEntry)
+          : Number.isFinite(Number(trade?.entryPrice))
+          ? Number(trade.entryPrice)
+          : Number.isFinite(Number(trade?.price))
+          ? Number(trade.price)
+          : 0;
+        const qty = Number(trade?.qty ?? trade?.quantity);
+        const normalizedQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
+        const metrics = calculateOptionPnL(trade, syncedChain, syncedSpot);
+        const updated = {
+          ...trade,
+          qty: normalizedQty,
+          quantity: normalizedQty,
+          netPremiumAtEntry: entryPremium,
+          currentMark: metrics.currentMark,
+          delta: metrics.delta,
+          theta: metrics.theta,
+          unrealizedPnl: metrics.pnl,
+          isStale: metrics.isStale
+        };
+        if (
+          updated.currentMark !== trade.currentMark ||
+          updated.delta !== trade.delta ||
+          updated.theta !== trade.theta ||
+          updated.unrealizedPnl !== trade.unrealizedPnl ||
+          updated.isStale !== trade.isStale ||
+          updated.qty !== trade.qty ||
+          updated.netPremiumAtEntry !== trade.netPremiumAtEntry
+        ) {
+          changed = true;
+        }
+        return updated;
+      });
+      return changed ? next : prev;
+    });
+  };
+
 
 const handleStrategyChosen = async (tradePayload) => {
   if (!tradePayload || !tradePayload.notional) return;
@@ -195,6 +242,8 @@ const handleStrategyChosen = async (tradePayload) => {
       initialDelta: initialDelta || 0,
       initialTheta: initialTheta || 0,
       qty: tradePayload.qty ?? 1,
+      quantity: tradePayload.qty ?? 1,
+      notional: tradePayload.notional ?? 1,
       totalNotional: tradePayload.notional,
     };
 
@@ -251,6 +300,8 @@ useEffect(() => {
           .then(data => {
             if (data && data.chain) {
               setMultiChainCache(prev => ({ ...prev, [asset]: data.chain }));
+              const spot = Number(spotPrices?.[asset]) || null;
+              syncActiveTradeSnapshots(asset, data.chain, spot);
             }
           })
           .catch(err => console.error(`Failed to fetch supplementary chain for ${asset}`, err));
@@ -365,8 +416,10 @@ useEffect(() => {
         }
 
         setChain(data.chain);
+        let resolvedSpot = null;
         const lyraSpot = Number(data?.market_price ?? data?.spot);
         if (Number.isFinite(lyraSpot) && lyraSpot > 0) {
+          resolvedSpot = lyraSpot;
           setSpotPrices((prev) => ({
             ...prev,
             [activeAsset]: lyraSpot
@@ -376,6 +429,7 @@ useEffect(() => {
           const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
           if (!isMounted) return;
           if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
+            resolvedSpot = fallbackSpot;
             setSpotPrices((prev) => ({
               ...prev,
               [activeAsset]: fallbackSpot
@@ -385,6 +439,7 @@ useEffect(() => {
             setSpotSources((prev) => ({ ...prev, [activeAsset]: "unavailable" }));
           }
         }
+        syncActiveTradeSnapshots(activeAsset, data.chain, resolvedSpot || Number(spotPrices?.[activeAsset]) || null);
 
         setMetrics({
           iv: parseFloat(data?.market_metrics?.iv) || 0.42,
@@ -676,7 +731,7 @@ useEffect(() => {
                         </div>
                       </td>
                       <td className="active-trades-symbol">{trade.asset}</td>
-                      <td>{trade.notional || 1}</td>
+                      <td>{trade.qty || trade.quantity || 1}</td>
                       <td style={{ fontSize: "11px", color: "#94a3b8" }}>
                         {trade.legs?.[0]?.expiry || "—"}
                       </td>

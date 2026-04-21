@@ -167,7 +167,7 @@ button {
   position: sticky;
   top: 24px;
   height: calc(100vh - 48px);
-  background: #02050d;
+  background: rgba(0, 0, 0, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 24px;
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.7);
@@ -204,8 +204,8 @@ button {
 }
 
 .sidebar-toggle-btn:hover {
-  background: rgba(56, 189, 248, 0.12);
-  border-color: #38bdf8;
+  background: rgba(148, 163, 184, 0.16);
+  border-color: rgba(148, 163, 184, 0.42);
 }
 
 .sidebar-brand {
@@ -250,9 +250,9 @@ button {
 }
 
 .nav-btn.active {
-  background: rgba(56, 189, 248, 0.12);
-  border-left: 3px solid #38bdf8;
-  color: #38bdf8;
+  background: rgba(148, 163, 184, 0.16);
+  border-left: 3px solid rgba(226, 232, 240, 0.9);
+  color: #e2e8f0;
   padding-left: 15px; /* adjust for border */
 }
 
@@ -320,8 +320,8 @@ button {
 }
 
 .settings-launcher:hover {
-  border-color: rgba(56, 189, 248, 0.8);
-  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(148, 163, 184, 0.42);
+  background: rgba(148, 163, 184, 0.12);
 }
 
 .user-icon {
@@ -332,8 +332,8 @@ button {
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  background: rgba(56, 189, 248, 0.25);
-  color: #dbeafe;
+  background: rgba(148, 163, 184, 0.24);
+  color: #f8fafc;
 }
 
 .sidebar-footer-email {
@@ -1405,8 +1405,8 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 22px;
   background:
-    radial-gradient(circle at top left, rgba(29, 158, 117, 0.18), transparent 38%),
-    linear-gradient(180deg, rgba(8, 15, 23, 0.92), rgba(2, 6, 23, 0.95));
+    radial-gradient(circle at top left, rgba(148, 163, 184, 0.12), transparent 38%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.96));
   overflow: hidden;
 }
 
@@ -1414,14 +1414,14 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 999px;
   padding: 9px 14px;
-  background: rgba(15, 23, 42, 0.76);
+  background: rgba(0, 0, 0, 0.72);
   color: #e2e8f0;
   font-weight: 700;
 }
 
 .company-page-back:hover {
-  border-color: rgba(125, 211, 252, 0.38);
-  background: rgba(14, 116, 144, 0.16);
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.12);
 }
 
 .company-page-title-wrap {
@@ -1434,7 +1434,7 @@ button {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: #7dd3fc;
+  color: #cbd5e1;
   margin-bottom: 8px;
 }
 
@@ -1455,7 +1455,7 @@ button {
 .company-page-subtitle span {
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.65);
+  background: rgba(0, 0, 0, 0.62);
   border: 1px solid rgba(148, 163, 184, 0.15);
   color: #cbd5e1;
   font-size: 0.78rem;
@@ -1485,7 +1485,7 @@ button {
   min-width: 150px;
   border-radius: 16px;
   border: 1px solid rgba(34, 197, 94, 0.3);
-  background: rgba(15, 23, 42, 0.55);
+  background: rgba(0, 0, 0, 0.56);
   color: #86efac;
   font-weight: 700;
   font-size: 0.78rem;
@@ -1520,8 +1520,8 @@ button {
 .company-page-finviz-card {
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 20px;
-  background: rgba(2, 6, 23, 0.8);
-  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.18);
+  background: rgba(0, 0, 0, 0.82);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
 }
 
 .company-page-finviz-card {
@@ -1540,7 +1540,7 @@ button {
 }
 
 .company-finviz-cell {
-  background: rgba(2, 6, 23, 0.95);
+  background: rgba(0, 0, 0, 0.94);
   padding: 6px 10px;
   display: flex;
   justify-content: space-between;
@@ -1631,7 +1631,7 @@ button {
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.66);
+  background: rgba(0, 0, 0, 0.66);
   color: #cbd5e1;
   font-size: 0.8rem;
   font-weight: 600;
@@ -1639,7 +1639,7 @@ button {
 }
 
 .company-page-source-pill:hover {
-  border-color: rgba(125, 211, 252, 0.35);
+  border-color: rgba(148, 163, 184, 0.4);
   color: #e2e8f0;
 }
 
@@ -1650,7 +1650,7 @@ button {
   align-items: center;
   padding: 10px 12px;
   border-radius: 14px;
-  background: rgba(15, 23, 42, 0.5);
+  background: rgba(0, 0, 0, 0.52);
   color: #cbd5e1;
 }
 
@@ -1673,14 +1673,14 @@ button {
 }
 
 .company-page-filing-row a {
-  color: #7dd3fc;
+  color: #cbd5e1;
   font-size: 0.84rem;
   font-weight: 700;
   text-decoration: none;
 }
 
 .company-page-filing-row a:hover {
-  color: #bae6fd;
+  color: #f1f5f9;
 }
 
 .company-page-tabs {
@@ -1694,7 +1694,7 @@ button {
   padding: 9px 16px;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.72);
+  background: rgba(0, 0, 0, 0.74);
   color: #cbd5e1;
   font-weight: 700;
   font-size: 0.84rem;
@@ -1703,7 +1703,7 @@ button {
 }
 
 .company-page-tab:hover {
-  background: rgba(15, 23, 42, 0.9);
+  background: rgba(0, 0, 0, 0.9);
   border-color: rgba(148, 163, 184, 0.3);
   transform: translateY(-1px);
 }
@@ -1723,17 +1723,17 @@ button {
 }
 
 .company-page-tab.active-intel {
-  border-color: #0ea5e9;
-  background: rgba(14, 165, 233, 0.15);
-  color: #7dd3fc;
-  box-shadow: 0 0 15px rgba(14, 165, 233, 0.1);
+  border-color: rgba(148, 163, 184, 0.48);
+  background: rgba(148, 163, 184, 0.14);
+  color: #e2e8f0;
+  box-shadow: 0 0 15px rgba(148, 163, 184, 0.14);
 }
 
 .company-page-legend,
 .company-page-empty {
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgba(15, 23, 42, 0.58);
+  background: rgba(0, 0, 0, 0.6);
   color: #94a3b8;
   line-height: 1.65;
 }
@@ -1749,7 +1749,7 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 18px;
   overflow: hidden;
-  background: rgba(2, 6, 23, 0.7);
+  background: rgba(0, 0, 0, 0.72);
 }
 
 .company-section-header {
@@ -1765,7 +1765,7 @@ button {
 }
 
 .company-section-header:hover {
-  background: rgba(15, 23, 42, 0.34);
+  background: rgba(148, 163, 184, 0.08);
 }
 
 .company-section-icon {
@@ -1843,8 +1843,8 @@ button {
 }
 
 .company-item-badge.badge-quantitative {
-  background: rgba(59, 130, 246, 0.16);
-  color: #93c5fd;
+  background: rgba(148, 163, 184, 0.18);
+  color: #e2e8f0;
 }
 
 .company-item-badge.badge-risk {
@@ -3503,6 +3503,46 @@ button {
     word-break: break-word;
   }
 
+  .report-header-meta {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .report-header-meta .asset-count {
+    font-size: 0.78rem;
+    line-height: 1.4;
+    flex: 1 1 100%;
+  }
+
+  .export-menu-anchor {
+    width: 100%;
+  }
+
+  .export-menu-anchor > .pagination-button {
+    width: 100%;
+  }
+
+  .export-menu {
+    left: 0;
+    right: 0;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .journal-report-table {
+    min-width: 700px;
+  }
+
+  .journal-report-table th {
+    padding: 8px 10px;
+    font-size: 0.72rem;
+  }
+
+  .journal-report-table td {
+    padding: 8px 10px;
+    font-size: 0.82rem;
+  }
+
   .modal-header {
     padding: 18px 20px;
     flex-wrap: wrap;
@@ -3791,6 +3831,38 @@ button {
 .journal-report-table-wrap {
   width: 100%;
   overflow-x: auto;
+}
+
+.report-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.export-menu-anchor {
+  position: relative;
+}
+
+.export-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 140px;
+  max-width: min(180px, calc(100vw - 40px));
+  background: rgba(0, 0, 0, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 20;
+}
+
+.export-menu .pagination-button {
+  width: 100%;
 }
 
 .journal-report-table {
@@ -4687,7 +4759,7 @@ button {
     padding: 24px 16px !important;
     z-index: 1100 !important;
     flex-direction: column !important;
-    background: rgba(2, 6, 23, 0.98) !important;
+    background: rgba(0, 0, 0, 0.96) !important;
     backdrop-filter: blur(12px);
     border-right: 1px solid rgba(148, 163, 184, 0.15) !important;
     transform: translateX(0);
@@ -5759,6 +5831,23 @@ button {
     width: 100%;
   }
 
+  .journal-report-table {
+    min-width: 640px;
+  }
+
+  .journal-report-table th,
+  .journal-report-table td {
+    padding: 7px 8px;
+  }
+
+  .journal-report-table th {
+    font-size: 0.68rem;
+  }
+
+  .journal-report-table td {
+    font-size: 0.78rem;
+  }
+
   .table-scroll .option-chain-table {
     min-width: 640px;
   }
@@ -6009,7 +6098,7 @@ button {
   width: 100%;
   overflow-x: auto;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.3);
+  background: rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(148, 163, 184, 0.1);
 }
 
@@ -6070,13 +6159,13 @@ button {
   gap: 16px;
   padding: 12px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.3);
+  background: rgba(0, 0, 0, 0.42);
   border: 1px solid rgba(148, 163, 184, 0.1);
   transition: all 0.2s ease;
 }
 
 .intel-news-item:hover {
-  border-color: rgba(56, 189, 248, 0.3);
+  border-color: rgba(148, 163, 184, 0.35);
   transform: translateX(4px);
 }
 
@@ -6100,7 +6189,7 @@ button {
 
 .news-source {
   font-size: 0.75rem;
-  color: var(--color-primary);
+  color: #cbd5e1;
   opacity: 0.8;
 }
 

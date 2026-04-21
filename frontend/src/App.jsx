@@ -182,6 +182,13 @@ useEffect(() => {
             strategy: h.strategyName || h.name || "Strategy",
             asset: h.symbol,
             legs: h.legsJson || [],
+            qty: Number(h.quantity) || 1,
+            quantity: Number(h.quantity) || 1,
+            notional: Number(h.quantity) || 1,
+            netPremiumAtEntry: Number.isFinite(Number(h.entryPrice)) ? Number(h.entryPrice) : (Number(h.price) || 0),
+            initialDelta: 0,
+            initialTheta: 0,
+            executedAt: h.openedAt || h.date_added || new Date().toISOString(),
             status: "OPEN",
             pnl: 0 // Will be recalculated by OptionsModule
           }));
@@ -942,6 +949,14 @@ const handleOptionTradeExecuted = async (tradePayload) => {
              strategy: h.strategyName,
              asset: h.symbol,
              legs: h.legsJson || [],
+             qty: Number(h.quantity) || Number(tradePayload.qty) || Number(tradePayload.quantity) || 1,
+             quantity: Number(h.quantity) || Number(tradePayload.qty) || Number(tradePayload.quantity) || 1,
+             notional: Number(tradePayload.notional) || Number(h.quantity) || 1,
+             totalNotional: Number(tradePayload.notional) || Number(h.quantity) || 1,
+             netPremiumAtEntry: Number.isFinite(Number(h.entryPrice)) ? Number(h.entryPrice) : (Number(h.price) || Number(tradePayload.netPremiumAtEntry) || 0),
+             initialDelta: Number.isFinite(Number(tradePayload.initialDelta)) ? Number(tradePayload.initialDelta) : 0,
+             initialTheta: Number.isFinite(Number(tradePayload.initialTheta)) ? Number(tradePayload.initialTheta) : 0,
+             executedAt: h.openedAt || tradePayload.executedAt || new Date().toISOString(),
              status: "OPEN"
            };
            if (existingIdx >= 0) next[existingIdx] = mapped;
@@ -957,8 +972,13 @@ const handleOptionTradeExecuted = async (tradePayload) => {
            strategy: atomicPayload.strategyName,
            asset: atomicPayload.symbol,
            legs: atomicPayload.legsJson || [],
+           qty: atomicPayload.quantity,
            quantity: atomicPayload.quantity,
-           netPremiumAtEntry: atomicPayload.price,
+           notional: Number(tradePayload.notional) || Number(atomicPayload.quantity) || 1,
+           totalNotional: Number(tradePayload.notional) || Number(atomicPayload.quantity) || 1,
+           netPremiumAtEntry: Number(tradePayload.netPremiumAtEntry) || Number(atomicPayload.price) || 0,
+           initialDelta: Number.isFinite(Number(tradePayload.initialDelta)) ? Number(tradePayload.initialDelta) : 0,
+           initialTheta: Number.isFinite(Number(tradePayload.initialTheta)) ? Number(tradePayload.initialTheta) : 0,
            status: "OPEN",
            executedAt: atomicPayload.executedAt
          },
@@ -991,7 +1011,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       type: "options",
       marketType: "options",
       orderType: "sell",
-      quantity: tradeObj.quantity || 1,
+      quantity: tradeObj.qty || tradeObj.quantity || 1,
       price: tradeObj.currentMark || 0,
       strategyName: tradeObj.strategy,
       legsJson: tradeObj.legs || [],
@@ -2275,7 +2295,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
         {activeSection === "Tax Estimator" && (
-          <TaxEstimator />
+          <TaxEstimator trades={trades} />
         )}
           </>
         )}

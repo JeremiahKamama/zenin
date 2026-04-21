@@ -1009,6 +1009,13 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
   const finvizEntries = Object.entries(profile?.finvizMetrics || {}).filter(
     ([key]) => key !== "earnings" && key !== "target_price" && key !== "market_cap" && key !== "pe"
   );
+  const finvizRatings = Array.isArray(finvizData?.ratings)
+    ? finvizData.ratings
+    : Array.isArray(finvizData?.analyst_ratings)
+    ? finvizData.analyst_ratings
+    : Array.isArray(finvizData?.analystRatings)
+    ? finvizData.analystRatings
+    : [];
 
   const toggleSection = (key) => {
     setOpenSections((prev) => {
@@ -1192,14 +1199,6 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                       </p>
                     )}
                   </div>
-                  <a 
-                    href={`https://finviz.com/quote.ashx?t=${finvizData.ticker || normalizedSymbol.replace('.', '-')}`} 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    className="view-finviz-link"
-                  >
-                    View on Finviz ↗
-                  </a>
                 </div>
 
                 {/* Summary Metrics Grid */}
@@ -1234,16 +1233,16 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {finvizData.ratings?.slice(0, 10).map((r, i) => (
+                        {finvizRatings.slice(0, 10).map((r, i) => (
                           <tr key={`rate-${i}`}>
                             <td>{r.date}</td>
                             <td><span className={`intel-status ${String(r.action).toLowerCase().includes('up') ? 'positive' : String(r.action).toLowerCase().includes('down') ? 'negative' : ''}`}>{r.action}</span></td>
                             <td>{r.analyst}</td>
                             <td className="rating-cell">{r.rating}</td>
-                            <td>{r.price_target}</td>
+                            <td>{r.price_target || r.target || r.pt || "—"}</td>
                           </tr>
                         ))}
-                        {!finvizData.ratings?.length && <tr><td colSpan="5" className="empty-table-msg">No recent ratings found.</td></tr>}
+                        {!finvizRatings.length && <tr><td colSpan="5" className="empty-table-msg">No recent ratings found.</td></tr>}
                       </tbody>
                     </table>
                   </div>

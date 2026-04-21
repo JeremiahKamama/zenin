@@ -4,10 +4,19 @@
 
 export function calculateOptionPnL(trade, tradeChain, tradeSpot) {
   const isAssetStale = !tradeChain || tradeChain.length === 0 || !tradeSpot;
+  const entryPremium = Number.isFinite(Number(trade?.netPremiumAtEntry))
+    ? Number(trade.netPremiumAtEntry)
+    : Number.isFinite(Number(trade?.entryPrice))
+    ? Number(trade.entryPrice)
+    : Number.isFinite(Number(trade?.price))
+    ? Number(trade.price)
+    : 0;
+  const quantity = Number(trade?.qty ?? trade?.quantity);
+  const qty = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
   
   // Default to stored entry values if live data isn't currently loaded for this asset
   const result = {
-    currentMark: isAssetStale ? (trade.netPremiumAtEntry || 0) : 0,
+    currentMark: isAssetStale ? entryPremium : 0,
     pnl: isAssetStale ? 0 : 0,
     delta: isAssetStale ? (trade.initialDelta || 0) : 0,
     theta: isAssetStale ? (trade.initialTheta || 0) : 0,
@@ -51,7 +60,7 @@ export function calculateOptionPnL(trade, tradeChain, tradeSpot) {
   result.currentMark = totalMark;
   result.delta = totalDelta;
   result.theta = totalTheta;
-  result.pnl = (totalMark - (trade.netPremiumAtEntry || 0)) * (trade.qty || 1);
+  result.pnl = (totalMark - entryPremium) * qty;
   result.isStale = false;
   
   return result;
