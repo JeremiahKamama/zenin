@@ -350,6 +350,8 @@ export function AnalyticsModule({ backendUrl }) {
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [selectedFundId, setSelectedFundId] = useState("");
   const [selectedMMFId, setSelectedMMFId] = useState("");
+  const [selectedMMFCountry, setSelectedMMFCountry] = useState("ALL");
+  const [selectedREITCountry, setSelectedREITCountry] = useState("ALL");
   const [selectedMarketView, setSelectedMarketView] = useState("benchmarks");
   const [compareItems, setCompareItems] = useState([]);
   const [timeRange, setTimeRange] = useState("1Y");
@@ -660,6 +662,16 @@ export function AnalyticsModule({ backendUrl }) {
   }, [selectedGeoCode, selectedIndicator, chartRange, chartMode, macroTimeseries.length]);
 
   useEffect(() => {
+    setSelectedMMFId("");
+  }, [selectedMMFCountry]);
+
+  useEffect(() => {
+    if (selectedMainCategory === "reits") {
+      setSelectedSymbol("");
+    }
+  }, [selectedREITCountry, selectedMainCategory]);
+
+  useEffect(() => {
     if (activeTab !== "commodities") return;
     let cancelled = false;
     const controller = new AbortController();
@@ -875,8 +887,8 @@ export function AnalyticsModule({ backendUrl }) {
         fetchJson("/equities/categories"),
         fetchJson("/equities/stocks"),
         fetchJson("/equities/funds"),
-        fetchJson("/equities/mmf"),
-        fetchJson("/equities/reits"),
+        fetchJson(`/equities/mmf?country=${encodeURIComponent(selectedMMFCountry)}`),
+        fetchJson(`/equities/reits?country=${encodeURIComponent(selectedREITCountry)}`),
         fetchJson("/equities/market/snapshot"),
         fetchJson("/equities/market/benchmarks"),
         fetchJson("/equities/market/sectors"),
@@ -947,7 +959,7 @@ export function AnalyticsModule({ backendUrl }) {
       cancelled = true;
       controller.abort();
     };
-  }, [activeTab, backendUrl, compareItems, searchQuery, selectedFundId, selectedMMFId, selectedMainCategory, selectedSymbol]);
+  }, [activeTab, backendUrl, compareItems, searchQuery, selectedFundId, selectedMMFId, selectedMMFCountry, selectedREITCountry, selectedMainCategory, selectedSymbol]);
 
   const cryptoPerps = useMemo(() => {
     if (!cryptoData || !cryptoData.perpMetrics || !selectedPerpExchange) {
@@ -2270,6 +2282,21 @@ export function AnalyticsModule({ backendUrl }) {
 
                 {selectedMainCategory === "mmf" ? (
                   <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                        Country scope (schema-backed): Kenya, Nigeria, South Africa
+                      </div>
+                      <select
+                        value={selectedMMFCountry}
+                        onChange={(e) => setSelectedMMFCountry(e.target.value)}
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                      >
+                        <option value="ALL">All Countries</option>
+                        <option value="KE">Kenya (KE)</option>
+                        <option value="NG">Nigeria (NG)</option>
+                        <option value="ZA">South Africa (ZA)</option>
+                      </select>
+                    </div>
                     <AnalyticsTableCard
                       title="MMF Directory"
                       subtitle="Dedicated lane for money market funds"
@@ -2288,6 +2315,7 @@ export function AnalyticsModule({ backendUrl }) {
                             </button>
                           ),
                         },
+                        { key: "country", label: "Country" },
                         { key: "currency", label: "Currency" },
                         { key: "yield", label: "Yield", align: "right", render: (v, row) => row?.yieldRange || v || "—" },
                         { key: "maturity", label: "Maturity", align: "right" },
@@ -2332,6 +2360,21 @@ export function AnalyticsModule({ backendUrl }) {
 
                 {selectedMainCategory === "reits" ? (
                   <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                        Country scope (schema-backed): Kenya, Nigeria, South Africa
+                      </div>
+                      <select
+                        value={selectedREITCountry}
+                        onChange={(e) => setSelectedREITCountry(e.target.value)}
+                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                      >
+                        <option value="ALL">All Countries</option>
+                        <option value="KE">Kenya (KE)</option>
+                        <option value="NG">Nigeria (NG)</option>
+                        <option value="ZA">South Africa (ZA)</option>
+                      </select>
+                    </div>
                     <AnalyticsTableCard
                       title="REIT Directory"
                       subtitle="Dedicated REIT lane with property and income metrics"
@@ -2350,6 +2393,7 @@ export function AnalyticsModule({ backendUrl }) {
                             </button>
                           ),
                         },
+                        { key: "country", label: "Country" },
                         { key: "propertyType", label: "Property Type" },
                         { key: "region", label: "Region" },
                         { key: "dividendYield", label: "Yield", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },

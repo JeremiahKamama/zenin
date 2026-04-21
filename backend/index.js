@@ -5296,6 +5296,169 @@ app.get("/api/commodities/correlation", async (req, res) => {
   res.json({ updatedAt: new Date().toISOString(), rows, correlation: rows });
 });
 
+const AFRICA_COUNTRY_SET = new Set(["KE", "NG", "ZA"]);
+const AFRICA_MMF_ROWS = [
+  { id: "KE_CIC_MMF", fundName: "CIC Money Market Fund", name: "CIC Money Market Fund", country: "KE", currency: "KES", yieldRange: "9.8% - 11.2%", yield: 10.4, maturity: "45d", liquidity: "High", provider: "CIC Asset Management", category: "MMF", aum: 125000000000, returnYtdPct: 4.6 },
+  { id: "KE_BRITAM_MMF", fundName: "Britam Money Market Fund", name: "Britam Money Market Fund", country: "KE", currency: "KES", yieldRange: "9.4% - 10.8%", yield: 10.1, maturity: "39d", liquidity: "High", provider: "Britam Asset Managers", category: "MMF", aum: 98000000000, returnYtdPct: 4.2 },
+  { id: "NG_STANBIC_MMF", fundName: "Stanbic IBTC Money Market Fund", name: "Stanbic IBTC Money Market Fund", country: "NG", currency: "NGN", yieldRange: "13.1% - 15.5%", yield: 14.3, maturity: "52d", liquidity: "High", provider: "Stanbic IBTC Asset Mgmt", category: "MMF", aum: 410000000000, returnYtdPct: 6.9 },
+  { id: "NG_FBN_MMF", fundName: "FBN Money Market Fund", name: "FBN Money Market Fund", country: "NG", currency: "NGN", yieldRange: "12.8% - 14.9%", yield: 13.8, maturity: "49d", liquidity: "High", provider: "FBNQuest Asset Management", category: "MMF", aum: 350000000000, returnYtdPct: 6.4 },
+  { id: "ZA_NINETYONE_MMF", fundName: "Ninety One Money Market Fund", name: "Ninety One Money Market Fund", country: "ZA", currency: "ZAR", yieldRange: "7.2% - 8.6%", yield: 7.9, maturity: "34d", liquidity: "High", provider: "Ninety One", category: "MMF", aum: 74000000000, returnYtdPct: 3.2 },
+  { id: "ZA_STANLIB_MMF", fundName: "STANLIB Money Market Fund", name: "STANLIB Money Market Fund", country: "ZA", currency: "ZAR", yieldRange: "7.0% - 8.3%", yield: 7.7, maturity: "31d", liquidity: "High", provider: "STANLIB", category: "MMF", aum: 66500000000, returnYtdPct: 3.0 },
+];
+const AFRICA_REIT_ROWS = [
+  { symbol: "FIR", name: "Fairvest REIT", country: "ZA", region: "South Africa", propertyType: "Retail", dividendYield: 8.4, marketCap: 18500000000, category: "REIT", returnYtdPct: 5.2 },
+  { symbol: "GRT", name: "Growthpoint Properties", country: "ZA", region: "South Africa", propertyType: "Diversified", dividendYield: 9.1, marketCap: 52000000000, category: "REIT", returnYtdPct: 4.1 },
+  { symbol: "SKA", name: "NEPI Rockcastle", country: "ZA", region: "South Africa / CEE", propertyType: "Retail", dividendYield: 8.0, marketCap: 69000000000, category: "REIT", returnYtdPct: 6.0 },
+  { symbol: "NGER", name: "SFS Real Estate Investment Trust", country: "NG", region: "Nigeria", propertyType: "Commercial", dividendYield: 7.1, marketCap: 42000000000, category: "REIT", returnYtdPct: 2.8 },
+  { symbol: "UHREIT", name: "UPDC REIT", country: "NG", region: "Nigeria", propertyType: "Mixed", dividendYield: 6.5, marketCap: 28500000000, category: "REIT", returnYtdPct: 1.9 },
+  { symbol: "ILAMU", name: "ILAM Fahari I-REIT", country: "KE", region: "Kenya", propertyType: "Commercial", dividendYield: 7.8, marketCap: 11800000000, category: "REIT", returnYtdPct: 3.6 },
+];
+const AFRICA_MMF_DETAIL = Object.fromEntries(AFRICA_MMF_ROWS.map((row) => [
+  row.id,
+  {
+    fundId: row.id,
+    fundName: row.fundName,
+    country: row.country,
+    category: row.category,
+    currency: row.currency,
+    regulator: row.country === "KE" ? "CMA Kenya" : row.country === "NG" ? "SEC Nigeria" : "FSCA/ASISA",
+    benchmark: row.country === "NG" ? "1M T-Bill + spread" : "Cash benchmark",
+    aum: row.aum,
+    nav: Number((100 + row.returnYtdPct).toFixed(4)),
+    yield_7d: row.yield,
+    dealingFrequency: "daily",
+    sourceSchema: "africa_funds_reits_mmfs_schema"
+  }
+]));
+const AFRICA_REIT_DETAIL = Object.fromEntries(AFRICA_REIT_ROWS.map((row) => [
+  row.symbol,
+  {
+    symbol: row.symbol,
+    name: row.name,
+    country: row.country,
+    category: row.category,
+    propertyType: row.propertyType,
+    region: row.region,
+    price: Number((10 + row.returnYtdPct * 0.25).toFixed(2)),
+    marketCap: row.marketCap,
+    dividendYield: row.dividendYield,
+    ffo: Number((row.marketCap * 0.072).toFixed(0)),
+    affo: Number((row.marketCap * 0.061).toFixed(0)),
+    payoutRatio: Number((68 + (row.country === "ZA" ? 5 : 2)).toFixed(2)),
+    occupancy: Number((90 + (row.country === "ZA" ? 3 : 1.2)).toFixed(2))
+  }
+]));
+
+function resolveAfricaCountry(country) {
+  const normalized = String(country || "all").trim().toUpperCase();
+  if (normalized === "ALL") return "ALL";
+  return AFRICA_COUNTRY_SET.has(normalized) ? normalized : "ALL";
+}
+
+app.get("/api/equities/mmf", async (req, res) => {
+  const country = resolveAfricaCountry(req.query.country);
+  const rows = country === "ALL" ? AFRICA_MMF_ROWS : AFRICA_MMF_ROWS.filter((row) => row.country === country);
+  res.json(rows);
+});
+
+app.get("/api/equities/mmf/:id", async (req, res) => {
+  const id = String(req.params.id || "").toUpperCase();
+  const detail = AFRICA_MMF_DETAIL[id] || null;
+  if (!detail) return res.status(404).json({ error: "MMF not found" });
+  res.json(detail);
+});
+
+app.get("/api/equities/mmf/:id/yield-history", async (req, res) => {
+  const id = String(req.params.id || "").toUpperCase();
+  const base = AFRICA_MMF_DETAIL[id];
+  if (!base) return res.status(404).json({ error: "MMF not found" });
+  const history = Array.from({ length: 12 }, (_, idx) => {
+    const daysAgo = (11 - idx) * 7;
+    return {
+      date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      yield_7d: Number((Number(base.yield_7d) + Math.sin(idx / 2.1) * 0.24).toFixed(2)),
+      nav: Number((Number(base.nav) + idx * 0.03).toFixed(4))
+    };
+  });
+  res.json(history);
+});
+
+app.get("/api/equities/mmf/:id/liquidity", async (req, res) => {
+  const id = String(req.params.id || "").toUpperCase();
+  const base = AFRICA_MMF_DETAIL[id];
+  if (!base) return res.status(404).json({ error: "MMF not found" });
+  const rows = Array.from({ length: 6 }, (_, idx) => ({
+    date: new Date(Date.now() - idx * 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    dla: `${Math.max(18, 29 - idx)}%`,
+    wla: `${Math.max(35, 48 - idx)}%`,
+    timeToLiquidate: `${Math.max(1, 3 - Math.floor(idx / 3))}d`
+  }));
+  res.json(rows);
+});
+
+app.get("/api/equities/mmf/:id/composition", async (req, res) => {
+  const id = String(req.params.id || "").toUpperCase();
+  if (!AFRICA_MMF_DETAIL[id]) return res.status(404).json({ error: "MMF not found" });
+  res.json([
+    { bucket: "Treasury Bills", weightPct: 44.2 },
+    { bucket: "Repos / Cash", weightPct: 21.8 },
+    { bucket: "Commercial Paper", weightPct: 18.4 },
+    { bucket: "Bank Deposits", weightPct: 15.6 },
+  ]);
+});
+
+app.get("/api/equities/reits", async (req, res) => {
+  const country = resolveAfricaCountry(req.query.country);
+  const rows = country === "ALL" ? AFRICA_REIT_ROWS : AFRICA_REIT_ROWS.filter((row) => row.country === country);
+  res.json(rows);
+});
+
+app.get("/api/equities/reits/compare", async (req, res) => {
+  const ids = String(req.query.ids || "").split(",").map((v) => v.trim().toUpperCase()).filter(Boolean);
+  const rows = (ids.length ? ids : AFRICA_REIT_ROWS.map((row) => row.symbol).slice(0, 3))
+    .map((symbol) => AFRICA_REIT_ROWS.find((row) => row.symbol === symbol))
+    .filter(Boolean)
+    .map((row) => ({
+      id: row.symbol,
+      country: row.country,
+      dividendYield: row.dividendYield,
+      marketCap: row.marketCap,
+      returnYtdPct: row.returnYtdPct
+    }));
+  res.json(rows);
+});
+
+app.get("/api/equities/reits/:symbol", async (req, res) => {
+  const symbol = String(req.params.symbol || "").toUpperCase();
+  const detail = AFRICA_REIT_DETAIL[symbol] || null;
+  if (!detail) return res.status(404).json({ error: "REIT not found" });
+  res.json(detail);
+});
+
+app.get("/api/equities/reits/:symbol/exposure", async (req, res) => {
+  const symbol = String(req.params.symbol || "").toUpperCase();
+  if (!AFRICA_REIT_DETAIL[symbol]) return res.status(404).json({ error: "REIT not found" });
+  res.json([
+    { segment: "Retail", weightPct: 36.2 },
+    { segment: "Office", weightPct: 28.4 },
+    { segment: "Industrial", weightPct: 19.1 },
+    { segment: "Residential / Other", weightPct: 16.3 },
+  ]);
+});
+
+app.get("/api/equities/reits/:symbol/income", async (req, res) => {
+  const symbol = String(req.params.symbol || "").toUpperCase();
+  const detail = AFRICA_REIT_DETAIL[symbol];
+  if (!detail) return res.status(404).json({ error: "REIT not found" });
+  const rows = ["2025Q1", "2025Q2", "2025Q3", "2025Q4"].map((period, idx) => ({
+    period,
+    dividend: Number((0.19 + idx * 0.01).toFixed(2)),
+    payoutRatio: Number((detail.payoutRatio + Math.sin(idx) * 1.4).toFixed(2)),
+    ffo: Number((detail.ffo * (0.22 + idx * 0.01)).toFixed(0))
+  }));
+  res.json(rows);
+});
+
 app.get('/api/analytics/equities', async (req, res) => {
   try {
     const calculateCAGR = (series, assetKey, years) => {
