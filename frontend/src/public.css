@@ -1126,6 +1126,19 @@
   .zc-home .phone {
     position: static;
     margin: 14px auto 0;
+    width: min(100%, 176px);
+    padding: 12px;
+  }
+
+  .zc-home .phone-screen {
+    min-height: 248px;
+    height: auto;
+    gap: 10px;
+  }
+
+  .zc-home .analytics-kpi-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   .zc-home .bottom-cta {
@@ -1185,7 +1198,12 @@
   }
 
   .zc-home .phone-screen {
-    height: 180px;
+    min-height: 228px;
+    height: auto;
+  }
+
+  .zc-home .phone {
+    width: min(100%, 168px);
   }
 }
 

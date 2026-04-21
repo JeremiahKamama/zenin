@@ -60,29 +60,6 @@ export default function PublicHomepage() {
                 <a className="btn btn-secondary" href="#features">Explore Features</a>
               </div>
 
-              <div className="hero-features">
-                <div className="mini-proof">
-                  <div className="mini-proof-icon">🛡</div>
-                  <div>
-                    <strong>Secure &amp; Private</strong>
-                    <div>Bank-level security</div>
-                  </div>
-                </div>
-                <div className="mini-proof">
-                  <div className="mini-proof-icon">☁</div>
-                  <div>
-                    <strong>Real-time Data</strong>
-                    <div>Live market updates</div>
-                  </div>
-                </div>
-                <div className="mini-proof">
-                  <div className="mini-proof-icon">✓</div>
-                  <div>
-                    <strong>All-in-One Platform</strong>
-                    <div>Powerful &amp; integrated</div>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <div className="hero-visual" id="screens">
