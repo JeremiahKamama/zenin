@@ -785,6 +785,20 @@ function normalizeCountryLookupValue(value) {
     .trim();
 }
 
+function findCountryByIsoCode(code) {
+  const upper = String(code || "").trim().toUpperCase();
+  if (!upper) return null;
+  const pools = [
+    Array.isArray(countryCatalogMemory?.countries) ? countryCatalogMemory.countries : [],
+    Array.isArray(FALLBACK_COUNTRY_CATALOG) ? FALLBACK_COUNTRY_CATALOG : []
+  ];
+  for (const pool of pools) {
+    const found = pool.find((country) => country?.cca3 === upper || country?.cca2 === upper);
+    if (found) return found;
+  }
+  return null;
+}
+
 function isSnapshotFresh(snapshot, ttlMs) {
   const updatedAtMs = new Date(snapshot?.updatedAt || 0).getTime();
   return Number.isFinite(updatedAtMs) && updatedAtMs > 0 && (Date.now() - updatedAtMs) < ttlMs;
@@ -2659,15 +2673,50 @@ app.get("/api/macro-indicators", async (req, res) => {
       throw new Error("EODHD token does not include macro indicators on the current plan.");
     }
 
-    const groupedByIndicator = groupMacroPayloadByIndicator(bulkData);
-
-    const metrics = MACRO_INDICATOR_CONFIG.map((config) => {
+    let groupedByIndicator = groupMacroPayloadByIndicator(bulkData);
+    let metrics = MACRO_INDICATOR_CONFIG.map((config) => {
       const rows = getMacroRowsForConfig(groupedByIndicator, config);
       return buildMacroMetric(rows, config);
     });
 
     const missingKeys = metrics.filter((m) => m.current == null).map((m) => m.key);
     if (missingKeys.length === metrics.length) {
+      // Fallback path: try per-indicator calls when bulk payload is unavailable/unusable.
+      const perIndicatorRows = new Map();
+      for (const config of MACRO_INDICATOR_CONFIG) {
+        const indicatorParams = new URLSearchParams({
+          api_token: EODHD_API_TOKEN,
+          fmt: "json",
+          indicator: config.key
+        });
+        const indicatorUrl = `${base}?${indicatorParams.toString()}`;
+        try {
+          const response = await fetch(indicatorUrl);
+          if (!response.ok) continue;
+          const text = await response.text();
+          let parsed = null;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = null;
+          }
+          const groupedSingle = groupMacroPayloadByIndicator(parsed);
+          const rows = getMacroRowsForConfig(groupedSingle, config);
+          if (Array.isArray(rows) && rows.length > 0) {
+            perIndicatorRows.set(config.key, rows);
+          }
+        } catch {
+          // ignore single-indicator fetch errors and continue with next indicator
+        }
+      }
+      if (perIndicatorRows.size > 0) {
+        metrics = MACRO_INDICATOR_CONFIG.map((config) => buildMacroMetric(perIndicatorRows.get(config.key) || [], config));
+        groupedByIndicator = new Map([...groupedByIndicator.entries(), ...perIndicatorRows.entries()]);
+      }
+    }
+
+    const stillMissingKeys = metrics.filter((m) => m.current == null).map((m) => m.key);
+    if (stillMissingKeys.length === metrics.length) {
       throw new Error("No usable macro indicator values returned by EODHD for this country/token.");
     }
 
@@ -2678,7 +2727,7 @@ app.get("/api/macro-indicators", async (req, res) => {
       updatedAt: new Date().toISOString(),
       metrics,
       diagnostics: {
-        missingIndicatorKeys: missingKeys,
+        missingIndicatorKeys: stillMissingKeys,
         groupedIndicatorCount: groupedByIndicator.size
       }
     };
@@ -3207,6 +3256,8 @@ async function resolveCountryReference(input) {
 
   // Fast path: allow ISO code inputs without depending on country-catalog fetch.
   if (/^[A-Z]{3}$/.test(upperRaw)) {
+    const matched = findCountryByIsoCode(upperRaw);
+    if (matched) return matched;
     return {
       cca3: upperRaw,
       cca2: null,
@@ -3216,6 +3267,8 @@ async function resolveCountryReference(input) {
     };
   }
   if (/^[A-Z]{2}$/.test(upperRaw)) {
+    const matched = findCountryByIsoCode(upperRaw);
+    if (matched) return matched;
     return {
       cca3: upperRaw,
       cca2: upperRaw,
