@@ -162,6 +162,15 @@ export function Watchlist({
     });
     return next;
   }, [assets]);
+  const assetCatalogBySymbolLoose = useMemo(() => {
+    const next = new Map();
+    (Array.isArray(assets) ? assets : []).forEach((asset) => {
+      const key = normalizeSymbol(asset?.symbol);
+      if (!key) return;
+      if (!next.has(key)) next.set(key, asset);
+    });
+    return next;
+  }, [assets]);
 
   const doesEntryBelongToActiveCategory = (entry) => {
     return resolveWatchlistCategory(entry) === normalizeCategory(activeCategory);
@@ -174,7 +183,8 @@ export function Watchlist({
       .map((entry) => {
         const exactCatalogAsset = assetCatalogByMeta.get(buildAssetMetaKey(entry));
         const fallbackCatalogAsset = assetCatalogBySymbol.get(buildAssetSymbolKey(entry));
-        const marketAsset = exactCatalogAsset || fallbackCatalogAsset || null;
+        const looseCatalogAsset = assetCatalogBySymbolLoose.get(normalizeSymbol(entry?.symbol));
+        const marketAsset = exactCatalogAsset || fallbackCatalogAsset || looseCatalogAsset || null;
         return {
           ...(marketAsset || {}),
           ...entry,
@@ -189,7 +199,7 @@ export function Watchlist({
         };
       })
       .sort((a, b) => getWatchlistOrder(a) - getWatchlistOrder(b));
-  }, [watchlistAssets, activeCategory, assetCatalogByMeta, assetCatalogBySymbol]);
+  }, [watchlistAssets, activeCategory, assetCatalogByMeta, assetCatalogBySymbol, assetCatalogBySymbolLoose]);
 
   // Derive displayed assets based on selected stock theme after watchlist filter.
   const displayedAssets =
@@ -306,7 +316,8 @@ useEffect(() => {
         if (!isMounted) return;
         if (!cachedPayload) setMacroSnapshot(null);
         setMacroStale(true);
-        setMacroNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : "");
+        const message = err?.message ? String(err.message) : "";
+        setMacroNotice(cachedPayload ? getSnapshotFallbackMessage(cachedPayload) : (message || "Macro indicators unavailable right now."));
       } finally {
         if (isMounted) setMacroLoading(false);
       }
@@ -389,7 +400,7 @@ useEffect(() => {
   const formatEarningsDate = (value) => {
     if (!value) return "No upcoming date";
     const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "No upcoming date";
+    if (Number.isNaN(d.getTime())) return String(value);
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
 
@@ -480,7 +491,9 @@ useEffect(() => {
           ) : macroLoading && (!Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0) ? (
             <div className="loading-state">Loading macro indicators...</div>
           ) : !Array.isArray(macroSnapshot?.metrics) || macroSnapshot.metrics.length === 0 ? (
-            <div className="loading-state">Waiting for macro indicators...</div>
+            <div className="loading-state">
+              {macroStale && macroNotice ? macroNotice : "Waiting for macro indicators..."}
+            </div>
           ) : (
             <IndicatorMetricsTable
               snapshot={macroSnapshot}
@@ -605,7 +618,7 @@ useEffect(() => {
           <div className="section-header" style={{ marginBottom: "8px" }}>
             <h2 style={{ margin: 0, fontSize: "14px" }}>Earnings</h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div className="asset-count">Yahoo Finance</div>
+              <div className="asset-count">Finviz</div>
               <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
                 <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
                 Earnings
@@ -633,7 +646,7 @@ useEffect(() => {
                 >
                   <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{item.symbol}</strong>
                   <span style={{ fontSize: "12px", color: "#94a3b8" }}>
-                    {formatEarningsDate(item.nextEarnings)}
+                    {formatEarningsDate(item.nextEarnings || item.earningsText)}
                   </span>
                 </div>
               ))}

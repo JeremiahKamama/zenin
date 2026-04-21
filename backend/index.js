@@ -4,6 +4,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
+const path = require("path");
 const { spawn } = require("child_process");
 const { watchlistData } = require("./data");
 const {
@@ -1666,11 +1667,16 @@ app.get("/api/categories", (_req, res) => {
 
 app.get("/api/history", async (req, res) => {
   const { type, interval = "1D" } = req.query;
-  const symbol = sanitizeSymbol(req.query.symbol || "");
-  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  const rawSymbol = String(req.query.symbol || "").trim().toUpperCase();
+  if (!rawSymbol) return res.status(400).json({ error: "Invalid symbol" });
+  const normalizedType = String(type || "stock").toLowerCase();
+  const resolvedSymbol = normalizedType === "crypto"
+    ? sanitizeSymbol(rawSymbol)
+    : sanitizeSymbol(normaliseSymbol(rawSymbol));
+  if (!resolvedSymbol) return res.status(400).json({ error: "Invalid symbol" });
   const snapshotParams = {
-    symbol: String(symbol).toUpperCase(),
-    type: String(type || "stock").toLowerCase(),
+    symbol: rawSymbol.slice(0, 30),
+    type: normalizedType,
     interval: String(interval || "1D").toUpperCase()
   };
   const cached = await readServiceSnapshot("history", snapshotParams);
@@ -1678,12 +1684,12 @@ app.get("/api/history", async (req, res) => {
   try {
     let history = [];
     let source = "";
-    if (type === "crypto") {
-      const cryptoHistory = await fetchHistoryForCrypto(symbol, interval);
+    if (normalizedType === "crypto") {
+      const cryptoHistory = await fetchHistoryForCrypto(resolvedSymbol, interval);
       history = cryptoHistory.history;
       source = cryptoHistory.source;
     } else {
-      const stockHistory = await fetchHistoryFromYahoo(symbol, interval);
+      const stockHistory = await fetchHistoryFromYahoo(resolvedSymbol, interval);
       history = stockHistory.history;
       source = stockHistory.source || "yahoo";
     }
@@ -1714,14 +1720,21 @@ app.get("/api/history", async (req, res) => {
 
 app.get("/api/interval-performance", async (req, res) => {
   const { symbol, type } = req.query;
-  const cleanSymbol = sanitizeSymbol(symbol || "").toUpperCase();
+  const rawSymbol = String(symbol || "").trim().toUpperCase();
+  if (!rawSymbol) {
+    return res.status(400).json({ error: "Invalid symbol" });
+  }
+  const normalizedType = String(type || "stock").toLowerCase();
+  const cleanSymbol = normalizedType === "crypto"
+    ? sanitizeSymbol(rawSymbol)
+    : sanitizeSymbol(normaliseSymbol(rawSymbol));
   if (!cleanSymbol) {
     return res.status(400).json({ error: "Invalid symbol" });
   }
   const intervals = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
   const snapshotParams = {
-    symbol: cleanSymbol,
-    type: String(type || "stock").toLowerCase()
+    symbol: rawSymbol.slice(0, 30),
+    type: normalizedType
   };
   const cached = await readServiceSnapshot("interval-performance", snapshotParams);
   
@@ -1729,7 +1742,7 @@ app.get("/api/interval-performance", async (req, res) => {
     const results = await Promise.all(intervals.map(async (int) => {
       try {
         let history = [];
-        if (type === "crypto") {
+        if (normalizedType === "crypto") {
           const cryptoHistory = await fetchHistoryForCrypto(cleanSymbol, int);
           history = cryptoHistory.history;
         } else {
@@ -1867,53 +1880,14 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-const FINVIZ_CACHE = new Map();
-const FINVIZ_CACHE_TTL = 3600 * 1000; // 1 hour
-
-app.get("/api/finviz", async (req, res) => {
-  const symbol = String(req.query.symbol || "").trim().toUpperCase();
-  if (!symbol) return res.status(400).json({ error: "symbol query is required" });
-
-  // Cache check
-  const now = Date.now();
-  if (FINVIZ_CACHE.has(symbol)) {
-    const entry = FINVIZ_CACHE.get(symbol);
-    if (now - entry.timestamp < FINVIZ_CACHE_TTL) {
-      return res.json(entry.data);
-    }
-  }
-
-  try {
-    const child = spawn("python3", ["scripts/fetch_finviz.py", symbol], { cwd: __dirname });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-
-    child.on("close", (code) => {
-      if (code !== 0) {
-        console.error("Finviz scraper failed:", stderr);
-        return res.status(500).json({ error: "Scraper failed" });
-      }
-      try {
-        const data = JSON.parse(stdout);
-        FINVIZ_CACHE.set(symbol, { timestamp: now, data });
-        res.json(data);
-      } catch (e) {
-        res.status(500).json({ error: "Failed to parse scraper output" });
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.get("/api/earnings", async (req, res) => {
-  const { symbol } = req.query;
-  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  const rawSymbol = String(req.query.symbol || "").trim().toUpperCase();
+  if (!rawSymbol) return res.status(400).json({ error: "symbol required" });
 
-  const safeSymbol = symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
-  const snapshotParams = { symbol: safeSymbol.toUpperCase() };
+  const requestedSymbol = rawSymbol.slice(0, 30);
+  const resolvedSymbol = sanitizeSymbol(normaliseSymbol(rawSymbol)).slice(0, 20);
+  if (!resolvedSymbol) return res.status(400).json({ error: "Invalid symbol" });
+  const snapshotParams = { symbol: requestedSymbol };
   const cached = await readServiceSnapshot("earnings", snapshotParams);
 
   return new Promise((resolve) => {
@@ -1938,7 +1912,8 @@ app.get("/api/earnings", async (req, res) => {
           return finish(applyStaleMeta(cached.payload, cached, "earnings_fetch_failed"));
         }
         return finish({
-          symbol: safeSymbol.toUpperCase(),
+          symbol: requestedSymbol,
+          resolvedSymbol,
           updatedAt: new Date().toISOString(),
           stale: true,
           unavailable: true,
@@ -1954,7 +1929,8 @@ app.get("/api/earnings", async (req, res) => {
             return finish(applyStaleMeta(cached.payload, cached, result.error));
           }
           return finish({
-            symbol: safeSymbol.toUpperCase(),
+            symbol: requestedSymbol,
+            resolvedSymbol,
             updatedAt: new Date().toISOString(),
             stale: true,
             unavailable: true,
@@ -1965,7 +1941,8 @@ app.get("/api/earnings", async (req, res) => {
         }
         const payload = {
           ...(result || {}),
-          symbol: safeSymbol.toUpperCase(),
+          symbol: requestedSymbol,
+          resolvedSymbol,
           updatedAt: new Date().toISOString(),
           stale: false
         };
@@ -1976,7 +1953,8 @@ app.get("/api/earnings", async (req, res) => {
           return finish(applyStaleMeta(cached.payload, cached, "earnings_parse_failed"));
         }
         finish({
-          symbol: safeSymbol.toUpperCase(),
+          symbol: requestedSymbol,
+          resolvedSymbol,
           updatedAt: new Date().toISOString(),
           stale: true,
           unavailable: true,
@@ -1993,7 +1971,8 @@ app.get("/api/earnings", async (req, res) => {
         return finish(applyStaleMeta(cached.payload, cached, err?.message || "earnings_process_start_failed"));
       }
       finish({
-        symbol: safeSymbol.toUpperCase(),
+        symbol: requestedSymbol,
+        resolvedSymbol,
         updatedAt: new Date().toISOString(),
         stale: true,
         unavailable: true,
@@ -2003,7 +1982,7 @@ app.get("/api/earnings", async (req, res) => {
       });
     });
 
-    child.stdin.write(JSON.stringify({ symbol: safeSymbol }));
+    child.stdin.write(JSON.stringify({ symbol: resolvedSymbol }));
     child.stdin.end();
 
     setTimeout(() => {
@@ -2012,7 +1991,8 @@ app.get("/api/earnings", async (req, res) => {
         return finish(applyStaleMeta(cached.payload, cached, "earnings_fetch_timed_out"));
       }
       finish({
-        symbol: safeSymbol.toUpperCase(),
+        symbol: requestedSymbol,
+        resolvedSymbol,
         updatedAt: new Date().toISOString(),
         stale: true,
         unavailable: true,
@@ -2025,11 +2005,13 @@ app.get("/api/earnings", async (req, res) => {
 });
 
 app.get("/api/finviz", async (req, res) => {
-  const { symbol } = req.query;
-  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  const rawSymbol = String(req.query.symbol || "").trim().toUpperCase();
+  if (!rawSymbol) return res.status(400).json({ error: "symbol required" });
 
-  const safeSymbol = symbol.replace(/[^a-zA-Z0-9.\-_]/g, "").slice(0, 20);
-  const snapshotParams = { symbol: safeSymbol.toUpperCase() };
+  const requestedSymbol = rawSymbol.slice(0, 30);
+  const safeSymbol = sanitizeSymbol(normaliseSymbol(rawSymbol)).slice(0, 20);
+  if (!safeSymbol) return res.status(400).json({ error: "Invalid symbol" });
+  const snapshotParams = { symbol: requestedSymbol };
   const cached = await readServiceSnapshot("finviz", snapshotParams);
 
   return new Promise((resolve) => {
@@ -2056,7 +2038,8 @@ app.get("/api/finviz", async (req, res) => {
           return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_failed"));
         }
         return finish({
-          symbol: safeSymbol.toUpperCase(),
+          symbol: requestedSymbol,
+          resolvedSymbol: safeSymbol,
           updatedAt: new Date().toISOString(),
           stale: true,
           unavailable: true,
@@ -2070,7 +2053,8 @@ app.get("/api/finviz", async (req, res) => {
             return finish(applyStaleMeta(cached.payload, cached, result.error));
           }
           return finish({
-            symbol: safeSymbol.toUpperCase(),
+            symbol: requestedSymbol,
+            resolvedSymbol: safeSymbol,
             updatedAt: new Date().toISOString(),
             stale: true,
             unavailable: true,
@@ -2079,7 +2063,8 @@ app.get("/api/finviz", async (req, res) => {
         }
         const payload = {
           ...(result || {}),
-          symbol: safeSymbol.toUpperCase(),
+          symbol: requestedSymbol,
+          resolvedSymbol: safeSymbol,
           updatedAt: new Date().toISOString(),
           stale: false
         };
@@ -2091,7 +2076,8 @@ app.get("/api/finviz", async (req, res) => {
           return finish(applyStaleMeta(cached.payload, cached, "finviz_parse_failed"));
         }
         finish({
-          symbol: safeSymbol.toUpperCase(),
+          symbol: requestedSymbol,
+          resolvedSymbol: safeSymbol,
           updatedAt: new Date().toISOString(),
           stale: true,
           unavailable: true,
@@ -2105,7 +2091,7 @@ app.get("/api/finviz", async (req, res) => {
       if (cached?.payload) {
         return finish(applyStaleMeta(cached.payload, cached, "finviz_process_start_failed"));
       }
-      finish({ symbol: safeSymbol, error: "process_start_failed" });
+      finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "process_start_failed" });
     });
 
     setTimeout(() => {
@@ -2113,7 +2099,7 @@ app.get("/api/finviz", async (req, res) => {
       if (cached?.payload) {
         return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_timed_out"));
       }
-      finish({ symbol: safeSymbol, error: "timed_out" });
+      finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "timed_out" });
     }, 25000);
   });
 });
@@ -2328,8 +2314,6 @@ app.get("/api/earnings-calendar", async (req, res) => {
     return res.status(400).json({ error: "symbols required" });
   }
 
-  const { toYF } = buildSymbolMaps(symbols);
-  const yfSymbols = symbols.map((s) => toYF[s]);
   const snapshotParams = { symbols };
   const cached = await readServiceSnapshot("earnings-calendar", snapshotParams);
 
@@ -2342,7 +2326,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
       resolve();
     };
 
-    const child = spawn("python3", ["fetch_earnings.py"], { cwd: __dirname });
+    const child = spawn("python3", ["fetch_earnings_calendar_finviz.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -2359,7 +2343,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
           items: symbols.map((originalSymbol) => ({
             symbol: originalSymbol,
             nextEarnings: null,
-            source: "Yahoo Finance"
+            source: "Finviz"
           })),
           updatedAt: new Date().toISOString(),
           stale: true,
@@ -2373,15 +2357,15 @@ app.get("/api/earnings-calendar", async (req, res) => {
       try {
         const parsed = JSON.parse(stdout);
         const items = Array.isArray(parsed?.items) ? parsed.items : [];
-        const byYfSymbol = new Map(items.map((item) => [item.symbol, item]));
+        const bySymbol = new Map(items.map((item) => [String(item.symbol || "").toUpperCase(), item]));
 
         const normalizedItems = symbols.map((originalSymbol) => {
-          const yfSymbol = toYF[originalSymbol];
-          const result = byYfSymbol.get(yfSymbol);
+          const result = bySymbol.get(String(originalSymbol || "").toUpperCase());
           return {
             symbol: originalSymbol,
             nextEarnings: result?.nextEarnings || null,
-            source: "Yahoo Finance"
+            earningsText: result?.earningsText || null,
+            source: "Finviz"
           };
         });
         const payload = {
@@ -2398,7 +2382,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
           items: symbols.map((originalSymbol) => ({
             symbol: originalSymbol,
             nextEarnings: null,
-            source: "Yahoo Finance"
+            source: "Finviz"
           })),
           updatedAt: new Date().toISOString(),
           stale: true,
@@ -2419,7 +2403,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
         items: symbols.map((originalSymbol) => ({
           symbol: originalSymbol,
           nextEarnings: null,
-          source: "Yahoo Finance"
+          source: "Finviz"
         })),
         updatedAt: new Date().toISOString(),
         stale: true,
@@ -2430,7 +2414,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
       });
     });
 
-    child.stdin.write(JSON.stringify({ symbols: yfSymbols }));
+    child.stdin.write(JSON.stringify({ symbols }));
     child.stdin.end();
 
     setTimeout(() => {
@@ -2442,7 +2426,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
         items: symbols.map((originalSymbol) => ({
           symbol: originalSymbol,
           nextEarnings: null,
-          source: "Yahoo Finance"
+          source: "Finviz"
         })),
         updatedAt: new Date().toISOString(),
         stale: true,
@@ -2461,38 +2445,9 @@ app.get("/api/macro-indicators", async (req, res) => {
     return res.status(400).json({ error: "country query parameter required" });
   }
 
-  let countryMeta = null;
-  try {
-    countryMeta = await resolveCountryReference(requestedCountry);
-  } catch (error) {
-    console.error("Country resolution failed:", error?.message || error);
-    return res.status(502).json({ error: "Could not resolve the requested country right now." });
-  }
-  if (!countryMeta?.cca3) {
-    return res.status(400).json({ error: "country must be a valid country name or ISO code" });
-  }
-  const country = String(countryMeta.cca3 || "").trim().toUpperCase();
-  const countryName = String(countryMeta.name || country).trim() || country;
-
-  const cacheKey = `macro:${country}`;
-  const now = Date.now();
-  const memoryCached = macroIndicatorsCache.get(cacheKey);
-  const persisted = await readServiceSnapshot("macro-indicators", { country });
-  const cached = memoryCached?.payload
-    ? memoryCached
-    : (persisted?.payload
-      ? {
-          payload: persisted.payload,
-          cachedAt: new Date(persisted.updatedAt || 0).getTime() || now
-        }
-      : null);
-  if (cached?.payload && now - cached.cachedAt < MACRO_CACHE_TTL_MS) {
-    return res.json(cached.payload);
-  }
-
-  const buildFallbackPayload = (reason) => ({
-    country,
-    countryName,
+  const buildEarlyFallbackPayload = (country = requestedCountry, countryName = requestedCountry, reason = "country_resolution_failed") => ({
+    country: String(country || requestedCountry || "").trim().toUpperCase(),
+    countryName: String(countryName || country || requestedCountry || "").trim(),
     source: "Macro data temporarily unavailable",
     updatedAt: new Date().toISOString(),
     stale: true,
@@ -2510,33 +2465,87 @@ app.get("/api/macro-indicators", async (req, res) => {
       series: []
     })),
     diagnostics: {
-      reason: String(reason || "upstream_unavailable")
+      reason: String(reason || "country_resolution_failed")
     }
   });
 
-  if (!EODHD_API_TOKEN) {
-    if (cached?.payload) {
-      return res.json({
-        ...cached.payload,
-        stale: true,
-        unavailable: true,
-        stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000),
-        diagnostics: {
-          ...(cached.payload?.diagnostics || {}),
-          reason: "missing_eodhd_token"
-        }
-      });
-    }
-    return res.json(buildFallbackPayload("missing_eodhd_token"));
-  }
-
   try {
-    const fetch = await resolveFetch();
-    const base = `https://eodhd.com/api/macro-indicator/${encodeURIComponent(country)}`;
-    const defaultParams = new URLSearchParams({
-      api_token: EODHD_API_TOKEN,
-      fmt: "json"
+    let countryMeta = null;
+    try {
+      countryMeta = await resolveCountryReference(requestedCountry);
+    } catch (error) {
+      console.error("Country resolution failed:", error?.message || error);
+      return res.json(buildEarlyFallbackPayload(requestedCountry, requestedCountry, error?.message || "country_resolution_failed"));
+    }
+    if (!countryMeta?.cca3) {
+      return res.json(buildEarlyFallbackPayload(requestedCountry, requestedCountry, "invalid_country_reference"));
+    }
+    const country = String(countryMeta.cca3 || "").trim().toUpperCase();
+    const countryName = String(countryMeta.name || country).trim() || country;
+
+    const cacheKey = `macro:${country}`;
+    const now = Date.now();
+    const memoryCached = macroIndicatorsCache.get(cacheKey);
+    const persisted = await readServiceSnapshot("macro-indicators", { country });
+    const cached = memoryCached?.payload
+      ? memoryCached
+      : (persisted?.payload
+        ? {
+            payload: persisted.payload,
+            cachedAt: new Date(persisted.updatedAt || 0).getTime() || now
+          }
+        : null);
+    if (cached?.payload && now - cached.cachedAt < MACRO_CACHE_TTL_MS) {
+      return res.json(cached.payload);
+    }
+
+    const buildFallbackPayload = (reason) => ({
+      country,
+      countryName,
+      source: "Macro data temporarily unavailable",
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      metrics: MACRO_INDICATOR_CONFIG.map((config) => ({
+        key: config.key,
+        label: config.label,
+        unit: config.unit || "",
+        current: null,
+        previous: null,
+        expectation: null,
+        change: null,
+        changePercent: null,
+        asOf: null,
+        series: []
+      })),
+      diagnostics: {
+        reason: String(reason || "upstream_unavailable")
+      }
     });
+
+    if (!EODHD_API_TOKEN) {
+      if (cached?.payload) {
+        return res.json({
+          ...cached.payload,
+          stale: true,
+          unavailable: true,
+          stale_age_seconds: Math.floor((now - cached.cachedAt) / 1000),
+          diagnostics: {
+            ...(cached.payload?.diagnostics || {}),
+            reason: "missing_eodhd_token"
+          }
+        });
+      }
+      return res.json(buildFallbackPayload("missing_eodhd_token"));
+    }
+
+    try {
+      const fetch = await resolveFetch();
+      const base = `https://eodhd.com/api/macro-indicator/${encodeURIComponent(country)}`;
+      const defaultParams = new URLSearchParams({
+        api_token: EODHD_API_TOKEN,
+        fmt: "json"
+      });
 
     // Prefer one bulk request (more reliable and far cheaper than multiple indicator calls).
     const bulkUrl = `${base}?${defaultParams.toString()}`;
@@ -2595,17 +2604,21 @@ app.get("/api/macro-indicators", async (req, res) => {
       }
     };
 
-    macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
-    await writeServiceSnapshot("macro-indicators", { country }, payload);
-    res.json(payload);
-  } catch (error) {
-    console.error("Macro indicators fetch failed:", error.message);
-    if (cached?.payload) {
-      return res.json(applyStaleMeta(cached.payload, {
-        updatedAt: persisted?.updatedAt || new Date(cached.cachedAt).toISOString()
-      }, error?.message || "macro_fetch_failed"));
+      macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
+      await writeServiceSnapshot("macro-indicators", { country }, payload);
+      res.json(payload);
+    } catch (error) {
+      console.error("Macro indicators fetch failed:", error.message);
+      if (cached?.payload) {
+        return res.json(applyStaleMeta(cached.payload, {
+          updatedAt: persisted?.updatedAt || new Date(cached.cachedAt).toISOString()
+        }, error?.message || "macro_fetch_failed"));
+      }
+      return res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
     }
-    return res.json(buildFallbackPayload(error?.message || "upstream_fetch_failed"));
+  } catch (error) {
+    console.error("Macro indicators unexpected failure:", error?.message || error);
+    return res.json(buildEarlyFallbackPayload(requestedCountry, requestedCountry, error?.message || "macro_indicators_unexpected_failure"));
   }
 });
 
@@ -3105,6 +3118,27 @@ async function resolveCountryReference(input) {
   if (!raw) return null;
   const normalized = normalizeCountryLookupValue(raw);
   const upperRaw = raw.toUpperCase();
+
+  // Fast path: allow ISO code inputs without depending on country-catalog fetch.
+  if (/^[A-Z]{3}$/.test(upperRaw)) {
+    return {
+      cca3: upperRaw,
+      cca2: null,
+      name: upperRaw,
+      officialName: null,
+      aliases: [upperRaw]
+    };
+  }
+  if (/^[A-Z]{2}$/.test(upperRaw)) {
+    return {
+      cca3: upperRaw,
+      cca2: upperRaw,
+      name: upperRaw,
+      officialName: null,
+      aliases: [upperRaw]
+    };
+  }
+
   const countries = await loadCountryCatalog();
 
   const exact = countries.find((country) => {
@@ -3122,15 +3156,6 @@ async function resolveCountryReference(input) {
   });
   if (partial) return partial;
 
-  if (/^[A-Z]{3}$/.test(upperRaw)) {
-    return {
-      cca3: upperRaw,
-      cca2: null,
-      name: upperRaw,
-      officialName: null,
-      aliases: [upperRaw]
-    };
-  }
   return null;
 }
 

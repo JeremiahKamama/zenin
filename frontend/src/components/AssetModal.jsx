@@ -59,6 +59,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   });
 
   const [performanceMap, setPerformanceMap] = useState({});
+  const [liveQuote, setLiveQuote] = useState({ price: null, priceChangePercent: null });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [shake, setShake] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -127,6 +128,42 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       cancelled = true;
     };
   }, [activeInterval, assetSymbol, assetType]);
+
+  useEffect(() => {
+    setLiveQuote({ price: null, priceChangePercent: null });
+  }, [assetSymbol, assetType]);
+
+  useEffect(() => {
+    if (!assetSymbol) return;
+    const hasPrice = Number.isFinite(Number(asset?.price));
+    const hasChange = Number.isFinite(Number(asset?.priceChangePercent));
+    if (hasPrice && hasChange) return;
+    let cancelled = false;
+
+    const fetchQuote = async () => {
+      try {
+        const quoteType = assetType === "crypto" ? "crypto" : "stock";
+        const params = new URLSearchParams({ type: quoteType, symbols: assetSymbol });
+        const res = await fetch(`${BACKEND_URL}/prices?${params.toString()}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const row = data?.prices?.[assetSymbol] || data?.[assetSymbol] || null;
+        const price = Number(row?.price);
+        const priceChangePercent = Number(row?.priceChangePercent);
+        setLiveQuote({
+          price: Number.isFinite(price) ? price : null,
+          priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+        });
+      } catch {
+        if (cancelled) return;
+      }
+    };
+
+    fetchQuote();
+    return () => {
+      cancelled = true;
+    };
+  }, [asset?.price, asset?.priceChangePercent, assetSymbol, assetType]);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,6 +245,17 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     return () => controller.abort();
   }, [isTradFi, assetSymbol]);
 
+  const displayedPrice = Number.isFinite(Number(asset?.price))
+    ? Number(asset.price)
+    : Number.isFinite(Number(liveQuote.price))
+      ? Number(liveQuote.price)
+      : 0;
+  const displayedChangePercent = Number.isFinite(Number(asset?.priceChangePercent))
+    ? Number(asset.priceChangePercent)
+    : Number.isFinite(Number(liveQuote.priceChangePercent))
+      ? Number(liveQuote.priceChangePercent)
+      : 0;
+
   useEffect(() => {
     if (!isTradFi || !assetSymbol) return;
     
@@ -229,7 +277,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     fetchFinviz();
   }, [isTradFi, assetSymbol]);
 
-  const totalValue = (asset.price || 0) * (quantity || 0);
+  const totalValue = displayedPrice * (quantity || 0);
   const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
   const insufficientBalance = orderType === "buy" && totalValue > availableBalance;
   const confettiPieces = useMemo(() => Array.from({ length: 26 }, (_, i) => i), []);
@@ -508,14 +556,14 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         <div className="chart-section asset-modal-body">
           <div className="chart-header-controls">
             <div className="asset-price-mini">
-              <span className="price">${asset.price?.toFixed(2)}</span>
+              <span className="price">${displayedPrice.toFixed(2)}</span>
               {asset.isMarketOpen === false ? (
                 <span className="market-status-badge closed" style={{ color: "var(--color-text-secondary)", marginLeft: "8px", fontSize: "0.85rem" }}>
                   — Market Closed ({asset.marketStatus || 'Weekend/Holiday'})
                 </span>
               ) : (
-                <span className={`change ${asset.priceChangePercent >= 0 ? "positive" : "negative"}`}>
-                  {asset.priceChangePercent >= 0 ? "+" : ""}{asset.priceChangePercent?.toFixed(2)}%
+                <span className={`change ${displayedChangePercent >= 0 ? "positive" : "negative"}`}>
+                  {displayedChangePercent >= 0 ? "+" : ""}{displayedChangePercent.toFixed(2)}%
                 </span>
               )}
               {assetType === "crypto" && historySource ? (
@@ -688,7 +736,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               (p.marketType || "spot") === (asset.marketType || "spot")
             );
             const holdingQty = holding?.quantity || 0;
-            const holdingValue = holdingQty * (asset.price || 0);
+            const holdingValue = holdingQty * displayedPrice;
             return holdingQty > 0 ? (
               <div className="asset-modal-position-note">
                 Your position: <strong style={{ color: "var(--color-text-primary)" }}>
@@ -743,7 +791,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               <div className="value-field">
                 <input type="number" value={totalValue.toFixed(2)} onChange={(e) => {
                   const newVal = parseFloat(e.target.value) || 0;
-                  if (asset.price > 0) setQuantity(newVal / asset.price);
+                  if (displayedPrice > 0) setQuantity(newVal / displayedPrice);
                 }} step="0.01" />
               </div>
             </div>
