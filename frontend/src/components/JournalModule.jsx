@@ -30,11 +30,45 @@ export function JournalModule({
   const [nowTs, setNowTs] = useState(Date.now());
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef(null);
+  const [journalEntries, setJournalEntries] = useState(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem("zenin_journal_entries") || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [entryDraft, setEntryDraft] = useState({
+    symbol: "",
+    strategy: "",
+    setupTag: "",
+    marketRegime: "",
+    timeframe: "intraday",
+    emotion: "neutral",
+    confidence: 5,
+    preThesis: "",
+    postReview: "",
+    mistakeCategory: "",
+    learned: "",
+    chartLink: ""
+  });
+  const [journalFilters, setJournalFilters] = useState({
+    strategy: "all",
+    timeframe: "all",
+    assetClass: "all",
+    outcome: "all",
+    emotion: "all",
+    search: ""
+  });
 
   useEffect(() => {
     const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
     return () => clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_journal_entries", JSON.stringify(journalEntries.slice(0, 300)));
+  }, [journalEntries]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -210,6 +244,30 @@ export function JournalModule({
 
     return rows.reverse();
   }, [trades]);
+
+  const addJournalEntry = () => {
+    if (!entryDraft.symbol.trim() && !entryDraft.preThesis.trim() && !entryDraft.postReview.trim()) return;
+    const newEntry = {
+      id: `jrnl-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      ...entryDraft
+    };
+    setJournalEntries((prev) => [newEntry, ...prev]);
+    setEntryDraft({
+      symbol: "",
+      strategy: "",
+      setupTag: "",
+      marketRegime: "",
+      timeframe: "intraday",
+      emotion: "neutral",
+      confidence: 5,
+      preThesis: "",
+      postReview: "",
+      mistakeCategory: "",
+      learned: "",
+      chartLink: ""
+    });
+  };
 
   const analytics = useMemo(() => {
     const dayMs = 24 * 60 * 60 * 1000;
@@ -630,6 +688,39 @@ export function JournalModule({
     };
   }, [trades, portfolio, livePriceBySymbol, nowTs, activeOptionsTrades, multiChainCache, spotPrices]);
 
+  const weeklyMonthlyReview = useMemo(() => {
+    const now = Date.now();
+    const weekAgo = now - (7 * 24 * 60 * 60 * 1000);
+    const monthAgo = now - (30 * 24 * 60 * 60 * 1000);
+    const weekTrades = (analytics.realizedTrades || []).filter((t) => new Date(t.closeDate || 0).getTime() >= weekAgo);
+    const monthTrades = (analytics.realizedTrades || []).filter((t) => new Date(t.closeDate || 0).getTime() >= monthAgo);
+    const summarize = (rows) => {
+      const wins = rows.filter((r) => Number(r.pnl || 0) > 0).length;
+      const losses = rows.filter((r) => Number(r.pnl || 0) < 0).length;
+      const total = rows.reduce((sum, r) => sum + Number(r.pnl || 0), 0);
+      const grossWin = rows.filter((r) => Number(r.pnl || 0) > 0).reduce((s, r) => s + Number(r.pnl || 0), 0);
+      const grossLoss = Math.abs(rows.filter((r) => Number(r.pnl || 0) < 0).reduce((s, r) => s + Number(r.pnl || 0), 0));
+      const profitFactor = grossLoss > 0 ? grossWin / grossLoss : 0;
+      const expectancy = rows.length ? total / rows.length : 0;
+      return { wins, losses, total, profitFactor, expectancy };
+    };
+    return {
+      weekly: summarize(weekTrades),
+      monthly: summarize(monthTrades)
+    };
+  }, [analytics.realizedTrades]);
+
+  const filteredJournalEntries = useMemo(() => {
+    return (journalEntries || []).filter((entry) => {
+      const strategyOk = journalFilters.strategy === "all" || String(entry.strategy || "").toLowerCase() === journalFilters.strategy;
+      const timeframeOk = journalFilters.timeframe === "all" || String(entry.timeframe || "").toLowerCase() === journalFilters.timeframe;
+      const emotionOk = journalFilters.emotion === "all" || String(entry.emotion || "").toLowerCase() === journalFilters.emotion;
+      const textBlob = `${entry.symbol || ""} ${entry.strategy || ""} ${entry.preThesis || ""} ${entry.postReview || ""} ${entry.learned || ""}`.toLowerCase();
+      const searchOk = !journalFilters.search.trim() || textBlob.includes(journalFilters.search.trim().toLowerCase());
+      return strategyOk && timeframeOk && emotionOk && searchOk;
+    });
+  }, [journalEntries, journalFilters]);
+
   const portfolioValue = useMemo(
     () => (portfolio || []).reduce((total, item) => total + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0),
     [portfolio]
@@ -997,6 +1088,39 @@ export function JournalModule({
 
       <div className="watchlist-panel glass">
         <div className="section-header">
+          <h2>Trade Entry Journal</h2>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px", marginBottom: "10px" }}>
+          <input className="search-input" placeholder="Symbol" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} />
+          <input className="search-input" placeholder="Strategy type" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} />
+          <input className="search-input" placeholder="Setup tag" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} />
+          <input className="search-input" placeholder="Market regime" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} />
+          <select className="search-input" value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
+            <option value="intraday">Intraday</option>
+            <option value="swing">Swing</option>
+            <option value="position">Position</option>
+          </select>
+          <select className="search-input" value={entryDraft.emotion} onChange={(e) => setEntryDraft((p) => ({ ...p, emotion: e.target.value }))}>
+            <option value="neutral">Neutral</option>
+            <option value="confident">Confident</option>
+            <option value="fearful">Fearful</option>
+            <option value="fomo">FOMO</option>
+            <option value="disciplined">Disciplined</option>
+          </select>
+          <input className="search-input" type="number" min="1" max="10" placeholder="Confidence (1-10)" value={entryDraft.confidence} onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) || 5 }))} />
+          <input className="search-input" placeholder="Chart / screenshot link" value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
+          <input className="search-input" placeholder="Mistake category" value={entryDraft.mistakeCategory} onChange={(e) => setEntryDraft((p) => ({ ...p, mistakeCategory: e.target.value }))} />
+          <input className="search-input" placeholder="What I learned" value={entryDraft.learned} onChange={(e) => setEntryDraft((p) => ({ ...p, learned: e.target.value }))} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "10px" }}>
+          <textarea className="search-input" rows={3} placeholder="Pre-trade thesis" value={entryDraft.preThesis} onChange={(e) => setEntryDraft((p) => ({ ...p, preThesis: e.target.value }))} />
+          <textarea className="search-input" rows={3} placeholder="Post-trade review" value={entryDraft.postReview} onChange={(e) => setEntryDraft((p) => ({ ...p, postReview: e.target.value }))} />
+        </div>
+        <button className="pagination-button" onClick={addJournalEntry}>Save Journal Entry</button>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header">
           <h2>Analytics</h2>
         </div>
         <div className="journal-stats-grid">
@@ -1006,6 +1130,29 @@ export function JournalModule({
               <span className="journal-stat-value">{formatValue(stat.value, stat.currency)}</span>
             </div>
           ))}
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header">
+          <h2>Weekly / Monthly Review</h2>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "8px" }}>
+          <div className="journal-stat-card">
+            <span className="journal-stat-label">Weekly Win/Loss</span>
+            <span className="journal-stat-value">{weeklyMonthlyReview.weekly.wins}/{weeklyMonthlyReview.weekly.losses}</span>
+            <span className="journal-stat-label">PF {weeklyMonthlyReview.weekly.profitFactor.toFixed(2)} · Exp {weeklyMonthlyReview.weekly.expectancy.toFixed(2)}</span>
+          </div>
+          <div className="journal-stat-card">
+            <span className="journal-stat-label">Monthly Win/Loss</span>
+            <span className="journal-stat-value">{weeklyMonthlyReview.monthly.wins}/{weeklyMonthlyReview.monthly.losses}</span>
+            <span className="journal-stat-label">PF {weeklyMonthlyReview.monthly.profitFactor.toFixed(2)} · Exp {weeklyMonthlyReview.monthly.expectancy.toFixed(2)}</span>
+          </div>
+          <div className="journal-stat-card">
+            <span className="journal-stat-label">Journal Notes</span>
+            <span className="journal-stat-value">{journalEntries.length}</span>
+            <span className="journal-stat-label">Searchable with strategy, emotion, and thesis text.</span>
+          </div>
         </div>
       </div>
 
@@ -1129,6 +1276,57 @@ export function JournalModule({
               </div>
             );
           })}
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass">
+        <div className="section-header">
+          <h2>Journal Archive</h2>
+          <div className="asset-count">{filteredJournalEntries.length} Entries</div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "8px", marginBottom: "10px" }}>
+          <select className="search-input" value={journalFilters.strategy} onChange={(e) => setJournalFilters((p) => ({ ...p, strategy: e.target.value }))}>
+            <option value="all">All Strategies</option>
+            {[...new Set(journalEntries.map((row) => String(row.strategy || "").toLowerCase()).filter(Boolean))].map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="search-input" value={journalFilters.timeframe} onChange={(e) => setJournalFilters((p) => ({ ...p, timeframe: e.target.value }))}>
+            <option value="all">All Timeframes</option>
+            <option value="intraday">Intraday</option>
+            <option value="swing">Swing</option>
+            <option value="position">Position</option>
+          </select>
+          <select className="search-input" value={journalFilters.emotion} onChange={(e) => setJournalFilters((p) => ({ ...p, emotion: e.target.value }))}>
+            <option value="all">All Emotions</option>
+            <option value="neutral">Neutral</option>
+            <option value="confident">Confident</option>
+            <option value="fearful">Fearful</option>
+            <option value="fomo">FOMO</option>
+            <option value="disciplined">Disciplined</option>
+          </select>
+          <input className="search-input" placeholder="Search notes..." value={journalFilters.search} onChange={(e) => setJournalFilters((p) => ({ ...p, search: e.target.value }))} />
+        </div>
+        <div style={{ display: "grid", gap: "8px" }}>
+          {filteredJournalEntries.slice(0, 20).map((entry) => (
+            <div key={entry.id} style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px", background: "rgba(15,23,42,0.4)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                <div style={{ fontSize: "12px", color: "#e2e8f0", fontWeight: 600 }}>{entry.symbol || "N/A"} · {entry.strategy || "Unspecified strategy"}</div>
+                <div style={{ fontSize: "11px", color: "#94a3b8" }}>{new Date(entry.createdAt).toLocaleString()}</div>
+              </div>
+              <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px" }}>
+                {entry.timeframe} · {entry.emotion} · Confidence {entry.confidence}/10 · {entry.marketRegime || "No regime"}
+              </div>
+              {entry.preThesis ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "6px" }}><strong>Thesis:</strong> {entry.preThesis}</div> : null}
+              {entry.postReview ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "4px" }}><strong>Review:</strong> {entry.postReview}</div> : null}
+              {entry.mistakeCategory || entry.learned ? (
+                <div style={{ fontSize: "11px", color: "#fbbf24", marginTop: "4px" }}>
+                  {entry.mistakeCategory ? `Mistake: ${entry.mistakeCategory}. ` : ""}{entry.learned ? `Learned: ${entry.learned}` : ""}
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {filteredJournalEntries.length === 0 ? (
+            <div className="empty-state" style={{ padding: "20px", color: "#64748b" }}>No journal notes match the current filters.</div>
+          ) : null}
         </div>
       </div>
 

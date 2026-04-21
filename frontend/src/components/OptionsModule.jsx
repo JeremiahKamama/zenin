@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
@@ -107,6 +107,8 @@ export const OptionsModule = ({
   const [whaleSource, setWhaleSource] = useState("derive");
   const lastSyncToastRef = useRef(null); // Ref to track the last toasted request key
   const [simulatorError, setSimulatorError] = useState("");
+  const [strikeWindow, setStrikeWindow] = useState("all");
+  const [earningsCalendar, setEarningsCalendar] = useState([]);
   
 // strategy states removed, now handled inline
 const [strategySubmitting, setStrategySubmitting] = useState(false);
@@ -272,8 +274,34 @@ const handleStrategyChosen = async (tradePayload) => {
 
 // handleConfirmStrategyTrade removed as it is now handled inline by handleStrategyChosen
 
- useEffect(() => {
+useEffect(() => {
   setAllAssets(SUPPORTED_OPTIONS_ASSETS);
+}, []);
+
+useEffect(() => {
+  let cancelled = false;
+  const loadEarnings = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/earnings-calendar`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      if (cancelled) return;
+      const rows = Array.isArray(payload?.events)
+        ? payload.events
+        : Array.isArray(payload?.rows)
+        ? payload.rows
+        : Array.isArray(payload)
+        ? payload
+        : [];
+      setEarningsCalendar(rows);
+    } catch {
+      if (!cancelled) setEarningsCalendar([]);
+    }
+  };
+  loadEarnings();
+  return () => {
+    cancelled = true;
+  };
 }, []);
 
 useEffect(() => {
@@ -665,6 +693,68 @@ useEffect(() => {
     ? `${activeAsset} is currently exposed through ${marketStructureLabel} on Derive, so a full chain snapshot may be partial or unavailable here.`
     : `Waiting for options data for ${activeAsset}.`;
 
+  const activeSpot = Number(spotPrices?.[activeAsset] || 0);
+  const filteredChain = useMemo(() => {
+    if (!Array.isArray(chain) || chain.length === 0) return [];
+    if (!Number.isFinite(activeSpot) || activeSpot <= 0 || strikeWindow === "all") return chain;
+    const bandPct = strikeWindow === "tight" ? 0.1 : strikeWindow === "medium" ? 0.2 : 0.35;
+    return chain.filter((row) => {
+      const strike = Number(row?.strike || 0);
+      if (!Number.isFinite(strike) || strike <= 0) return false;
+      return Math.abs(strike - activeSpot) / activeSpot <= bandPct;
+    });
+  }, [chain, strikeWindow, activeSpot]);
+
+  const greekSummary = useMemo(() => {
+    const totals = { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 };
+    const rows = Array.isArray(activeOptionsTrades) ? activeOptionsTrades : [];
+    rows.forEach((trade) => {
+      const calc = getInternalOptionPnL(trade);
+      totals.delta += Number(calc?.delta || 0);
+      totals.theta += Number(calc?.theta || 0);
+      totals.gamma += Number(calc?.gamma || 0);
+      totals.vega += Number(calc?.vega || 0);
+      totals.rho += Number(calc?.rho || 0);
+    });
+    return totals;
+  }, [activeOptionsTrades, multiChainCache, chain, spotPrices, activeAsset]);
+
+  const termStructureRows = useMemo(() => {
+    return (availableExpiries || []).map((expiryTs) => {
+      const days = Math.max(1, Math.round((Number(expiryTs) * 1000 - Date.now()) / (24 * 60 * 60 * 1000)));
+      const impliedVol = Number(metrics?.iv || 0) * (1 + Math.min(days, 120) / 1200);
+      return {
+        expiryTs,
+        days,
+        impliedVol
+      };
+    }).sort((a, b) => a.days - b.days);
+  }, [availableExpiries, metrics?.iv]);
+
+  const upcomingEarningsForAsset = useMemo(() => {
+    const symbol = String(activeAsset || "").toUpperCase();
+    return (earningsCalendar || []).filter((row) => String(row?.symbol || row?.ticker || "").toUpperCase() === symbol).slice(0, 2);
+  }, [earningsCalendar, activeAsset]);
+
+  const assignmentReminders = useMemo(() => {
+    const now = Date.now();
+    return (activeOptionsTrades || []).map((trade) => {
+      const expiryRaw = trade?.legs?.[0]?.expiry;
+      const expiryTs = Number.isFinite(Number(expiryRaw))
+        ? Number(expiryRaw) * 1000
+        : (expiryRaw ? new Date(expiryRaw).getTime() : 0);
+      const hoursToExpiry = expiryTs > 0 ? Math.round((expiryTs - now) / (60 * 60 * 1000)) : null;
+      const mark = Number(getInternalOptionPnL(trade)?.currentMark || 0);
+      const entry = Number(trade?.netPremiumAtEntry || 0);
+      return {
+        id: trade.id,
+        label: `${trade.asset} ${trade.strategy || "Options"}`,
+        hoursToExpiry,
+        inTheMoneyRisk: mark > entry && mark > 0
+      };
+    }).filter((row) => row.hoursToExpiry != null && row.hoursToExpiry <= 72);
+  }, [activeOptionsTrades, multiChainCache, chain, spotPrices, activeAsset]);
+
   return (
     <div className="view-container options-terminal">
       <div className="portfolio-analytics-row">
@@ -779,6 +869,91 @@ useEffect(() => {
         error={simulatorError}
       />
 
+      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+        <div className="section-header">
+          <h2>Greeks & Volatility Context</h2>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <span className="asset-count">Strike Window</span>
+            <select
+              value={strikeWindow}
+              onChange={(e) => setStrikeWindow(e.target.value)}
+              style={{ background: "rgba(15,23,42,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
+            >
+              <option value="all">All Strikes</option>
+              <option value="medium">ATM ±20%</option>
+              <option value="tight">ATM ±10%</option>
+              <option value="wide">ATM ±35%</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px", marginBottom: "10px" }}>
+          {[
+            { label: "Portfolio Delta", value: greekSummary.delta },
+            { label: "Portfolio Theta", value: greekSummary.theta },
+            { label: "Portfolio Gamma", value: greekSummary.gamma },
+            { label: "Portfolio Vega", value: greekSummary.vega },
+            { label: "Portfolio Rho", value: greekSummary.rho }
+          ].map((item) => (
+            <div key={item.label} className="journal-stat-card">
+              <span className="journal-stat-label">{item.label}</span>
+              <span className="journal-stat-value">{Number(item.value || 0).toFixed(3)}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+          <div style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
+            <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>IV / OI Heatmap (sample)</div>
+            <div style={{ display: "grid", gap: "6px" }}>
+              {filteredChain.slice(0, 8).map((row) => {
+                const callIv = Number(row?.call?.iv || 0) * 100;
+                const callOi = Number(row?.call?.openInterest || row?.call?.oi || 0);
+                const intensity = Math.min(1, Math.max(0.08, (callIv / 120) + (callOi / 100000)));
+                return (
+                  <div key={`heat-${row.strike}`} style={{ borderRadius: "6px", padding: "6px 8px", background: `rgba(56,189,248,${intensity.toFixed(2)})`, display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+                    <span>{Number(row.strike).toLocaleString()}</span>
+                    <span>IV {callIv.toFixed(1)}% · OI {callOi.toLocaleString()}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
+            <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>Volatility Term Structure</div>
+            <div style={{ display: "grid", gap: "6px" }}>
+              {termStructureRows.slice(0, 8).map((row) => (
+                <div key={`term-${row.expiryTs}`} style={{ display: "grid", gridTemplateColumns: "68px 1fr 48px", gap: "8px", alignItems: "center", fontSize: "12px" }}>
+                  <span>{formatDate(row.expiryTs)}</span>
+                  <div style={{ height: "8px", background: "rgba(15,23,42,0.8)", borderRadius: "999px", overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: "linear-gradient(90deg, #22c55e, #38bdf8)" }} />
+                  </div>
+                  <span>{(row.impliedVol * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {(upcomingEarningsForAsset.length > 0 || assignmentReminders.length > 0) ? (
+        <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+          <div className="section-header">
+            <h2>Event Risk Warnings</h2>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {upcomingEarningsForAsset.map((evt, idx) => (
+              <div key={`earnwarn-${idx}`} style={{ border: "1px solid rgba(245,158,11,0.28)", borderRadius: "8px", padding: "8px 10px", color: "#fbbf24", fontSize: "12px", background: "rgba(120,53,15,0.2)" }}>
+                Earnings volatility warning: {activeAsset} has earnings on {evt?.date || evt?.reportDate || "upcoming"}; avoid overlapping expiries unless intentional.
+              </div>
+            ))}
+            {assignmentReminders.map((item) => (
+              <div key={`assign-${item.id}`} style={{ border: "1px solid rgba(148,163,184,0.22)", borderRadius: "8px", padding: "8px 10px", color: "#cbd5e1", fontSize: "12px", background: "rgba(15,23,42,0.5)" }}>
+                {item.label}: expires in {item.hoursToExpiry}h{item.inTheMoneyRisk ? " · Assignment risk elevated (ITM)." : ""}.
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="watchlist-panel glass">
         <div className="section-header">
           <div className="header-left">
@@ -829,9 +1004,9 @@ useEffect(() => {
           </div>
         ) : null}
 
-          {chain.length === 0 && loading ? (
+          {filteredChain.length === 0 && loading ? (
             <div className="loading-state">{activeUsesRfq ? `Syncing ${activeAsset} RFQ references...` : `Syncing ${activeAsset} with Lyra Protocol...`}</div>
-          ) : chain.length === 0 ? (
+          ) : filteredChain.length === 0 ? (
             <div className="loading-state">{emptyChainText}</div>
           ) : (
             <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto" }}>
@@ -855,7 +1030,7 @@ useEffect(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  {chain.map((row) => (
+                  {filteredChain.map((row) => (
                     <tr key={row.strike}>
                       <td className="greek">{formatIv(row.call?.iv)}</td>
                       <td className="greek">{formatGreek(row.call?.delta, 3)}</td>

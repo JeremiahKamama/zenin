@@ -34,6 +34,15 @@ export function HomeModule({
   const [moversHorizon, setMoversHorizon] = useState("daily");
   const [moversPerformanceByKey, setMoversPerformanceByKey] = useState({});
   const [moversLoading, setMoversLoading] = useState(false);
+  const [todayView, setTodayView] = useState({
+    vix: null,
+    rates: null,
+    breadth: null,
+    sentiment: "Neutral",
+    headlines: []
+  });
+  const [eventRows, setEventRows] = useState([]);
+  const [quickActionFeedback, setQuickActionFeedback] = useState("");
   const moversPerfCacheRef = useRef(new Map());
 
   const topPositions = useMemo(() => {
@@ -224,6 +233,69 @@ export function HomeModule({
     }, { total: 0, resolved: 0, fallback: 0, unavailable: 0 });
   }, [moversUniverse, moversPerformanceByKey, moversHorizon]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const hydrateTodayView = async () => {
+      try {
+        const [macroRes, earningsRes] = await Promise.all([
+          fetch(`${BACKEND_URL}/macro-indicators?country=USA`),
+          fetch(`${BACKEND_URL}/earnings-calendar`)
+        ]);
+
+        let macroPayload = null;
+        let earningsPayload = null;
+        if (macroRes.ok) macroPayload = await macroRes.json();
+        if (earningsRes.ok) earningsPayload = await earningsRes.json();
+        if (cancelled) return;
+
+        const macroRows = Array.isArray(macroPayload?.indicators)
+          ? macroPayload.indicators
+          : Array.isArray(macroPayload?.data)
+          ? macroPayload.data
+          : [];
+        const vixRow = macroRows.find((row) => String(row?.name || row?.indicator || "").toLowerCase().includes("vix"));
+        const rateRow = macroRows.find((row) => String(row?.name || row?.indicator || "").toLowerCase().includes("interest"));
+        const breadthRow = macroRows.find((row) => String(row?.name || row?.indicator || "").toLowerCase().includes("advance"));
+        const vixValue = Number(vixRow?.value);
+        const sentiment = Number.isFinite(vixValue)
+          ? vixValue > 25 ? "Risk Off" : vixValue < 15 ? "Risk On" : "Balanced"
+          : "Neutral";
+
+        const earningsRows = Array.isArray(earningsPayload?.events)
+          ? earningsPayload.events
+          : Array.isArray(earningsPayload?.rows)
+          ? earningsPayload.rows
+          : Array.isArray(earningsPayload)
+          ? earningsPayload
+          : [];
+        setEventRows(earningsRows.slice(0, 8));
+        setTodayView({
+          vix: Number.isFinite(vixValue) ? vixValue : null,
+          rates: Number(rateRow?.value),
+          breadth: Number(breadthRow?.value),
+          sentiment,
+          headlines: earningsRows.slice(0, 3).map((row) => {
+            const symbol = row?.symbol || row?.ticker || "Event";
+            const date = row?.date || row?.reportDate || "";
+            return `${symbol} earnings ${date ? `on ${date}` : "upcoming"}`;
+          })
+        });
+      } catch {
+        if (!cancelled) {
+          setTodayView((prev) => ({
+            ...prev,
+            headlines: ["Macro and earnings feeds unavailable, showing portfolio-native signals."]
+          }));
+          setEventRows([]);
+        }
+      }
+    };
+    hydrateTodayView();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const gainers = [...moversWithChange]
     .sort((a, b) => (b.__moverChange || 0) - (a.__moverChange || 0))
     .slice(0, 5);
@@ -249,6 +321,75 @@ export function HomeModule({
   const totalAccountEquity = Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
     ? Number(activeAccountMetrics.totalAccountEquity)
     : (liveAvailableBalance + portfolioValue);
+  const realizedPnl = Number(activeAccountMetrics?.realizedPnl || 0);
+  const unrealizedPnl = Number(activeAccountMetrics?.unrealizedPnl || calculatePortfolioGain() || 0);
+
+  const dailyChange = useMemo(() => {
+    const now = Date.now();
+    const dayAgo = now - (24 * 60 * 60 * 1000);
+    const anchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= dayAgo);
+    const start = Number(anchor?.equity || initialBalance);
+    return totalAccountEquity - start;
+  }, [tradeTimeline, totalAccountEquity, initialBalance]);
+
+  const weeklyChange = useMemo(() => {
+    if (tradeTimeline.length < 2) return 0;
+    const now = Date.now();
+    const weekAgo = now - (7 * 24 * 60 * 60 * 1000);
+    const weekAnchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= weekAgo);
+    const start = Number(weekAnchor?.equity || initialBalance);
+    return totalAccountEquity - start;
+  }, [tradeTimeline, totalAccountEquity, initialBalance]);
+
+  const ytdChange = useMemo(() => {
+    const now = new Date();
+    const ytdStartTs = new Date(now.getFullYear(), 0, 1).getTime();
+    const ytdAnchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= ytdStartTs);
+    const start = Number(ytdAnchor?.equity || initialBalance);
+    return totalAccountEquity - start;
+  }, [tradeTimeline, totalAccountEquity, initialBalance]);
+
+  const alerts = useMemo(() => {
+    const rows = [];
+    const highVolMovers = moversWithChange.filter((row) => Math.abs(Number(row.__moverChange || 0)) >= 5).slice(0, 3);
+    highVolMovers.forEach((row) => {
+      rows.push({
+        id: `mv-${row.symbol}`,
+        type: "price",
+        text: `${row.symbol} moved ${Number(row.__moverChange).toFixed(2)}% (${MOVERS_HORIZONS[moversHorizon]?.label || "selected horizon"})`
+      });
+    });
+    if (Number.isFinite(todayView.vix) && todayView.vix > 25) {
+      rows.push({ id: "vix-risk", type: "risk", text: `VIX elevated at ${todayView.vix.toFixed(2)}.` });
+    }
+    if (moversCoverage.unavailable > 0) {
+      rows.push({ id: "missing-data", type: "data", text: `${moversCoverage.unavailable} symbols missing interval data.` });
+    }
+    eventRows.slice(0, 2).forEach((evt, idx) => {
+      rows.push({
+        id: `evt-${idx}`,
+        type: "earnings",
+        text: `${evt?.symbol || evt?.ticker || "Upcoming"} earnings ${evt?.date || evt?.reportDate || "soon"}`
+      });
+    });
+    return rows.slice(0, 6);
+  }, [moversWithChange, moversHorizon, todayView.vix, moversCoverage.unavailable, eventRows]);
+
+  const needsAttention = useMemo(() => {
+    const rows = [];
+    if ((watchlistAssets || []).length === 0) rows.push("Watchlist is empty. Add symbols for stronger alert coverage.");
+    if (moversCoverage.unavailable > 0) rows.push(`${moversCoverage.unavailable} assets have stale or missing interval performance data.`);
+    if ((portfolio || []).length === 0) rows.push("Portfolio has no open positions.");
+    if (Math.abs(weeklyChange) > Math.max(500, totalAccountEquity * 0.05)) rows.push("Weekly equity swing exceeded 5% of account value.");
+    return rows;
+  }, [watchlistAssets, moversCoverage.unavailable, portfolio, weeklyChange, totalAccountEquity]);
+
+  const quickActions = [
+    { id: "trade", label: "Add Trade", action: () => onSelectAsset?.(gainers[0] || moversUniverse[0] || null) },
+    { id: "rebalance", label: "Rebalance", action: () => setQuickActionFeedback("Rebalance flow queued. Open Portfolio to apply target weights.") },
+    { id: "alert", label: "Set Alert", action: () => setQuickActionFeedback("Alert draft created from top mover context.") },
+    { id: "journal", label: "Journal Note", action: () => setQuickActionFeedback("Journal shortcut ready in the Journal page.") }
+  ];
 
   const optionTimelineAdjustments = useMemo(() => {
     return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : [])
@@ -387,21 +528,113 @@ export function HomeModule({
         <div className="metric-card glass">
           <label>Total Account Equity</label>
           <div className="value">${totalAccountEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div className={`change ${calculatePortfolioGain() >= 0 ? "positive" : "negative"}`}>
-            {calculatePortfolioGain() >= 0 ? "▲" : "▼"} ${Math.abs(calculatePortfolioGain()).toFixed(2)} Today
+          <div className={`change ${dailyChange >= 0 ? "positive" : "negative"}`}>
+            {dailyChange >= 0 ? "▲" : "▼"} ${Math.abs(dailyChange).toFixed(2)} Today
           </div>
         </div>
 
         <div className="metric-card glass">
-          <label>Market Sentiment</label>
-          <div className="value">Risk On</div>
-          <div className="change positive">High Volatility Alpha</div>
+          <label>Cash & Buying Power</label>
+          <div className="value">${liveAvailableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className="change positive">Available to deploy</div>
         </div>
 
         <div className="metric-card glass">
-          <label>Available Balance</label>
-          <div className="value">${liveAvailableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <label>PnL Snapshot</label>
+          <div className="value">${(realizedPnl + unrealizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className={`change ${unrealizedPnl >= 0 ? "positive" : "negative"}`}>
+            Unrealized {unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(2)}
+          </div>
         </div>
+        <div className="metric-card glass">
+          <label>Change Tracker</label>
+          <div className="value">
+            {weeklyChange >= 0 ? "+" : ""}${weeklyChange.toFixed(2)}
+          </div>
+          <div className={`change ${ytdChange >= 0 ? "positive" : "negative"}`}>
+            YTD {ytdChange >= 0 ? "+" : ""}${ytdChange.toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+        <div className="section-header">
+          <h2>Today View</h2>
+          <div className="asset-count">{todayView.sentiment}</div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", marginBottom: "10px" }}>
+          <div className="journal-stat-card"><span className="journal-stat-label">VIX</span><span className="journal-stat-value">{Number.isFinite(todayView.vix) ? todayView.vix.toFixed(2) : "—"}</span></div>
+          <div className="journal-stat-card"><span className="journal-stat-label">Rates</span><span className="journal-stat-value">{Number.isFinite(todayView.rates) ? todayView.rates.toFixed(2) : "—"}</span></div>
+          <div className="journal-stat-card"><span className="journal-stat-label">Breadth</span><span className="journal-stat-value">{Number.isFinite(todayView.breadth) ? todayView.breadth.toFixed(2) : "—"}</span></div>
+          <div className="journal-stat-card"><span className="journal-stat-label">Counts</span><span className="journal-stat-value">{(portfolio || []).length} pos · {(watchlistAssets || []).length} watch · {alerts.length} alerts</span></div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          {(todayView.headlines.length ? todayView.headlines : ["No headline feed yet."]).map((item, idx) => (
+            <div key={`head-${idx}`} style={{ fontSize: "12px", color: "#cbd5e1" }}>• {item}</div>
+          ))}
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+        <div className="section-header">
+          <h2>Alerts Tray</h2>
+          <div className="asset-count">{alerts.length} Active</div>
+        </div>
+        {alerts.length ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "8px" }}>
+            {alerts.map((alert) => (
+              <div key={alert.id} style={{ border: "1px solid rgba(148,163,184,0.18)", borderRadius: "10px", padding: "8px 10px", background: "rgba(15,23,42,0.45)", fontSize: "12px", color: "#cbd5e1" }}>
+                <span style={{ color: "#7dd3fc", textTransform: "uppercase", fontSize: "10px", marginRight: "6px" }}>{alert.type}</span>
+                {alert.text}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="loading-state">No active alerts.</div>
+        )}
+      </div>
+
+      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+        <div className="section-header">
+          <h2>Quick Actions</h2>
+        </div>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          {quickActions.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="pagination-button"
+              onClick={() => {
+                item.action();
+                if (item.id === "trade") {
+                  setQuickActionFeedback("Opening selected asset for a new trade.");
+                }
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {quickActionFeedback ? (
+          <div style={{ marginTop: "10px", fontSize: "12px", color: "#94a3b8" }}>{quickActionFeedback}</div>
+        ) : null}
+      </div>
+
+      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+        <div className="section-header">
+          <h2>Needs Attention</h2>
+        </div>
+        {needsAttention.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {needsAttention.map((item, idx) => (
+              <div key={`need-${idx}`} style={{ color: "#fbbf24", fontSize: "12px", border: "1px solid rgba(245,158,11,0.25)", borderRadius: "8px", padding: "8px 10px", background: "rgba(120,53,15,0.2)" }}>
+                {item}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="loading-state">No immediate attention flags.</div>
+        )}
       </div>
 
       {/* Portfolio Chart */}
