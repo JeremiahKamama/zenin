@@ -376,9 +376,11 @@
 .zc-home .side-link {
   min-height: 38px;
   border-radius: 10px;
-  padding: 0 10px;
+  width: 38px;
+  padding: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   font-size: 0.82rem;
   color: #cad8f8;
@@ -401,6 +403,7 @@
   padding: 20px;
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .zc-home .welcome-row {
@@ -433,7 +436,7 @@
 
 .zc-home .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -565,7 +568,7 @@
 
 .zc-home .simple-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.7fr) minmax(0, 0.65fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   min-height: 42px;
@@ -815,14 +818,9 @@
 }
 
 @media (max-width: 1180px) {
-  .zc-home .hero-grid,
   .zc-home .bottom-cta,
   .zc-home .main-panels {
     grid-template-columns: 1fr;
-  }
-
-  .zc-home .hero-visual {
-    order: -1;
   }
 
   .zc-home .cards-grid {
@@ -851,6 +849,12 @@
 
   .zc-home .phone {
     right: max(10px, 12%);
+  }
+}
+
+@media (max-width: 980px) {
+  .zc-home .hero-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -890,25 +894,19 @@
   }
 
   .zc-home .dashboard {
-    grid-template-columns: 1fr;
+    grid-template-columns: 80px minmax(0, 1fr);
+    min-height: 0;
   }
 
   .zc-home .sidebar {
-    border-right: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    gap: 14px;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 0;
+    gap: 12px;
+    padding: 14px 8px;
   }
 
   .zc-home .side-links {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .zc-home .side-link {
-    justify-content: center;
-  }
-
-  .zc-home .sidebar-bottom {
-    display: none;
+    gap: 6px;
   }
 }
 
@@ -936,7 +934,6 @@
   .zc-home .hero-features,
   .zc-home .proof-grid,
   .zc-home .cards-grid,
-  .zc-home .stats-grid,
   .zc-home .side-links {
     grid-template-columns: 1fr;
   }
@@ -957,7 +954,7 @@
   }
 
   .zc-home .stats-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
   }
 
   .zc-home .welcome-row {
@@ -965,16 +962,48 @@
     flex-direction: column;
   }
 
+  .zc-home .dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .zc-home .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 10px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .zc-home .app-logo {
+    margin: 0;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+  }
+
+  .zc-home .side-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .zc-home .side-link {
+    width: 28px;
+    min-height: 28px;
+    border-radius: 8px;
+  }
+
+  .zc-home .sidebar-bottom {
+    margin-left: auto;
+  }
+
   .zc-home .simple-row {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
     row-gap: 4px;
     min-height: auto;
     padding: 10px 12px;
-  }
-
-  .zc-home .simple-row > :nth-child(3),
-  .zc-home .simple-row > :nth-child(4) {
-    justify-self: start;
   }
 
   .zc-home .device-preview {
@@ -996,7 +1025,6 @@
     max-width: none;
   }
 
-  .zc-home .stats-grid,
   .zc-home .hero-features {
     grid-template-columns: 1fr;
   }
@@ -1006,8 +1034,9 @@
     min-height: auto;
   }
 
-  .zc-home .side-links {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .zc-home .sidebar {
+    gap: 8px;
+    padding: 8px;
   }
 
   .zc-home .proof-item {

@@ -1,7 +1,23 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 
 export default function PublicHomepage() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const openAppHref = useMemo(() => {
+    const configured = import.meta.env.VITE_OPEN_APP_URL;
+    if (configured) return configured;
+    if (typeof window === "undefined") return "/app";
+
+    const { protocol, hostname } = window.location;
+    const isLocalHost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "0.0.0.0";
+
+    if (isLocalHost) return "/app";
+    if (hostname.startsWith("app.")) return `${protocol}//${hostname}`;
+    if (hostname.endsWith(".app")) return `${protocol}//app.${hostname}`;
+    return "/app";
+  }, []);
 
   return (
     <div className="zc-home">
@@ -24,7 +40,7 @@ export default function PublicHomepage() {
           </nav>
 
           <div className={`nav-actions ${menuOpen ? "open" : ""}`}>
-            <a className="btn btn-primary" href="/app">Open App →</a>
+            <a className="btn btn-primary" href={openAppHref}>Open App →</a>
           </div>
 
           <button
@@ -52,7 +68,7 @@ export default function PublicHomepage() {
                 in one place.
               </p>
               <div className="hero-actions">
-                <a className="btn btn-primary" href="/app">Open App →</a>
+                <a className="btn btn-primary" href={openAppHref}>Open App →</a>
                 <a className="btn btn-secondary" href="#features">Explore Features</a>
               </div>
 
@@ -88,17 +104,17 @@ export default function PublicHomepage() {
                     <div>
                       <div className="app-logo">Z</div>
                       <div className="side-links">
-                        <div className="side-link active"><span className="side-icon" />Home</div>
-                        <div className="side-link"><span className="side-icon" />Watchlist</div>
-                        <div className="side-link"><span className="side-icon" />Portfolio</div>
-                        <div className="side-link"><span className="side-icon" />Options</div>
-                        <div className="side-link"><span className="side-icon" />Predictions</div>
-                        <div className="side-link"><span className="side-icon" />Journal</div>
-                        <div className="side-link"><span className="side-icon" />Tax</div>
-                        <div className="side-link"><span className="side-icon" />Settings</div>
+                        <div className="side-link active" title="Home"><span className="side-icon" /></div>
+                        <div className="side-link" title="Watchlist"><span className="side-icon" /></div>
+                        <div className="side-link" title="Portfolio"><span className="side-icon" /></div>
+                        <div className="side-link" title="Options"><span className="side-icon" /></div>
+                        <div className="side-link" title="Predictions"><span className="side-icon" /></div>
+                        <div className="side-link" title="Journal"><span className="side-icon" /></div>
+                        <div className="side-link" title="Tax"><span className="side-icon" /></div>
+                        <div className="side-link" title="Settings"><span className="side-icon" /></div>
                       </div>
                     </div>
-                    <div className="sidebar-bottom side-link"><span className="side-icon" />Log out</div>
+                    <div className="sidebar-bottom side-link" title="Log out"><span className="side-icon" /></div>
                   </aside>
 
                   <div className="dashboard-main">
@@ -118,17 +134,12 @@ export default function PublicHomepage() {
                       </div>
                       <div className="stat-card">
                         <small>Total Gain/Loss</small>
-                        <strong className="up">+$12,842.39</strong>
+                        <strong className="up">+11.10%</strong>
                         <span className="up">+11.10%</span>
                       </div>
                       <div className="stat-card">
-                        <small>Buying Power</small>
-                        <strong>$24,680.13</strong>
-                        <span>Available</span>
-                      </div>
-                      <div className="stat-card">
                         <small>Day Change</small>
-                        <strong className="up">+$1,245.91</strong>
+                        <strong className="up">+0.98%</strong>
                         <span className="up">+0.98%</span>
                       </div>
                     </div>
@@ -137,15 +148,6 @@ export default function PublicHomepage() {
                       <div className="panel">
                         <div className="panel-head">
                           <h4>Portfolio Performance</h4>
-                          <div className="tabs">
-                            <span className="tab">1D</span>
-                            <span className="tab">1W</span>
-                            <span className="tab">1M</span>
-                            <span className="tab">3M</span>
-                            <span className="tab">YTD</span>
-                            <span className="tab">1Y</span>
-                            <span className="tab">MAX</span>
-                          </div>
                         </div>
                         <div className="panel-head panel-head-tight">
                           <div />
@@ -178,11 +180,11 @@ export default function PublicHomepage() {
                             <h4>Top Positions</h4>
                           </div>
                           <div className="simple-table">
-                            <div className="simple-row"><strong>AAPL</strong><span>$195.32</span><span>$24,563.52</span><span className="up">+2.15%</span></div>
-                            <div className="simple-row"><strong>MSFT</strong><span>$414.75</span><span>$18,732.45</span><span className="up">+1.22%</span></div>
-                            <div className="simple-row"><strong>NVDA</strong><span>$1,212.76</span><span>$16,958.64</span><span className="up">+3.45%</span></div>
-                            <div className="simple-row"><strong>BTC</strong><span>$67,842.11</span><span>$15,642.33</span><span className="up">+2.86%</span></div>
-                            <div className="simple-row"><strong>GOOGL</strong><span>$155.90</span><span>$12,841.37</span><span className="down">-0.45%</span></div>
+                            <div className="simple-row"><strong>AAPL</strong><span className="up">+2.15%</span></div>
+                            <div className="simple-row"><strong>MSFT</strong><span className="up">+1.22%</span></div>
+                            <div className="simple-row"><strong>NVDA</strong><span className="up">+3.45%</span></div>
+                            <div className="simple-row"><strong>BTC</strong><span className="up">+2.86%</span></div>
+                            <div className="simple-row"><strong>GOOGL</strong><span className="down">-0.45%</span></div>
                           </div>
                         </div>
 
@@ -192,11 +194,11 @@ export default function PublicHomepage() {
                             <span className="tab">Daily</span>
                           </div>
                           <div className="simple-table">
-                            <div className="simple-row"><strong>NVDA</strong><span className="up">+5.23%</span><span>$1,212.76</span><span>Gainer</span></div>
-                            <div className="simple-row"><strong>AMD</strong><span className="up">+4.31%</span><span>$166.21</span><span>Gainer</span></div>
-                            <div className="simple-row"><strong>SOL</strong><span className="up">+3.85%</span><span>$162.73</span><span>Gainer</span></div>
-                            <div className="simple-row"><strong>PDD</strong><span className="up">+3.12%</span><span>$135.86</span><span>Gainer</span></div>
-                            <div className="simple-row"><strong>META</strong><span className="up">+2.91%</span><span>$501.23</span><span>Gainer</span></div>
+                            <div className="simple-row"><strong>NVDA</strong><span className="up">+5.23%</span></div>
+                            <div className="simple-row"><strong>AMD</strong><span className="up">+4.31%</span></div>
+                            <div className="simple-row"><strong>SOL</strong><span className="up">+3.85%</span></div>
+                            <div className="simple-row"><strong>PDD</strong><span className="up">+3.12%</span></div>
+                            <div className="simple-row"><strong>META</strong><span className="up">+2.91%</span></div>
                           </div>
                         </div>
                       </div>
@@ -255,7 +257,7 @@ export default function PublicHomepage() {
                   Whether you’re analyzing markets, building strategies, or optimizing taxes, Zenin brings it all together so you can focus on what matters — performance.
                 </p>
                 <div className="cta-actions">
-                  <a className="btn btn-primary" href="/app">Open App →</a>
+                  <a className="btn btn-primary" href={openAppHref}>Open App →</a>
                   <a className="btn btn-secondary" href="#screens">See Screens</a>
                 </div>
               </div>
