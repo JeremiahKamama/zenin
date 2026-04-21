@@ -4171,6 +4171,8 @@ app.post("/api/options/crypto", async (req, res) => {
         bid,
         ask,
         mark: Number.isFinite(normalizedFallback) ? normalizedFallback : 0,
+        oi: firstFiniteNumber(t?.open_interest, t?.stats?.open_interest, t?.openInterest, 0),
+        openInterest: firstFiniteNumber(t?.open_interest, t?.stats?.open_interest, t?.openInterest, 0),
         delta: firstFiniteNumber(t?.greeks?.delta, t?.stats?.delta, t?.delta, 0),
         gamma: firstFiniteNumber(t?.greeks?.gamma, t?.stats?.gamma, t?.gamma, 0),
         vega: firstFiniteNumber(t?.greeks?.vega, t?.stats?.vega, t?.vega, 0),

@@ -7,6 +7,7 @@ import { calculateOptionPnL } from "../utils/optionsPnL";
 const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
+const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
 const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
@@ -89,7 +90,7 @@ export const OptionsModule = ({
   const [allAssets, setAllAssets] = useState(SUPPORTED_OPTIONS_ASSETS);
   const [chain, setChain] = useState([]);
   const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
-  const [metrics, setMetrics] = useState({ iv: 0.245, pcr: 0.82, skew: "Bullish" });
+  const [metrics, setMetrics] = useState({ iv: 0, pcr: 0, skew: "N/A" });
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState("");
   const [optionsStale, setOptionsStale] = useState(false);
@@ -108,12 +109,18 @@ export const OptionsModule = ({
   const lastSyncToastRef = useRef(null); // Ref to track the last toasted request key
   const [simulatorError, setSimulatorError] = useState("");
   const [strikeWindow, setStrikeWindow] = useState("all");
+  const [selectedStrike, setSelectedStrike] = useState("");
   const [earningsCalendar, setEarningsCalendar] = useState([]);
+  const [termIvByExpiry, setTermIvByExpiry] = useState({});
   const supplementalFetchStateRef = useRef({
     chainInFlight: new Set(),
     spotInFlight: new Set(),
     lastChainFetchAt: {},
     lastSpotFetchAt: {}
+  });
+  const termStructureFetchStateRef = useRef({
+    inFlight: new Set(),
+    lastFetchedAt: {}
   });
   
 // strategy states removed, now handled inline
@@ -149,6 +156,17 @@ const [strategySubmitting, setStrategySubmitting] = useState(false);
       return acc + (String(leg?.side || "").toLowerCase() === "short" ? -v : v);
     }, 0);
     return Number.isFinite(fromLegs) ? fromLegs : 0;
+  };
+
+  const getTradeUsdQuantity = (trade) => {
+    const explicit = Number(trade?.totalNotional ?? trade?.notional);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    const qty = Number(trade?.qty ?? trade?.quantity);
+    const entryPremium = getTradeEntryPremium(trade);
+    if (Number.isFinite(qty) && Number.isFinite(entryPremium) && qty > 0) {
+      return Math.abs(entryPremium * qty);
+    }
+    return 0;
   };
 
   const syncActiveTradeSnapshots = (assetSymbol, syncedChain, syncedSpot) => {
@@ -396,9 +414,30 @@ useEffect(() => {
     });
   }, [activeOptionsTrades, activeAsset, chain]);
 
-  useEffect(() => {
-    setActiveExpiry(null); // Reset expiry when asset changes
-  }, [activeAsset]);
+useEffect(() => {
+  setActiveExpiry(null); // Reset expiry when asset changes
+  setSelectedStrike("");
+  setTermIvByExpiry({});
+}, [activeAsset]);
+
+const pickNearestExpiry = (expiries = []) => {
+  const nowSec = Date.now() / 1000;
+  const parsed = (Array.isArray(expiries) ? expiries : [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b);
+  if (!parsed.length) return null;
+  const future = parsed.filter((v) => v >= nowSec);
+  return (future.length ? future[0] : parsed[0]);
+};
+
+const deriveIvFromChain = (rows = []) => {
+  const ivValues = (Array.isArray(rows) ? rows : [])
+    .flatMap((row) => [Number(row?.call?.iv), Number(row?.put?.iv)])
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (!ivValues.length) return null;
+  return ivValues.reduce((sum, v) => sum + v, 0) / ivValues.length;
+};
 
 useEffect(() => {
   let isMounted = true; // prevent state update after unmount
@@ -439,12 +478,17 @@ useEffect(() => {
         if (cachedChain.length > 0) {
           setChain(cachedChain);
           setAvailableExpiries(Array.isArray(cached.payload?.expiries) ? cached.payload.expiries : []);
-          if (!activeExpiry && cached.payload?.expiry) setActiveExpiry(cached.payload.expiry);
-          setMetrics(cached.payload?.market_metrics ? {
-            iv: parseFloat(cached.payload.market_metrics?.iv) || 0.42,
-            pcr: cached.payload.market_metrics?.p_c_ratio || 0.85,
-            skew: "Volatile"
-          } : { iv: 0.42, pcr: 0.85, skew: "Volatile" });
+          if (!activeExpiry) {
+            const nextExpiry = pickNearestExpiry(cached.payload?.expiries || [cached.payload?.expiry].filter(Boolean));
+            if (nextExpiry != null) setActiveExpiry(nextExpiry);
+          }
+          const cachedIv = Number(cached?.payload?.market_metrics?.iv);
+          const resolvedCachedIv = Number.isFinite(cachedIv) && cachedIv > 0 ? cachedIv : deriveIvFromChain(cachedChain) || 0;
+          setMetrics({
+            iv: resolvedCachedIv,
+            pcr: Number(cached?.payload?.market_metrics?.p_c_ratio) || 0,
+            skew: resolvedCachedIv > 0 ? "Live" : "Unavailable"
+          });
           setOptionsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));
         }
       }
@@ -478,8 +522,9 @@ useEffect(() => {
         setMarketStructureNote(data?.market_structure_note || inferredMarketStructureNote);
         setAvailableExpiries(Array.isArray(data.expiries) ? data.expiries : []);
 
-        if (!activeExpiry && data.expiry) {
-          setActiveExpiry(data.expiry); // 🔥 prevents flicker + duplicate fetch
+        if (!activeExpiry) {
+          const nextExpiry = pickNearestExpiry(data.expiries || [data.expiry].filter(Boolean));
+          if (nextExpiry != null) setActiveExpiry(nextExpiry); // default nearest available expiry
         }
 
         setChain(data.chain);
@@ -508,10 +553,13 @@ useEffect(() => {
         }
         syncActiveTradeSnapshots(activeAsset, data.chain, resolvedSpot || Number(spotPrices?.[activeAsset]) || null);
 
+        const chainIv = deriveIvFromChain(data.chain || []);
+        const responseIv = Number(data?.market_metrics?.iv);
+        const resolvedIv = Number.isFinite(responseIv) && responseIv > 0 ? responseIv : chainIv || 0;
         setMetrics({
-          iv: parseFloat(data?.market_metrics?.iv) || 0.42,
-          pcr: data?.market_metrics?.p_c_ratio || 0.85,
-          skew: "Volatile"
+          iv: resolvedIv,
+          pcr: Number(data?.market_metrics?.p_c_ratio) || 0,
+          skew: resolvedIv > 0 ? "Live" : "Unavailable"
         });
         setOptionsStale(Boolean(data?.stale || data?.unavailable));
         setOptionsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
@@ -733,8 +781,39 @@ useEffect(() => {
     : `Waiting for options data for ${activeAsset}.`;
 
   const activeSpot = Number(spotPrices?.[activeAsset] || 0);
+  const nearestStrikeValue = useMemo(() => {
+    const rows = Array.isArray(chain) ? chain : [];
+    if (!rows.length) return "";
+    const center = Number.isFinite(activeSpot) && activeSpot > 0 ? activeSpot : Number(rows[Math.floor(rows.length / 2)]?.strike || 0);
+    let best = rows[0];
+    let minDist = Math.abs(Number(rows[0]?.strike || 0) - center);
+    rows.forEach((row) => {
+      const strike = Number(row?.strike || 0);
+      const d = Math.abs(strike - center);
+      if (d < minDist) {
+        minDist = d;
+        best = row;
+      }
+    });
+    return String(best?.strike ?? "");
+  }, [chain, activeSpot]);
+
+  useEffect(() => {
+    if (!nearestStrikeValue) return;
+    if (!selectedStrike) {
+      setSelectedStrike(nearestStrikeValue);
+      return;
+    }
+    const exists = (chain || []).some((row) => String(row?.strike) === String(selectedStrike));
+    if (!exists) setSelectedStrike(nearestStrikeValue);
+  }, [nearestStrikeValue, selectedStrike, chain]);
+
   const filteredChain = useMemo(() => {
     if (!Array.isArray(chain) || chain.length === 0) return [];
+    if (selectedStrike) {
+      const picked = chain.filter((row) => String(row?.strike) === String(selectedStrike));
+      if (picked.length) return picked;
+    }
     if (!Number.isFinite(activeSpot) || activeSpot <= 0 || strikeWindow === "all") return chain;
     const bandPct = strikeWindow === "tight" ? 0.1 : strikeWindow === "medium" ? 0.2 : 0.35;
     return chain.filter((row) => {
@@ -742,7 +821,7 @@ useEffect(() => {
       if (!Number.isFinite(strike) || strike <= 0) return false;
       return Math.abs(strike - activeSpot) / activeSpot <= bandPct;
     });
-  }, [chain, strikeWindow, activeSpot]);
+  }, [chain, strikeWindow, activeSpot, selectedStrike]);
 
   const greekSummary = useMemo(() => {
     const totals = { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 };
@@ -793,17 +872,62 @@ useEffect(() => {
   const hasPortfolioGreeks = Object.values(greekSummary).some((v) => Math.abs(Number(v) || 0) > 1e-6);
   const displayGreeks = hasActiveTrades && hasPortfolioGreeks ? greekSummary : marketGreekSummary;
 
+  useEffect(() => {
+    const expiries = (availableExpiries || []).slice(0, 6);
+    if (!expiries.length) return;
+    let cancelled = false;
+    const run = async () => {
+      for (const expiryTs of expiries) {
+        const cacheKey = `${String(activeAsset || "").toUpperCase()}:${expiryTs}`;
+        const state = termStructureFetchStateRef.current;
+        const lastAt = Number(state.lastFetchedAt[cacheKey] || 0);
+        if (state.inFlight.has(cacheKey) || Date.now() - lastAt < TERM_STRUCTURE_REFRESH_MS) continue;
+        state.inFlight.add(cacheKey);
+        state.lastFetchedAt[cacheKey] = Date.now();
+        try {
+          const res = await fetch(`${BACKEND_URL}/options/crypto`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ currency: activeAsset, expiry: expiryTs })
+          });
+          if (!res.ok) continue;
+          const payload = await res.json();
+          if (cancelled) return;
+          const iv = Number(payload?.market_metrics?.iv);
+          const chainIv = deriveIvFromChain(payload?.chain || []);
+          const resolvedIv = Number.isFinite(iv) && iv > 0 ? iv : chainIv;
+          if (Number.isFinite(resolvedIv) && resolvedIv > 0) {
+            setTermIvByExpiry((prev) => ({ ...prev, [String(expiryTs)]: Number(resolvedIv) }));
+          }
+        } catch {
+          // silent fallback to available data
+        } finally {
+          state.inFlight.delete(cacheKey);
+        }
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAsset, availableExpiries]);
+
   const termStructureRows = useMemo(() => {
+    const liveBaseIv = Number(metrics?.iv);
     return (availableExpiries || []).map((expiryTs) => {
       const days = Math.max(1, Math.round((Number(expiryTs) * 1000 - Date.now()) / (24 * 60 * 60 * 1000)));
-      const impliedVol = Number(metrics?.iv || 0) * (1 + Math.min(days, 120) / 1200);
+      const mappedIv = Number(termIvByExpiry?.[String(expiryTs)]);
+      const impliedVol =
+        Number.isFinite(mappedIv) && mappedIv > 0
+          ? mappedIv
+          : (Number.isFinite(liveBaseIv) && liveBaseIv > 0 ? liveBaseIv : 0);
       return {
         expiryTs,
         days,
         impliedVol
       };
     }).sort((a, b) => a.days - b.days);
-  }, [availableExpiries, metrics?.iv]);
+  }, [availableExpiries, metrics?.iv, termIvByExpiry]);
 
   const upcomingEarningsForAsset = useMemo(() => {
     const symbol = String(activeAsset || "").toUpperCase();

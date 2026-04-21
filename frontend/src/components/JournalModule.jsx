@@ -60,6 +60,7 @@ export function JournalModule({
     emotion: "all",
     search: ""
   });
+  const [expandedExecutionGroups, setExpandedExecutionGroups] = useState({});
 
   useEffect(() => {
     const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
@@ -787,12 +788,38 @@ export function JournalModule({
   );
 
   const recentRowsPerPage = 10;
-  const recentTotalPages = Math.max(1, Math.ceil(executionRows.length / recentRowsPerPage));
+  const groupedExecutionRows = useMemo(() => {
+    if (!Array.isArray(executionRows) || executionRows.length === 0) return [];
+    const grouped = [];
+    let current = null;
+    executionRows.forEach((row) => {
+      const asset = String(row?.asset || "").trim().toUpperCase();
+      if (!current || current.asset !== asset) {
+        if (current) grouped.push(current);
+        current = {
+          key: `${asset}::${row?.id || row?.clientId || Math.random()}`,
+          asset,
+          header: row,
+          items: [row]
+        };
+      } else {
+        current.items.push(row);
+      }
+    });
+    if (current) grouped.push(current);
+    return grouped;
+  }, [executionRows]);
+
+  const recentTotalPages = Math.max(1, Math.ceil(groupedExecutionRows.length / recentRowsPerPage));
   const safeRecentPage = Math.min(recentPage, recentTotalPages);
-  const pagedExecutionRows = executionRows.slice(
+  const pagedExecutionRows = groupedExecutionRows.slice(
     (safeRecentPage - 1) * recentRowsPerPage,
     safeRecentPage * recentRowsPerPage
   );
+
+  useEffect(() => {
+    setExpandedExecutionGroups({});
+  }, [safeRecentPage, executionRows.length]);
 
   const frequentTradedSymbols = analytics.tradedAssetsReport
     .filter((row) => row.tradeCount > 0)
@@ -1089,34 +1116,93 @@ export function JournalModule({
       <div className="watchlist-panel glass">
         <div className="section-header">
           <h2>Trade Entry Journal</h2>
+          <div className="asset-count">Structured notes with strategy, regime, and review context</div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px", marginBottom: "10px" }}>
-          <input className="search-input" placeholder="Symbol" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} />
-          <input className="search-input" placeholder="Strategy type" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} />
-          <input className="search-input" placeholder="Setup tag" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} />
-          <input className="search-input" placeholder="Market regime" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} />
-          <select className="search-input" value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
-            <option value="intraday">Intraday</option>
-            <option value="swing">Swing</option>
-            <option value="position">Position</option>
-          </select>
-          <select className="search-input" value={entryDraft.emotion} onChange={(e) => setEntryDraft((p) => ({ ...p, emotion: e.target.value }))}>
-            <option value="neutral">Neutral</option>
-            <option value="confident">Confident</option>
-            <option value="fearful">Fearful</option>
-            <option value="fomo">FOMO</option>
-            <option value="disciplined">Disciplined</option>
-          </select>
-          <input className="search-input" type="number" min="1" max="10" placeholder="Confidence (1-10)" value={entryDraft.confidence} onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) || 5 }))} />
-          <input className="search-input" placeholder="Chart / screenshot link" value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
-          <input className="search-input" placeholder="Mistake category" value={entryDraft.mistakeCategory} onChange={(e) => setEntryDraft((p) => ({ ...p, mistakeCategory: e.target.value }))} />
-          <input className="search-input" placeholder="What I learned" value={entryDraft.learned} onChange={(e) => setEntryDraft((p) => ({ ...p, learned: e.target.value }))} />
+        <div className="journal-report-table-wrap" style={{ marginBottom: "10px" }}>
+          <table className="journal-report-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Strategy</th>
+                <th>Setup Tag</th>
+                <th>Market Regime</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. BTC" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} />
+                </td>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Breakout" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} />
+                </td>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Pullback" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} />
+                </td>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Risk-on" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} />
+                </td>
+              </tr>
+              <tr>
+                <th>Timeframe</th>
+                <th>Emotion</th>
+                <th>Confidence</th>
+                <th>Chart Link</th>
+              </tr>
+              <tr>
+                <td>
+                  <select className="search-input" style={{ width: "100%" }} value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
+                    <option value="intraday">Intraday</option>
+                    <option value="swing">Swing</option>
+                    <option value="position">Position</option>
+                  </select>
+                </td>
+                <td>
+                  <select className="search-input" style={{ width: "100%" }} value={entryDraft.emotion} onChange={(e) => setEntryDraft((p) => ({ ...p, emotion: e.target.value }))}>
+                    <option value="neutral">Neutral</option>
+                    <option value="confident">Confident</option>
+                    <option value="fearful">Fearful</option>
+                    <option value="fomo">FOMO</option>
+                    <option value="disciplined">Disciplined</option>
+                  </select>
+                </td>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} type="number" min="1" max="10" placeholder="1-10" value={entryDraft.confidence} onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) || 5 }))} />
+                </td>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="URL / screenshot" value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
+                </td>
+              </tr>
+              <tr>
+                <th>Mistake Category</th>
+                <th colSpan={3}>What I Learned</th>
+              </tr>
+              <tr>
+                <td>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Oversized" value={entryDraft.mistakeCategory} onChange={(e) => setEntryDraft((p) => ({ ...p, mistakeCategory: e.target.value }))} />
+                </td>
+                <td colSpan={3}>
+                  <input className="search-input" style={{ width: "100%" }} placeholder="Key lesson from this setup" value={entryDraft.learned} onChange={(e) => setEntryDraft((p) => ({ ...p, learned: e.target.value }))} />
+                </td>
+              </tr>
+              <tr>
+                <th colSpan={2}>Pre-Trade Thesis</th>
+                <th colSpan={2}>Post-Trade Review</th>
+              </tr>
+              <tr>
+                <td colSpan={2}>
+                  <textarea className="search-input" style={{ width: "100%" }} rows={3} placeholder="Why this trade made sense before entry" value={entryDraft.preThesis} onChange={(e) => setEntryDraft((p) => ({ ...p, preThesis: e.target.value }))} />
+                </td>
+                <td colSpan={2}>
+                  <textarea className="search-input" style={{ width: "100%" }} rows={3} placeholder="What happened and what to improve next" value={entryDraft.postReview} onChange={(e) => setEntryDraft((p) => ({ ...p, postReview: e.target.value }))} />
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "10px" }}>
-          <textarea className="search-input" rows={3} placeholder="Pre-trade thesis" value={entryDraft.preThesis} onChange={(e) => setEntryDraft((p) => ({ ...p, preThesis: e.target.value }))} />
-          <textarea className="search-input" rows={3} placeholder="Post-trade review" value={entryDraft.postReview} onChange={(e) => setEntryDraft((p) => ({ ...p, postReview: e.target.value }))} />
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button className="pagination-button" onClick={addJournalEntry}>Save Journal Entry</button>
         </div>
-        <button className="pagination-button" onClick={addJournalEntry}>Save Journal Entry</button>
       </div>
 
       <div className="watchlist-panel glass">
@@ -1160,23 +1246,62 @@ export function JournalModule({
         <div className="watchlist-panel glass">
           <div className="section-header">
             <h2>Recent Executions</h2>
-            <div className="asset-count">{executionRows.length} Records</div>
+            <div className="asset-count">{executionRows.length} Records · {groupedExecutionRows.length} Rows</div>
           </div>
           <div className="trade-list">
             {pagedExecutionRows.length > 0 ? (
-              pagedExecutionRows.map((trade) => (
-                <div key={trade.clientId || trade.id} className="trade-item">
-                  <div className="trade-date greek">{trade.executionDate}</div>
-                  <div className="trade-asset" style={{fontWeight: 700}}>{trade.asset}</div>
-                  <div className={`trade-side ${trade.type === "BUY" ? "positive" : "negative"}`}>{trade.type}</div>
-                  <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
-                  <div className="trade-details">
-                    <div className="trade-meta">
-                      {trade.type === "BUY" ? "" : "Proceeds "}{formatValue(Number(trade.notional) || 0, true)}
+              pagedExecutionRows.map((group) => {
+                const trade = group.header;
+                const isGrouped = (group.items || []).length > 1;
+                const expanded = Boolean(expandedExecutionGroups[group.key]);
+                return (
+                <div key={group.key}>
+                  <div
+                    className="trade-item"
+                    style={isGrouped ? { cursor: "pointer", borderLeft: "2px solid rgba(56,189,248,0.35)" } : undefined}
+                    onClick={() => {
+                      if (!isGrouped) return;
+                      setExpandedExecutionGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }));
+                    }}
+                    title={isGrouped ? "Click to expand and view exact execution timestamps" : undefined}
+                  >
+                    <div className="trade-date greek">{trade.executionDate}</div>
+                    <div className="trade-asset" style={{fontWeight: 700}}>
+                      {trade.asset}
+                      {isGrouped ? (
+                        <span style={{ marginLeft: 8, fontSize: 11, color: "#7dd3fc" }}>
+                          {expanded ? "▼" : "▶"} {group.items.length} executions
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className={`trade-side ${trade.type === "BUY" ? "positive" : "negative"}`}>{trade.type}</div>
+                    <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
+                    <div className="trade-details">
+                      <div className="trade-meta">
+                        {trade.type === "BUY" ? "" : "Proceeds "}{formatValue(Number(trade.notional) || 0, true)}
+                        {isGrouped ? (
+                          <span style={{ marginLeft: 8, color: "#94a3b8" }}>
+                            (collapsible)
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
+                  {isGrouped && expanded ? (
+                    <div style={{ margin: "4px 0 10px 22px", paddingLeft: 10, borderLeft: "1px dashed rgba(148,163,184,0.25)", display: "grid", gap: 4 }}>
+                      {group.items.map((row) => {
+                        const exact = row?.executedAt ? new Date(row.executedAt).toLocaleString() : row.executionDate;
+                        return (
+                          <div key={`detail-${group.key}-${row.id || row.clientId || exact}`} style={{ fontSize: 12, color: "#94a3b8", display: "flex", justifyContent: "space-between", gap: 8 }}>
+                            <span>{exact}</span>
+                            <span>{row.type} · {formatValue(Number(row.notional) || 0, true)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
-              ))
+              )})
             ) : (
               <div className="empty-state" style={{padding: '40px', color: '#64748b'}}>
                 No trades recorded yet. Confirm an order to see it in your journal.

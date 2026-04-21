@@ -391,13 +391,15 @@ const OptionsStrategySimulator = ({
     
     return generateLegs.reduce((acc, leg) => {
       const mult = leg.side === 'long' ? 1 : -1;
+      const legQtyRaw = Number(leg?.qty);
+      const legQty = Number.isFinite(legQtyRaw) && legQtyRaw > 0 ? legQtyRaw : 1;
       if (leg.type === 'spot') {
-        acc.delta += 1 * mult; // Spot delta is 1
+        acc.delta += 1 * mult * legQty; // Spot delta is 1
       } else {
-        acc.delta += (leg.delta || 0) * mult;
-        acc.gamma += (leg.gamma || 0) * mult;
-        acc.theta += (leg.theta || 0) * mult;
-        acc.vega += (leg.vega || 0) * mult;
+        acc.delta += (leg.delta || 0) * mult * legQty;
+        acc.gamma += (leg.gamma || 0) * mult * legQty;
+        acc.theta += (leg.theta || 0) * mult * legQty;
+        acc.vega += (leg.vega || 0) * mult * legQty;
       }
       return acc;
     }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
@@ -427,7 +429,9 @@ const OptionsStrategySimulator = ({
       let entryPremium = 0;
       generateLegs.forEach(leg => {
         const mult = leg.side === 'long' ? 1 : -1;
-        entryPremium += (leg.entryPrice || 0) * mult;
+        const legQtyRaw = Number(leg?.qty);
+        const legQty = Number.isFinite(legQtyRaw) && legQtyRaw > 0 ? legQtyRaw : 1;
+        entryPremium += (leg.entryPrice || 0) * mult * legQty;
       });
 
       await onStrategyChosen({

@@ -72,10 +72,12 @@ export function calculateOptionPnL(trade, tradeChain, tradeSpot) {
   let totalTheta = 0;
 
   (trade.legs || []).forEach(leg => {
+    const legQtyRaw = Number(leg?.qty);
+    const legQty = Number.isFinite(legQtyRaw) && legQtyRaw > 0 ? legQtyRaw : 1;
     if (leg.type === 'spot') {
       const spot = tradeSpot || leg.strike || 0;
-      totalMark += leg.side === 'long' ? spot : -spot;
-      totalDelta += leg.side === 'long' ? 1 : -1;
+      totalMark += (leg.side === 'long' ? spot : -spot) * legQty;
+      totalDelta += (leg.side === 'long' ? 1 : -1) * legQty;
     } else {
       const row = findBestRow(leg?.strike);
       if (row) {
@@ -86,13 +88,13 @@ export function calculateOptionPnL(trade, tradeChain, tradeSpot) {
           const theta = Number(instr.theta) || 0;
           
           if (leg.side === 'long') {
-            totalMark += mark;
-            totalDelta += delta;
-            totalTheta += theta;
+            totalMark += mark * legQty;
+            totalDelta += delta * legQty;
+            totalTheta += theta * legQty;
           } else {
-            totalMark -= mark;
-            totalDelta -= delta;
-            totalTheta -= theta;
+            totalMark -= mark * legQty;
+            totalDelta -= delta * legQty;
+            totalTheta -= theta * legQty;
           }
         }
       }
