@@ -2043,7 +2043,10 @@ const handleOptionTradeClosed = async (tradeId) => {
       )}
       <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header">
-          <h1 className="sidebar-brand">Zenin</h1>
+          <h1 className="sidebar-brand">
+            <span className="sidebar-brand-mark">Z</span>
+            <span className="sidebar-brand-text">Zenin</span>
+          </h1>
           <button
             className="sidebar-toggle-btn mobile-close-btn"
             onClick={() => setIsSidebarCollapsed((prev) => !prev)}
@@ -2064,42 +2067,38 @@ const handleOptionTradeClosed = async (tradeId) => {
               }}
               title={section}
             >
-              {isSidebarCollapsed ? (
-                <span className="nav-icon">{sectionIcon(section)}</span>
-              ) : (
-                <span className="nav-full">{section}</span>
-              )}
+              <span className="nav-icon">{sectionIcon(section)}</span>
+              <span className="nav-full">{section}</span>
             </button>
           ))}
         </nav>
 
-        <div style={{ padding: '0 16px', marginBottom: '8px', display: 'flex', justifyContent: 'center' }}>
-          <button 
-            onClick={toggleTheme}
-            style={{ 
-              background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)', 
-              color: '#e2e8f0', borderRadius: '50%', width: '40px', height: '40px', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem',
-              transition: 'all 0.2s'
-            }}
-            title="Dark mode enforced"
+        <div className="sidebar-bottom">
+          <button className="sidebar-theme-row" onClick={toggleTheme} title="Theme">
+            <span className="sidebar-theme-left">
+              <span className="sidebar-theme-icon">◔</span>
+              <span className="sidebar-theme-label">Theme</span>
+            </span>
+            <span className="sidebar-theme-chevron">›</span>
+          </button>
+
+          <button
+            className="sidebar-footer settings-launcher"
+            onClick={() => setIsSettingsOpen(true)}
+            title="Open settings"
           >
-            🌙
+            <div className="user-icon">
+              {String(userEmail || "U").trim().charAt(0).toUpperCase() || "U"}
+            </div>
+            <div className="sidebar-account-meta">
+              <span className="sidebar-footer-email" title={userEmail}>
+                {userEmail}
+              </span>
+              <span className="sidebar-plan-label">Premium Plan</span>
+            </div>
+            <span className="sidebar-account-chevron">⌄</span>
           </button>
         </div>
-
-        <button
-          className="sidebar-footer settings-launcher"
-          onClick={() => setIsSettingsOpen(true)}
-          title="Open settings"
-        >
-          <div className="user-icon">
-            👤
-          </div>
-          <span className="sidebar-footer-email" title={userEmail}>
-            {userEmail}
-          </span>
-        </button>
 
       </aside>
 

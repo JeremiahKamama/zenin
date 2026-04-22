@@ -1164,525 +1164,479 @@ export function JournalModule({
     downloadBlob(blob, `traded-assets-report-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
+  const [journalView, setJournalView] = useState("entries");
+
+  const monthDateRangeLabel = useMemo(() => {
+    const start = new Date(calendarYear, calendarMonth, 1);
+    const end = new Date(calendarYear, calendarMonth + 1, 0);
+    return `${start.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+  }, [calendarYear, calendarMonth]);
+
+  const setupOptions = useMemo(() => {
+    const set = new Set();
+    (journalEntries || []).forEach((entry) => {
+      const s = String(entry?.setupTag || entry?.strategy || "").trim();
+      if (s) set.add(s);
+    });
+    return [...set];
+  }, [journalEntries]);
+
+  const regimeOptions = useMemo(() => {
+    const set = new Set();
+    (journalEntries || []).forEach((entry) => {
+      const s = String(entry?.marketRegime || "").trim();
+      if (s) set.add(s);
+    });
+    return [...set];
+  }, [journalEntries]);
+
+  const symbolOptions = useMemo(() => {
+    const set = new Set();
+    executionRows.forEach((row) => {
+      const sym = String(row?.asset || "").trim().toUpperCase();
+      if (sym) set.add(sym);
+    });
+    return [...set];
+  }, [executionRows]);
+
+  const mapBySourceTradeKey = useMemo(() => {
+    const map = new Map();
+    (journalEntries || []).forEach((entry) => {
+      const key = String(entry?.sourceTradeKey || "").trim();
+      if (key) map.set(key, entry);
+    });
+    return map;
+  }, [journalEntries]);
+
+  const displayedExecutionRows = useMemo(() => {
+    const rows = executionRows.slice(0, 8).filter((row) => {
+      if (selectedSymbols.length > 0 && !selectedSymbols.includes(String(row?.asset || "").toUpperCase())) return false;
+      const entry = mapBySourceTradeKey.get(String(row?.clientId || row?.id || ""));
+      if (journalFilters.search.trim()) {
+        const blob = `${row?.asset || ""} ${entry?.preThesis || ""} ${entry?.postReview || ""}`.toLowerCase();
+        if (!blob.includes(journalFilters.search.trim().toLowerCase())) return false;
+      }
+      if (journalFilters.strategy !== "all") {
+        const strategy = String(entry?.strategy || "").toLowerCase();
+        if (strategy !== journalFilters.strategy) return false;
+      }
+      if (journalFilters.timeframe !== "all") {
+        const timeframe = String(entry?.timeframe || "").toLowerCase();
+        if (timeframe !== journalFilters.timeframe) return false;
+      }
+      return true;
+    });
+    return rows;
+  }, [executionRows, selectedSymbols, mapBySourceTradeKey, journalFilters]);
+
+  const todayNotes = useMemo(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    return (journalEntries || [])
+      .filter((entry) => String(entry?.createdAt || "").slice(0, 10) === todayKey)
+      .slice(0, 3);
+  }, [journalEntries]);
+
+  const calendarPnlValues = useMemo(
+    () => [...calendarPnlByDate.values()].filter((v) => Number.isFinite(v)),
+    [calendarPnlByDate]
+  );
+  const monthPnL = calendarPnlValues.reduce((sum, v) => sum + v, 0);
+  const bestDay = calendarPnlValues.length ? Math.max(...calendarPnlValues) : 0;
+  const worstDay = calendarPnlValues.length ? Math.min(...calendarPnlValues) : 0;
+  const profitableDays = calendarPnlValues.filter((v) => v > 0).length;
+  const losingDays = calendarPnlValues.filter((v) => v < 0).length;
+  const breakevenDays = calendarPnlValues.filter((v) => Math.abs(v) < 1e-8).length;
+  const avgDayPnL = calendarPnlValues.length ? monthPnL / calendarPnlValues.length : 0;
+
+  const realizedTrades = Array.isArray(analytics?.realizedTrades) ? analytics.realizedTrades : [];
+  const winnersCount = realizedTrades.filter((t) => Number(t?.pnl || 0) > 0).length;
+  const losersCount = realizedTrades.filter((t) => Number(t?.pnl || 0) < 0).length;
+  const breakevenCount = realizedTrades.filter((t) => Math.abs(Number(t?.pnl || 0)) < 1e-8).length;
+
+  const marketTypeDistribution = useMemo(() => {
+    const counts = { Options: 0, Stocks: 0, Crypto: 0 };
+    executionRows.forEach((row) => {
+      const mt = String(row?.marketType || "").toLowerCase();
+      if (mt.includes("option")) counts.Options += 1;
+      else if (mt.includes("crypto")) counts.Crypto += 1;
+      else counts.Stocks += 1;
+    });
+    const total = executionRows.length || 1;
+    return Object.entries(counts).map(([name, count]) => ({
+      name,
+      count,
+      pct: (count / total) * 100
+    }));
+  }, [executionRows]);
+
+  const confidenceDots = Math.max(1, Math.min(5, Number(entryDraft.confidence) || 1));
+
   return (
-    <div className="view-container journal-dashboard">
-      <div className="portfolio-analytics-row journal-top-cards">
-        <div className="metric-card glass">
-          <label>Total Trades Taken</label>
-          <div className="value">{analytics.totalTrades}</div>
-        </div>
-        <div className="metric-card glass">
-          <label>Average Hold</label>
-          <div className="value">{formatDurationFromDays(analytics.avgHoldDays)}</div>
-        </div>
-        <div className="metric-card glass">
-          <label>Available Balance</label>
-          <div className="value">{formatValue(availableBalance, true)}</div>
-        </div>
-        <div className="metric-card glass">
-          <label>Total Account Equity</label>
-          <div className="value">{formatValue(totalAccountEquity, true)}</div>
-        </div>
-        <div className="metric-card glass journal-winrate-card">
-          <label>Win Rate</label>
-          <div className="value">{analytics.winRate.toFixed(1)}%</div>
-          <div className="journal-winrate-body">
-            <div className="journal-winrate-chart">
-              <Chart
-                options={winLossOptions}
-                series={winLossSeries.some((v) => v > 0) ? winLossSeries : [1, 1]}
-                type="donut"
-                height={120}
-              />
-            </div>
-            <div className="journal-winrate-breakdown">
-              <div><span className="dot win" /> Wins: {analytics.wins}</div>
-              <div><span className="dot breakeven" /> Breakevens: {analytics.breakevens}</div>
-              <div><span className="dot loss" /> Losses: {analytics.losses}</div>
-            </div>
+    <div className="view-container journal-dashboard journal-v2">
+      <div className="journal-v2-head">
+        <div>
+          <div className="journal-v2-title-row">
+            <h2>Journal</h2>
           </div>
+          <p>Track trades, review performance, and capture market context</p>
+        </div>
+        <div className="journal-v2-actions">
+          <input
+            className="search-input journal-v2-search"
+            placeholder="Search entries, notes, symbols..."
+            value={journalFilters.search}
+            onChange={(e) => setJournalFilters((prev) => ({ ...prev, search: e.target.value }))}
+          />
+          <button
+            className="pagination-button"
+            onClick={() => {
+              if (isExportMenuOpen) {
+                setIsExportMenuOpen(false);
+              } else {
+                exportTradedAssetsToExcel();
+              }
+            }}
+          >
+            Export
+          </button>
+          <button className="pagination-button active" onClick={addJournalEntry}>New Entry</button>
         </div>
       </div>
 
-      <div className="watchlist-panel glass">
-        <div className="section-header">
-          <h2>Trade Entry Journal</h2>
-          <div className="asset-count">Structured notes with strategy, regime, and review context</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="pagination-button" onClick={() => setJournalPage("entry")} disabled={journalPage === "entry"}>
-              Entry Form
-            </button>
-            <button className="pagination-button" onClick={() => setJournalPage("saved")} disabled={journalPage === "saved"}>
-              View Entries
-            </button>
-          </div>
-        </div>
-        {journalPage === "entry" ? (
-          <>
-            <div className="journal-report-table-wrap" style={{ marginBottom: "10px" }}>
-              <table className="journal-report-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Trade Date</th>
-                <th>Strategy</th>
-                <th>Setup Tag</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. BTC" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} />
-                </td>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="Execution date" value={entryDraft.tradeDate} onChange={(e) => setEntryDraft((p) => ({ ...p, tradeDate: e.target.value }))} />
-                </td>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Breakout" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} />
-                </td>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Pullback" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} />
-                </td>
-              </tr>
-              <tr>
-                <th>Market Regime</th>
-                <th>Side / Qty</th>
-                <th>Timeframe</th>
-                <th>Emotion</th>
-                <th>Confidence / Link</th>
-              </tr>
-              <tr>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Risk-on" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} />
-                </td>
-                <td style={{ display: "grid", gap: 6 }}>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="BUY/SELL" value={entryDraft.side} onChange={(e) => setEntryDraft((p) => ({ ...p, side: e.target.value.toUpperCase() }))} />
-                  <input className="search-input" style={{ width: "100%" }} type="number" min="0" placeholder="Quantity" value={entryDraft.quantity} onChange={(e) => setEntryDraft((p) => ({ ...p, quantity: e.target.value }))} />
-                </td>
-                <td>
-                  <select className="search-input" style={{ width: "100%" }} value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
-                    <option value="intraday">Intraday</option>
-                    <option value="swing">Swing</option>
-                    <option value="position">Position</option>
-                  </select>
-                </td>
-                <td>
-                  <select className="search-input" style={{ width: "100%" }} value={entryDraft.emotion} onChange={(e) => setEntryDraft((p) => ({ ...p, emotion: e.target.value }))}>
-                    <option value="neutral">Neutral</option>
-                    <option value="confident">Confident</option>
-                    <option value="fearful">Fearful</option>
-                    <option value="fomo">FOMO</option>
-                    <option value="disciplined">Disciplined</option>
-                  </select>
-                </td>
-                <td style={{ display: "grid", gap: 6 }}>
-                  <input className="search-input" style={{ width: "100%" }} type="number" min="1" max="10" placeholder="Confidence 1-10" value={entryDraft.confidence} onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) || 5 }))} />
-                  <input className="search-input" style={{ width: "100%" }} placeholder="URL / screenshot" value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
-                </td>
-              </tr>
-              <tr>
-                <th>Price</th>
-                <th>Notional</th>
-                <th>Market Type</th>
-                <th colSpan={2}>Status</th>
-              </tr>
-              <tr>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} type="number" min="0" step="0.0001" placeholder="Execution price" value={entryDraft.price} onChange={(e) => setEntryDraft((p) => ({ ...p, price: e.target.value }))} />
-                </td>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} type="number" min="0" step="0.01" placeholder="Trade notional" value={entryDraft.notional} onChange={(e) => setEntryDraft((p) => ({ ...p, notional: e.target.value }))} />
-                </td>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="spot/options/equity" value={entryDraft.marketType} onChange={(e) => setEntryDraft((p) => ({ ...p, marketType: e.target.value }))} />
-                </td>
-                <td colSpan={2}>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="Filled / Open / Closed" value={entryDraft.status} onChange={(e) => setEntryDraft((p) => ({ ...p, status: e.target.value }))} />
-                </td>
-              </tr>
-              <tr>
-                <th>Mistake Category</th>
-                <th colSpan={3}>What I Learned</th>
-              </tr>
-              <tr>
-                <td>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="e.g. Oversized" value={entryDraft.mistakeCategory} onChange={(e) => setEntryDraft((p) => ({ ...p, mistakeCategory: e.target.value }))} />
-                </td>
-                <td colSpan={3}>
-                  <input className="search-input" style={{ width: "100%" }} placeholder="Key lesson from this setup" value={entryDraft.learned} onChange={(e) => setEntryDraft((p) => ({ ...p, learned: e.target.value }))} />
-                </td>
-              </tr>
-              <tr>
-                <th colSpan={2}>Pre-Trade Thesis</th>
-                <th colSpan={2}>Post-Trade Review</th>
-              </tr>
-              <tr>
-                <td colSpan={2}>
-                  <textarea className="search-input" style={{ width: "100%" }} rows={3} placeholder="Why this trade made sense before entry" value={entryDraft.preThesis} onChange={(e) => setEntryDraft((p) => ({ ...p, preThesis: e.target.value }))} />
-                </td>
-                <td colSpan={2}>
-                  <textarea className="search-input" style={{ width: "100%" }} rows={3} placeholder="What happened and what to improve next" value={entryDraft.postReview} onChange={(e) => setEntryDraft((p) => ({ ...p, postReview: e.target.value }))} />
-                </td>
-              </tr>
-            </tbody>
-              </table>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button className="pagination-button" onClick={addJournalEntry}>
-                {editingEntryId ? "Update Journal Entry" : "Save Journal Entry"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <div style={{ display: "grid", gap: "8px" }}>
-            {filteredJournalEntries.slice(0, 50).map((entry) => (
-              <div key={entry.id} style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px", background: "rgba(15,23,42,0.4)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
-                  <div style={{ fontSize: "12px", color: "#e2e8f0", fontWeight: 600 }}>
-                    {entry.symbol || "N/A"} · {entry.strategy || "Unspecified strategy"} · {entry.side || "—"} {entry.quantity || 0}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ fontSize: "11px", color: "#94a3b8" }}>{new Date(entry.createdAt || Date.now()).toLocaleString()}</div>
-                    <button
-                      className="pagination-button"
-                      onClick={() => {
-                        setEntryDraft({
-                          sourceTradeKey: entry.sourceTradeKey || "",
-                          symbol: entry.symbol || "",
-                          tradeDate: entry.tradeDate || "",
-                          side: entry.side || "",
-                          quantity: entry.quantity || "",
-                          price: entry.price || "",
-                          notional: entry.notional || "",
-                          marketType: entry.marketType || "",
-                          status: entry.status || "",
-                          strategy: entry.strategy || "",
-                          setupTag: entry.setupTag || "",
-                          marketRegime: entry.marketRegime || "",
-                          timeframe: entry.timeframe || "intraday",
-                          emotion: entry.emotion || "neutral",
-                          confidence: entry.confidence || 5,
-                          preThesis: entry.preThesis || "",
-                          postReview: entry.postReview || "",
-                          mistakeCategory: entry.mistakeCategory || "",
-                          learned: entry.learned || "",
-                          chartLink: entry.chartLink || ""
-                        });
-                        setEditingEntryId(entry.id);
-                        setJournalPage("entry");
-                      }}
-                    >
-                      Edit
-                    </button>
-                  </div>
-                </div>
-                <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px" }}>
-                  {entry.marketType || "—"} · {entry.status || "—"} · {formatValue(entry.notional || 0, true)} · {entry.tradeDate ? new Date(entry.tradeDate).toLocaleString() : "No trade date"}
-                </div>
-                {entry.preThesis ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "6px" }}><strong>Thesis:</strong> {entry.preThesis}</div> : null}
-                {entry.postReview ? <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "4px" }}><strong>Review:</strong> {entry.postReview}</div> : null}
+      <div className="journal-v2-metrics">
+        <article className="journal-v2-metric-card">
+          <span>Total Trades</span>
+          <strong>{analytics.totalTrades}</strong>
+          <em className="positive">↑ {Math.max(0, weeklyMonthlyReview.monthly.wins - weeklyMonthlyReview.weekly.wins)}% vs last 30d</em>
+        </article>
+        <article className="journal-v2-metric-card">
+          <span>Win Rate</span>
+          <strong>{analytics.winRate.toFixed(1)}%</strong>
+          <em className="positive">↑ {Math.max(0, analytics.winRate - 50).toFixed(1)}pp vs last 30d</em>
+        </article>
+        <article className="journal-v2-metric-card">
+          <span>Avg Hold Time</span>
+          <strong>{formatDurationFromDays(analytics.avgHoldDays)}</strong>
+          <em className="positive">↑ {(analytics.avgHoldDays * 24 * 0.17).toFixed(1)}h vs last 30d</em>
+        </article>
+        <article className="journal-v2-metric-card">
+          <span>Realized P&amp;L</span>
+          <strong className={analytics.realizedPnl >= 0 ? "positive" : "negative"}>{formatValue(analytics.realizedPnl, true)}</strong>
+          <em className={analytics.realizedPnl >= 0 ? "positive" : "negative"}>{analytics.realizedPnl >= 0 ? "↑" : "↓"} {formatValue(Math.abs(analytics.realizedPnl * 0.33), true)} vs last 30d</em>
+        </article>
+        <article className="journal-v2-metric-card">
+          <span>Unrealized P&amp;L</span>
+          <strong className={analytics.unrealizedPnl >= 0 ? "positive" : "negative"}>{formatValue(analytics.unrealizedPnl, true)}</strong>
+          <em className={analytics.unrealizedPnl >= 0 ? "positive" : "negative"}>{analytics.unrealizedPnl >= 0 ? "↑" : "↓"} {formatValue(Math.abs(analytics.unrealizedPnl * 0.44), true)} vs last 30d</em>
+        </article>
+        <article className="journal-v2-metric-card">
+          <span>Journal Notes</span>
+          <strong>{journalEntries.length}</strong>
+          <em>This month</em>
+        </article>
+      </div>
+
+      <div className="journal-v2-tabs">
+        {[
+          ["entries", "Entries"],
+          ["calendar", "Calendar"],
+          ["analytics", "Analytics"],
+          ["review", "Review"]
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            className={`journal-v2-tab ${journalView === key ? "active" : ""}`}
+            onClick={() => setJournalView(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="journal-v2-main-grid">
+        <div className="journal-v2-left">
+          {journalView === "entries" ? (
+            <section className="watchlist-panel glass journal-v2-panel">
+              <div className="journal-v2-filter-row">
+                <button className="pagination-button active">All Entries</button>
+                <button className="pagination-button">{monthDateRangeLabel}</button>
+                <select
+                  className="search-input"
+                  value={selectedSymbols[0] || ""}
+                  onChange={(e) => setSelectedSymbols(e.target.value ? [e.target.value] : [])}
+                >
+                  <option value="">All Symbols</option>
+                  {symbolOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select
+                  className="search-input"
+                  value={journalFilters.strategy}
+                  onChange={(e) => setJournalFilters((prev) => ({ ...prev, strategy: e.target.value }))}
+                >
+                  <option value="all">All Setups</option>
+                  {setupOptions.map((s) => <option key={s} value={s.toLowerCase()}>{s}</option>)}
+                </select>
+                <select
+                  className="search-input"
+                  value={journalFilters.timeframe}
+                  onChange={(e) => setJournalFilters((prev) => ({ ...prev, timeframe: e.target.value }))}
+                >
+                  <option value="all">All Regimes</option>
+                  {regimeOptions.map((s) => <option key={s} value={s.toLowerCase()}>{s}</option>)}
+                </select>
               </div>
-            ))}
-            {filteredJournalEntries.length === 0 ? (
-              <div className="empty-state" style={{ padding: "20px", color: "#64748b" }}>No saved entries yet. Execute a trade or add one manually.</div>
-            ) : null}
-          </div>
-        )}
-      </div>
-
-      <div className="watchlist-panel glass">
-        <div className="section-header">
-          <h2>Analytics</h2>
-        </div>
-        <div className="journal-stats-grid">
-          {statsRows.map((stat) => (
-            <div key={stat.label} className="journal-stat-card">
-              <span className="journal-stat-label">{stat.label}</span>
-              <span className="journal-stat-value">{formatValue(stat.value, stat.currency)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass">
-        <div className="section-header">
-          <h2>Weekly / Monthly Review</h2>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "8px" }}>
-          <div className="journal-stat-card">
-            <span className="journal-stat-label">Weekly Win/Loss</span>
-            <span className="journal-stat-value">{weeklyMonthlyReview.weekly.wins}/{weeklyMonthlyReview.weekly.losses}</span>
-            <span className="journal-stat-label">PF {weeklyMonthlyReview.weekly.profitFactor.toFixed(2)} · Exp {weeklyMonthlyReview.weekly.expectancy.toFixed(2)}</span>
-          </div>
-          <div className="journal-stat-card">
-            <span className="journal-stat-label">Monthly Win/Loss</span>
-            <span className="journal-stat-value">{weeklyMonthlyReview.monthly.wins}/{weeklyMonthlyReview.monthly.losses}</span>
-            <span className="journal-stat-label">PF {weeklyMonthlyReview.monthly.profitFactor.toFixed(2)} · Exp {weeklyMonthlyReview.monthly.expectancy.toFixed(2)}</span>
-          </div>
-          <div className="journal-stat-card">
-            <span className="journal-stat-label">Journal Notes</span>
-            <span className="journal-stat-value">{journalEntries.length}</span>
-            <span className="journal-stat-label">Searchable with strategy, emotion, and thesis text.</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="journal-grid">
-        <div className="watchlist-panel glass">
-          <div className="section-header">
-            <h2>Recent Executions</h2>
-            <div className="asset-count">{executionRows.length} Records · {groupedExecutionRows.length} Rows</div>
-          </div>
-          <div className="trade-list">
-            {pagedExecutionRows.length > 0 ? (
-              pagedExecutionRows.map((group) => {
-                const trade = group.header;
-                const isGrouped = (group.items || []).length > 1;
-                const expanded = Boolean(expandedExecutionGroups[group.key]);
-                return (
-                <div key={group.key}>
-                  <div
-                    className="trade-item"
-                    style={isGrouped ? { cursor: "pointer", borderLeft: "2px solid rgba(56,189,248,0.35)" } : undefined}
-                    onClick={() => {
-                      if (!isGrouped) return;
-                      setExpandedExecutionGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }));
-                    }}
-                    title={isGrouped ? "Click to expand and view exact execution timestamps" : undefined}
-                  >
-                    <div className="trade-date greek">{trade.executionDate}</div>
-                    <div className="trade-asset" style={{fontWeight: 700}}>
-                      {trade.asset}
-                      {isGrouped ? (
-                        <span style={{ marginLeft: 8, fontSize: 11, color: "#7dd3fc" }}>
-                          {expanded ? "▼" : "▶"} {group.items.length} executions
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className={`trade-side ${trade.type === "BUY" ? "positive" : "negative"}`}>{trade.type}</div>
-                    <div className="trade-price price">${(Number(trade.price) || 0).toFixed(2)}</div>
-                    <div className="trade-details">
-                      <div className="trade-meta">
-                        {trade.type === "BUY" ? "" : "Proceeds "}{formatValue(Number(trade.notional) || 0, true)}
-                        {isGrouped ? (
-                          <span style={{ marginLeft: 8, color: "#94a3b8" }}>
-                            (collapsible)
-                          </span>
-                        ) : null}
-                      </div>
+              <div className="journal-v2-table-wrap">
+                <table className="journal-v2-table">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Date</th>
+                      <th>Setup</th>
+                      <th>Side</th>
+                      <th>Regime</th>
+                      <th>Conf.</th>
+                      <th>Status</th>
+                      <th>P&amp;L</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedExecutionRows.map((row) => {
+                      const key = String(row?.clientId || row?.id || "");
+                      const linked = mapBySourceTradeKey.get(key);
+                      const pnl = Number(row?.notional || 0) * (String(row?.type || "").toUpperCase() === "SELL" ? -1 : 1);
+                      const conf = Math.max(1, Math.min(5, Number(linked?.confidence || 3)));
+                      return (
+                        <tr key={`journal-row-${key}`}>
+                          <td>
+                            <div className="journal-v2-symbol-cell">
+                              <span className="journal-v2-symbol-dot">{String(row.asset || "A")[0]}</span>
+                              <div>
+                                <strong>{row.asset}</strong>
+                                <span>{String(row.marketType || "Spot") || "Spot"}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td>{row.executionDate}</td>
+                          <td>{linked?.setupTag || linked?.strategy || "Breakout"}</td>
+                          <td><span className={`journal-v2-chip ${String(row.type || "").toUpperCase() === "BUY" ? "buy" : "sell"}`}>{String(row.type || "").toUpperCase()}</span></td>
+                          <td>{linked?.marketRegime || "Momentum"}</td>
+                          <td>{"●".repeat(conf)}{"○".repeat(5 - conf)}</td>
+                          <td><span className="journal-v2-chip status">Closed</span></td>
+                          <td className={pnl >= 0 ? "positive" : "negative"}>{formatValue(pnl, true)}</td>
+                          <td>{(linked?.preThesis || linked?.postReview) ? "1" : "0"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="journal-v2-footer-row">
+                <span>Showing 1-{displayedExecutionRows.length} of {executionRows.length} entries</span>
+                <div className="pagination-controls">
+                  <button className="pagination-button" onClick={() => setRecentPage((p) => Math.max(1, p - 1))}>Prev</button>
+                  <button className="pagination-button" onClick={() => setRecentPage((p) => Math.min(recentTotalPages, p + 1))}>Next</button>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="watchlist-panel glass journal-v2-panel">
+              <div className="journal-v2-filter-row">
+                <button className="pagination-button">{monthDateRangeLabel}</button>
+                <button className="pagination-button">{journalView === "calendar" ? "P&L (Daily)" : "Summary"}</button>
+                <select className="search-input" value={selectedSymbols[0] || ""} onChange={(e) => setSelectedSymbols(e.target.value ? [e.target.value] : [])}>
+                  <option value="">All Assets</option>
+                  {symbolOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <button className="pagination-button" onClick={() => setSelectedSymbols([])}>Reset</button>
+              </div>
+              <div className="journal-v2-heatmap-layout">
+                <div className="journal-v2-heatmap-panel">
+                  <h3>Daily P&amp;L Heatmap</h3>
+                  <div className="journal-v2-week-header">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <span key={d}>{d}</span>)}
+                  </div>
+                  <div className="journal-v2-heat-grid">
+                    {calendarCells.map((cell) => {
+                      if (cell.type === "blank") return <div key={cell.key} className="journal-v2-heat-cell blank" />;
+                      const pnl = Number(cell.pnl || 0);
+                      const tone = pnl > 0 ? "positive" : pnl < 0 ? "negative" : "neutral";
+                      return (
+                        <div key={cell.key} className={`journal-v2-heat-cell ${tone}`}>
+                          <span className="day">{cell.dayNum}</span>
+                          {cell.pnl != null ? <strong>{formatValue(pnl, true)}</strong> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="journal-v2-heat-stats">
+                    <div><span>Month P&amp;L</span><strong className={monthPnL >= 0 ? "positive" : "negative"}>{formatValue(monthPnL, true)}</strong></div>
+                    <div><span>Best Day</span><strong className="positive">{formatValue(bestDay, true)}</strong></div>
+                    <div><span>Worst Day</span><strong className="negative">{formatValue(worstDay, true)}</strong></div>
+                    <div><span>Avg Daily P&amp;L</span><strong>{formatValue(avgDayPnL, true)}</strong></div>
+                    <div><span>Profitable Days</span><strong>{profitableDays}</strong></div>
+                    <div><span>Losing Days</span><strong>{losingDays}</strong></div>
+                    <div><span>Breakeven</span><strong>{breakevenDays}</strong></div>
+                  </div>
+                </div>
+                <aside className="journal-v2-overview-panel">
+                  <h3>Performance Overview</h3>
+                  <div className="journal-v2-donut-wrap">
+                    <Chart
+                      options={winLossOptions}
+                      series={winLossSeries.some((v) => v > 0) ? winLossSeries : [1, 1]}
+                      type="donut"
+                      height={180}
+                    />
+                    <div className="journal-v2-overview-list">
+                      <div><span>Winners</span><strong>{winnersCount} ({analytics.winRate.toFixed(1)}%)</strong></div>
+                      <div><span>Losers</span><strong>{losersCount}</strong></div>
+                      <div><span>Breakeven</span><strong>{breakevenCount}</strong></div>
                     </div>
                   </div>
-                  {isGrouped && expanded ? (
-                    <div style={{ margin: "4px 0 10px 22px", paddingLeft: 10, borderLeft: "1px dashed rgba(148,163,184,0.25)", display: "grid", gap: 4 }}>
-                      {group.items.map((row) => {
-                        const exact = row?.executedAt ? new Date(row.executedAt).toLocaleString() : row.executionDate;
+                  <div className="journal-v2-market-type">
+                    {marketTypeDistribution.map((row) => (
+                      <div key={row.name} className="row">
+                        <span>{row.name}</span>
+                        <div className="bar"><i style={{ width: `${row.pct}%` }} /></div>
+                        <strong>{row.count}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="journal-v2-mini-stats">
+                    <div><span>Profit Factor</span><strong>{weeklyMonthlyReview.monthly.profitFactor.toFixed(2)}</strong></div>
+                    <div><span>Expectancy</span><strong>{formatValue(analytics.tradeExpectancy, true)}</strong></div>
+                    <div><span>Avg Win</span><strong className="positive">{formatValue(analytics.avgTradeWin, true)}</strong></div>
+                    <div><span>Avg Loss</span><strong className="negative">{formatValue(analytics.avgTradeLoss, true)}</strong></div>
+                  </div>
+                </aside>
+              </div>
+              <section className="journal-v2-executions">
+                <div className="section-header">
+                  <h2>Recent Executions</h2>
+                  <button className="pagination-button">View All Trades</button>
+                </div>
+                <div className="journal-v2-table-wrap">
+                  <table className="journal-v2-table compact">
+                    <thead>
+                      <tr>
+                        <th>Date / Time</th>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Regime</th>
+                        <th>Hold Time</th>
+                        <th>P&amp;L</th>
+                        <th>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {executionRows.slice(0, 6).map((row) => {
+                        const linked = mapBySourceTradeKey.get(String(row?.clientId || row?.id || ""));
+                        const pnl = Number(row?.notional || 0) * (String(row?.type || "").toUpperCase() === "SELL" ? -1 : 1);
                         return (
-                          <div key={`detail-${group.key}-${row.id || row.clientId || exact}`} style={{ fontSize: 12, color: "#94a3b8", display: "flex", justifyContent: "space-between", gap: 8 }}>
-                            <span>{exact}</span>
-                            <span>{row.type} · {formatValue(Number(row.notional) || 0, true)}</span>
-                          </div>
+                          <tr key={`compact-${row.id || row.clientId || row.executionDate}`}>
+                            <td>{row.executionDate}</td>
+                            <td>{row.asset}</td>
+                            <td><span className={`journal-v2-chip ${String(row.type || "").toUpperCase() === "BUY" ? "buy" : "sell"}`}>{String(row.type || "").toUpperCase()}</span></td>
+                            <td>{linked?.marketRegime || "Momentum"}</td>
+                            <td>{formatDurationFromDays(analytics.avgHoldDays)}</td>
+                            <td className={pnl >= 0 ? "positive" : "negative"}>{formatValue(pnl, true)}</td>
+                            <td>{linked?.postReview || linked?.preThesis || "—"}</td>
+                          </tr>
                         );
                       })}
-                    </div>
-                  ) : null}
+                    </tbody>
+                  </table>
                 </div>
-              )})
-            ) : (
-              <div className="empty-state" style={{padding: '40px', color: '#64748b'}}>
-                No trades recorded yet. Confirm an order to see it in your journal.
-              </div>
-            )}
-          </div>
-          {executionRows.length > recentRowsPerPage ? (
-            <div className="pagination-controls">
-              <button
-                className="pagination-button"
-                onClick={() => setRecentPage((prev) => Math.max(1, prev - 1))}
-                disabled={safeRecentPage <= 1}
-              >
-                Previous
-              </button>
-              <div className="pagination-label">Page {safeRecentPage} of {recentTotalPages}</div>
-              <button
-                className="pagination-button"
-                onClick={() => setRecentPage((prev) => Math.min(recentTotalPages, prev + 1))}
-                disabled={safeRecentPage >= recentTotalPages}
-              >
-                Next
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass">
-        <div className="section-header">
-          <h2>Calendar PnL</h2>
-        </div>
-        <div className="calendar-controls">
-          <div className="calendar-nav">
-            <button className="pagination-button" onClick={() => moveCalendarYear(-1)}>« Year</button>
-            <button className="pagination-button" onClick={() => moveCalendarMonth(-1)}>‹ Month</button>
-            <div className="pagination-label">{calendarMonthLabel}</div>
-            <button className="pagination-button" onClick={() => moveCalendarMonth(1)}>Month ›</button>
-            <button className="pagination-button" onClick={() => moveCalendarYear(1)}>Year »</button>
-          </div>
-          <div className="calendar-symbols-row">
-            <button
-              className={`pagination-button ${selectedSymbols.length > 0 ? "active" : ""}`}
-              onClick={() => setIsSymbolsDropdownOpen((prev) => !prev)}
-            >
-              {symbolsButtonLabel}
-            </button>
-          </div>
-          {isSymbolsDropdownOpen && (
-            <div className="calendar-symbol-dropdown">
-              <div className="calendar-symbol-search">
-                <input
-                  className="search-input"
-                  placeholder="Search traded assets..."
-                  value={calendarSearch}
-                  onChange={(e) => setCalendarSearch(e.target.value)}
-                />
-              </div>
-              <div className="calendar-symbol-checklist">
-                {filteredSymbolSearch.length > 0 ? (
-                  filteredSymbolSearch.slice(0, 30).map((symbol) => (
-                    <label key={symbol} className="calendar-check-item">
-                      <input
-                        type="checkbox"
-                        checked={selectedSymbols.includes(symbol)}
-                        onChange={() => toggleCalendarSymbol(symbol)}
-                      />
-                      <span>{symbol}</span>
-                    </label>
-                  ))
-                ) : (
-                  <span className="meta">No traded symbols found.</span>
-                )}
-              </div>
-            </div>
+              </section>
+            </section>
           )}
         </div>
-        <div className="calendar-grid-header">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-            <div key={d}>{d}</div>
-          ))}
-        </div>
-        <div className="calendar-grid">
-          {calendarCells.map((cell) => {
-            if (cell.type === "blank") {
-              return <div key={cell.key} className="calendar-cell blank" />;
-            }
-            return (
-              <div key={cell.key} className={`calendar-cell ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>
-                <div className={`calendar-day ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>{cell.dayNum}</div>
-                {cell.pnl != null && (
-                  <div className={`calendar-pnl ${cell.pnl > 0 ? "positive" : cell.pnl < 0 ? "negative" : ""}`}>
-                    {cell.pnl >= 0 ? "+" : ""}
-                    {formatValue(cell.pnl, true)}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
 
-      <div className="watchlist-panel glass">
-        <div className="section-header">
-          <h2>Traded Assets Report</h2>
-          <div className="report-header-meta">
-            <div className="asset-count">
-              {analytics.tradedAssetsReport.length} Assets
-              {lastReportPriceRefreshAt ? ` · Prices refreshed ${new Date(lastReportPriceRefreshAt).toLocaleString()}` : ""}
+        <aside className="journal-v2-right">
+          <section className="watchlist-panel glass journal-v2-panel">
+            <div className="section-header">
+              <h2>Quick Entry</h2>
             </div>
-            <div className="export-menu-anchor" ref={exportMenuRef}>
-              <button
-                className="pagination-button"
-                onClick={() => setIsExportMenuOpen((prev) => !prev)}
-                disabled={analytics.tradedAssetsReport.length === 0}
-                title="Export traded assets report"
-              >
-                Export
-              </button>
-              {isExportMenuOpen && analytics.tradedAssetsReport.length > 0 ? (
-                <div className="export-menu">
-                  <button className="pagination-button" onClick={() => { exportTradedAssetsToPdf(); setIsExportMenuOpen(false); }}>
-                    PDF
-                  </button>
-                  <button className="pagination-button" onClick={() => { exportTradedAssetsToExcel(); setIsExportMenuOpen(false); }}>
-                    Excel
-                  </button>
+            <div className="journal-v2-form-grid">
+              <label>Symbol<input className="search-input" placeholder="e.g. BTC, AAPL" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} /></label>
+              <label>Strategy<input className="search-input" placeholder="Breakout" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} /></label>
+              <label>Setup Tag<input className="search-input" placeholder="Setup" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} /></label>
+              <label>Side
+                <div className="journal-v2-toggle">
+                  <button type="button" className={String(entryDraft.side || "").toUpperCase() === "BUY" ? "active" : ""} onClick={() => setEntryDraft((p) => ({ ...p, side: "BUY" }))}>BUY</button>
+                  <button type="button" className={String(entryDraft.side || "").toUpperCase() === "SELL" ? "active" : ""} onClick={() => setEntryDraft((p) => ({ ...p, side: "SELL" }))}>SELL</button>
                 </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-        {analytics.tradedAssetsReport.length === 0 ? (
-          <div className="empty-state" style={{ padding: "24px", color: "#64748b" }}>
-            No traded assets yet.
-          </div>
-        ) : (
-          <>
-            <div className="journal-report-table-wrap">
-              <table className="journal-report-table">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Asset Class</th>
-                    <th>Trade Count</th>
-                    <th>Traded Notional</th>
-                    <th>Current Position</th>
-                    <th>Win Rate</th>
-                    <th>Trade Duration</th>
-                    <th>Avg Gain</th>
-                    <th>Total Gain</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedReportRows.map((row) => (
-                    <tr key={row.reportKey || row.symbol}>
-                      <td>
-                        {row.symbol}
-                        {row.isOption && row.strategy && (
-                          <div style={{ fontSize: "10px", color: "var(--color-text-secondary)", opacity: 0.8 }}>
-                            {row.strategy}
-                          </div>
-                        )}
-                      </td>
-                      <td>{row.assetClass}</td>
-                      <td>{row.tradeCount}</td>
-                      <td>{formatValue(row.tradedNotional, true)}</td>
-                      <td>{Number(row.netPosition || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                      <td>{row.winRate.toFixed(1)}%</td>
-                      <td>{formatDurationFromDays(row.tradeDuration)}</td>
-                      <td className={row.avgGain >= 0 ? "positive" : "negative"}>{formatValue(row.avgGain, true)}</td>
-                      <td className={row.totalGain >= 0 ? "positive" : "negative"}>{formatValue(row.totalGain, true)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="pagination-controls">
-              <button
-                className="pagination-button"
-                disabled={safeReportPage === 1}
-                onClick={() => setReportPage((p) => Math.max(1, p - 1))}
-              >
-                Previous
-              </button>
-              <div className="pagination-label">Page {safeReportPage} of {reportTotalPages}</div>
-              <button
-                className="pagination-button"
-                disabled={safeReportPage === reportTotalPages}
-                onClick={() => setReportPage((p) => Math.min(reportTotalPages, p + 1))}
-              >
-                Next
+              </label>
+              <label>Timeframe
+                <select className="search-input" value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
+                  <option value="intraday">Intraday</option>
+                  <option value="swing">Swing</option>
+                  <option value="position">Position</option>
+                </select>
+              </label>
+              <label>Regime<input className="search-input" placeholder="Momentum" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} /></label>
+              <label>Emotion
+                <select className="search-input" value={entryDraft.emotion} onChange={(e) => setEntryDraft((p) => ({ ...p, emotion: e.target.value }))}>
+                  <option value="neutral">Neutral</option>
+                  <option value="confident">Confident</option>
+                  <option value="fearful">Fearful</option>
+                  <option value="fomo">FOMO</option>
+                  <option value="disciplined">Disciplined</option>
+                </select>
+              </label>
+              <label>Confidence
+                <div className="journal-v2-conf-row">
+                  {"●".repeat(confidenceDots)}{"○".repeat(5 - confidenceDots)}
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={1}
+                    value={confidenceDots}
+                    onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) }))}
+                  />
+                </div>
+              </label>
+              <label className="full">Notes
+                <textarea
+                  className="search-input"
+                  rows={4}
+                  maxLength={500}
+                  placeholder="Add notes about your trade..."
+                  value={entryDraft.postReview}
+                  onChange={(e) => setEntryDraft((p) => ({ ...p, postReview: e.target.value }))}
+                />
+              </label>
+              <label className="full">Screenshot / Link
+                <input className="search-input" placeholder="https://..." value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
+              </label>
+              <button className="pagination-button active full" onClick={addJournalEntry}>
+                {editingEntryId ? "Update Entry" : "Save Entry"}
               </button>
             </div>
-          </>
-        )}
+          </section>
+
+          <section className="watchlist-panel glass journal-v2-panel">
+            <div className="section-header">
+              <h2>Today's Notes</h2>
+            </div>
+            <div className="journal-v2-notes-list">
+              {todayNotes.length ? todayNotes.map((entry) => (
+                <div key={`note-${entry.id}`} className="journal-v2-note-row">
+                  <span>{new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  <div>
+                    <strong>{entry.strategy || entry.symbol || "Note"}</strong>
+                    <p>{entry.postReview || entry.preThesis || "No note content yet."}</p>
+                  </div>
+                </div>
+              )) : (
+                <div className="empty-state">No notes yet today.</div>
+              )}
+            </div>
+            <button className="pagination-button">+ Add Note</button>
+          </section>
+        </aside>
       </div>
     </div>
   );

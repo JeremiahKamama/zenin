@@ -24,7 +24,7 @@ export function PortfolioModule({
   const [selectedHolding, setSelectedHolding] = useState(null);
   const [benchmarkSymbol, setBenchmarkSymbol] = useState("SPY");
   const [selectedTaxLotMethod, setSelectedTaxLotMethod] = useState("hifo");
-  const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
+  const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
 
 // ✅ 1) compute portfolioValue first
 const portfolioValue = calculatePortfolioValue();
@@ -95,14 +95,19 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "#22c55e" : "#ef4444") : "#38bdf8";
 
   const chartData = useMemo(() => {
-    const pointCountMap = { "1D": 24, "1W": 7, "3M": 90, "1Y": 52, "YTD": 52, "5Y": 60, "MAX": 120 };
+    const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
     const points = pointCountMap[chartInterval] || 24;
     const now = Date.now();
     const start = (() => {
       if (chartInterval === "1D") return now - 24 * 60 * 60 * 1000;
       if (chartInterval === "1W") return now - 7 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "1M") return now - 30 * 24 * 60 * 60 * 1000;
       if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
       if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "ALL") {
+        const firstTradeTs = tradeTimeline[0]?.t;
+        return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
+      }
       if (chartInterval === "YTD") {
         const d = new Date(now);
         return new Date(d.getFullYear(), 0, 1).getTime();
@@ -490,456 +495,369 @@ const isProfitable = currentAccountEquity >= initialBalance;
     }).sort((a, b) => Math.abs(b.drift) - Math.abs(a.drift));
   }, [sortedHoldings]);
 
+  const formatMoney = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const formatSignedMoney = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `${num >= 0 ? "+" : "-"}$${Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const stablecoinSymbols = useMemo(
+    () => new Set(["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"]),
+    []
+  );
+
+  const exposureSummary = useMemo(() => {
+    const pickTop = (bucket) => exposureRows.find((row) => String(row.bucket || "").toLowerCase() === bucket) || null;
+    return {
+      sector: pickTop("sector"),
+      country: pickTop("country"),
+      currency: pickTop("currency")
+    };
+  }, [exposureRows]);
+
+  const bestPerformer = useMemo(() => {
+    const rows = Array.isArray(portfolio) ? portfolio : [];
+    if (!rows.length) return null;
+    return [...rows].sort((a, b) => Number(b?.priceChangePercent || 0) - Number(a?.priceChangePercent || 0))[0];
+  }, [portfolio]);
+
+  const holdingsTableRows = useMemo(() => {
+    const total = sortedHoldings.reduce((sum, row) => sum + Number(row?.positionValue || 0), 0);
+    return sortedHoldings.map((holding) => {
+      if (holding.kind === "spot") {
+        const item = holding.row;
+        const symbol = String(item?.symbol || "N/A").toUpperCase();
+        const quantity = Number(item?.quantity || 0);
+        const allocation = total > 0 ? (Number(holding.positionValue || 0) / total) * 100 : 0;
+        const isStable = stablecoinSymbols.has(symbol) || String(item?.type || "").toLowerCase() === "stablecoin";
+        const status = isStable ? "Cash" : "Hold";
+        return {
+          key: holding.key,
+          kind: "spot",
+          symbol,
+          name: item?.name || symbol,
+          allocation,
+          markValueMain: formatMoney(holding.positionValue),
+          markValueSub: `${quantity.toFixed(4)} ${symbol}`,
+          pnlMain: formatSignedMoney(holding.positionGain),
+          pnlSub: `${Number(item?.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(item?.priceChangePercent || 0).toFixed(2)}%`,
+          pnlPositive: Number(holding.positionGain || 0) >= 0,
+          status,
+          statusClass: status.toLowerCase(),
+          raw: item
+        };
+      }
+
+      const trade = holding.row;
+      const symbol = String(trade?.asset || "OPT").toUpperCase();
+      const qty = Number(trade?.qty || trade?.quantity || 0);
+      const allocation = total > 0 ? (Number(holding.positionValue || 0) / total) * 100 : 0;
+      const pnl = Number(holding.positionGain || 0);
+      const base = Math.abs(Number(trade?.netPremiumAtEntry || 0) * Math.max(1, qty));
+      const pct = base > 0 ? (pnl / base) * 100 : 0;
+      return {
+        key: holding.key,
+        kind: "options",
+        symbol,
+        name: trade?.strategy || "Options",
+        allocation,
+        markValueMain: formatMoney(holding.positionValue),
+        markValueSub: `${qty.toFixed(5)} Units`,
+        pnlMain: formatSignedMoney(pnl),
+        pnlSub: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+        pnlPositive: pnl >= 0,
+        status: "Options",
+        statusClass: "options",
+        raw: trade
+      };
+    });
+  }, [sortedHoldings, stablecoinSymbols]);
+
+  const recentActivityRows = useMemo(() => {
+    const rows = (Array.isArray(trades) ? trades : [])
+      .map((trade) => {
+        const ts = new Date(trade?.executedAt || trade?.date || 0).getTime();
+        const qty = Number(trade?.quantity || 0);
+        const notional = Number(trade?.notional || (Number(trade?.price || 0) * qty));
+        const symbol = String(trade?.asset || "Asset").toUpperCase();
+        const isSell = String(trade?.side || trade?.type || "").toLowerCase() === "sell";
+        return {
+          id: trade?.id || `${symbol}-${ts}`,
+          symbol,
+          side: isSell ? "Sell" : "Buy",
+          tone: isSell ? "sell" : "buy",
+          ts,
+          qty: Math.abs(qty),
+          notional: Number.isFinite(notional) ? Math.abs(notional) : 0
+        };
+      })
+      .filter((row) => Number.isFinite(row.ts) && row.ts > 0)
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 4);
+
+    const now = Date.now();
+    return rows.map((row) => {
+      const hours = Math.floor((now - row.ts) / (60 * 60 * 1000));
+      const when = hours >= 24 ? `${Math.floor(hours / 24)}d ago` : hours >= 1 ? `${hours}h ago` : "just now";
+      return { ...row, when };
+    });
+  }, [trades]);
+
+  const totalGainLoss = Number(calculatePortfolioGain?.() || 0);
+  const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
+  const cashWeight = currentAccountEquity > 0 ? (liveAvailableBalance / currentAccountEquity) * 100 : 0;
+
   return (
-    <div className="portfolio-module" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)", paddingBottom: "8px" }}>
-        <div className="portfolio-analytics-row" style={{ marginBottom: "16px" }}>
-                <div className="metric-card glass">
-                  <label>Total Account Equity</label>
-                  <div className="value">${currentAccountEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                  <div className={`change ${liveAvailableBalance >= 0 ? "positive" : "negative"}`}>
-                    Cash ${liveAvailableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
-                </div>
-
-                <div className="metric-card glass">
-                  <label>Best Performing</label>
-                  {portfolio.length > 0 ? (() => {
-                    const best = [...portfolio].sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0))[0];
-                    return <>
-                      <div className="value">{best.symbol}</div>
-                      <div className="change positive">+{best.priceChangePercent?.toFixed(2)}%</div>
-                    </>;
-                  })() : <div className="value">N/A</div>}
-                </div>
-
-                <div
-                  className="metric-card glass clickable"
-                  style={{ overflow: "hidden", cursor: "pointer" }}
-                  onClick={() => setShowDiversificationModal(true)}
-                  title="View exposure heatmap details"
-                >
-                  <label>Exposure Heatmap</label>
-                  {exposureRows.length > 0 ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "6px", marginTop: "4px" }}>
-                      {exposureRows.slice(0, 4).map((row) => (
-                        <div
-                          key={`heat-preview-${row.bucket}-${row.name}`}
-                          style={{
-                            borderRadius: "6px",
-                            padding: "6px",
-                            border: "1px solid rgba(148,163,184,0.16)",
-                            background: row.weight > 25 ? "rgba(239,68,68,0.15)" : row.weight > 15 ? "rgba(245,158,11,0.12)" : "rgba(34,197,94,0.12)"
-                          }}
-                        >
-                          <div style={{ fontSize: "9px", color: "#94a3b8", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                            {row.bucket}
-                          </div>
-                          <div style={{ fontSize: "10px", color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                            {row.name}
-                          </div>
-                          <div style={{ fontSize: "11px", fontWeight: 700, color: "#e2e8f0" }}>
-                            {row.weight.toFixed(1)}%
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="value" style={{ fontSize: "14px" }}>No holdings</div>
-                  )}
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
-                    {exposureRows.slice(0, 4).map((row) => (
-                      <span key={`heat-chip-${row.bucket}-${row.name}`} style={{
-                        fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
-                        background: "rgba(255,255,255,0.06)", color: "var(--color-text-secondary)"
-                      }}>{row.name}</span>
-                    ))}
-                    {exposureRows.length > 4 && (
-                      <span style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>+{exposureRows.length - 4} more</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="metric-card glass" style={{ minWidth: 0 }}>
-                  <label>Performance Attribution</label>
-                  {attributionSummary.sectorTop ? (
-                    <>
-                      <div className="value" style={{ fontSize: "1.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {attributionSummary.sectorTop.name}
-                      </div>
-                      <div className={`change ${attributionSummary.sectorTop.pnl >= 0 ? "positive" : "negative"}`} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        Sector {attributionSummary.sectorTop.pnl >= 0 ? "+" : ""}${Math.abs(attributionSummary.sectorTop.pnl).toFixed(2)}
-                      </div>
-                      <div className={`change ${Number(attributionSummary.regionTop?.pnl || 0) >= 0 ? "positive" : "negative"}`} style={{ marginTop: "6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        Region {attributionSummary.regionTop ? `${attributionSummary.regionTop.name} (${attributionSummary.regionTop.pnl >= 0 ? "+" : ""}$${Math.abs(attributionSummary.regionTop.pnl).toFixed(2)})` : "N/A"}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="value" style={{ fontSize: "14px" }}>No attribution data</div>
-                  )}
-                </div>
-              </div>
-
-      <div className="portfolio-chart-section" style={{ marginBottom: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "12px" }}>
-          <h2>Performance Chart</h2>
+    <div className="portfolio-module portfolio-v2">
+      <div className="portfolio-v2-head">
+        <div className="portfolio-v2-title-row">
+          <h2>Portfolio</h2>
+          <span className="portfolio-v2-badge">v2</span>
         </div>
-        <div className="watchlist-panel glass portfolio-performance-card">
-          <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
-            {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
-              <button key={mode} onClick={() => setChartMode(mode)} style={{
-                padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
-                background: chartMode === mode ? "rgba(56,189,248,0.15)" : "transparent",
-                border: `0.5px solid ${chartMode === mode ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
-                color: chartMode === mode ? "#38bdf8" : "var(--color-text-secondary)"
-              }}>{label}</button>
+        <div className="portfolio-v2-toolbar">
+          <select className="portfolio-v2-select" defaultValue="all">
+            <option value="all">All Accounts</option>
+          </select>
+          <div className="portfolio-v2-range">
+            {INTERVALS.map((int) => (
+              <button
+                key={int}
+                type="button"
+                className={`portfolio-v2-range-btn ${chartInterval === int ? "active" : ""}`}
+                onClick={() => setChartInterval(int)}
+              >
+                {int}
+              </button>
             ))}
-          </div>
-          <ReactApexChart
-            type="area"
-            height={200}
-            series={[
-              { name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", data: chartData },
-              { name: benchmarkSymbol, data: benchmarkSeries }
-            ]}
-            options={chartOptions}
-            key={`${chartMode}-${chartInterval}`}
-          />
-          <div style={{ display: "flex", gap: "6px", marginTop: "8px", justifyContent: "center", flexWrap: "wrap" }}>
-            {INTERVALS.map(int => (
-              <button key={int} onClick={() => setChartInterval(int)} style={{
-                padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
-                background: chartInterval === int ? "rgba(56,189,248,0.15)" : "transparent",
-                border: `0.5px solid ${chartInterval === int ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
-                color: chartInterval === int ? "#38bdf8" : "var(--color-text-secondary)"
-              }}>{int}</button>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px", gap: "8px", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>Benchmark Comparison</span>
-            <select
-              value={benchmarkSymbol}
-              onChange={(e) => setBenchmarkSymbol(e.target.value)}
-              style={{ background: "rgba(15,23,42,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
-            >
-              <option value="SPY">SPY</option>
-              <option value="ACWI">ACWI</option>
-              <option value="QQQ">QQQ</option>
-            </select>
           </div>
         </div>
       </div>
 
-      <div className="portfolio-holdings-section" style={{ marginBottom: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "12px" }}>
-          <h2>Holdings &amp; Performance Metrics</h2>
-        </div>
-        <div className="portfolio-holdings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-
-          <div className="watchlist-panel glass">
-            <div className="section-header">
-              <h2>Holdings</h2>
-              <div className="asset-count">{sortedHoldings.length} Positions</div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
-              <select
-                value={holdingsSortBy}
-                onChange={(e) => setHoldingsSortBy(e.target.value)}
-                style={{ background: "rgba(15,23,42,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
-              >
-                <option value="value">Sort: Value</option>
-                <option value="pnl">Sort: PnL</option>
-                <option value="return">Sort: Return</option>
-                <option value="risk">Sort: Risk Contribution</option>
-              </select>
-            </div>
-            {sortedHoldings.length === 0 ? (
-              <p style={{ padding: "20px", color: "var(--color-text-secondary)" }}>No holdings yet.</p>
-            ) : (
-              <>
-                <div className="portfolio-list">
-                  {sortedHoldings.map((holding) => {
-                    if (holding.kind === "spot") {
-                      const item = holding.row;
-                      const gainPercent = item.priceChangePercent || 0;
-                      const positionValue = holding.positionValue;
-                      const positionGain = holding.positionGain;
-                      return (
-                      <div
-                        key={holding.key}
-                        className="portfolio-card clickable"
-                        onClick={() => {
-                          setSelectedHolding({
-                            symbol: item.symbol,
-                            kind: "spot",
-                            positionValue,
-                            positionGain,
-                            quantity: item.quantity,
-                            entryPrice: item.entryPrice,
-                            price: item.price,
-                            sector: item.theme || item.sector || "Unclassified",
-                            country: item.country || item.region || "Global",
-                            currency: item.currency || "USD"
-                          });
-                          onSelectAsset?.({ ...item, _fromHoldings: true });
-                        }}
-                      >
-                        <div className="portfolio-left">
-                          <div>
-                            <strong>{item.symbol}</strong>
-                          </div>
-                        </div>
-                        <div className="portfolio-center">
-                          <div className="price-info">
-                            <div className={`change ${gainPercent >= 0 ? "positive" : "negative"}`}>
-                              {gainPercent >= 0 ? "+" : ""}{gainPercent.toFixed(2)}%
-                            </div>
-                          </div>
-                        </div>
-                        <div className="portfolio-quantity">
-                          <div className="quantity-readonly">{Number(item.quantity || 0).toFixed(2)}</div>
-                        </div>
-                        <div className="portfolio-value">
-                          <div className="position-value">${positionValue.toFixed(2)}</div>
-                          <div className={`position-gain ${positionGain >= 0 ? "positive" : "negative"}`}>
-                            {positionGain >= 0 ? "+" : ""}${positionGain.toFixed(2)}
-                          </div>
-                        </div>
-                      </div>
-                      );
-                    }
-
-                    const trade = holding.row;
-                    const { currentMark, pnl, isStale } = holding.metrics || {};
-                    const pnlColor = (pnl || 0) >= 0 ? "#22c55e" : "#ef4444";
-                    return (
-                      <div
-                        key={holding.key}
-                        className={`portfolio-card ${isStale ? "stale-row" : ""}`}
-                        style={{ borderLeft: `3px solid ${pnlColor}` }}
-                        onClick={() =>
-                          setSelectedHolding({
-                            symbol: trade.asset,
-                            kind: "options",
-                            positionValue: holding.positionValue,
-                            positionGain: pnl,
-                            quantity: trade.qty || trade.quantity,
-                            entryPrice: trade.netPremiumAtEntry,
-                            price: currentMark,
-                            strategy: trade.strategy
-                          })
-                        }
-                      >
-                        <div className="portfolio-left">
-                          <div>
-                            <strong>{trade.asset}</strong>
-                            <span style={{ fontSize: "11px", color: "var(--color-text-secondary)", marginLeft: "6px" }}>
-                              {trade.strategy}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="portfolio-center">
-                           <div className="price-info">
-                             <div style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                               {trade.qty} Unit{trade.qty !== 1 ? "s" : ""}
-                             </div>
-                           </div>
-                        </div>
-                        <div className="portfolio-quantity">
-                           <div className="quantity-readonly" style={{ fontSize: "11px" }}>
-                             ${(currentMark || 0).toFixed(2)} Mark
-                           </div>
-                        </div>
-                        <div className="portfolio-value">
-                           <div className="position-value" style={{ color: pnlColor }}>
-                             {pnl >= 0 ? "+" : ""}${ (pnl || 0).toFixed(2) }
-                           </div>
-                           <div style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>
-                             Options PnL | Mark ${Number(currentMark || 0).toFixed(2)}
-                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="portfolio-summary">
-                  <div className="summary-item"><span>Total Value:</span><strong>${calculatePortfolioValue().toFixed(2)}</strong></div>
-                  <div className="summary-item">
-                    <span>Total Gain/Loss:</span>
-                    <strong className={calculatePortfolioGain() >= 0 ? "positive" : "negative"}>
-                      ${calculatePortfolioGain().toFixed(2)}
-                    </strong>
-                  </div>
-                </div>
-              </>
-            )}
+      <div className="portfolio-v2-top-cards">
+        <article className="portfolio-v2-stat-card">
+          <span className="label">Total Account Equity</span>
+          <strong>{formatMoney(currentAccountEquity)}</strong>
+          <span className={`delta ${totalGainLoss >= 0 ? "positive" : "negative"}`}>
+            {formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)
+          </span>
+        </article>
+        <article className="portfolio-v2-stat-card">
+          <span className="label">Cash</span>
+          <strong>{formatMoney(liveAvailableBalance)}</strong>
+          <span className="sub">{cashWeight.toFixed(1)}% of portfolio</span>
+        </article>
+        <article className="portfolio-v2-stat-card">
+          <span className="label">Best Performing</span>
+          <strong>{bestPerformer?.symbol || "N/A"}</strong>
+          <span className="delta positive">
+            {bestPerformer ? `${Number(bestPerformer?.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer?.priceChangePercent || 0).toFixed(2)}%` : "N/A"}
+          </span>
+        </article>
+        <article className="portfolio-v2-stat-card">
+          <span className="label">Exposure Summary</span>
+          <div className="portfolio-v2-mini-grid">
+            <div><span>Sector</span><strong>{exposureSummary.sector?.name || "Unclassified"} {exposureSummary.sector ? `${exposureSummary.sector.weight.toFixed(1)}%` : ""}</strong></div>
+            <div><span>Country</span><strong>{exposureSummary.country?.name || "Global"} {exposureSummary.country ? `${exposureSummary.country.weight.toFixed(1)}%` : ""}</strong></div>
+            <div><span>Currency</span><strong>{exposureSummary.currency?.name || "USD"} {exposureSummary.currency ? `${exposureSummary.currency.weight.toFixed(1)}%` : ""}</strong></div>
           </div>
+        </article>
+      </div>
 
-          <div className="watchlist-panel glass">
-            <div className="section-header" style={{ marginBottom: "16px" }}>
-              <h2>Performance Metrics</h2>
+      <div className="portfolio-v2-main-grid">
+        <div className="portfolio-v2-left">
+          <section className="watchlist-panel glass portfolio-v2-panel">
+            <div className="section-header">
+              <h2>Holdings &amp; Positions</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="asset-count">{holdingsTableRows.length} Positions</span>
+                <select
+                  value={holdingsSortBy}
+                  onChange={(e) => setHoldingsSortBy(e.target.value)}
+                  className="portfolio-v2-select"
+                >
+                  <option value="value">Sort: Value</option>
+                  <option value="pnl">Sort: PnL</option>
+                  <option value="return">Sort: Return</option>
+                  <option value="risk">Sort: Risk</option>
+                </select>
+              </div>
             </div>
-            {metrics ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                {[
-                  {
-                    key: "sharpe",
-                    label: "Sharpe Ratio",
-                    value: metrics.sharpe,
-                    color: Number.isFinite(Number(metrics.sharpe))
-                      ? (Number(metrics.sharpe) >= 1 ? "#22c55e" : Number(metrics.sharpe) >= 0 ? "#f59e0b" : "#ef4444")
-                      : "#94a3b8"
-                  },
-                  {
-                    key: "sortino",
-                    label: "Sortino Ratio",
-                    value: metrics.sortino,
-                    color: Number.isFinite(Number(metrics.sortino))
-                      ? (Number(metrics.sortino) >= 1 ? "#22c55e" : Number(metrics.sortino) >= 0 ? "#f59e0b" : "#ef4444")
-                      : "#94a3b8"
-                  },
-                  {
-                    key: "maxDrawdown",
-                    label: "Max Drawdown",
-                    value: `${metrics.maxDrawdown}%`,
-                    color: Number.isFinite(Number(metrics.maxDrawdown))
-                      ? (Number(metrics.maxDrawdown) < 5 ? "#22c55e" : Number(metrics.maxDrawdown) < 15 ? "#f59e0b" : "#ef4444")
-                      : "#94a3b8"
-                  },
-                  {
-                    key: "alpha",
-                    label: "Alpha (Jensen's)",
-                    value: Number.isFinite(Number(metrics.alpha)) ? `${metrics.alpha}%` : metrics.alpha,
-                    color: Number.isFinite(Number(metrics.alpha))
-                      ? (Number(metrics.alpha) >= 0 ? "#22c55e" : "#ef4444")
-                      : "#94a3b8"
-                  },
-                  {
-                    key: "beta",
-                    label: "Beta",
-                    value: metrics.beta,
-                    color: Number.isFinite(Number(metrics.beta))
-                      ? (Math.abs(Number(metrics.beta) - 1) < 0.3 ? "#38bdf8" : "#f59e0b")
-                      : "#94a3b8"
-                  }
-                ].map(({ key, label, value, color }) => (
-                  <div key={key} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                      <span style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>{label}</span>
-                      <span style={{ fontSize: "18px", fontWeight: 500, color }}>{value}</span>
+            <div className="portfolio-v2-table-wrap">
+              <table className="portfolio-v2-table">
+                <thead>
+                  <tr>
+                    <th>Symbol / Name</th>
+                    <th>Allocation</th>
+                    <th>Mark / Value</th>
+                    <th>P&amp;L</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {holdingsTableRows.map((row) => (
+                    <tr key={row.key} onClick={() => row.kind === "spot" ? onSelectAsset?.(row.raw) : null}>
+                      <td>
+                        <div className="portfolio-v2-symbol-cell">
+                          <div className="portfolio-v2-symbol-avatar">{row.symbol.slice(0, 1)}</div>
+                          <div>
+                            <strong>{row.symbol}</strong>
+                            <span>{row.name}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{row.allocation.toFixed(2)}%</td>
+                      <td>
+                        <div className="portfolio-v2-stack">
+                          <strong>{row.markValueMain}</strong>
+                          <span>{row.markValueSub}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className={`portfolio-v2-stack ${row.pnlPositive ? "positive" : "negative"}`}>
+                          <strong>{row.pnlMain}</strong>
+                          <span>{row.pnlSub}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`portfolio-v2-status ${row.statusClass}`}>{row.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={2}><span>Total Account Equity</span> <strong>{formatMoney(currentAccountEquity)}</strong></td>
+                    <td colSpan={3}><span>Total Gain/Loss</span> <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)</strong></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </section>
+
+          <div className="portfolio-v2-two-col">
+            <section className="watchlist-panel glass portfolio-v2-panel">
+              <div className="section-header"><h2>Performance Attribution</h2></div>
+              <div className="portfolio-v2-attrib-grid">
+                {[{ key: "sector", label: "By Sector" }, { key: "region", label: "By Region" }, { key: "factor", label: "By Factor" }].map((group) => {
+                  const first = attributionRows[group.key]?.[0];
+                  return (
+                    <div key={group.key} className="portfolio-v2-attrib-card">
+                      <span>{group.label}</span>
+                      <strong>{first?.name || "Unclassified"}</strong>
+                      <em className={(first?.pnl || 0) >= 0 ? "positive" : "negative"}>
+                        {first ? formatSignedMoney(first.pnl) : "$0.00"}
+                      </em>
                     </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="watchlist-panel glass portfolio-v2-panel">
+              <div className="section-header"><h2>Exposure Heatmap</h2></div>
+              <div className="portfolio-v2-heatmap">
+                {exposureRows.slice(0, 3).map((row) => (
+                  <div key={`${row.bucket}-${row.name}`} className="portfolio-v2-heat-cell">
+                    <span>{row.bucket}</span>
+                    <strong>{row.name}</strong>
+                    <em>{row.weight.toFixed(1)}%</em>
                   </div>
                 ))}
               </div>
-            ) : (
-              <p style={{ padding: "20px", color: "var(--color-text-secondary)" }}>Add holdings to see performance metrics.</p>
-            )}
+            </section>
           </div>
 
+          <section className="watchlist-panel glass portfolio-v2-panel">
+            <div className="section-header"><h2>Rebalancing Suggestions</h2></div>
+            <div className="table-scroll">
+              <table className="portfolio-v2-table rebalance">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Current</th>
+                    <th>Target</th>
+                    <th>Drift</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rebalanceSuggestions.slice(0, 8).map((row) => (
+                    <tr key={`reb-${row.symbol}`}>
+                      <td>{row.symbol}</td>
+                      <td>{row.current.toFixed(2)}%</td>
+                      <td>{row.target.toFixed(2)}%</td>
+                      <td className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</td>
+                      <td><span className="portfolio-v2-status hold">{row.action}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
-      </div>
+        <aside className="portfolio-v2-right">
+          <section className="watchlist-panel glass portfolio-v2-panel">
+            <div className="section-header"><h2>Performance Metrics</h2></div>
+            <div className="portfolio-v2-metric-list">
+              {[
+                { label: "Sharpe Ratio", value: metrics.sharpe },
+                { label: "Sortino Ratio", value: metrics.sortino },
+                { label: "Max Drawdown", value: `${metrics.maxDrawdown}%` },
+                { label: "Alpha (Jensen's)", value: metrics.alpha },
+                { label: "Beta", value: metrics.beta }
+              ].map((m) => (
+                <div key={m.label} className="portfolio-v2-metric-row">
+                  <span>{m.label}</span>
+                  <strong className={m.label === "Max Drawdown" ? "positive" : Number(m.value) < 0 ? "negative" : ""}>{m.value}</strong>
+                </div>
+              ))}
+            </div>
+          </section>
 
-      <div className="watchlist-panel glass">
-        <div className="section-header" style={{ marginBottom: "12px" }}>
-          <h2>Prediction Markets</h2>
-          <div className="asset-count">{predictionMarketRows.length} Markets</div>
-        </div>
-        {predictionMarketRows.length === 0 ? (
-          <p style={{ padding: "20px", color: "var(--color-text-secondary)" }}>
-            No prediction market trades yet.
-          </p>
-        ) : (
-          <div style={{ display: "grid", gap: "10px" }}>
-            {predictionMarketRows.map((row) => (
-              <div
-                key={row.market}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderRadius: "10px",
-                  padding: "10px 12px",
-                  background: "rgba(15,23,42,0.3)"
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {row.market}
-                  </div>
-                </div>
-                <div style={{ fontWeight: 700, color: row.pnl >= 0 ? "#22c55e" : "#ef4444", marginLeft: "12px" }}>
-                  {row.pnl >= 0 ? "+" : ""}${Math.abs(row.pnl).toFixed(2)}
-                </div>
+          <section className="watchlist-panel glass portfolio-v2-panel">
+            <div className="section-header"><h2>Prediction Markets</h2><div className="asset-count">{predictionMarketRows.length} Markets</div></div>
+            {predictionMarketRows.length === 0 ? (
+              <div className="portfolio-v2-empty">
+                <p>No prediction market trades yet.</p>
+                <button type="button" className="portfolio-v2-link">Explore Prediction Markets</button>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            ) : (
+              <div className="portfolio-v2-activity-list">
+                {predictionMarketRows.slice(0, 4).map((row) => (
+                  <div key={row.market} className="portfolio-v2-activity-row">
+                    <div className="portfolio-v2-activity-main">
+                      <strong>{row.market}</strong>
+                      <span>{row.netQty.toFixed(2)} qty</span>
+                    </div>
+                    <div className={`portfolio-v2-activity-pnl ${row.pnl >= 0 ? "positive" : "negative"}`}>{formatSignedMoney(row.pnl)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
-      <div className="watchlist-panel glass" style={{ marginTop: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "12px" }}>
-          <h2>Performance Attribution</h2>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
-          {[{ key: "sector", label: "By Sector" }, { key: "region", label: "By Region" }, { key: "factor", label: "By Factor" }].map((group) => (
-            <div key={group.key} style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
-              <div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "6px" }}>{group.label}</div>
-              {(attributionRows[group.key] || []).slice(0, 5).map((row) => (
-                <div key={`${group.key}-${row.name}`} style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", padding: "3px 0" }}>
-                  <span style={{ color: "#cbd5e1" }}>{row.name}</span>
-                  <span style={{ color: row.pnl >= 0 ? "#22c55e" : "#ef4444" }}>
-                    {row.pnl >= 0 ? "+" : ""}${row.pnl.toFixed(2)}
-                  </span>
+          <section className="watchlist-panel glass portfolio-v2-panel">
+            <div className="section-header"><h2>Recent Activity</h2></div>
+            <div className="portfolio-v2-activity-list">
+              {recentActivityRows.map((row) => (
+                <div key={row.id} className="portfolio-v2-activity-row">
+                  <div className={`portfolio-v2-activity-dot ${row.tone}`}>{row.tone === "sell" ? "↘" : "↗"}</div>
+                  <div className="portfolio-v2-activity-main">
+                    <strong>{row.side} {row.symbol}</strong>
+                    <span>{row.when}</span>
+                  </div>
+                  <div className="portfolio-v2-activity-value">{formatMoney(row.notional)}</div>
                 </div>
               ))}
             </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass" style={{ marginTop: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "12px" }}>
-          <h2>Exposure Heatmap</h2>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px" }}>
-          {exposureRows.slice(0, 12).map((row) => (
-            <div key={`${row.bucket}-${row.name}`} style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "8px", padding: "8px", background: row.weight > 25 ? "rgba(239,68,68,0.15)" : row.weight > 15 ? "rgba(245,158,11,0.12)" : "rgba(34,197,94,0.12)" }}>
-              <div style={{ fontSize: "10px", color: "#94a3b8", textTransform: "uppercase" }}>{row.bucket}</div>
-              <div style={{ fontSize: "12px", color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.name}</div>
-              <div style={{ fontSize: "12px", fontWeight: 700 }}>{row.weight.toFixed(1)}%</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass" style={{ marginTop: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "12px" }}>
-          <h2>Rebalancing Suggestions</h2>
-        </div>
-        <div className="table-scroll">
-          <table className="option-chain-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Current</th>
-                <th>Target</th>
-                <th>Drift</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rebalanceSuggestions.slice(0, 10).map((row) => (
-                <tr key={`reb-${row.symbol}`}>
-                  <td className="greek">{row.symbol}</td>
-                  <td className="greek">{row.current.toFixed(2)}%</td>
-                  <td className="greek">{row.target.toFixed(2)}%</td>
-                  <td className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</td>
-                  <td className="greek">{row.action}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          </section>
+        </aside>
       </div>
 
       {showDiversificationModal ? (
@@ -952,11 +870,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   Theme exposure across your current stock picks.
                 </p>
               </div>
-              <button
-                type="button"
-                className="pagination-button"
-                onClick={() => setShowDiversificationModal(false)}
-              >
+              <button type="button" className="pagination-button" onClick={() => setShowDiversificationModal(false)}>
                 Close
               </button>
             </div>

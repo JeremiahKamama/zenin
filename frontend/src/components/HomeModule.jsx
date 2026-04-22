@@ -419,14 +419,19 @@ export function HomeModule({
   };
 
   const chartData = useMemo(() => {
-    const pointCountMap = { "1D": 24, "1W": 7, "3M": 90, "1Y": 52, "YTD": 52, "5Y": 60, "MAX": 120 };
+    const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
     const points = pointCountMap[chartInterval] || 24;
     const now = Date.now();
     const start = (() => {
       if (chartInterval === "1D") return now - 24 * 60 * 60 * 1000;
       if (chartInterval === "1W") return now - 7 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "1M") return now - 30 * 24 * 60 * 60 * 1000;
       if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
       if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "ALL") {
+        const firstTradeTs = tradeTimeline[0]?.t;
+        return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
+      }
       if (chartInterval === "YTD") {
         const d = new Date(now);
         return new Date(d.getFullYear(), 0, 1).getTime();
@@ -520,224 +525,360 @@ export function HomeModule({
     markers: { size: 0 }
   };
 
-  const INTERVALS = ["1D", "1W", "3M", "1Y", "YTD", "5Y", "MAX"];
+  const formatMoney = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const formatSignedMoney = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `${num >= 0 ? "+" : "-"}$${Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const formatSignedPercent = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "0.00%";
+    return `${num >= 0 ? "+" : ""}${num.toFixed(2)}%`;
+  };
+
+  const formatCompactMoney = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "$0";
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      notation: "compact",
+      maximumFractionDigits: 1
+    }).format(num);
+  };
+
+  const stablecoinSymbols = new Set(["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"]);
+  const isCashLikeAsset = (asset) => {
+    const symbol = String(asset?.symbol || "").toUpperCase();
+    const type = String(asset?.type || "").toLowerCase();
+    return stablecoinSymbols.has(symbol) || type === "stablecoin";
+  };
+
+  const topHoldingsRows = useMemo(() => {
+    const spotRows = (Array.isArray(portfolio) ? portfolio : [])
+      .map((item) => {
+        const price = Number(item?.price) || 0;
+        const quantity = Number(item?.quantity) || 0;
+        const value = price * quantity;
+        return { ...item, __positionValue: Number.isFinite(value) ? value : 0 };
+      })
+      .sort((a, b) => Number(b.__positionValue || 0) - Number(a.__positionValue || 0))
+      .slice(0, 3);
+
+    const totalSpotValue = spotRows.reduce((sum, row) => sum + Number(row.__positionValue || 0), 0);
+    return spotRows.map((row) => {
+      const alloc = totalSpotValue > 0 ? (Number(row.__positionValue || 0) / totalSpotValue) * 100 : 0;
+      return {
+        ...row,
+        __allocationPercent: alloc
+      };
+    });
+  }, [portfolio]);
+
+  const allocationBreakdown = useMemo(() => {
+    const spotRows = Array.isArray(portfolio) ? portfolio : [];
+    let cryptoValue = 0;
+    let stablecoinValue = 0;
+    spotRows.forEach((item) => {
+      const value = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
+      if (!Number.isFinite(value) || value <= 0) return;
+      if (isCashLikeAsset(item)) {
+        stablecoinValue += value;
+      } else {
+        cryptoValue += value;
+      }
+    });
+
+    const cashValue = Math.max(0, Number(liveAvailableBalance || 0)) + stablecoinValue;
+    const total = cryptoValue + cashValue;
+    const cryptoPercent = total > 0 ? (cryptoValue / total) * 100 : 0;
+    const cashPercent = total > 0 ? (cashValue / total) * 100 : 0;
+    return { cryptoValue, cashValue, total, cryptoPercent, cashPercent };
+  }, [portfolio, liveAvailableBalance]);
+
+  const recentActivityRows = useMemo(() => {
+    const rows = (Array.isArray(trades) ? trades : [])
+      .map((trade) => ({
+        ...trade,
+        __ts: new Date(trade?.executedAt || trade?.date || 0).getTime()
+      }))
+      .filter((trade) => Number.isFinite(trade.__ts) && trade.__ts > 0)
+      .sort((a, b) => b.__ts - a.__ts)
+      .slice(0, 3);
+
+    const now = Date.now();
+    return rows.map((trade) => {
+      const diffMs = Math.max(0, now - trade.__ts);
+      const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+      const diffDays = Math.floor(diffHours / 24);
+      const when = diffDays >= 1 ? `${diffDays}d ago` : diffHours >= 1 ? `${diffHours}h ago` : "just now";
+      const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "Sell" : "Buy";
+      const symbol = String(trade?.asset || trade?.symbol || "Asset").toUpperCase();
+      const notional = Number(trade?.notional || (Number(trade?.price || 0) * Number(trade?.quantity || 0)));
+      return {
+        id: trade.id || `${symbol}-${trade.__ts}`,
+        title: `${side} ${symbol}`,
+        when,
+        value: Number.isFinite(notional) ? notional : 0,
+        tone: side === "Sell" ? "sell" : "buy"
+      };
+    });
+  }, [trades]);
+
+  const dayRange = useMemo(() => {
+    const now = Date.now();
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const points = (Array.isArray(tradeTimeline) ? tradeTimeline : [])
+      .filter((point) => Number(point?.t) >= oneDayAgo && Number.isFinite(Number(point?.equity)))
+      .map((point) => Number(point.equity));
+    points.push(totalAccountEquity);
+    const low = Math.min(...points);
+    const high = Math.max(...points);
+    return {
+      low: Number.isFinite(low) ? low : totalAccountEquity,
+      high: Number.isFinite(high) ? high : totalAccountEquity
+    };
+  }, [tradeTimeline, totalAccountEquity]);
+
+  const totalGainLoss = realizedPnl + unrealizedPnl;
+  const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
+  const chartModeButtons = [["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]];
+  const DISPLAY_INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
+
+  const attentionCards = [
+    {
+      id: "missing",
+      variant: "warn",
+      title: `${moversCoverage.unavailable || 0} assets missing data`,
+      text: "Update required for accurate tracking",
+      cta: "Review"
+    },
+    {
+      id: "rebalance",
+      variant: "info",
+      title: "Rebalancing suggested",
+      text: `Portfolio drift detected: ${Math.abs(allocationBreakdown.cryptoPercent - 50).toFixed(1)}% from target`,
+      cta: "View Plan"
+    },
+    {
+      id: "volatility",
+      variant: "risk",
+      title: "High volatility alert",
+      text: alerts[0]?.text || "Macro/market volatility signal detected",
+      cta: "Analyze"
+    }
+  ];
 
   return (
-    <div className="view-container home-dashboard">
-      <div className="portfolio-analytics-row">
-        <div className="metric-card glass">
-          <label>Total Account Equity</label>
-          <div className="value">${totalAccountEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div className={`change ${dailyChange >= 0 ? "positive" : "negative"}`}>
-            {dailyChange >= 0 ? "▲" : "▼"} ${Math.abs(dailyChange).toFixed(2)} Today
+    <div className="view-container home-dashboard home-v2">
+      <section className="home-v2-hero glass">
+        <div className="home-v2-hero-left">
+          <div className="home-v2-label">Total Portfolio Value</div>
+          <div className="home-v2-hero-main">
+            <span className="home-v2-hero-value">{formatMoney(totalAccountEquity)}</span>
+            <span className={`home-v2-hero-change ${dailyChange >= 0 ? "positive" : "negative"}`}>
+              {dailyChange >= 0 ? "↗" : "↘"} {formatSignedMoney(dailyChange)} ({formatSignedPercent(initialBalance > 0 ? (dailyChange / initialBalance) * 100 : 0)})
+            </span>
+          </div>
+          <div className="home-v2-subtle">Today's P&amp;L</div>
+        </div>
+        <div className="home-v2-hero-stats">
+          <div className="home-v2-hero-stat">
+            <span>Buying Power</span>
+            <strong>{formatMoney(liveAvailableBalance)}</strong>
+          </div>
+          <div className="home-v2-hero-stat">
+            <span>Total Gain/Loss</span>
+            <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss)}</strong>
+          </div>
+          <div className="home-v2-hero-stat">
+            <span>Day's Range</span>
+            <strong>{`${formatCompactMoney(dayRange.low)} - ${formatCompactMoney(dayRange.high)}`}</strong>
           </div>
         </div>
+      </section>
 
-        <div className="metric-card glass">
-          <label>Cash & Buying Power</label>
-          <div className="value">${liveAvailableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div className="change positive">Available to deploy</div>
-        </div>
-
-        <div className="metric-card glass">
-          <label>PnL Snapshot</label>
-          <div className="value">${(realizedPnl + unrealizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div className={`change ${unrealizedPnl >= 0 ? "positive" : "negative"}`}>
-            Unrealized {unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(2)}
-          </div>
-        </div>
-        <div className="metric-card glass">
-          <label>Change Tracker</label>
-          <div className="value">
-            {weeklyChange >= 0 ? "+" : ""}${weeklyChange.toFixed(2)}
-          </div>
-          <div className={`change ${ytdChange >= 0 ? "positive" : "negative"}`}>
-            YTD {ytdChange >= 0 ? "+" : ""}${ytdChange.toFixed(2)}
-          </div>
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
-        <div className="section-header">
-          <h2>Today View</h2>
-          <div className="asset-count">{todayView.sentiment}</div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", marginBottom: "10px" }}>
-          <div className="journal-stat-card"><span className="journal-stat-label">VIX</span><span className="journal-stat-value">{Number.isFinite(todayView.vix) ? todayView.vix.toFixed(2) : "—"}</span></div>
-          <div className="journal-stat-card"><span className="journal-stat-label">Rates</span><span className="journal-stat-value">{Number.isFinite(todayView.rates) ? todayView.rates.toFixed(2) : "—"}</span></div>
-          <div className="journal-stat-card"><span className="journal-stat-label">Breadth</span><span className="journal-stat-value">{Number.isFinite(todayView.breadth) ? todayView.breadth.toFixed(2) : "—"}</span></div>
-          <div className="journal-stat-card"><span className="journal-stat-label">Counts</span><span className="journal-stat-value">{(portfolio || []).length} pos · {(watchlistAssets || []).length} watch · {alerts.length} alerts</span></div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          {(todayView.headlines.length ? todayView.headlines : ["No headline feed yet."]).map((item, idx) => (
-            <div key={`head-${idx}`} style={{ fontSize: "12px", color: "#cbd5e1" }}>• {item}</div>
-          ))}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
-        <div className="section-header">
-          <h2>Alerts Tray</h2>
-          <div className="asset-count">{alerts.length} Active</div>
-        </div>
-        {alerts.length ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "8px" }}>
-            {alerts.map((alert) => (
-              <div key={alert.id} style={{ border: "1px solid rgba(148,163,184,0.18)", borderRadius: "10px", padding: "8px 10px", background: "rgba(15,23,42,0.45)", fontSize: "12px", color: "#cbd5e1" }}>
-                <span style={{ color: "#7dd3fc", textTransform: "uppercase", fontSize: "10px", marginRight: "6px" }}>{alert.type}</span>
-                {alert.text}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="loading-state">No active alerts.</div>
-        )}
-      </div>
-
-      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
-        <div className="section-header">
-          <h2>Quick Actions</h2>
-        </div>
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {quickActions.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="pagination-button"
-              onClick={() => {
-                item.action();
-                if (item.id === "trade") {
-                  setQuickActionFeedback("Opening selected asset for a new trade.");
-                }
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        {quickActionFeedback ? (
-          <div style={{ marginTop: "10px", fontSize: "12px", color: "#94a3b8" }}>{quickActionFeedback}</div>
-        ) : null}
-      </div>
-
-      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
+      <section className="home-v2-attention">
         <div className="section-header">
           <h2>Needs Attention</h2>
+          <button type="button" className="home-v2-link-btn">View All</button>
         </div>
-        {needsAttention.length ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            {needsAttention.map((item, idx) => (
-              <div key={`need-${idx}`} style={{ color: "#fbbf24", fontSize: "12px", border: "1px solid rgba(245,158,11,0.25)", borderRadius: "8px", padding: "8px 10px", background: "rgba(120,53,15,0.2)" }}>
-                {item}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="loading-state">No immediate attention flags.</div>
-        )}
-      </div>
-
-      {/* Portfolio Chart */}
-      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "8px" }}>
-          <h2>Portfolio Performance</h2>
-          <div style={{ display: "flex", gap: "6px" }}>
-            {[["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]].map(([mode, label]) => (
-              <button
-                key={mode}
-                onClick={() => setChartMode(mode)}
-                style={{
-                  padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
-                  background: chartMode === mode ? "rgba(56,189,248,0.15)" : "transparent",
-                  border: `0.5px solid ${chartMode === mode ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
-                  color: chartMode === mode ? "#38bdf8" : "var(--color-text-secondary)"
-                }}
-              >{label}</button>
-            ))}
-          </div>
-        </div>
-        <ReactApexChart 
-          options={chartOptions}
-          series={[{ 
-            name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve", 
-            data: chartData
-          }]}
-          type="area"
-          height={220}
-          width="100%"
-        />
-
-        <div style={{ display: "flex", gap: "6px", marginTop: "8px", justifyContent: "center" }}>
-          {INTERVALS.map(int => (
-            <button
-              key={int}
-              onClick={() => setChartInterval(int)}
-              style={{
-                padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
-                background: chartInterval === int ? "rgba(56,189,248,0.15)" : "transparent",
-                border: `0.5px solid ${chartInterval === int ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
-                color: chartInterval === int ? "#38bdf8" : "var(--color-text-secondary)"
-              }}
-            >{int}</button>
+        <div className="home-v2-attention-grid">
+          {attentionCards.map((card) => (
+            <article key={card.id} className={`home-v2-attention-card ${card.variant}`}>
+              <h3>{card.title}</h3>
+              <p>{card.text}</p>
+              <button type="button" className="home-v2-link-btn">{card.cta}</button>
+            </article>
           ))}
         </div>
-      </div>
+      </section>
 
-      <div className="home-grid">
-        {/* Top Positions */}
-        <div className="watchlist-panel glass">
-          <div className="section-header">
-            <h2 className="home-subsection-title">Top Positions</h2>
-            <div className="asset-count">By Value</div>
-          </div>
-          <div className="home-asset-list">
-            {topPositions.length > 0 ? (
-              topPositions.map((asset) => {
-                const value = Number(asset.__positionValue || ((asset.price || 0) * (asset.quantity || 0)));
-                const isOptionRow = Boolean(asset.__isOptionPosition);
-                return (
-                  <div
-                    key={asset.id}
-                    className={`home-asset-item ${isOptionRow ? "" : "clickable"}`}
-                    onClick={() => {
-                      if (!isOptionRow) onSelectAsset(asset);
-                    }}
+      <section className="home-v2-main-grid">
+        <div className="home-v2-left-col">
+          <div className="watchlist-panel glass home-v2-panel">
+            <div className="section-header">
+              <h2>Portfolio Performance</h2>
+              <div className="home-v2-toggle-row">
+                {chartModeButtons.map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`home-v2-pill ${chartMode === mode ? "active" : ""}`}
+                    onClick={() => setChartMode(mode)}
                   >
-                    <div className="symbol-info">
-                      <span className="symbol">{asset.symbol}</span>
-                      {isOptionRow ? (
-                        <div className="meta" style={{ fontSize: "11px" }}>{asset.strategy}</div>
-                      ) : null}
-                    </div>
-                    <div className="value-info">
-                      <div className="price">
-                        {isOptionRow
-                          ? `${asset.__optionPnl >= 0 ? "+" : ""}$${Number(asset.__optionPnl || 0).toFixed(2)}`
-                          : isTreasuryAsset(asset)
-                          ? `${Number(asset.price || 0).toFixed(2)}%`
-                          : `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ReactApexChart
+              options={chartOptions}
+              series={[{
+                name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve",
+                data: chartData
+              }]}
+              type="area"
+              height={360}
+              width="100%"
+            />
+            <div className="home-v2-toggle-row home-v2-toggle-row-right">
+              {DISPLAY_INTERVALS.map((int) => (
+                <button
+                  key={int}
+                  type="button"
+                  className={`home-v2-pill ${chartInterval === int ? "active" : ""}`}
+                  onClick={() => setChartInterval(int)}
+                >
+                  {int}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="watchlist-panel glass home-v2-panel">
+            <div className="section-header">
+              <h2>Top Holdings</h2>
+              <button type="button" className="home-v2-link-btn">View All Positions</button>
+            </div>
+            <div className="home-v2-holdings-list">
+              {topHoldingsRows.length ? (
+                topHoldingsRows.map((asset) => {
+                  const symbol = String(asset?.symbol || "").toUpperCase();
+                  const change = Number(asset?.priceChangePercent || 0);
+                  const changeClass = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
+                  return (
+                    <button
+                      type="button"
+                      key={`home-hold-${asset.id || symbol}`}
+                      className="home-v2-holding-row"
+                      onClick={() => onSelectAsset?.(asset)}
+                    >
+                      <div className="home-v2-holding-id">
+                        <div className="home-v2-avatar">{symbol.slice(0, 1) || "?"}</div>
+                        <div>
+                          <div className="home-v2-holding-symbol">{symbol || "N/A"}</div>
+                          <div className="home-v2-holding-name">{asset?.name || symbol || "Asset"}</div>
+                        </div>
                       </div>
-                      <div className="qty">
-                        {isOptionRow ? `${Number(asset.quantity || 0).toFixed(2)} opt` : asset.quantity}
+                      <div className="home-v2-holding-value">
+                        <strong>{formatMoney(asset.__positionValue)}</strong>
+                        <span>{asset.__allocationPercent.toFixed(1)}% allocation</span>
                       </div>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="meta" style={{ padding: "20px" }}>No positions yet.</p>
-            )}
+                      <div className={`home-v2-holding-change ${changeClass}`}>
+                        {change > 0 ? "↗" : change < 0 ? "↘" : ""} {change > 0 ? "+" : ""}{change.toFixed(1)}%
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="loading-state">No holdings yet.</div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Gainers & Losers */}
-        <div className="watchlist-panel glass">
-          <div className="section-header" style={{ marginBottom: "8px" }}>
-            <h2 className="home-subsection-title">Top Movers</h2>
+        <aside className="home-v2-right-col">
+          <div className="watchlist-panel glass home-v2-panel">
+            <div className="section-header"><h2>Asset Allocation</h2></div>
+            <ReactApexChart
+              options={{
+                chart: { type: "donut", background: "transparent" },
+                labels: ["Crypto", "Cash"],
+                legend: { show: false },
+                stroke: { width: 2, colors: ["#d1d5db"] },
+                colors: ["#f5a524", "#2ecf9e"],
+                dataLabels: { enabled: false },
+                plotOptions: { pie: { donut: { size: "66%" } } }
+              }}
+              series={[
+                Number(allocationBreakdown.cryptoPercent.toFixed(2)),
+                Number(allocationBreakdown.cashPercent.toFixed(2))
+              ]}
+              type="donut"
+              height={250}
+            />
+            <div className="home-v2-legend">
+              <div className="home-v2-legend-row">
+                <div className="home-v2-legend-left">
+                  <span className="dot crypto" />
+                  <span>Crypto</span>
+                </div>
+                <strong>{allocationBreakdown.cryptoPercent.toFixed(0)}%</strong>
+              </div>
+              <div className="home-v2-legend-row">
+                <div className="home-v2-legend-left">
+                  <span className="dot cash" />
+                  <span>Cash</span>
+                </div>
+                <strong>{allocationBreakdown.cashPercent.toFixed(0)}%</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="watchlist-panel glass home-v2-panel">
+            <div className="section-header"><h2>Key Metrics</h2></div>
+            <div className="home-v2-metrics">
+              <div className="home-v2-metric-row"><span>Total Return</span><strong className={totalReturnPct >= 0 ? "positive" : "negative"}>{formatSignedPercent(totalReturnPct)}</strong></div>
+              <div className="home-v2-metric-row"><span>Today's Change</span><strong className={dailyChange >= 0 ? "positive" : "negative"}>{formatSignedMoney(dailyChange)}</strong></div>
+              <div className="home-v2-metric-row"><span># of Positions</span><strong>{(portfolio || []).length}</strong></div>
+              <div className="home-v2-metric-row"><span>Watchlist</span><strong>{(watchlistAssets || []).length} assets</strong></div>
+              <div className="home-v2-metric-row"><span>Active Alerts</span><strong className="warning">{alerts.length}</strong></div>
+            </div>
+          </div>
+
+          <div className="watchlist-panel glass home-v2-panel">
+            <div className="section-header"><h2>Recent Activity</h2></div>
+            <div className="home-v2-activity-list">
+              {recentActivityRows.length ? recentActivityRows.map((row) => (
+                <div key={row.id} className="home-v2-activity-row">
+                  <div className={`home-v2-activity-icon ${row.tone}`}>{row.tone === "sell" ? "↘" : "↗"}</div>
+                  <div className="home-v2-activity-body">
+                    <strong>{row.title}</strong>
+                    <span>{row.when}</span>
+                  </div>
+                  <div className="home-v2-activity-value">{formatMoney(row.value)}</div>
+                </div>
+              )) : (
+                <div className="loading-state">No recent trades yet.</div>
+              )}
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      {(needsAttention.length || quickActionFeedback || moversLoading || gainers.length || losers.length || todayView.headlines.length || eventRows.length || quickActions.length) ? (
+        <section className="watchlist-panel glass home-v2-panel">
+          <div className="section-header">
+            <h2>Market Context</h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              {moversLoading ? (
-                <span className="asset-count">Loading...</span>
-              ) : null}
               <select
                 value={moversHorizon}
                 onChange={(e) => setMoversHorizon(e.target.value)}
@@ -756,52 +897,35 @@ export function HomeModule({
                 <option value="ytd">YTD</option>
                 <option value="yearly">Yearly</option>
               </select>
+              <span className="asset-count">{moversLoading ? "Loading..." : `${gainers.length + losers.length} movers`}</span>
             </div>
           </div>
-
-          <div className="home-movers-split" style={{ display: "flex", gap: "0" }}>
-            
-            <div className="home-movers-col home-movers-col-left" style={{ flex: 1, borderRight: "0.5px solid rgba(255,255,255,0.1)" }}>
-              <div className="section-header" style={{ padding: "0 0 8px" }}>
-                <h2 className="home-subsection-title">Gainers</h2>
-              </div>
+          <div className="home-grid">
+            <div>
+              <h3 className="home-subsection-title">Gainers</h3>
               <div className="home-asset-list">
-                {gainers.length > 0 ? gainers.map((asset) => (
-                  <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
-                    <div className="symbol-info">
-                      <span className="symbol">{asset.symbol}</span>
-                    </div>
-                    <div className="value-info">
-                      <div className="price">{formatAssetPrice(asset)}</div>
-                      <div className="change positive">+{(asset.__moverChange || 0).toFixed(2)}%</div>
-                    </div>
+                {gainers.map((asset) => (
+                  <div key={`g-${asset.symbol}`} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
+                    <div className="symbol-info"><span className="symbol">{asset.symbol}</span></div>
+                    <div className="value-info"><div className="price">{formatAssetPrice(asset)}</div><div className="change positive">+{(asset.__moverChange || 0).toFixed(2)}%</div></div>
                   </div>
-                )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
+                ))}
               </div>
             </div>
-
-            <div className="home-movers-col home-movers-col-right" style={{ flex: 1, paddingLeft: "12px" }}>
-              <div className="section-header" style={{ padding: "0 0 8px" }}>
-                <h2 className="home-subsection-title">Losers</h2>
-              </div>
+            <div>
+              <h3 className="home-subsection-title">Losers</h3>
               <div className="home-asset-list">
-                {losers.length > 0 ? losers.map((asset) => (
-                  <div key={asset.symbol} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
-                    <div className="symbol-info">
-                      <span className="symbol">{asset.symbol}</span>
-                    </div>
-                    <div className="value-info">
-                      <div className="price">{formatAssetPrice(asset)}</div>
-                      <div className="change negative">{(asset.__moverChange || 0).toFixed(2)}%</div>
-                    </div>
+                {losers.map((asset) => (
+                  <div key={`l-${asset.symbol}`} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
+                    <div className="symbol-info"><span className="symbol">{asset.symbol}</span></div>
+                    <div className="value-info"><div className="price">{formatAssetPrice(asset)}</div><div className="change negative">{(asset.__moverChange || 0).toFixed(2)}%</div></div>
                   </div>
-                )) : <p className="meta" style={{ padding: "12px" }}>No data yet.</p>}
+                ))}
               </div>
             </div>
-
           </div>
-        </div>
-      </div>
+        </section>
+      ) : null}
     </div>
   );
 }

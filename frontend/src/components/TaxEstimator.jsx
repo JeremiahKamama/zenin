@@ -613,480 +613,321 @@ export function TaxEstimator({ trades = [] }) {
     };
   }, [scenario, gains, advanced, ordinaryIncomeTotal]);
 
+  const setBucketTotal = (bucket, keys, nextTotal) => {
+    const target = Math.max(0, Number(nextTotal) || 0);
+    setHasManualGainEdit(true);
+    setGains((prev) => {
+      const row = prev[bucket] || {};
+      const currentValues = keys.map((k) => Math.max(0, Number(row[k] || 0)));
+      const currentTotal = currentValues.reduce((s, v) => s + v, 0);
+      const nextRow = { ...row };
+      if (currentTotal > 0) {
+        keys.forEach((k, idx) => {
+          nextRow[k] = target * (currentValues[idx] / currentTotal);
+        });
+      } else {
+        const share = keys.length > 0 ? target / keys.length : 0;
+        keys.forEach((k) => {
+          nextRow[k] = share;
+        });
+      }
+      return { ...prev, [bucket]: nextRow };
+    });
+  };
+
+  const declaredTotals = useMemo(() => ({
+    equities: Number(gains?.Equities?.shortTerm || 0) + Number(gains?.Equities?.longTerm || 0),
+    crypto: Number(gains?.Crypto?.shortTerm || 0) + Number(gains?.Crypto?.longTerm || 0),
+    fixedIncome: Number(gains?.Bonds?.standard || 0) + Number(gains?.MMFs?.standard || 0),
+    specialFunds: Number(gains?.['Special Funds']?.standard || 0)
+  }), [gains]);
+
+  const netAfterTax = Math.max(0, Number(summaryPreview.grossTotal || 0) - Number(summaryPreview.estimatedTax || 0));
+  const taxSavingsVsUAE = useMemo(() => {
+    const { adjustedGains } = buildAdjustedGains(gains, advanced);
+    const usLiability = calcLiability(jurisdictions[0] || "USA", adjustedGains, { ordinaryIncomeTotal }).liability;
+    const uaeLiability = calcLiability("UAE", adjustedGains, { ordinaryIncomeTotal }).liability;
+    return usLiability - uaeLiability;
+  }, [gains, advanced, jurisdictions, ordinaryIncomeTotal]);
+
   return (
-    <div style={{ padding: '24px', maxWidth: '1100px', margin: '0 auto', color: '#e2e8f0' }}>
-      <div style={{ marginBottom: '28px' }}>
-        <h2 style={{ margin: '0 0 6px 0', fontSize: '1.8rem', color: '#f8fafc' }}>Global Tax Estimator</h2>
-        <p style={{ margin: 0, color: '#94a3b8' }}>Estimate capital gains liabilities across 40+ global jurisdictions. Tax rules last updated: {TAX_RULES_LAST_UPDATED}.</p>
+    <div className="tax-v2">
+      <div className="tax-v2-head">
+        <div>
+          <h2>Global Tax Estimator</h2>
+          <p>Estimate capital gains liabilities across 40+ global jurisdictions.</p>
+        </div>
+        <div className="tax-v2-head-actions">
+          <button type="button" className="pagination-button" onClick={handleSave}>Saved scenarios</button>
+          <button type="button" className="pagination-button" onClick={handleExportCsv}>Export</button>
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
-        {/* ── Left: Config ───────────────────────────────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <section style={{ background: 'rgba(2,6,23,0.7)', border: '1px solid rgba(148,163,184,0.12)', borderRadius: '16px', padding: '20px' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#f8fafc' }}>Jurisdictions</h3>
+      <div className="tax-v2-kpis">
+        <div className="tax-v2-kpi">
+          <span>Estimated Tax</span>
+          <strong>${summaryPreview.estimatedTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          <em className="positive">↓ {Math.abs(taxSavingsVsUAE).toLocaleString(undefined, { maximumFractionDigits: 0 })} vs UAE</em>
+        </div>
+        <div className="tax-v2-kpi">
+          <span>Effective Rate</span>
+          <strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong>
+          <em>vs 21.58% (UAE)</em>
+        </div>
+        <div className="tax-v2-kpi">
+          <span>Taxable Gain</span>
+          <strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          <em>{summaryPreview.grossTotal > 0 ? ((summaryPreview.taxableGain / summaryPreview.grossTotal) * 100).toFixed(1) : "0.0"}% of Gross Gains</em>
+        </div>
+        <div className="tax-v2-kpi">
+          <span>Net After Tax</span>
+          <strong className="positive">${netAfterTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          <em>Total Gain: ${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</em>
+        </div>
+      </div>
 
-            <input
-              type="text"
-              placeholder="Search countries..."
-              value={jurisdictionSearch}
-              onChange={e => setJurisdictionSearch(e.target.value)}
-              style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '8px', background: 'rgba(15,23,42,0.7)', border: '1px solid rgba(148,163,184,0.3)', color: '#fff', marginBottom: '10px', fontSize: '0.85rem' }}
-            />
-
-            {/* Region filter tabs */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
-              {['All', ...REGIONS].map(r => (
-                <button key={r} onClick={() => setActiveRegion(r)}
-                  style={{ padding: '3px 10px', borderRadius: '12px', fontSize: '0.75rem', cursor: 'pointer', border: activeRegion === r ? '1px solid #38bdf8' : '1px solid rgba(148,163,184,0.25)', background: activeRegion === r ? 'rgba(56,189,248,0.18)' : 'transparent', color: activeRegion === r ? '#38bdf8' : '#94a3b8' }}>
-                  {r}
-                </button>
-              ))}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '300px', overflowY: 'auto' }}>
-              {filteredJurisdictions.map(([key, info]) => (
-                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 10px', borderRadius: '8px', cursor: 'pointer', background: jurisdictions.includes(key) ? 'rgba(56,189,248,0.1)' : 'transparent', border: jurisdictions.includes(key) ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent' }}>
-                  <input type="checkbox" checked={jurisdictions.includes(key)} onChange={() => toggleJurisdiction(key)} style={{ accentColor: '#38bdf8' }} />
-                  <div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#f1f5f9' }}>{info.name}</div>
-                    <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{info.currency} · {info.logic}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-
-            {jurisdictions.length > 0 && (
-              <div style={{ marginTop: '12px', fontSize: '0.78rem', color: '#7dd3fc', background: 'rgba(125,211,252,0.08)', padding: '8px', borderRadius: '6px' }}>
-                {jurisdictions.length} base{jurisdictions.length > 1 ? 's' : ''} selected: {jurisdictions.map(j => TAX_RULES[j].name).join(', ')}
-              </div>
-            )}
-            {detectedCountry && (
-              <div style={{ marginTop: '8px', fontSize: '0.74rem', color: '#94a3b8' }}>
-                Auto-detected country from browser locale: {TAX_RULES[detectedCountry]?.name || detectedCountry}. You can override it above.
-              </div>
-            )}
-          </section>
-
-          <section style={{ background: 'rgba(2,6,23,0.7)', border: '1px solid rgba(148,163,184,0.12)', borderRadius: '16px', padding: '20px' }}>
-            <h3 style={{ margin: '0 0 12px 0', fontSize: '1rem', color: '#f8fafc' }}>Tax Year</h3>
-            <select value={taxYear} onChange={e => setTaxYear(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '8px', background: 'rgba(15,23,42,0.7)', border: '1px solid rgba(148,163,184,0.3)', color: '#fff' }}>
+      <div className="tax-v2-grid-main">
+        <section className="tax-v2-panel">
+          <h3><span className="num">1</span> Jurisdictions</h3>
+          <p className="sub">Search countries or jurisdictions</p>
+          <input
+            className="search-input tax-v2-input"
+            type="text"
+            placeholder="Search by country, region, or code..."
+            value={jurisdictionSearch}
+            onChange={(e) => setJurisdictionSearch(e.target.value)}
+          />
+          <div className="tax-v2-region-tabs">
+            {['All', ...REGIONS].map((r) => (
+              <button key={r} type="button" className={`tax-v2-pill ${activeRegion === r ? "active" : ""}`} onClick={() => setActiveRegion(r)}>{r}</button>
+            ))}
+          </div>
+          <div className="tax-v2-jur-list">
+            {filteredJurisdictions.slice(0, 8).map(([key, info]) => (
+              <label key={key} className={`tax-v2-jur-item ${jurisdictions.includes(key) ? "active" : ""}`}>
+                <div>
+                  <strong>{info.name}</strong>
+                  <span>{jurisdictions[0] === key ? "Base jurisdiction" : info.logic}</span>
+                </div>
+                <input type="checkbox" checked={jurisdictions.includes(key)} onChange={() => toggleJurisdiction(key)} />
+              </label>
+            ))}
+          </div>
+          <div className="tax-v2-inline-row">
+            <span>Tax Year</span>
+            <select className="search-input tax-v2-input" value={taxYear} onChange={(e) => setTaxYear(e.target.value)}>
               <option value="2026">2026 (Latest)</option>
               <option value="2025">2025</option>
               <option value="2024">2024</option>
               <option value="2023">2023</option>
             </select>
-          </section>
+          </div>
+        </section>
 
-          <section style={{ background: 'rgba(2,6,23,0.7)', border: '1px solid rgba(148,163,184,0.12)', borderRadius: '16px', padding: '20px' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#f8fafc' }}>Income Breakdown</h3>
-            <p style={{ margin: '0 0 10px 0', color: '#94a3b8', fontSize: '0.78rem' }}>Ordinary income buckets taxed at the jurisdiction ordinary rate.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-              <GainRow label="Salary" value={additionalIncome.salary} onChange={(v) => setAdditionalIncome((p) => ({ ...p, salary: Number(v) || 0 }))} />
-              <GainRow label="Dividends" value={additionalIncome.dividends} onChange={(v) => setAdditionalIncome((p) => ({ ...p, dividends: Number(v) || 0 }))} />
-              <GainRow label="Interest" value={additionalIncome.interest} onChange={(v) => setAdditionalIncome((p) => ({ ...p, interest: Number(v) || 0 }))} />
-              <GainRow label="Staking" value={additionalIncome.stakingRewards} onChange={(v) => setAdditionalIncome((p) => ({ ...p, stakingRewards: Number(v) || 0 }))} />
-              <GainRow label="Airdrops" value={additionalIncome.airdrops} onChange={(v) => setAdditionalIncome((p) => ({ ...p, airdrops: Number(v) || 0 }))} />
-              <GainRow label="Other Income" value={additionalIncome.otherOrdinaryIncome} onChange={(v) => setAdditionalIncome((p) => ({ ...p, otherOrdinaryIncome: Number(v) || 0 }))} />
+        <section className="tax-v2-panel">
+          <h3><span className="num">2</span> Declared Gross Gains / Income</h3>
+          <div className="tax-v2-inline-row right">
+            <select className="search-input tax-v2-input" value={advanced.currency} onChange={(e) => setAdvanced((p) => ({ ...p, currency: e.target.value }))}>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="KES">KES</option>
+            </select>
+          </div>
+          <div className="tax-v2-gain-rows">
+            <div className="tax-v2-gain-row">
+              <div><strong>Equities</strong><span>Stocks, ETFs, REITs</span></div>
+              <input className="search-input tax-v2-input" type="number" min="0" value={declaredTotals.equities} onChange={(e) => setBucketTotal("Equities", ["shortTerm", "longTerm"], e.target.value)} />
             </div>
-          </section>
-
-          <section style={{ background: 'rgba(2,6,23,0.7)', border: '1px solid rgba(148,163,184,0.12)', borderRadius: '16px', padding: '20px' }}>
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '1rem', color: '#f8fafc' }}>Import Statements</h3>
-            <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0 0 12px' }}>Upload CSV/JSON to map gains automatically.</p>
-            <button onClick={() => document.getElementById('tax-file-import').click()}
-              style={{ width: '100%', padding: '10px', background: 'rgba(56,189,248,0.08)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
-              {fileName ? `✓ ${fileName}` : '+ Import Documents'}
-            </button>
-            <input type="file" id="tax-file-import" accept=".csv,.json,.xls,.xlsx" style={{ display: 'none' }} onChange={handleDocumentImport} />
-          </section>
-        </div>
-
-        {/* ── Right: Gains + Results ──────────────────────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <section style={{ background: 'rgba(2,6,23,0.7)', border: '1px solid rgba(148,163,184,0.12)', borderRadius: '16px', padding: '20px' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#f8fafc' }}>Declared Gross Gains</h3>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr minmax(230px, 1fr)', gap: '12px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <GainCard title="Equities">
-                  <GainRow label="Short Term (< 1 yr)" value={gains.Equities.shortTerm} onChange={v => handleGainChange('Equities', 'shortTerm', v)} />
-                  <GainRow label="Long Term (> 1 yr)" value={gains.Equities.longTerm} onChange={v => handleGainChange('Equities', 'longTerm', v)} />
-                </GainCard>
-
-                <GainCard title="Digital Assets / Crypto">
-                  <GainRow label="Short Term (< 1 yr)" value={gains.Crypto.shortTerm} onChange={v => handleGainChange('Crypto', 'shortTerm', v)} />
-                  <GainRow label="Long Term (> 1 yr)" value={gains.Crypto.longTerm} onChange={v => handleGainChange('Crypto', 'longTerm', v)} />
-                </GainCard>
-
-                <GainCard title="Fixed Income">
-                  <GainRow label="Bonds Total" value={gains.Bonds.standard} onChange={v => handleGainChange('Bonds', 'standard', v)} />
-                  <GainRow label="MMFs / Interest" value={gains.MMFs.standard} onChange={v => handleGainChange('MMFs', 'standard', v)} />
-                </GainCard>
-
-                <GainCard title="Special Funds & Structured">
-                  <GainRow label="Recognized Gains" value={gains['Special Funds'].standard} onChange={v => handleGainChange('Special Funds', 'standard', v)} />
-                </GainCard>
-              </div>
-
-              <section style={{ background: 'rgba(0, 0, 0, 0.65)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: '12px', padding: '12px' }}>
-                <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', color: '#e2e8f0' }}>Live Summary</h4>
-                <SummaryRow label="Base jurisdiction" value={summaryPreview.jurisdiction} />
-                <SummaryRow label="Total gain" value={`$${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                <SummaryRow label="Net after costs" value={`$${summaryPreview.netAfterCosts.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                <SummaryRow label="Taxable gain" value={`$${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                <SummaryRow label="Ordinary income" value={`$${summaryPreview.ordinaryIncomeTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                <SummaryRow label="Estimated tax" value={`$${summaryPreview.estimatedTax.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                <SummaryRow label="Effective rate" value={`${summaryPreview.effectiveRate.toFixed(2)}%`} tone={summaryPreview.effectiveRate > 0 ? '#fbbf24' : '#4ade80'} />
-              </section>
+            <div className="tax-v2-gain-row">
+              <div><strong>Digital Assets / Crypto</strong><span>Coins, tokens, DeFi, NFTs</span></div>
+              <input className="search-input tax-v2-input" type="number" min="0" value={declaredTotals.crypto} onChange={(e) => setBucketTotal("Crypto", ["shortTerm", "longTerm"], e.target.value)} />
             </div>
-
-            <div style={{ marginTop: '12px' }}>
-              <button
-                type="button"
-                onClick={() => setIsAdvancedOpen((v) => !v)}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  borderRadius: '8px',
-                  border: '1px solid rgba(148,163,184,0.25)',
-                  background: 'rgba(15,23,42,0.6)',
-                  color: '#cbd5e1',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 600
-                }}
-              >
-                {isAdvancedOpen ? 'Hide Advanced Inputs' : 'Show Advanced Inputs'}
-              </button>
-
-              {isAdvancedOpen && (
-                <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
-                  <AdvancedField label="Cost Basis">
-                    <select value={advanced.costBasisMethod} onChange={(e) => setAdvanced((p) => ({ ...p, costBasisMethod: e.target.value }))}>
-                      <option value="actual">Actual</option>
-                      <option value="fifo">FIFO</option>
-                      <option value="lifo">LIFO</option>
-                      <option value="hifo">HIFO</option>
-                      <option value="average">Average Cost</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Mode">
-                    <select value={advanced.realizationMode} onChange={(e) => setAdvanced((p) => ({ ...p, realizationMode: e.target.value }))}>
-                      <option value="realized">Realized</option>
-                      <option value="unrealized">Unrealized</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Acquisition Date">
-                    <input type="date" value={advanced.acquisitionDate} onChange={(e) => setAdvanced((p) => ({ ...p, acquisitionDate: e.target.value }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Sale Date">
-                    <input type="date" value={advanced.saleDate} onChange={(e) => setAdvanced((p) => ({ ...p, saleDate: e.target.value }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Fees">
-                    <input type="number" min="0" value={advanced.fees} onChange={(e) => setAdvanced((p) => ({ ...p, fees: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Slippage">
-                    <input type="number" min="0" value={advanced.slippage} onChange={(e) => setAdvanced((p) => ({ ...p, slippage: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Brokerage">
-                    <input type="number" min="0" value={advanced.brokerage} onChange={(e) => setAdvanced((p) => ({ ...p, brokerage: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="FX Rate">
-                    <input type="number" min="0" step="0.0001" value={advanced.fxRate} onChange={(e) => setAdvanced((p) => ({ ...p, fxRate: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Currency">
-                    <select value={advanced.currency} onChange={(e) => setAdvanced((p) => ({ ...p, currency: e.target.value }))}>
-                      <option value="USD">USD</option>
-                      <option value="EUR">EUR</option>
-                      <option value="GBP">GBP</option>
-                      <option value="KES">KES</option>
-                      <option value="JPY">JPY</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="FX Source">
-                    <select value={advanced.fxSource} onChange={(e) => setAdvanced((p) => ({ ...p, fxSource: e.target.value }))}>
-                      <option value="Manual">Manual</option>
-                      <option value="ECB">ECB</option>
-                      <option value="FRED">FRED</option>
-                      <option value="ExchangeRate-API">ExchangeRate-API</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Loss Carryforward">
-                    <input type="number" min="0" value={advanced.lossCarryforward} onChange={(e) => setAdvanced((p) => ({ ...p, lossCarryforward: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Exemption Threshold">
-                    <input type="number" min="0" value={advanced.exemptionThreshold} onChange={(e) => setAdvanced((p) => ({ ...p, exemptionThreshold: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Foreign Tax Paid">
-                    <input type="number" min="0" value={advanced.foreignTaxPaid} onChange={(e) => setAdvanced((p) => ({ ...p, foreignTaxPaid: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Withholding Tax">
-                    <input type="number" min="0" value={advanced.withholdingTax} onChange={(e) => setAdvanced((p) => ({ ...p, withholdingTax: Number(e.target.value) || 0 }))} />
-                  </AdvancedField>
-                  <AdvancedField label="Residency">
-                    <select value={advanced.residencyStatus} onChange={(e) => setAdvanced((p) => ({ ...p, residencyStatus: e.target.value }))}>
-                      <option value="resident">Resident</option>
-                      <option value="non-resident">Non-resident</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Tax Regime">
-                    <select value={advanced.taxRegime} onChange={(e) => setAdvanced((p) => ({ ...p, taxRegime: e.target.value }))}>
-                      <option value="individual">Individual</option>
-                      <option value="company">Company</option>
-                      <option value="trust">Trust</option>
-                      <option value="fund">Fund</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Filing Status">
-                    <select value={advanced.filingStatus} onChange={(e) => setAdvanced((p) => ({ ...p, filingStatus: e.target.value }))}>
-                      <option value="single">Single</option>
-                      <option value="married-joint">Married (Joint)</option>
-                      <option value="married-separate">Married (Separate)</option>
-                      <option value="head-of-household">Head of Household</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Marital Status">
-                    <select value={advanced.maritalStatus} onChange={(e) => setAdvanced((p) => ({ ...p, maritalStatus: e.target.value }))}>
-                      <option value="single">Single</option>
-                      <option value="married">Married</option>
-                      <option value="divorced">Divorced</option>
-                      <option value="widowed">Widowed</option>
-                    </select>
-                  </AdvancedField>
-                  <AdvancedField label="Notes">
-                    <input type="text" value={advanced.notes} onChange={(e) => setAdvanced((p) => ({ ...p, notes: e.target.value }))} placeholder="Special treatment / exceptions" />
-                  </AdvancedField>
-                </div>
-              )}
+            <div className="tax-v2-gain-row">
+              <div><strong>Fixed Income</strong><span>Bonds, Notes, CDs</span></div>
+              <input className="search-input tax-v2-input" type="number" min="0" value={declaredTotals.fixedIncome} onChange={(e) => {
+                const n = Number(e.target.value) || 0;
+                setBucketTotal("Bonds", ["standard"], n);
+                setBucketTotal("MMFs", ["standard"], 0);
+              }} />
             </div>
-
-            <button onClick={handleCalculate}
-              style={{ marginTop: '20px', width: '100%', padding: '14px', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', color: '#fff', fontSize: '1rem', fontWeight: 700, border: 'none', borderRadius: '10px', cursor: 'pointer', letterSpacing: '0.5px', boxShadow: '0 4px 16px rgba(59,130,246,0.35)' }}>
-              Calculate Estimated Liabilities
-            </button>
-
-            {inputWarnings.length > 0 && (
-              <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {inputWarnings.map((warn, idx) => (
-                  <div key={idx} style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(120,53,15,0.25)', color: '#fbbf24', fontSize: '0.78rem' }}>
-                    {warn}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Results */}
-          {results.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              {results.map((res, idx) => (
-                <section key={idx} style={{ 
-                  padding: '20px', 
-                  background: 'rgba(0, 0, 0, 0.85)', 
-                  backdropFilter: 'blur(12px)',
-                  border: '1px solid rgba(56,189,248,0.35)', 
-                  borderRadius: '16px',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>{res.jurisdiction}</h3>
-                    <span style={{ color: res.liability === 0 ? '#4ade80' : '#38bdf8', fontWeight: 700, fontSize: '1.25rem' }}>
-                      {res.currency} {res.liability.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', marginBottom: '10px' }}>
-                    <MiniPill label="Gross Gain" value={`$${Number(res.grossGain || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                    <MiniPill label="Net Gain" value={`$${Number(res.netGain || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                    <MiniPill label="Taxable Gain" value={`$${Number(res.taxableGain || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                    <MiniPill label="Ordinary Income" value={`$${Number(res.ordinaryIncomeTotal || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                    <MiniPill label="Effective Rate" value={`${Number(res.effectiveRate || 0).toFixed(2)}%`} />
-                  </div>
-                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '12px', borderRadius: '8px' }}>
-                    {Object.entries(res.details).map(([k, v]) => (
-                      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                        <span style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>{k}</span>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: v === 0 ? '#4ade80' : '#f1f5f9' }}>
-                          {res.currency} {v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ))}
-
-              {/* ── Jurisdiction Recommendation Card ────────────────────── */}
-              {jurisdictionRecommendations.length > 0 && (
-                <section style={{ 
-                  padding: '20px', 
-                  background: 'linear-gradient(135deg, rgba(0, 20, 10, 0.95), rgba(0, 0, 0, 0.9))', 
-                  backdropFilter: 'blur(12px)',
-                  border: '1px solid rgba(74,222,128,0.35)', 
-                  borderRadius: '16px',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                    <span style={{ fontSize: '1.25rem' }}>🌍</span>
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: '1rem', color: '#4ade80' }}>Jurisdiction Recommendation</h3>
-                      <p style={{ margin: '3px 0 0', fontSize: '0.78rem', color: '#86efac' }}>Based on your declared gains, you could have paid significantly less tax in these jurisdictions.</p>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {jurisdictionRecommendations.map((rec, i) => (
-                      <div key={rec.key} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 14px', background: 'rgba(0,0,0,0.3)', borderRadius: '10px', border: '1px solid rgba(74,222,128,0.12)' }}>
-                        <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#4ade80', minWidth: '24px' }}>#{i + 1}</div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#f1f5f9' }}>{rec.name}</div>
-                          <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>{rec.region} · {rec.logic}</div>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Estimated liability</div>
-                          <div style={{ fontWeight: 700, color: rec.liability === 0 ? '#4ade80' : '#38bdf8' }}>
-                            {rec.currency} {rec.liability.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                          </div>
-                          <div style={{ fontSize: '0.8rem', color: '#4ade80', fontWeight: 600 }}>
-                            Save ≈ ${rec.saving.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <p style={{ margin: '14px 0 0', fontSize: '0.72rem', color: '#64748b' }}>
-                    ⚠ Indicative flat-rate estimates only. Consult a qualified tax advisor before making residency decisions.
-                  </p>
-                </section>
-              )}
-
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={handleSave} style={{ flex: 1, padding: '10px', background: 'transparent', border: '1px solid #38bdf8', color: '#38bdf8', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>Save All</button>
-                <select
-                  defaultValue=""
-                  onChange={(e) => {
-                    if (e.target.value) handleExport(e.target.value);
-                    e.target.value = '';
-                  }}
-                  style={{ flex: 1, padding: '10px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
-                >
-                  <option value="" disabled>Export Report...</option>
-                  <option value="pdf">PDF</option>
-                  <option value="csv">CSV</option>
-                </select>
-              </div>
+            <div className="tax-v2-gain-row">
+              <div><strong>Special Funds & Structured</strong><span>Private equity, hedge funds, derivatives</span></div>
+              <input className="search-input tax-v2-input" type="number" min="0" value={declaredTotals.specialFunds} onChange={(e) => setBucketTotal("Special Funds", ["standard"], e.target.value)} />
             </div>
-          )}
+          </div>
+          <div className="tax-v2-total-row">
+            <span>Total Declared Gross Gains</span>
+            <strong>${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          </div>
+        </section>
 
-          <section style={{ background: 'rgba(2,6,23,0.72)', border: '1px solid rgba(148,163,184,0.16)', borderRadius: '14px', padding: '16px' }}>
-            <h4 style={{ margin: '0 0 10px', color: '#f8fafc', fontSize: '0.9rem' }}>Scenario Comparison</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px', marginBottom: '10px' }}>
-              <AdvancedField label="Country A">
-                <select value={scenario.countryA} onChange={(e) => setScenario((p) => ({ ...p, countryA: e.target.value }))}>
-                  {Object.keys(TAX_RULES).map((code) => <option key={code} value={code}>{TAX_RULES[code].name}</option>)}
-                </select>
-              </AdvancedField>
-              <AdvancedField label="Country B">
-                <select value={scenario.countryB} onChange={(e) => setScenario((p) => ({ ...p, countryB: e.target.value }))}>
-                  {Object.keys(TAX_RULES).map((code) => <option key={code} value={code}>{TAX_RULES[code].name}</option>)}
-                </select>
-              </AdvancedField>
-              <AdvancedField label="Sell Later (Days)">
-                <input type="number" min="0" value={scenario.shiftDays} onChange={(e) => setScenario((p) => ({ ...p, shiftDays: Number(e.target.value) || 0 }))} />
-              </AdvancedField>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '8px' }}>
-              <MiniPill label={`${TAX_RULES[scenarioComparison.countryA]?.name} (Now)`} value={`${TAX_RULES[scenarioComparison.countryA]?.currency} ${scenarioComparison.nowA.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-              <MiniPill label={`${TAX_RULES[scenarioComparison.countryB]?.name} (Now)`} value={`${TAX_RULES[scenarioComparison.countryB]?.currency} ${scenarioComparison.nowB.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-              <MiniPill label={`${TAX_RULES[scenarioComparison.countryA]?.name} (+${scenarioComparison.shiftDays}d)`} value={`${TAX_RULES[scenarioComparison.countryA]?.currency} ${scenarioComparison.shiftedA.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-            </div>
-          </section>
-
-          <section style={{ background: 'rgba(2,6,23,0.72)', border: '1px solid rgba(148,163,184,0.16)', borderRadius: '14px', padding: '16px' }}>
-            <h4 style={{ margin: '0 0 6px', color: '#f8fafc', fontSize: '0.9rem' }}>Compliance & Sources</h4>
-            <p style={{ margin: '0 0 8px', fontSize: '0.76rem', color: '#94a3b8' }}>
-              This estimator is informational only and not tax advice. Confirm rates, forms, and filing treatment with a qualified advisor.
-            </p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-              {TAX_RULE_SOURCES.map((source) => (
-                <a key={source.href} href={source.href} target="_blank" rel="noreferrer" style={{ color: '#7dd3fc', fontSize: '0.76rem' }}>
-                  {source.label}
-                </a>
-              ))}
-            </div>
-          </section>
-
-          {savedEstimates.length > 0 && (
-            <section style={{ 
-              background: 'rgba(0, 0, 0, 0.75)', 
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(148,163,184,0.1)', 
-              borderRadius: '14px', 
-              padding: '16px',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)'
-            }}>
-              <h4 style={{ margin: '0 0 12px', color: '#94a3b8', fontSize: '0.9rem' }}>Saved Estimates</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {savedEstimates.map((est, idx) => (
-                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(15,23,42,0.4)', padding: '10px 14px', borderRadius: '8px' }}>
-                    <div>
-                      <strong style={{ display: 'block', color: '#e2e8f0', fontSize: '0.85rem' }}>{est.jurisdiction}</strong>
-                      <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{new Date(est.timestamp).toLocaleString()}</span>
-                    </div>
-                    <strong style={{ color: '#38bdf8', fontSize: '0.9rem' }}>{est.currency} {est.liability.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {auditTrail.length > 0 && (
-            <section style={{
-              background: 'rgba(2,6,23,0.75)',
-              border: '1px solid rgba(148,163,184,0.2)',
-              borderRadius: '14px',
-              padding: '16px'
-            }}>
-              <h4 style={{ margin: '0 0 10px', color: '#f8fafc', fontSize: '0.9rem' }}>Audit Trail</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {auditTrail.slice(0, 5).map((entry) => (
-                  <div key={entry.id} style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(148,163,184,0.14)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                      <span style={{ fontSize: '0.76rem', color: '#cbd5e1' }}>{new Date(entry.timestamp).toLocaleString()}</span>
-                      <span style={{ fontSize: '0.74rem', color: '#7dd3fc' }}>Year {entry.taxYear}</span>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '4px' }}>
-                      Jurisdictions: {(entry.jurisdictions || []).map((k) => TAX_RULES[k]?.name || k).join(', ')}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {showImportPreview && (
-            <section style={{
-              background: 'rgba(2,6,23,0.75)',
-              border: '1px solid rgba(148,163,184,0.2)',
-              borderRadius: '14px',
-              padding: '16px'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <h4 style={{ margin: 0, color: '#f8fafc', fontSize: '0.9rem' }}>Import Preview</h4>
-                <button onClick={() => setShowImportPreview(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>Close</button>
-              </div>
-              <p style={{ margin: '0 0 8px', fontSize: '0.78rem', color: '#94a3b8' }}>
-                Imported file: {fileName || 'N/A'} · Review mapped columns before finalizing.
-              </p>
-              <div style={{ fontSize: '0.78rem', color: '#cbd5e1', lineHeight: 1.5 }}>
-                Mapped: <strong>Trade Date</strong>, <strong>Sale Date</strong>, <strong>Asset Class</strong>, <strong>Proceeds</strong>, <strong>Cost Basis</strong>, <strong>Fees</strong>
-              </div>
-              <div style={{ marginTop: '8px', fontSize: '0.76rem', color: '#fbbf24' }}>
-                Unmatched fields: none detected in demo parser.
-              </div>
-            </section>
-          )}
-        </div>
+        <section className="tax-v2-panel">
+          <h3><span className="num">3</span> Live Summary</h3>
+          <div className="tax-v2-live-header">
+            <span>Base Jurisdiction</span>
+            <strong>{summaryPreview.jurisdiction}</strong>
+          </div>
+          <div className="tax-v2-live-rows">
+            <div><span>Total Declared Gross Gains</span><strong>${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+            <div><span>Less: Costs & Adjustments</span><strong>(${summaryPreview.totalCosts?.toLocaleString?.() || Number(advanced.fees + advanced.brokerage + advanced.slippage).toLocaleString(undefined, { maximumFractionDigits: 0 })})</strong></div>
+            <div><span>Taxable Gain</span><strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+            <div><span>Estimated Tax</span><strong>${summaryPreview.estimatedTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+            <div><span>Effective Rate</span><strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong></div>
+          </div>
+          <div className="tax-v2-net-row">
+            <span>Net After Tax</span>
+            <strong>${netAfterTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          </div>
+        </section>
       </div>
+
+      <div className="tax-v2-grid-bottom">
+        <section className="tax-v2-panel">
+          <div className="tax-v2-panel-head">
+            <h3><span className="num">4</span> Advanced Inputs</h3>
+            <button type="button" className="tax-v2-link-btn" onClick={() => setIsAdvancedOpen((v) => !v)}>{isAdvancedOpen ? "Hide" : "Show"}</button>
+          </div>
+          {isAdvancedOpen ? (
+            <>
+              <div className="tax-v2-advanced-grid">
+                <AdvancedField label="Cost Basis Method">
+                  <select value={advanced.costBasisMethod} onChange={(e) => setAdvanced((p) => ({ ...p, costBasisMethod: e.target.value }))}>
+                    <option value="fifo">FIFO</option>
+                    <option value="lifo">LIFO</option>
+                    <option value="hifo">HIFO</option>
+                    <option value="average">Average Cost</option>
+                    <option value="actual">Actual</option>
+                  </select>
+                </AdvancedField>
+                <AdvancedField label="Acquisition Date">
+                  <input type="date" value={advanced.acquisitionDate} onChange={(e) => setAdvanced((p) => ({ ...p, acquisitionDate: e.target.value }))} />
+                </AdvancedField>
+                <AdvancedField label="Sale Date">
+                  <input type="date" value={advanced.saleDate} onChange={(e) => setAdvanced((p) => ({ ...p, saleDate: e.target.value }))} />
+                </AdvancedField>
+                <AdvancedField label="Fees & Expenses">
+                  <input type="number" min="0" value={advanced.fees} onChange={(e) => setAdvanced((p) => ({ ...p, fees: Number(e.target.value) || 0 }))} />
+                </AdvancedField>
+                <AdvancedField label="Brokerage / Platform">
+                  <input type="number" min="0" value={advanced.brokerage} onChange={(e) => setAdvanced((p) => ({ ...p, brokerage: Number(e.target.value) || 0 }))} />
+                </AdvancedField>
+                <AdvancedField label="FX Rate">
+                  <input type="number" min="0.0001" step="0.0001" value={advanced.fxRate} onChange={(e) => setAdvanced((p) => ({ ...p, fxRate: Number(e.target.value) || 1 }))} />
+                </AdvancedField>
+                <AdvancedField label="Residency Status">
+                  <select value={advanced.residencyStatus} onChange={(e) => setAdvanced((p) => ({ ...p, residencyStatus: e.target.value }))}>
+                    <option value="resident">Resident</option>
+                    <option value="non-resident">Non-resident</option>
+                  </select>
+                </AdvancedField>
+                <AdvancedField label="Filing Status">
+                  <select value={advanced.filingStatus} onChange={(e) => setAdvanced((p) => ({ ...p, filingStatus: e.target.value }))}>
+                    <option value="single">Single</option>
+                    <option value="married-joint">Married (Joint)</option>
+                    <option value="married-separate">Married (Separate)</option>
+                    <option value="head-of-household">Head of Household</option>
+                  </select>
+                </AdvancedField>
+                <AdvancedField label="Tax Regime">
+                  <select value={advanced.taxRegime} onChange={(e) => setAdvanced((p) => ({ ...p, taxRegime: e.target.value }))}>
+                    <option value="individual">Individual</option>
+                    <option value="company">Company</option>
+                    <option value="trust">Trust</option>
+                    <option value="fund">Fund</option>
+                  </select>
+                </AdvancedField>
+              </div>
+              <label className="tax-v2-notes-field">
+                Notes (optional)
+                <input className="search-input tax-v2-input" type="text" placeholder="Add any additional context or assumptions..." value={advanced.notes} onChange={(e) => setAdvanced((p) => ({ ...p, notes: e.target.value }))} />
+              </label>
+            </>
+          ) : null}
+          <button type="button" className="tax-v2-calc-btn" onClick={handleCalculate}>Calculate Estimated Liabilities</button>
+          {inputWarnings.length ? (
+            <div className="tax-v2-warning-list">
+              {inputWarnings.map((warn, idx) => <div key={`warn-${idx}`}>{warn}</div>)}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="tax-v2-panel">
+          <div className="tax-v2-panel-head">
+            <h3><span className="num">5</span> Scenario Comparison</h3>
+            <button type="button" className="pagination-button">+ Add Scenario</button>
+          </div>
+          <div className="tax-v2-scenario-grid">
+            <div className="tax-v2-scenario-card">
+              <h4>{TAX_RULES[scenarioComparison.countryA]?.name}</h4>
+              <div><span>Taxable Gain</span><strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <div><span>Estimated Tax</span><strong>${scenarioComparison.nowA.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <div><span>Effective Rate</span><strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong></div>
+              <div><span>Net After Tax</span><strong className="positive">${Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowA).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+            </div>
+            <div className="tax-v2-scenario-card">
+              <h4>{TAX_RULES[scenarioComparison.countryB]?.name}</h4>
+              <div><span>Taxable Gain</span><strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <div><span>Estimated Tax</span><strong>${scenarioComparison.nowB.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <div><span>Effective Rate</span><strong>{summaryPreview.taxableGain > 0 ? ((scenarioComparison.nowB / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100).toFixed(2) : "0.00"}%</strong></div>
+              <div><span>Net After Tax</span><strong>${Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowB).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+            </div>
+          </div>
+          <div className="tax-v2-save-strip">
+            You save ${(scenarioComparison.nowB - scenarioComparison.nowA).toLocaleString(undefined, { maximumFractionDigits: 0 })} ({summaryPreview.grossTotal > 0 ? (((scenarioComparison.nowB - scenarioComparison.nowA) / summaryPreview.grossTotal) * 100).toFixed(2) : "0.00"}%)
+          </div>
+        </section>
+      </div>
+
+      <section className="tax-v2-panel tax-v2-footer">
+        <div>
+          <h4>Compliance & Sources</h4>
+          <p>This estimator is informational only and not tax advice. Confirm rates, forms, and filing treatment with a qualified advisor.</p>
+        </div>
+        <div className="tax-v2-source-links">
+          {TAX_RULE_SOURCES.map((source) => (
+            <a key={source.href} href={source.href} target="_blank" rel="noreferrer">{source.label}</a>
+          ))}
+        </div>
+      </section>
+
+      {results.length > 0 ? (
+        <section className="tax-v2-panel tax-v2-results">
+          <div className="tax-v2-panel-head">
+            <h3>Detailed Breakdown</h3>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="pagination-button" onClick={handleSave}>Save All</button>
+              <button className="pagination-button" onClick={handleExportCsv}>Export CSV</button>
+            </div>
+          </div>
+          <div className="tax-v2-results-grid">
+            {results.map((res) => (
+              <article key={res.jurisdictionKey} className="tax-v2-result-card">
+                <div className="head">
+                  <h4>{res.jurisdiction}</h4>
+                  <strong>{res.currency} {res.liability.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                </div>
+                <div className="rows">
+                  {Object.entries(res.details).map(([k, v]) => (
+                    <div key={k}><span>{k}</span><span>{res.currency} {Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {showImportPreview ? (
+        <section className="tax-v2-panel">
+          <div className="tax-v2-panel-head">
+            <h3>Import Preview</h3>
+            <button className="tax-v2-link-btn" onClick={() => setShowImportPreview(false)}>Close</button>
+          </div>
+          <p className="sub">Imported file: {fileName || 'N/A'} · Review mapped columns before finalizing.</p>
+          <p className="sub">Mapped: Trade Date, Sale Date, Asset Class, Proceeds, Cost Basis, Fees</p>
+        </section>
+      ) : null}
     </div>
   );
 }
