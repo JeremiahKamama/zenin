@@ -357,7 +357,7 @@ export function TaxEstimator({ trades = [] }) {
   const [savedEstimates, setSavedEstimates] = useState([]);
   const [auditTrail, setAuditTrail] = useState([]);
   const [fileName, setFileName] = useState('');
-  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(true);
   const [showImportPreview, setShowImportPreview] = useState(false);
   const [detectedCountry, setDetectedCountry] = useState('');
   const [additionalIncome, setAdditionalIncome] = useState(DEFAULT_INCOME_BREAKDOWN);
@@ -550,7 +550,7 @@ export function TaxEstimator({ trades = [] }) {
   });
 
   const summaryPreview = useMemo(() => {
-    const { adjustedGains, grossTotal, taxableGain, netAfterCosts } = buildAdjustedGains(gains, advanced);
+    const { adjustedGains, grossTotal, taxableGain, netAfterCosts, totalCosts } = buildAdjustedGains(gains, advanced);
     const first = jurisdictions[0] || "USA";
     const { liability } = calcLiability(first, adjustedGains, { ordinaryIncomeTotal });
     const taxCredits = Math.max(0, Number(advanced.foreignTaxPaid || 0)) + Math.max(0, Number(advanced.withholdingTax || 0));
@@ -560,6 +560,7 @@ export function TaxEstimator({ trades = [] }) {
       jurisdiction: TAX_RULES[first]?.name || "N/A",
       grossTotal,
       netAfterCosts,
+      totalCosts,
       taxableGain,
       ordinaryIncomeTotal,
       estimatedTax,
@@ -643,6 +644,23 @@ export function TaxEstimator({ trades = [] }) {
   }), [gains]);
 
   const netAfterTax = Math.max(0, Number(summaryPreview.grossTotal || 0) - Number(summaryPreview.estimatedTax || 0));
+  const formatMoney = (value) =>
+    `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const currencyLabel = advanced.currency || "USD";
+  const countryFlag = (jurisdictionKey) => {
+    const key = String(jurisdictionKey || "").toUpperCase();
+    const map = {
+      USA: "🇺🇸",
+      UAE: "🇦🇪",
+      GERMANY: "🇩🇪",
+      SINGAPORE: "🇸🇬",
+      UK: "🇬🇧",
+      CANADA: "🇨🇦",
+      FRANCE: "🇫🇷",
+      INDIA: "🇮🇳"
+    };
+    return map[key] || "🌐";
+  };
   const taxSavingsVsUAE = useMemo(() => {
     const { adjustedGains } = buildAdjustedGains(gains, advanced);
     const usLiability = calcLiability(jurisdictions[0] || "USA", adjustedGains, { ordinaryIncomeTotal }).liability;
@@ -660,29 +678,34 @@ export function TaxEstimator({ trades = [] }) {
         <div className="tax-v2-head-actions">
           <button type="button" className="pagination-button" onClick={handleSave}>Saved scenarios</button>
           <button type="button" className="pagination-button" onClick={handleExportCsv}>Export</button>
+          <button type="button" className="pagination-button" aria-label="More options">•••</button>
         </div>
       </div>
 
       <div className="tax-v2-kpis">
         <div className="tax-v2-kpi">
+          <div className="tax-v2-kpi-icon blue">$</div>
           <span>Estimated Tax</span>
-          <strong>${summaryPreview.estimatedTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          <strong>{formatMoney(summaryPreview.estimatedTax)}</strong>
           <em className="positive">↓ {Math.abs(taxSavingsVsUAE).toLocaleString(undefined, { maximumFractionDigits: 0 })} vs UAE</em>
         </div>
         <div className="tax-v2-kpi">
+          <div className="tax-v2-kpi-icon cyan">◔</div>
           <span>Effective Rate</span>
           <strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong>
           <em>vs 21.58% (UAE)</em>
         </div>
         <div className="tax-v2-kpi">
+          <div className="tax-v2-kpi-icon violet">▥</div>
           <span>Taxable Gain</span>
-          <strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+          <strong>{formatMoney(summaryPreview.taxableGain)}</strong>
           <em>{summaryPreview.grossTotal > 0 ? ((summaryPreview.taxableGain / summaryPreview.grossTotal) * 100).toFixed(1) : "0.0"}% of Gross Gains</em>
         </div>
         <div className="tax-v2-kpi">
+          <div className="tax-v2-kpi-icon green">◫</div>
           <span>Net After Tax</span>
-          <strong className="positive">${netAfterTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
-          <em>Total Gain: ${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</em>
+          <strong className="positive">{formatMoney(netAfterTax)}</strong>
+          <em>Total Gain: {formatMoney(summaryPreview.grossTotal)}</em>
         </div>
       </div>
 
@@ -702,10 +725,12 @@ export function TaxEstimator({ trades = [] }) {
               <button key={r} type="button" className={`tax-v2-pill ${activeRegion === r ? "active" : ""}`} onClick={() => setActiveRegion(r)}>{r}</button>
             ))}
           </div>
+          <p className="sub">Select jurisdiction</p>
           <div className="tax-v2-jur-list">
             {filteredJurisdictions.slice(0, 8).map(([key, info]) => (
               <label key={key} className={`tax-v2-jur-item ${jurisdictions.includes(key) ? "active" : ""}`}>
-                <div>
+                <div className="tax-v2-jur-main">
+                  <span className="tax-v2-jur-flag">{countryFlag(key)}</span>
                   <strong>{info.name}</strong>
                   <span>{jurisdictions[0] === key ? "Base jurisdiction" : info.logic}</span>
                 </div>
@@ -758,27 +783,31 @@ export function TaxEstimator({ trades = [] }) {
           </div>
           <div className="tax-v2-total-row">
             <span>Total Declared Gross Gains</span>
-            <strong>${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+            <strong>{formatMoney(summaryPreview.grossTotal)}</strong>
           </div>
         </section>
 
         <section className="tax-v2-panel">
-          <h3><span className="num">3</span> Live Summary</h3>
+          <div className="tax-v2-live-title">
+            <h3><span className="num">3</span> Live Summary</h3>
+            <span className="tax-v2-live-badge">● Realized</span>
+          </div>
           <div className="tax-v2-live-header">
             <span>Base Jurisdiction</span>
-            <strong>{summaryPreview.jurisdiction}</strong>
+            <strong>{countryFlag(jurisdictions[0] || "USA")} {summaryPreview.jurisdiction}</strong>
           </div>
           <div className="tax-v2-live-rows">
-            <div><span>Total Declared Gross Gains</span><strong>${summaryPreview.grossTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
-            <div><span>Less: Costs & Adjustments</span><strong>(${summaryPreview.totalCosts?.toLocaleString?.() || Number(advanced.fees + advanced.brokerage + advanced.slippage).toLocaleString(undefined, { maximumFractionDigits: 0 })})</strong></div>
-            <div><span>Taxable Gain</span><strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
-            <div><span>Estimated Tax</span><strong>${summaryPreview.estimatedTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+            <div><span>Total Declared Gross Gains</span><strong>{formatMoney(summaryPreview.grossTotal)}</strong></div>
+            <div><span>Less: Costs & Adjustments</span><strong>({formatMoney(summaryPreview.totalCosts || Number(advanced.fees + advanced.brokerage + advanced.slippage)).slice(1)})</strong></div>
+            <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
+            <div><span>Estimated Tax</span><strong>{formatMoney(summaryPreview.estimatedTax)}</strong></div>
             <div><span>Effective Rate</span><strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong></div>
           </div>
           <div className="tax-v2-net-row">
             <span>Net After Tax</span>
-            <strong>${netAfterTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+            <strong>{formatMoney(netAfterTax)}</strong>
           </div>
+          <div className="tax-v2-note">Estimates are directional. Add context for exceptions and special treatment.</div>
         </section>
       </div>
 
@@ -813,7 +842,10 @@ export function TaxEstimator({ trades = [] }) {
                   <input type="number" min="0" value={advanced.brokerage} onChange={(e) => setAdvanced((p) => ({ ...p, brokerage: Number(e.target.value) || 0 }))} />
                 </AdvancedField>
                 <AdvancedField label="FX Rate">
-                  <input type="number" min="0.0001" step="0.0001" value={advanced.fxRate} onChange={(e) => setAdvanced((p) => ({ ...p, fxRate: Number(e.target.value) || 1 }))} />
+                  <input type="text" value={`${advanced.fxRate} ${advanced.currency === "USD" ? "USD" : advanced.currency}`} onChange={(e) => {
+                    const value = Number(String(e.target.value).split(" ")[0]);
+                    setAdvanced((p) => ({ ...p, fxRate: Number.isFinite(value) && value > 0 ? value : p.fxRate }));
+                  }} />
                 </AdvancedField>
                 <AdvancedField label="Residency Status">
                   <select value={advanced.residencyStatus} onChange={(e) => setAdvanced((p) => ({ ...p, residencyStatus: e.target.value }))}>
@@ -859,18 +891,18 @@ export function TaxEstimator({ trades = [] }) {
           </div>
           <div className="tax-v2-scenario-grid">
             <div className="tax-v2-scenario-card">
-              <h4>{TAX_RULES[scenarioComparison.countryA]?.name}</h4>
-              <div><span>Taxable Gain</span><strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
-              <div><span>Estimated Tax</span><strong>${scenarioComparison.nowA.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <h4>{countryFlag(scenarioComparison.countryA)} {TAX_RULES[scenarioComparison.countryA]?.name}<span className="tax-v2-base-pill">Base</span></h4>
+              <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
+              <div><span>Estimated Tax</span><strong>{formatMoney(scenarioComparison.nowA)}</strong></div>
               <div><span>Effective Rate</span><strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong></div>
-              <div><span>Net After Tax</span><strong className="positive">${Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowA).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <div><span>Net After Tax</span><strong className="positive">{formatMoney(Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowA))}</strong></div>
             </div>
             <div className="tax-v2-scenario-card">
-              <h4>{TAX_RULES[scenarioComparison.countryB]?.name}</h4>
-              <div><span>Taxable Gain</span><strong>${summaryPreview.taxableGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
-              <div><span>Estimated Tax</span><strong>${scenarioComparison.nowB.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <h4>{countryFlag(scenarioComparison.countryB)} {TAX_RULES[scenarioComparison.countryB]?.name}</h4>
+              <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
+              <div><span>Estimated Tax</span><strong>{formatMoney(scenarioComparison.nowB)}</strong></div>
               <div><span>Effective Rate</span><strong>{summaryPreview.taxableGain > 0 ? ((scenarioComparison.nowB / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100).toFixed(2) : "0.00"}%</strong></div>
-              <div><span>Net After Tax</span><strong>${Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowB).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+              <div><span>Net After Tax</span><strong>{formatMoney(Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowB))}</strong></div>
             </div>
           </div>
           <div className="tax-v2-save-strip">
@@ -932,69 +964,15 @@ export function TaxEstimator({ trades = [] }) {
   );
 }
 
-// ── Helper micro-components ────────────────────────────────────────────────────
-function GainCard({ title, children }) {
-  return (
-    <div style={{ 
-      background: 'rgba(0, 0, 0, 0.65)', 
-      backdropFilter: 'blur(8px)',
-      padding: '14px', 
-      borderRadius: '12px', 
-      border: '1px solid rgba(148,163,184,0.12)',
-      boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
-    }}>
-      <h4 style={{ margin: '0 0 12px', fontSize: '0.88rem', color: '#e2e8f0' }}>{title}</h4>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>{children}</div>
-    </div>
-  );
-}
-
-function GainRow({ label, value, onChange }) {
-  return (
-    <div>
-      <label style={{ fontSize: '0.76rem', color: '#94a3b8', display: 'block', marginBottom: '3px' }}>{label}</label>
-      <input type="number" min="0" value={value} onChange={e => onChange(e.target.value)}
-        style={{ width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: '6px', color: '#f1f5f9', padding: '5px 8px', fontSize: '0.88rem' }} />
-    </div>
-  );
-}
-
-function SummaryRow({ label, value, tone = '#38bdf8' }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid rgba(148,163,184,0.1)' }}>
-      <span style={{ fontSize: '0.76rem', color: '#94a3b8' }}>{label}</span>
-      <span style={{ fontSize: '0.82rem', color: tone, fontWeight: 700 }}>{value}</span>
-    </div>
-  );
-}
-
 function AdvancedField({ label, children }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-      <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{label}</span>
-      <div style={{ display: 'flex' }}>
+    <label className="tax-v2-adv-field">
+      <span>{label}</span>
+      <div>
         {React.cloneElement(children, {
-          style: {
-            width: '100%',
-            boxSizing: 'border-box',
-            background: 'rgba(0,0,0,0.35)',
-            border: '1px solid rgba(148,163,184,0.2)',
-            borderRadius: '6px',
-            color: '#f1f5f9',
-            padding: '6px 8px',
-            fontSize: '0.82rem'
-          }
+          className: `tax-v2-adv-input ${children.props.className || ''}`.trim()
         })}
       </div>
     </label>
-  );
-}
-
-function MiniPill({ label, value }) {
-  return (
-    <div style={{ padding: '8px', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.15)', background: 'rgba(15,23,42,0.45)' }}>
-      <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '3px' }}>{label}</div>
-      <div style={{ fontSize: '0.82rem', color: '#f1f5f9', fontWeight: 700 }}>{value}</div>
-    </div>
   );
 }

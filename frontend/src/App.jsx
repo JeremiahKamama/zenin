@@ -2074,10 +2074,10 @@ const handleOptionTradeClosed = async (tradeId) => {
         </nav>
 
         <div className="sidebar-bottom">
-          <button className="sidebar-theme-row" onClick={toggleTheme} title="Theme">
+          <button className="sidebar-theme-row" onClick={toggleTheme} title="Theme: Dark">
             <span className="sidebar-theme-left">
-              <span className="sidebar-theme-icon">◔</span>
-              <span className="sidebar-theme-label">Theme</span>
+              <span className="sidebar-theme-icon">🌙</span>
+              <span className="sidebar-theme-label">🌙 ☀️</span>
             </span>
             <span className="sidebar-theme-chevron">›</span>
           </button>
