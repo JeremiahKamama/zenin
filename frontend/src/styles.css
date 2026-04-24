@@ -467,6 +467,35 @@ button {
   padding-top: 12px;
 }
 
+.analytics-tab-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.analytics-tab-pill {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.78);
+  color: #cbd5e1;
+  padding: 12px 16px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+.analytics-tab-pill.active {
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+}
+
+.analytics-tab-pill-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;
@@ -4918,6 +4947,10 @@ button {
   border-collapse: collapse;
 }
 
+.portfolio-v2-table.rebalance {
+  min-width: 560px;
+}
+
 .portfolio-v2-table th,
 .portfolio-v2-table td {
   text-align: left;
@@ -7142,8 +7175,9 @@ button {
   .mobile-hamburger-btn {
     display: flex;
     position: fixed;
-    top: 10px;
-    left: 10px;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    right: max(10px, env(safe-area-inset-right));
+    left: auto;
     z-index: 1000;
     background: rgba(148, 163, 184, 0.1);
     border: 1px solid rgba(148, 163, 184, 0.2);
@@ -8772,6 +8806,10 @@ button {
 }
 
 @media (max-width: 640px) {
+  .analytics-tab-list {
+    grid-template-columns: 1fr;
+  }
+
   .portfolio-v2-toolbar {
     width: 100%;
     justify-content: space-between;
@@ -8814,6 +8852,44 @@ button {
 
   .journal-v2-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .journal-v2-table-wrap {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .journal-v2-table {
+    min-width: 820px;
+  }
+
+  .journal-v2-table.compact {
+    min-width: 700px;
+  }
+
+  .journal-v2-table th:first-child,
+  .journal-v2-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: rgba(2, 6, 23, 0.96);
+    z-index: 2;
+  }
+
+  .journal-v2-table th:first-child {
+    z-index: 3;
+  }
+
+  .portfolio-v2-table.rebalance {
+    min-width: 620px;
+  }
+
+  .portfolio-v2-table.rebalance th,
+  .portfolio-v2-table.rebalance td {
+    white-space: nowrap;
+  }
+
+  .portfolio-v2-status {
+    padding: 3px 7px;
+    font-size: 0.76rem;
   }
 
   .journal-v2-heatmap-layout {

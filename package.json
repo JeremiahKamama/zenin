@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@vercel/speed-insights": "^2.0.0",
     "axios": "^1.15.0",
     "https": "^1.0.0",
     "ws": "^8.20.0"

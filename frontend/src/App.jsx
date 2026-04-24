@@ -15,6 +15,7 @@ import { calculateOptionPnL } from "./utils/optionsPnL";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch } from "./utils/zeninFetch";
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 
 

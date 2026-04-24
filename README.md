@@ -53,6 +53,7 @@ This README reflects the current implementation in this repository.
 - Live holdings valuation and aggregate gain/loss metrics
 - Portfolio charts and performance snapshots
 - Per-position entry-price aware gain calculations
+- Mobile-safe rebalancing table layout with improved horizontal overflow behavior
 
 ### 6) Options
 - Crypto options chain (Derive/Lyra-style provider route)
@@ -82,6 +83,8 @@ This README reflects the current implementation in this repository.
   - Success metrics (Win rate, Profit Factor, Expectancy)
   - Portfolio distribution and risk metrics
 - **Traded Assets Report**: Paginated overview with live price refresh and total volume tracking
+- Responsive cross-market Analytics tab stack (`Crypto`, `Options`, `Equities`, `Macro`, `Commodities`) for mobile
+- Journal table mobile hardening with sticky first column and controlled horizontal scrolling
 
 ### 9) Tax Estimator
 - Capital gains estimates for 40+ global jurisdictions (US, UK, India, Brazil, UAE, etc.)
@@ -101,7 +104,7 @@ This README reflects the current implementation in this repository.
 - Connected accounts modal for exchange/prediction market metadata
 - Notification + layout preference toggles
 
-## Current progress (as of April 21, 2026)
+## Current progress (as of April 23, 2026)
 
 - **Auth foundation implemented**: Server-side auth/session/reset-token flows exist and are rate-limited.
 - **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
@@ -112,8 +115,9 @@ This README reflects the current implementation in this repository.
 - **Analytics runtime fix shipped**: Resolved `selectedPerpExchange is not defined` crash in the Analytics module.
 - **Watchlist earnings fetch optimization shipped**: Earnings calendar now uses extended caching windows (frontend + backend) to avoid unnecessary reload fetches.
 - **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
+- **Mobile responsiveness fixes shipped**: Cross-market Analytics pills now stack cleanly on small screens; Journal and Portfolio tables were hardened for mobile overflow and clipping scenarios.
 
-## Current limitations (as of April 21, 2026)
+## Current limitations (as of April 23, 2026)
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
 - **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.

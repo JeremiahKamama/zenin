@@ -1198,8 +1198,8 @@ export function AnalyticsModule({ backendUrl }) {
       </section>
 
       {/* Tabs */}
-      <section>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+      <section className="analytics-tab-section">
+        <div className="analytics-tab-list">
           {CATEGORY_TABS.map((tab) => {
             const active = tab.id === activeTab;
             return (
@@ -1207,22 +1207,9 @@ export function AnalyticsModule({ backendUrl }) {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                style={{
-                  borderRadius: 999,
-                  border: active
-                    ? "1px solid rgba(56,189,248,0.38)"
-                    : "1px solid rgba(148,163,184,0.16)",
-                  background: active
-                    ? "rgba(56,189,248,0.12)"
-                    : "rgba(15,23,42,0.78)",
-                  color: active ? "#7dd3fc" : "#cbd5e1",
-                  padding: "12px 16px",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  minWidth: 220,
-                }}
+                className={`analytics-tab-pill ${active ? "active" : ""}`}
               >
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{tab.label}</div>
+                <div className="analytics-tab-pill-label">{tab.label}</div>
               </button>
             );
           })}
