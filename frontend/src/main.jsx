@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { Analytics } from "@vercel/analytics/react";
 import App from "./App";
 import AuthPage from "./AuthPage";
 import PublicHomepage from "./PublicHomepage";
@@ -19,5 +20,6 @@ const RootComponent = entry === "app" ? App : entry === "auth" ? AuthPage : Publ
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <RootComponent />
+    <Analytics />
   </React.StrictMode>
 );
