@@ -224,12 +224,20 @@ function sanitizeSymbol(symbol) {
   return symbol.replace(/[^a-zA-Z0-9.\-_:]/g, "").slice(0, 30);
 }
 
-// CORS — allow configured frontend origin (or all origins in dev)
-const allowedOrigins = [
-  process.env.FRONTEND_URL || "http://localhost:5173",
+// CORS — allow configured frontend origins and known production hosts
+const normalizeOrigin = (value) => String(value || "").trim().replace(/\/+$/, "");
+const configuredOrigins = String(process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((origin) => normalizeOrigin(origin))
+  .filter(Boolean);
+const allowedOrigins = Array.from(new Set([
+  "http://localhost:5173",
   "http://localhost:3000",
-  "https://zenincapital.com"
-];
+  "https://zenin.capital",
+  "https://www.zenin.capital",
+  "https://zenincapital.com",
+  ...configuredOrigins
+]));
 
 // Helper to fetch latest results from Dune Analytics
 async function fetchDuneLatestResults(queryId) {
@@ -259,13 +267,15 @@ async function fetchDuneLatestResults(queryId) {
 }
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    const normalizedOrigin = normalizeOrigin(origin);
+    if (!origin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
       callback(new Error("Not allowed by CORS"));
     }
   },
-  credentials: true
+  credentials: true,
+  optionsSuccessStatus: 204
 }));
 
 
