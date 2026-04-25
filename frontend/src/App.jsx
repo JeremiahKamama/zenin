@@ -45,23 +45,6 @@ function formatPlanLabel(plan, billingCycle = "monthly") {
   return `Starter Plan (${cycle})`;
 }
 
-function normalizeCurrentPlan(plan) {
-  const normalized = String(plan || "").trim().toLowerCase();
-  if (["starter", "pro", "desk"].includes(normalized)) return normalized;
-  return "starter";
-}
-
-function isPaidPlan(plan) {
-  const normalized = normalizeCurrentPlan(plan);
-  return normalized === "pro" || normalized === "desk";
-}
-
-function sanitizeInternalPath(path, fallback = "/app") {
-  const value = String(path || "").trim();
-  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
-  return value;
-}
-
 const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
   const price = Number(trade?.price);
@@ -1490,7 +1473,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
-  const [accountPlanLabel] = useState(() => {
+  const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
@@ -1572,16 +1555,10 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   useEffect(() => {
     let mounted = true;
-    const enforcePricing = async () => {
+    const hydrateOptionalAuth = async () => {
       const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
-      const requestedPath = sanitizeInternalPath(
-        `${window.location.pathname || "/app"}${window.location.search || ""}${window.location.hash || ""}`,
-        "/app"
-      );
-
       if (!token) {
-        localStorage.setItem("zenin_post_auth_next", requestedPath);
-        window.location.href = `/auth?mode=signin&next=${encodeURIComponent(requestedPath)}`;
+        if (mounted) setAccessCheckLoading(false);
         return;
       }
 
@@ -1592,28 +1569,20 @@ const handleOptionTradeClosed = async (tradeId) => {
         if (!res.ok || !data?.authenticated || !data?.user) {
           localStorage.removeItem("zenin_auth_token");
           localStorage.removeItem("zenin_auth_user");
-          localStorage.setItem("zenin_post_auth_next", requestedPath);
-          window.location.href = `/auth?mode=signin&next=${encodeURIComponent(requestedPath)}`;
-          return;
+        } else {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
+          setUserEmail(String(data.user.email || userEmail));
+          setAccountPlanLabel(formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
         }
-
-        localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-        if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
-        if (!isPaidPlan(data.user.currentPlan)) {
-          localStorage.setItem("zenin_post_auth_next", requestedPath);
-          window.location.href = `/?pricing=required&next=${encodeURIComponent(requestedPath)}#pricing`;
-          return;
-        }
-        setUserEmail(String(data.user.email || userEmail));
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
-        localStorage.setItem("zenin_post_auth_next", requestedPath);
-        window.location.href = `/?pricing=required&next=${encodeURIComponent(requestedPath)}#pricing`;
+        setAccessCheckLoading(false);
       }
     };
 
-    enforcePricing();
+    hydrateOptionalAuth();
     return () => {
       mounted = false;
     };
