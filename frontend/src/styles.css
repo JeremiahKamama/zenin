@@ -332,49 +332,61 @@ button {
 
 .sidebar-theme-row {
   width: 100%;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  background: linear-gradient(135deg, rgba(19, 34, 61, 0.72), rgba(15, 23, 42, 0.6));
   border-radius: 12px;
-  padding: 11px 12px;
+  padding: 10px 12px;
   color: #dbe4f2;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  transition: border-color 0.2s ease, background 0.2s ease;
+  gap: 10px;
+  min-height: 46px;
+  box-shadow: 0 6px 14px rgba(2, 6, 23, 0.25);
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
 }
 
 .sidebar-theme-row:hover {
-  border-color: rgba(59, 130, 246, 0.4);
-  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(96, 165, 250, 0.46);
+  background: linear-gradient(135deg, rgba(25, 50, 92, 0.78), rgba(24, 44, 81, 0.68));
+  transform: translateY(-1px);
 }
 
 .sidebar-theme-left {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
 }
 
 .sidebar-theme-icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.65);
-  display: inline-flex;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(15, 23, 42, 0.8);
+  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1rem;
+  font-size: 0.92rem;
+  color: #d7e7ff;
 }
 
 .sidebar-theme-label {
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
 }
 
-.sidebar-theme-chevron {
-  color: #8fa3c5;
+.sidebar-theme-chip {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9cc8ff;
+  background: rgba(13, 26, 48, 0.68);
 }
 
 .sidebar-footer {
@@ -455,7 +467,7 @@ button {
 }
 
 .sidebar.collapsed .sidebar-theme-label,
-.sidebar.collapsed .sidebar-theme-chevron,
+.sidebar.collapsed .sidebar-theme-chip,
 .sidebar.collapsed .sidebar-account-meta,
 .sidebar.collapsed .sidebar-account-chevron {
   display: none;

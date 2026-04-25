@@ -3,6 +3,7 @@ import { zeninFetch } from "./utils/zeninFetch";
 
 const PROVIDERS = ["google", "apple", "github", "microsoft"];
 const PASSKEY_PROVIDERS = ["iCloud Keychain", "Google Password Manager", "1Password", "Bitwarden"];
+const VALID_PLANS = ["starter", "pro", "desk"];
 
 function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
@@ -19,6 +20,37 @@ function persistAuth(result) {
     localStorage.setItem("zenin_auth_user", JSON.stringify(result.user));
     if (result.user.email) localStorage.setItem("zenin_email", result.user.email);
   }
+}
+
+function normalizePlan(plan) {
+  const value = String(plan || "").trim().toLowerCase();
+  return VALID_PLANS.includes(value) ? value : null;
+}
+
+function getRequestedPlan() {
+  let fromQuery = null;
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    fromQuery = normalizePlan(params.get("plan"));
+  }
+  const fromStorage = normalizePlan(localStorage.getItem("zenin_pending_plan"));
+  return fromQuery || fromStorage || null;
+}
+
+async function applyRequestedPlanIfAny() {
+  const plan = getRequestedPlan();
+  if (!plan) return;
+  const res = await zeninFetch("/account/plan", {
+    method: "POST",
+    body: JSON.stringify({ plan })
+  });
+  if (!res.ok) return;
+  const data = await res.json().catch(() => ({}));
+  if (data?.user) {
+    localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+    if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
+  }
+  localStorage.removeItem("zenin_pending_plan");
 }
 
 async function readJson(res) {
@@ -66,6 +98,7 @@ export default function AuthPage() {
     });
     const data = await readJson(res);
     persistAuth(data);
+    await applyRequestedPlanIfAny();
     window.location.href = "/app";
   });
 
@@ -76,6 +109,7 @@ export default function AuthPage() {
     });
     const data = await readJson(res);
     persistAuth(data);
+    await applyRequestedPlanIfAny();
     window.location.href = "/app";
   });
 
@@ -96,6 +130,7 @@ export default function AuthPage() {
     });
     const data = await readJson(res);
     persistAuth(data);
+    await applyRequestedPlanIfAny();
     window.location.href = "/app";
   });
 
@@ -106,6 +141,7 @@ export default function AuthPage() {
     });
     const data = await readJson(res);
     persistAuth(data);
+    await applyRequestedPlanIfAny();
     window.location.href = "/app";
   });
 

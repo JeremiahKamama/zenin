@@ -351,8 +351,16 @@ function sanitizeAuthUser(user = null) {
     twoFactorEnabled: Boolean(user.twoFactorEnabled),
     twoFactorMethod: user.twoFactorMethod || null,
     passkeys: Array.isArray(user.passkeys) ? user.passkeys : [],
+    currentPlan: String(user.currentPlan || "starter").trim().toLowerCase() || "starter",
+    planUpdatedAt: user.planUpdatedAt || null,
     createdAt: user.createdAt || null
   };
+}
+
+function normalizePlanInput(plan) {
+  const normalized = String(plan || "").trim().toLowerCase();
+  if (["starter", "pro", "desk"].includes(normalized)) return normalized;
+  return null;
 }
 
 function getBearerToken(req) {
@@ -1394,6 +1402,22 @@ app.get("/api/auth/me", async (req, res) => {
   }
   const user = await userAuth.findUserById(req.auth.userId);
   return res.json({ authenticated: true, user: sanitizeAuthUser(user) });
+});
+
+app.post("/api/account/plan", requireSignedIn, async (req, res) => {
+  try {
+    const plan = normalizePlanInput(req.body?.plan);
+    if (!plan) {
+      return res.status(400).json({ error: "Plan must be one of: starter, pro, desk." });
+    }
+    const updatedUser = await userAuth.updateCurrentPlan(req.auth.userId, plan);
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    return res.json({ success: true, user: sanitizeAuthUser(updatedUser) });
+  } catch (error) {
+    return handleServerError(res, "Account plan update failed", error);
+  }
 });
 
 app.post("/api/auth/signup", authLimiter, async (req, res) => {

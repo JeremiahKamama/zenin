@@ -37,6 +37,13 @@ function parseRouteFromLocation() {
   }
 }
 
+function formatPlanLabel(plan) {
+  const normalized = String(plan || "").trim().toLowerCase();
+  if (normalized === "pro") return "Pro Plan";
+  if (normalized === "desk") return "Desk Plan";
+  return "Starter Plan";
+}
+
 const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
   const price = Number(trade?.price);
@@ -1464,6 +1471,15 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
+  const [accountPlanLabel] = useState(() => {
+    try {
+      const rawUser = localStorage.getItem("zenin_auth_user");
+      const parsed = rawUser ? JSON.parse(rawUser) : null;
+      return formatPlanLabel(parsed?.currentPlan);
+    } catch {
+      return "Starter Plan";
+    }
+  });
 
   const [themeMode, setThemeMode] = useState("dark");
 
@@ -2075,12 +2091,17 @@ const handleOptionTradeClosed = async (tradeId) => {
         </nav>
 
         <div className="sidebar-bottom">
-          <button className="sidebar-theme-row" onClick={toggleTheme} title="Theme: Dark">
+          <button
+            className="sidebar-theme-row"
+            onClick={toggleTheme}
+            title="Theme: Dark mode"
+            aria-label="Theme set to dark mode"
+          >
             <span className="sidebar-theme-left">
-              <span className="sidebar-theme-icon">🌙</span>
-              <span className="sidebar-theme-label">🌙 ☀️</span>
+              <span className="sidebar-theme-icon" aria-hidden="true">☾</span>
+              <span className="sidebar-theme-label">Dark mode</span>
             </span>
-            <span className="sidebar-theme-chevron">›</span>
+            <span className="sidebar-theme-chip">Active</span>
           </button>
 
           <button
@@ -2095,7 +2116,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               <span className="sidebar-footer-email" title={userEmail}>
                 {userEmail}
               </span>
-              <span className="sidebar-plan-label">Premium Plan</span>
+              <span className="sidebar-plan-label">{accountPlanLabel}</span>
             </div>
             <span className="sidebar-account-chevron">⌄</span>
           </button>

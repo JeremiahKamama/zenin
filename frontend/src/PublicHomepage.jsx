@@ -1,11 +1,98 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { zeninFetch } from "./utils/zeninFetch";
+
+const VALID_PLANS = ["starter", "pro", "desk"];
+
+function normalizePlan(plan) {
+  const value = String(plan || "").trim().toLowerCase();
+  return VALID_PLANS.includes(value) ? value : "starter";
+}
+
+function readStoredAuthUser() {
+  try {
+    const raw = localStorage.getItem("zenin_auth_user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAuthUser(user) {
+  if (!user) return;
+  try {
+    localStorage.setItem("zenin_auth_user", JSON.stringify(user));
+    if (user.email) localStorage.setItem("zenin_email", user.email);
+  } catch {
+    // no-op
+  }
+}
 
 export default function PublicHomepage() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [authUser, setAuthUser] = useState(() => readStoredAuthUser());
+  const [pricingBusyPlan, setPricingBusyPlan] = useState("");
+  const [pricingError, setPricingError] = useState("");
+
+  const activePlan = useMemo(
+    () => normalizePlan(authUser?.currentPlan),
+    [authUser?.currentPlan]
+  );
 
   useEffect(() => {
     document.documentElement.classList.remove("light-theme-active");
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
+    if (!token) return;
+    zeninFetch("/auth/me")
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (!mounted) return;
+        if (data?.authenticated && data?.user) {
+          setAuthUser(data.user);
+          saveAuthUser(data.user);
+        }
+      })
+      .catch(() => {
+        // best-effort sync
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handlePlanSelection = async (plan) => {
+    const normalizedPlan = normalizePlan(plan);
+    setPricingError("");
+
+    const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
+    if (!token) {
+      localStorage.setItem("zenin_pending_plan", normalizedPlan);
+      window.location.href = `/auth?mode=signup&plan=${encodeURIComponent(normalizedPlan)}`;
+      return;
+    }
+
+    setPricingBusyPlan(normalizedPlan);
+    try {
+      const res = await zeninFetch("/account/plan", {
+        method: "POST",
+        body: JSON.stringify({ plan: normalizedPlan })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to update plan.");
+      if (data?.user) {
+        setAuthUser(data.user);
+        saveAuthUser(data.user);
+      }
+      window.location.href = "/app";
+    } catch (error) {
+      setPricingError(error?.message || "Could not connect plan to your account.");
+    } finally {
+      setPricingBusyPlan("");
+    }
+  };
 
   return (
     <div className="zc-home">
@@ -198,9 +285,144 @@ export default function PublicHomepage() {
               <article className="feature-card"><div className="feature-icon icon-options">◉</div><h3>Options</h3><p>Analyze chains, simulate strategies, and model payoffs.</p></article>
               <article className="feature-card"><div className="feature-icon icon-predictions">↗</div><h3>Predictions</h3><p>Track markets, whale activity, and position insights.</p></article>
               <article className="feature-card"><div className="feature-icon icon-journal">📘</div><h3>Journal</h3><p>Log trades, review execution, and keep performance notes.</p></article>
-              <article className="feature-card" id="pricing"><div className="feature-icon icon-analytics">▥</div><h3>Analytics</h3><p>Measure results with P&amp;L, win rate, and risk metrics.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-analytics">▥</div><h3>Analytics</h3><p>Measure results with P&amp;L, win rate, and risk metrics.</p></article>
               <article className="feature-card" id="about"><div className="feature-icon icon-tax">⌘</div><h3>Tax Estimator</h3><p>Estimate capital gains across 40+ countries with exports.</p></article>
             </div>
+
+            <section className="pricing-section" id="pricing">
+              <div className="pricing-head">
+                <div>
+                  <div className="section-tag">Pricing</div>
+                  <h3>Pick your Zenin plan</h3>
+                  <p>Start free, then scale into pro workflows when you need institutional-grade depth.</p>
+                </div>
+                <div className="pricing-billing-pill" aria-label="Billing cycle">
+                  <span className="is-active">Monthly</span>
+                  <span>Yearly</span>
+                </div>
+              </div>
+
+              <div className="pricing-grid">
+                <article className="pricing-card">
+                  <div className="pricing-card-head">
+                    <h4>Starter</h4>
+                    <span className="pricing-badge muted">For beginners</span>
+                  </div>
+                  <p className="pricing-desc">Personal market tracking and portfolio journaling.</p>
+                  <div className="pricing-price"><strong>$0</strong><span>/month</span></div>
+                  <ul className="pricing-list">
+                    <li>1 live portfolio</li>
+                    <li>Watchlist + macro alerts</li>
+                    <li>Basic journal analytics</li>
+                    <li>Email support</li>
+                  </ul>
+                  <button
+                    className="btn btn-secondary pricing-cta"
+                    onClick={() => handlePlanSelection("starter")}
+                    disabled={pricingBusyPlan === "starter" || activePlan === "starter"}
+                  >
+                    {pricingBusyPlan === "starter" ? "Saving..." : activePlan === "starter" ? "Current Plan" : "Get Started"}
+                  </button>
+                </article>
+
+                <article className="pricing-card featured">
+                  <div className="pricing-card-head">
+                    <h4>Pro</h4>
+                    <span className="pricing-badge">Most popular</span>
+                  </div>
+                  <p className="pricing-desc">Cross-market workflows for active investors and traders.</p>
+                  <div className="pricing-price"><strong>$29</strong><span>/month</span></div>
+                  <ul className="pricing-list">
+                    <li>Unlimited portfolios</li>
+                    <li>Company deep-dive module</li>
+                    <li>Advanced options strategy lab</li>
+                    <li>Prediction market flow tracker</li>
+                  </ul>
+                  <button
+                    className="btn btn-primary pricing-cta"
+                    onClick={() => handlePlanSelection("pro")}
+                    disabled={pricingBusyPlan === "pro" || activePlan === "pro"}
+                  >
+                    {pricingBusyPlan === "pro" ? "Saving..." : activePlan === "pro" ? "Current Plan" : "Start Pro"}
+                  </button>
+                </article>
+
+                <article className="pricing-card">
+                  <div className="pricing-card-head">
+                    <h4>Desk</h4>
+                    <span className="pricing-badge muted">For teams</span>
+                  </div>
+                  <p className="pricing-desc">Shared workspaces, controls, and premium integrations.</p>
+                  <div className="pricing-price"><strong>$99</strong><span>/month</span></div>
+                  <ul className="pricing-list">
+                    <li>5 team seats included</li>
+                    <li>Role-based permissions</li>
+                    <li>Priority data refresh</li>
+                    <li>Dedicated support channel</li>
+                  </ul>
+                  <button
+                    className="btn btn-secondary pricing-cta"
+                    onClick={() => handlePlanSelection("desk")}
+                    disabled={pricingBusyPlan === "desk" || activePlan === "desk"}
+                  >
+                    {pricingBusyPlan === "desk" ? "Saving..." : activePlan === "desk" ? "Current Plan" : "Choose Desk"}
+                  </button>
+                </article>
+              </div>
+
+              {pricingError ? <p className="pricing-error">{pricingError}</p> : null}
+
+              <div className="pricing-compare">
+                <div className="pricing-compare-head">
+                  <h4>Feature comparison</h4>
+                  <span>Built for progression from solo to desk-level workflows.</span>
+                </div>
+                <div className="pricing-table-wrap">
+                  <table className="pricing-table">
+                    <thead>
+                      <tr>
+                        <th>Capability</th>
+                        <th>Starter</th>
+                        <th>Pro</th>
+                        <th>Desk</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Live pricing + watchlist</td>
+                        <td>Included</td>
+                        <td>Included</td>
+                        <td>Included</td>
+                      </tr>
+                      <tr>
+                        <td>Portfolio analytics depth</td>
+                        <td>Basic</td>
+                        <td>Advanced</td>
+                        <td>Advanced + team view</td>
+                      </tr>
+                      <tr>
+                        <td>Options strategy simulator</td>
+                        <td>Limited</td>
+                        <td>Full</td>
+                        <td>Full</td>
+                      </tr>
+                      <tr>
+                        <td>Prediction and whale feed</td>
+                        <td>-</td>
+                        <td>Included</td>
+                        <td>Included</td>
+                      </tr>
+                      <tr>
+                        <td>Team seats</td>
+                        <td>1</td>
+                        <td>1</td>
+                        <td>5 included</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
 
             <div className="bottom-cta">
               <div>
