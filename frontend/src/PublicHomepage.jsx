@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
@@ -104,8 +104,13 @@ export default function PublicHomepage() {
     () => normalizeBillingCycle(authUser?.currentBillingCycle || "monthly"),
     [authUser?.currentBillingCycle]
   );
+  const hasAuthToken = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(String(localStorage.getItem("zenin_auth_token") || "").trim());
+  }, []);
+  const hasAuthenticatedPlanContext = hasAuthToken && Boolean(authUser?.id);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
     const body = document.body;
     const prevRootColorScheme = root.style.colorScheme;
@@ -188,12 +193,14 @@ export default function PublicHomepage() {
   };
 
   const isCurrentSelection = (plan) =>
-    normalizePlan(plan) === activePlan && activeBillingCycle === normalizeBillingCycle(billingCycle);
+    hasAuthenticatedPlanContext &&
+    normalizePlan(plan) === activePlan &&
+    activeBillingCycle === normalizeBillingCycle(billingCycle);
 
   const renderCtaText = (plan, fallback) => {
     if (pricingBusyPlan === plan) return "Saving...";
     if (isCurrentSelection(plan)) return "Current Plan";
-    if (activePlan === plan) {
+    if (hasAuthenticatedPlanContext && activePlan === plan) {
       return billingCycle === "yearly" ? "Switch to Yearly" : "Switch to Monthly";
     }
     if (billingCycle === "yearly" && plan !== "starter") return `${fallback} Yearly`;

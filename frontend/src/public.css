@@ -2,6 +2,13 @@
   --zc-font: "Inter", "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
+html.page-dark-theme,
+body.page-dark-theme,
+body.page-dark-theme #root {
+  color-scheme: dark !important;
+  background: #020610 !important;
+}
+
 .zc-home,
 .zc-home * {
   box-sizing: border-box;
@@ -35,6 +42,33 @@
     radial-gradient(circle at 10% 20%, rgba(37, 95, 255, 0.22), transparent 26%),
     radial-gradient(circle at 82% 18%, rgba(72, 118, 255, 0.14), transparent 24%),
     linear-gradient(180deg, #040915 0%, #060c19 35%, #020610 100%);
+  color-scheme: dark !important;
+}
+
+/* Dark baseline for all homepage controls/components */
+.zc-home input,
+.zc-home select,
+.zc-home textarea,
+.zc-home button {
+  color-scheme: dark;
+}
+
+.zc-home input:not([type="checkbox"]):not([type="radio"]),
+.zc-home select,
+.zc-home textarea {
+  background: rgba(8, 18, 36, 0.86);
+  border: 1px solid rgba(104, 149, 255, 0.24);
+  color: #dce8ff;
+}
+
+.zc-home input::placeholder,
+.zc-home textarea::placeholder {
+  color: #7f91b7;
+}
+
+.zc-home select option {
+  background: #071326;
+  color: #dce8ff;
 }
 
 .zc-home::before {
