@@ -157,6 +157,16 @@ button {
   overflow-x: hidden;
 }
 
+.app-access-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #02050f;
+  color: #cddcf8;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+}
+
 .sidebar {
   width: 270px;
   flex-shrink: 0;

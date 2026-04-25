@@ -8,6 +8,12 @@ function normalizePlan(plan) {
   return VALID_PLANS.includes(value) ? value : "starter";
 }
 
+function sanitizeInternalPath(path, fallback = "/app") {
+  const value = String(path || "").trim();
+  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
+  return value;
+}
+
 function readStoredAuthUser() {
   try {
     const raw = localStorage.getItem("zenin_auth_user");
@@ -32,6 +38,13 @@ export default function PublicHomepage() {
   const [authUser, setAuthUser] = useState(() => readStoredAuthUser());
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
+  const [postPlanTarget] = useState(() => {
+    if (typeof window === "undefined") return "/app";
+    const search = new URLSearchParams(window.location.search);
+    const queryNext = sanitizeInternalPath(search.get("next"), "");
+    const storedNext = sanitizeInternalPath(localStorage.getItem("zenin_post_auth_next"), "");
+    return queryNext || storedNext || "/app";
+  });
 
   const activePlan = useMemo(
     () => normalizePlan(authUser?.currentPlan),
@@ -70,7 +83,8 @@ export default function PublicHomepage() {
     const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
     if (!token) {
       localStorage.setItem("zenin_pending_plan", normalizedPlan);
-      window.location.href = `/auth?mode=signup&plan=${encodeURIComponent(normalizedPlan)}`;
+      localStorage.setItem("zenin_post_auth_next", postPlanTarget);
+      window.location.href = `/auth?mode=signup&plan=${encodeURIComponent(normalizedPlan)}&next=${encodeURIComponent(postPlanTarget)}`;
       return;
     }
 
@@ -86,7 +100,8 @@ export default function PublicHomepage() {
         setAuthUser(data.user);
         saveAuthUser(data.user);
       }
-      window.location.href = "/app";
+      localStorage.removeItem("zenin_post_auth_next");
+      window.location.href = postPlanTarget;
     } catch (error) {
       setPricingError(error?.message || "Could not connect plan to your account.");
     } finally {

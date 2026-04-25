@@ -27,6 +27,22 @@ function normalizePlan(plan) {
   return VALID_PLANS.includes(value) ? value : null;
 }
 
+function sanitizeInternalPath(path, fallback = "/app") {
+  const value = String(path || "").trim();
+  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
+  return value;
+}
+
+function getPostAuthRedirectPath() {
+  let queryNext = null;
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    queryNext = sanitizeInternalPath(params.get("next"), "");
+  }
+  const storedNext = sanitizeInternalPath(localStorage.getItem("zenin_post_auth_next"), "");
+  return queryNext || storedNext || "/app";
+}
+
 function getRequestedPlan() {
   let fromQuery = null;
   if (typeof window !== "undefined") {
@@ -99,7 +115,9 @@ export default function AuthPage() {
     const data = await readJson(res);
     persistAuth(data);
     await applyRequestedPlanIfAny();
-    window.location.href = "/app";
+    const target = getPostAuthRedirectPath();
+    localStorage.removeItem("zenin_post_auth_next");
+    window.location.href = target;
   });
 
   const onSignin = () => runAction(async () => {
@@ -110,7 +128,9 @@ export default function AuthPage() {
     const data = await readJson(res);
     persistAuth(data);
     await applyRequestedPlanIfAny();
-    window.location.href = "/app";
+    const target = getPostAuthRedirectPath();
+    localStorage.removeItem("zenin_post_auth_next");
+    window.location.href = target;
   });
 
   const onForgotRequest = () => runAction(async () => {
@@ -131,7 +151,9 @@ export default function AuthPage() {
     const data = await readJson(res);
     persistAuth(data);
     await applyRequestedPlanIfAny();
-    window.location.href = "/app";
+    const target = getPostAuthRedirectPath();
+    localStorage.removeItem("zenin_post_auth_next");
+    window.location.href = target;
   });
 
   const onOAuthMock = (provider) => runAction(async () => {
@@ -142,7 +164,9 @@ export default function AuthPage() {
     const data = await readJson(res);
     persistAuth(data);
     await applyRequestedPlanIfAny();
-    window.location.href = "/app";
+    const target = getPostAuthRedirectPath();
+    localStorage.removeItem("zenin_post_auth_next");
+    window.location.href = target;
   });
 
   const onEnableTwoFactor = () => runAction(async () => {

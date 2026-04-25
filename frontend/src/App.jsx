@@ -44,6 +44,23 @@ function formatPlanLabel(plan) {
   return "Starter Plan";
 }
 
+function normalizeCurrentPlan(plan) {
+  const normalized = String(plan || "").trim().toLowerCase();
+  if (["starter", "pro", "desk"].includes(normalized)) return normalized;
+  return "starter";
+}
+
+function isPaidPlan(plan) {
+  const normalized = normalizeCurrentPlan(plan);
+  return normalized === "pro" || normalized === "desk";
+}
+
+function sanitizeInternalPath(path, fallback = "/app") {
+  const value = String(path || "").trim();
+  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
+  return value;
+}
+
 const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
   const price = Number(trade?.price);
@@ -1471,6 +1488,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
+  const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [accountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
@@ -1550,6 +1568,55 @@ const handleOptionTradeClosed = async (tradeId) => {
       };
     }
   });
+
+  useEffect(() => {
+    let mounted = true;
+    const enforcePricing = async () => {
+      const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
+      const requestedPath = sanitizeInternalPath(
+        `${window.location.pathname || "/app"}${window.location.search || ""}${window.location.hash || ""}`,
+        "/app"
+      );
+
+      if (!token) {
+        localStorage.setItem("zenin_post_auth_next", requestedPath);
+        window.location.href = `/auth?mode=signin&next=${encodeURIComponent(requestedPath)}`;
+        return;
+      }
+
+      try {
+        const res = await zeninFetch("/auth/me");
+        const data = await res.json().catch(() => ({}));
+        if (!mounted) return;
+        if (!res.ok || !data?.authenticated || !data?.user) {
+          localStorage.removeItem("zenin_auth_token");
+          localStorage.removeItem("zenin_auth_user");
+          localStorage.setItem("zenin_post_auth_next", requestedPath);
+          window.location.href = `/auth?mode=signin&next=${encodeURIComponent(requestedPath)}`;
+          return;
+        }
+
+        localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+        if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
+        if (!isPaidPlan(data.user.currentPlan)) {
+          localStorage.setItem("zenin_post_auth_next", requestedPath);
+          window.location.href = `/?pricing=required&next=${encodeURIComponent(requestedPath)}#pricing`;
+          return;
+        }
+        setUserEmail(String(data.user.email || userEmail));
+        setAccessCheckLoading(false);
+      } catch {
+        if (!mounted) return;
+        localStorage.setItem("zenin_post_auth_next", requestedPath);
+        window.location.href = `/?pricing=required&next=${encodeURIComponent(requestedPath)}#pricing`;
+      }
+    };
+
+    enforcePricing();
+    return () => {
+      mounted = false;
+    };
+  }, []);
   const [connectedAccounts, setConnectedAccounts] = useState(() => {
     const raw = localStorage.getItem("zenin_connected_accounts");
     if (!raw) return [];
@@ -2048,6 +2115,9 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   return (
+    accessCheckLoading ? (
+      <div className="app-access-loading">Verifying account access...</div>
+    ) : (
     <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       {isSidebarCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
         <button
@@ -3024,6 +3094,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         </div>
       )}
     </div>
+    )
   );
 }
 
