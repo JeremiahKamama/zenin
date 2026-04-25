@@ -106,7 +106,24 @@ export default function PublicHomepage() {
   );
 
   useEffect(() => {
-    document.documentElement.classList.remove("light-theme-active");
+    const root = document.documentElement;
+    const body = document.body;
+    const prevRootColorScheme = root.style.colorScheme;
+    const prevBodyColorScheme = body.style.colorScheme;
+
+    root.classList.remove("light-theme-active");
+    body.classList.remove("light-theme-active");
+    root.classList.add("page-dark-theme");
+    body.classList.add("page-dark-theme");
+    root.style.colorScheme = "dark";
+    body.style.colorScheme = "dark";
+
+    return () => {
+      root.style.colorScheme = prevRootColorScheme;
+      body.style.colorScheme = prevBodyColorScheme;
+      root.classList.remove("page-dark-theme");
+      body.classList.remove("page-dark-theme");
+    };
   }, []);
 
   useEffect(() => {
@@ -375,7 +392,7 @@ export default function PublicHomepage() {
               <article className="feature-card"><div className="feature-icon icon-predictions">↗</div><h3>Predictions</h3><p>Track markets, whale activity, and position insights.</p></article>
               <article className="feature-card"><div className="feature-icon icon-journal">📘</div><h3>Journal</h3><p>Log trades, review execution, and keep performance notes.</p></article>
               <article className="feature-card"><div className="feature-icon icon-analytics">▥</div><h3>Analytics</h3><p>Measure results with P&amp;L, win rate, and risk metrics.</p></article>
-              <article className="feature-card" id="about"><div className="feature-icon icon-tax">⌘</div><h3>Tax Estimator</h3><p>Estimate capital gains across 40+ countries with exports.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-tax">⌘</div><h3>Tax Estimator</h3><p>Estimate capital gains across 40+ countries with exports.</p></article>
             </div>
 
             <section className="pricing-section" id="pricing">
@@ -542,6 +559,57 @@ export default function PublicHomepage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </section>
+
+            <section className="about-section" id="about">
+              <div className="about-head">
+                <div className="section-tag">About</div>
+                <h3>About Jeremiah Kamama</h3>
+                <p>
+                  Autodidact focused on AI, crypto privacy, and DeFi research with practical work across machine learning,
+                  policy, and on-the-ground ecosystem analysis.
+                </p>
+              </div>
+
+              <div className="about-grid">
+                <article className="about-card">
+                  <h4>Focus Areas</h4>
+                  <ul>
+                    <li>Artificial Intelligence and applied ML systems</li>
+                    <li>Crypto privacy and DeFi research</li>
+                    <li>African startup and blockchain ecosystem analysis</li>
+                  </ul>
+                </article>
+
+                <article className="about-card">
+                  <h4>Selected Work</h4>
+                  <ul>
+                    <li>
+                      Omdena + World Food Programme disaster-response challenge:
+                      worked with 34 ML engineers from 19 countries to help model affected populations and customize relief packages.
+                    </li>
+                    <li>
+                      Collaboration with Blockchain Club at Columbia University on
+                      <a href="https://blockchain.mirror.xyz/I2bACAPl83UZ9ScCpYns1wyF1ZazHCdYU2eKe4-Xcuc" target="_blank" rel="noreferrer"> What Crypto Means to Africa</a>.
+                    </li>
+                    <li>
+                      Summer Analyst at Audacity Fund and recipient of a DeFi Education Fund grant
+                      for Africa crypto policy research.
+                    </li>
+                    <li>
+                      Panel speaker at ETH Safari (September 2022) on
+                      <a href="https://ethsafari2022.sched.com/event/1B2ZR/vc-investments-in-web3-tokens-vs-equity-decentralized-vcs" target="_blank" rel="noreferrer">
+                        {" "}VC investments in web3: Tokens vs Equity - Decentralized VCs
+                      </a>.
+                    </li>
+                  </ul>
+                </article>
+              </div>
+
+              <div className="about-actions">
+                <a className="btn btn-secondary" href="https://www.kamama.co/about-me/" target="_blank" rel="noreferrer">Read Full About</a>
+                <a className="btn btn-primary" href="https://x.com/JeremiahKamama" target="_blank" rel="noreferrer">Connect on X</a>
               </div>
             </section>
 
