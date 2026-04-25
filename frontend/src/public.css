@@ -748,6 +748,118 @@
   line-height: 1.7;
 }
 
+.zc-home .coverage-section {
+  margin-top: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(104, 149, 255, 0.2);
+  background: linear-gradient(180deg, rgba(8, 18, 36, 0.9), rgba(5, 12, 24, 0.94));
+  padding: 20px;
+}
+
+.zc-home .coverage-head h3 {
+  margin: 0 0 8px;
+  font-size: clamp(1.5rem, 3.2vw, 2.2rem);
+  letter-spacing: -0.03em;
+}
+
+.zc-home .coverage-head p {
+  margin: 0;
+  color: var(--muted);
+  max-width: 72ch;
+  font-size: 0.98rem;
+  line-height: 1.7;
+}
+
+.zc-home .coverage-plan-refs {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.zc-home .coverage-plan-chip {
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(6, 14, 28, 0.78);
+  padding: 10px;
+  display: grid;
+  gap: 5px;
+}
+
+.zc-home .coverage-plan-chip strong {
+  font-size: 0.86rem;
+  letter-spacing: 0.01em;
+}
+
+.zc-home .coverage-plan-chip span {
+  font-size: 0.76rem;
+  color: #9eb0d5;
+  line-height: 1.4;
+}
+
+.zc-home .coverage-plan-chip b {
+  font-size: 0.85rem;
+  color: #cfe1ff;
+}
+
+.zc-home .coverage-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.zc-home .coverage-card {
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(7, 16, 33, 0.78);
+  padding: 14px;
+}
+
+.zc-home .coverage-card h4 {
+  margin: 0 0 10px;
+  font-size: 0.96rem;
+  letter-spacing: -0.01em;
+}
+
+.zc-home .coverage-card ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: #cddbf5;
+  font-size: 0.89rem;
+  line-height: 1.6;
+}
+
+.zc-home .coverage-kpis {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.zc-home .coverage-kpis div {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: rgba(6, 14, 28, 0.82);
+  padding: 12px;
+}
+
+.zc-home .coverage-kpis strong {
+  display: block;
+  font-size: 1.5rem;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.zc-home .coverage-kpis span {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: #9eb0d5;
+}
+
 .zc-home .pricing-section {
   margin-top: 26px;
   padding: 24px;
@@ -1274,6 +1386,14 @@
     grid-template-columns: 1fr;
   }
 
+  .zc-home .coverage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .zc-home .coverage-plan-refs {
+    grid-template-columns: 1fr;
+  }
+
   .zc-home .proof-item:nth-child(2) {
     border-right: 0;
   }
@@ -1404,6 +1524,14 @@
   .zc-home .pricing-compare-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .zc-home .coverage-section {
+    padding: 16px;
+  }
+
+  .zc-home .coverage-kpis {
+    grid-template-columns: 1fr;
   }
 
   .zc-home .about-section {

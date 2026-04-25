@@ -200,6 +200,27 @@ export default function PublicHomepage() {
     return fallback;
   };
 
+  const coveragePlanRefs = useMemo(() => ([
+    {
+      key: "starter",
+      label: "Starter",
+      description: "Core coverage for personal tracking",
+      price: `${toMoney(getPlanPrice("starter", billingCycle).amount)}${getPlanPrice("starter", billingCycle).periodLabel}`
+    },
+    {
+      key: "pro",
+      label: "Pro",
+      description: "Adds advanced analytics and journal depth",
+      price: `${toMoney(getPlanPrice("pro", billingCycle).amount)}${getPlanPrice("pro", billingCycle).periodLabel}`
+    },
+    {
+      key: "desk",
+      label: "Desk",
+      description: "Full multi-desk coverage and premium integrations",
+      price: `${toMoney(getPlanPrice("desk", billingCycle).amount)}${getPlanPrice("desk", billingCycle).periodLabel}`
+    }
+  ]), [billingCycle]);
+
   return (
     <div className="zc-home">
       <header className="site-header">
@@ -387,13 +408,69 @@ export default function PublicHomepage() {
             <div className="cards-grid">
               <article className="feature-card"><div className="feature-icon icon-watchlist">☆</div><h3>Watchlist</h3><p>Track assets, themes, earnings, and macro in one place.</p></article>
               <article className="feature-card"><div className="feature-icon icon-company">🏛</div><h3>Company Profile</h3><p>Deep stock research with news, insiders, earnings, and leadership context.</p></article>
-              <article className="feature-card" id="coverage"><div className="feature-icon icon-portfolio">◔</div><h3>Portfolio</h3><p>Manage holdings, trades, performance, and live P&amp;L.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-portfolio">◔</div><h3>Portfolio</h3><p>Manage holdings, trades, performance, and live P&amp;L.</p></article>
               <article className="feature-card"><div className="feature-icon icon-options">◉</div><h3>Options</h3><p>Analyze chains, simulate strategies, and model payoffs.</p></article>
               <article className="feature-card"><div className="feature-icon icon-predictions">↗</div><h3>Predictions</h3><p>Track markets, whale activity, and position insights.</p></article>
               <article className="feature-card"><div className="feature-icon icon-journal">📘</div><h3>Journal</h3><p>Log trades, review execution, and keep performance notes.</p></article>
               <article className="feature-card"><div className="feature-icon icon-analytics">▥</div><h3>Analytics</h3><p>Measure results with P&amp;L, win rate, and risk metrics.</p></article>
               <article className="feature-card"><div className="feature-icon icon-tax">⌘</div><h3>Tax Estimator</h3><p>Estimate capital gains across 40+ countries with exports.</p></article>
             </div>
+
+            <section className="coverage-section" id="coverage">
+              <div className="coverage-head">
+                <div className="section-tag">Coverage</div>
+                <h3>Cross-market coverage in one workflow</h3>
+                <p>
+                  Zenin is built to let you move from macro to execution without context switching.
+                  Track crypto, equities, options, predictions, and tax workflows in one place.
+                </p>
+                <div className="coverage-plan-refs">
+                  {coveragePlanRefs.map((item) => (
+                    <div key={item.key} className="coverage-plan-chip">
+                      <strong>{item.label}</strong>
+                      <span>{item.description}</span>
+                      <b>{item.price}</b>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="coverage-grid">
+                <article className="coverage-card">
+                  <h4>Markets</h4>
+                  <ul>
+                    <li>US and global equities</li>
+                    <li>Crypto spot and derivatives</li>
+                    <li>Options chains and strategy modeling</li>
+                    <li>Prediction markets and whale flow</li>
+                  </ul>
+                </article>
+                <article className="coverage-card">
+                  <h4>Data Layers</h4>
+                  <ul>
+                    <li>Live pricing + watchlist snapshots</li>
+                    <li>Company intelligence and catalysts</li>
+                    <li>Macro indicators by country</li>
+                    <li>Execution history and journal analytics</li>
+                  </ul>
+                </article>
+                <article className="coverage-card">
+                  <h4>Workflows</h4>
+                  <ul>
+                    <li>Portfolio tracking and rebalancing</li>
+                    <li>Theme-based watchlist management</li>
+                    <li>Risk-aware options planning</li>
+                    <li>Tax estimation across jurisdictions</li>
+                  </ul>
+                </article>
+              </div>
+
+              <div className="coverage-kpis">
+                <div><strong>5</strong><span>core market modules</span></div>
+                <div><strong>40+</strong><span>tax jurisdictions</span></div>
+                <div><strong>1</strong><span>unified dashboard</span></div>
+              </div>
+            </section>
 
             <section className="pricing-section" id="pricing">
               <div className="pricing-head">

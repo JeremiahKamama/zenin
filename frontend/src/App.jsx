@@ -45,6 +45,39 @@ function formatPlanLabel(plan, billingCycle = "monthly") {
   return `Starter Plan (${cycle})`;
 }
 
+function normalizeCurrentPlan(plan) {
+  const normalized = String(plan || "").trim().toLowerCase();
+  if (["starter", "pro", "desk"].includes(normalized)) return normalized;
+  return "starter";
+}
+
+const PLAN_RANK = {
+  starter: 0,
+  pro: 1,
+  desk: 2
+};
+
+const SECTION_MIN_PLAN = {
+  Home: "starter",
+  Portfolio: "starter",
+  Watchlist: "starter",
+  Analytics: "pro",
+  Journal: "pro",
+  Options: "desk",
+  Predictions: "desk",
+  "Tax Estimator": "starter"
+};
+
+function requiredPlanForSection(section) {
+  return SECTION_MIN_PLAN[section] || "starter";
+}
+
+function hasSectionAccess(plan, section) {
+  const userPlan = normalizeCurrentPlan(plan);
+  const requiredPlan = requiredPlanForSection(section);
+  return Number(PLAN_RANK[userPlan] || 0) >= Number(PLAN_RANK[requiredPlan] || 0);
+}
+
 const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
   const price = Number(trade?.price);
@@ -1482,6 +1515,15 @@ const handleOptionTradeClosed = async (tradeId) => {
       return "Starter Plan";
     }
   });
+  const [currentPlan, setCurrentPlan] = useState(() => {
+    try {
+      const rawUser = localStorage.getItem("zenin_auth_user");
+      const parsed = rawUser ? JSON.parse(rawUser) : null;
+      return normalizeCurrentPlan(parsed?.currentPlan);
+    } catch {
+      return "starter";
+    }
+  });
 
   const [themeMode, setThemeMode] = useState("dark");
 
@@ -1553,11 +1595,17 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   });
 
+  const accessibleSections = useMemo(
+    () => sections.filter((section) => hasSectionAccess(currentPlan, section)),
+    [sections, currentPlan]
+  );
+
   useEffect(() => {
     let mounted = true;
     const hydrateOptionalAuth = async () => {
       const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
       if (!token) {
+        if (mounted) setCurrentPlan("starter");
         if (mounted) setAccessCheckLoading(false);
         return;
       }
@@ -1569,15 +1617,19 @@ const handleOptionTradeClosed = async (tradeId) => {
         if (!res.ok || !data?.authenticated || !data?.user) {
           localStorage.removeItem("zenin_auth_token");
           localStorage.removeItem("zenin_auth_user");
+          setCurrentPlan("starter");
+          setAccountPlanLabel(formatPlanLabel("starter", "monthly"));
         } else {
           localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
           if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
           setUserEmail(String(data.user.email || userEmail));
+          setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
           setAccountPlanLabel(formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
         }
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
+        setCurrentPlan("starter");
         setAccessCheckLoading(false);
       }
     };
@@ -1587,6 +1639,13 @@ const handleOptionTradeClosed = async (tradeId) => {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!accessibleSections.length) return;
+    if (!accessibleSections.includes(activeSection)) {
+      setActiveSection(accessibleSections[0]);
+    }
+  }, [accessibleSections, activeSection]);
   const [connectedAccounts, setConnectedAccounts] = useState(() => {
     const raw = localStorage.getItem("zenin_connected_accounts");
     if (!raw) return [];
