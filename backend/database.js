@@ -185,6 +185,12 @@ function normalizePlanValue(plan) {
   return "starter";
 }
 
+function normalizeBillingCycleValue(billingCycle) {
+  const value = String(billingCycle || "").trim().toLowerCase();
+  if (["monthly", "yearly"].includes(value)) return value;
+  return "monthly";
+}
+
 async function initializeDatabase() {
   const client = await pool.connect();
 
@@ -370,6 +376,7 @@ async function initializeDatabase() {
         two_factor_secret_hash TEXT,
         passkeys_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         current_plan TEXT NOT NULL DEFAULT 'starter',
+        current_billing_cycle TEXT NOT NULL DEFAULT 'monthly',
         plan_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -379,6 +386,11 @@ async function initializeDatabase() {
     await client.query(`
       ALTER TABLE app_users
       ADD COLUMN IF NOT EXISTS current_plan TEXT NOT NULL DEFAULT 'starter';
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS current_billing_cycle TEXT NOT NULL DEFAULT 'monthly';
     `);
 
     await client.query(`
@@ -1555,6 +1567,7 @@ const userAuth = {
         two_factor_method AS "twoFactorMethod",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
+        current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
         created_at AS "createdAt";
     `, [
@@ -1591,6 +1604,7 @@ const userAuth = {
         two_factor_secret_hash AS "twoFactorSecretHash",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
+        current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
         created_at AS "createdAt"
       FROM app_users
@@ -1617,6 +1631,7 @@ const userAuth = {
         two_factor_method AS "twoFactorMethod",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
+        current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
         created_at AS "createdAt"
       FROM app_users
@@ -1660,6 +1675,7 @@ const userAuth = {
         u.two_factor_method AS "twoFactorMethod",
         u.passkeys_json AS passkeys,
         u.current_plan AS "currentPlan",
+        u.current_billing_cycle AS "currentBillingCycle",
         u.plan_updated_at AS "planUpdatedAt"
       FROM auth_sessions s
       JOIN app_users u ON u.id = s.user_id
@@ -1759,12 +1775,14 @@ const userAuth = {
     `, [toUserId(userId), JSON.stringify(next)]);
   },
 
-  updateCurrentPlan: async (userId, plan) => {
+  updateCurrentPlan: async (userId, plan, billingCycle = "monthly") => {
     const normalizedPlan = normalizePlanValue(plan);
+    const normalizedBillingCycle = normalizeBillingCycleValue(billingCycle);
     const result = await pool.query(`
       UPDATE app_users
       SET
         current_plan = $2,
+        current_billing_cycle = $3,
         plan_updated_at = NOW(),
         updated_at = NOW()
       WHERE id = $1
@@ -1778,9 +1796,10 @@ const userAuth = {
         two_factor_method AS "twoFactorMethod",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
+        current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
         created_at AS "createdAt";
-    `, [toUserId(userId), normalizedPlan]);
+    `, [toUserId(userId), normalizedPlan, normalizedBillingCycle]);
     const row = result.rows[0];
     if (!row) return null;
     return {

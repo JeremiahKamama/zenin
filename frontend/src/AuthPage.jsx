@@ -4,6 +4,7 @@ import { zeninFetch } from "./utils/zeninFetch";
 const PROVIDERS = ["google", "apple", "github", "microsoft"];
 const PASSKEY_PROVIDERS = ["iCloud Keychain", "Google Password Manager", "1Password", "Bitwarden"];
 const VALID_PLANS = ["starter", "pro", "desk"];
+const VALID_BILLING_CYCLES = ["monthly", "yearly"];
 
 function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
@@ -25,6 +26,11 @@ function persistAuth(result) {
 function normalizePlan(plan) {
   const value = String(plan || "").trim().toLowerCase();
   return VALID_PLANS.includes(value) ? value : null;
+}
+
+function normalizeBillingCycle(billingCycle) {
+  const value = String(billingCycle || "").trim().toLowerCase();
+  return VALID_BILLING_CYCLES.includes(value) ? value : null;
 }
 
 function sanitizeInternalPath(path, fallback = "/app") {
@@ -53,12 +59,23 @@ function getRequestedPlan() {
   return fromQuery || fromStorage || null;
 }
 
+function getRequestedBillingCycle() {
+  let fromQuery = null;
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    fromQuery = normalizeBillingCycle(params.get("billing"));
+  }
+  const fromStorage = normalizeBillingCycle(localStorage.getItem("zenin_pending_billing_cycle"));
+  return fromQuery || fromStorage || "monthly";
+}
+
 async function applyRequestedPlanIfAny() {
   const plan = getRequestedPlan();
   if (!plan) return;
+  const billingCycle = getRequestedBillingCycle();
   const res = await zeninFetch("/account/plan", {
     method: "POST",
-    body: JSON.stringify({ plan })
+    body: JSON.stringify({ plan, billingCycle })
   });
   if (!res.ok) return;
   const data = await res.json().catch(() => ({}));
@@ -67,6 +84,7 @@ async function applyRequestedPlanIfAny() {
     if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
   }
   localStorage.removeItem("zenin_pending_plan");
+  localStorage.removeItem("zenin_pending_billing_cycle");
 }
 
 async function readJson(res) {

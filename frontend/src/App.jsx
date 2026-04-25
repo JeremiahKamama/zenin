@@ -37,11 +37,12 @@ function parseRouteFromLocation() {
   }
 }
 
-function formatPlanLabel(plan) {
+function formatPlanLabel(plan, billingCycle = "monthly") {
   const normalized = String(plan || "").trim().toLowerCase();
-  if (normalized === "pro") return "Pro Plan";
-  if (normalized === "desk") return "Desk Plan";
-  return "Starter Plan";
+  const cycle = String(billingCycle || "").trim().toLowerCase() === "yearly" ? "Yearly" : "Monthly";
+  if (normalized === "desk") return `Desk Plan (${cycle})`;
+  if (normalized === "pro") return `Pro Plan (${cycle})`;
+  return `Starter Plan (${cycle})`;
 }
 
 function normalizeCurrentPlan(plan) {
@@ -1493,7 +1494,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
-      return formatPlanLabel(parsed?.currentPlan);
+      return formatPlanLabel(parsed?.currentPlan, parsed?.currentBillingCycle);
     } catch {
       return "Starter Plan";
     }

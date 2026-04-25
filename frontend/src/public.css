@@ -791,7 +791,7 @@
   background: rgba(8, 19, 39, 0.84);
 }
 
-.zc-home .pricing-billing-pill span {
+.zc-home .pricing-billing-pill button {
   min-height: 32px;
   padding: 0 12px;
   border-radius: 999px;
@@ -801,6 +801,9 @@
   color: #b4c6ea;
   font-size: 0.82rem;
   font-weight: 600;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .zc-home .pricing-billing-pill .is-active {
@@ -899,6 +902,13 @@
 .zc-home .pricing-price span {
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.zc-home .pricing-price-helper {
+  margin: -6px 0 12px;
+  color: #8fb3ef;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
 }
 
 .zc-home .pricing-list {

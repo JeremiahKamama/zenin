@@ -352,6 +352,7 @@ function sanitizeAuthUser(user = null) {
     twoFactorMethod: user.twoFactorMethod || null,
     passkeys: Array.isArray(user.passkeys) ? user.passkeys : [],
     currentPlan: String(user.currentPlan || "starter").trim().toLowerCase() || "starter",
+    currentBillingCycle: String(user.currentBillingCycle || "monthly").trim().toLowerCase() || "monthly",
     planUpdatedAt: user.planUpdatedAt || null,
     createdAt: user.createdAt || null
   };
@@ -360,6 +361,12 @@ function sanitizeAuthUser(user = null) {
 function normalizePlanInput(plan) {
   const normalized = String(plan || "").trim().toLowerCase();
   if (["starter", "pro", "desk"].includes(normalized)) return normalized;
+  return null;
+}
+
+function normalizeBillingCycleInput(billingCycle) {
+  const normalized = String(billingCycle || "").trim().toLowerCase();
+  if (["monthly", "yearly"].includes(normalized)) return normalized;
   return null;
 }
 
@@ -1407,10 +1414,14 @@ app.get("/api/auth/me", async (req, res) => {
 app.post("/api/account/plan", requireSignedIn, async (req, res) => {
   try {
     const plan = normalizePlanInput(req.body?.plan);
+    const billingCycle = normalizeBillingCycleInput(req.body?.billingCycle || "monthly");
     if (!plan) {
       return res.status(400).json({ error: "Plan must be one of: starter, pro, desk." });
     }
-    const updatedUser = await userAuth.updateCurrentPlan(req.auth.userId, plan);
+    if (!billingCycle) {
+      return res.status(400).json({ error: "Billing cycle must be one of: monthly, yearly." });
+    }
+    const updatedUser = await userAuth.updateCurrentPlan(req.auth.userId, plan, billingCycle);
     if (!updatedUser) {
       return res.status(404).json({ error: "User not found." });
     }

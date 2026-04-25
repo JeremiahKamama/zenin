@@ -2,10 +2,56 @@ import React, { useEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
+const VALID_BILLING_CYCLES = ["monthly", "yearly"];
+const YEARLY_DISCOUNT_RATE = 0.2;
+const MONTHLY_PRICES = {
+  starter: 0,
+  pro: 29,
+  desk: 99
+};
 
 function normalizePlan(plan) {
   const value = String(plan || "").trim().toLowerCase();
   return VALID_PLANS.includes(value) ? value : "starter";
+}
+
+function normalizeBillingCycle(cycle) {
+  const value = String(cycle || "").trim().toLowerCase();
+  return VALID_BILLING_CYCLES.includes(value) ? value : "monthly";
+}
+
+function toMoney(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "$0";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  }).format(amount);
+}
+
+function getPlanPrice(plan, cycle) {
+  const normalizedPlan = normalizePlan(plan);
+  const normalizedCycle = normalizeBillingCycle(cycle);
+  const monthlyBase = Number(MONTHLY_PRICES[normalizedPlan] || 0);
+  if (normalizedCycle === "monthly") {
+    return {
+      amount: monthlyBase,
+      periodLabel: "/month",
+      helperLabel: null,
+      yearlyTotal: Math.round(monthlyBase * 12 * 100) / 100
+    };
+  }
+  const yearlyTotal = Math.round(monthlyBase * 12 * (1 - YEARLY_DISCOUNT_RATE) * 100) / 100;
+  const monthlyEquivalent = Math.round((yearlyTotal / 12) * 100) / 100;
+  const savePercent = Math.round(YEARLY_DISCOUNT_RATE * 100);
+  return {
+    amount: yearlyTotal,
+    periodLabel: "/year",
+    helperLabel: monthlyBase > 0 ? `${toMoney(monthlyEquivalent)}/mo billed yearly · save ${savePercent}%` : null,
+    yearlyTotal
+  };
 }
 
 function sanitizeInternalPath(path, fallback = "/app") {
@@ -38,6 +84,10 @@ export default function PublicHomepage() {
   const [authUser, setAuthUser] = useState(() => readStoredAuthUser());
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
+  const [billingCycle, setBillingCycle] = useState(() => {
+    const stored = typeof window !== "undefined" ? localStorage.getItem("zenin_pricing_billing_cycle") : "";
+    return normalizeBillingCycle(stored || "monthly");
+  });
   const [postPlanTarget] = useState(() => {
     if (typeof window === "undefined") return "/app";
     const search = new URLSearchParams(window.location.search);
@@ -49,6 +99,10 @@ export default function PublicHomepage() {
   const activePlan = useMemo(
     () => normalizePlan(authUser?.currentPlan),
     [authUser?.currentPlan]
+  );
+  const activeBillingCycle = useMemo(
+    () => normalizeBillingCycle(authUser?.currentBillingCycle || "monthly"),
+    [authUser?.currentBillingCycle]
   );
 
   useEffect(() => {
@@ -66,6 +120,7 @@ export default function PublicHomepage() {
         if (data?.authenticated && data?.user) {
           setAuthUser(data.user);
           saveAuthUser(data.user);
+          setBillingCycle(normalizeBillingCycle(data.user.currentBillingCycle || "monthly"));
         }
       })
       .catch(() => {
@@ -76,15 +131,21 @@ export default function PublicHomepage() {
     };
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem("zenin_pricing_billing_cycle", billingCycle);
+  }, [billingCycle]);
+
   const handlePlanSelection = async (plan) => {
     const normalizedPlan = normalizePlan(plan);
+    const normalizedBillingCycle = normalizeBillingCycle(billingCycle);
     setPricingError("");
 
     const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
     if (!token) {
       localStorage.setItem("zenin_pending_plan", normalizedPlan);
+      localStorage.setItem("zenin_pending_billing_cycle", normalizedBillingCycle);
       localStorage.setItem("zenin_post_auth_next", postPlanTarget);
-      window.location.href = `/auth?mode=signup&plan=${encodeURIComponent(normalizedPlan)}&next=${encodeURIComponent(postPlanTarget)}`;
+      window.location.href = `/auth?mode=signup&plan=${encodeURIComponent(normalizedPlan)}&billing=${encodeURIComponent(normalizedBillingCycle)}&next=${encodeURIComponent(postPlanTarget)}`;
       return;
     }
 
@@ -92,7 +153,7 @@ export default function PublicHomepage() {
     try {
       const res = await zeninFetch("/account/plan", {
         method: "POST",
-        body: JSON.stringify({ plan: normalizedPlan })
+        body: JSON.stringify({ plan: normalizedPlan, billingCycle: normalizedBillingCycle })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Failed to update plan.");
@@ -107,6 +168,19 @@ export default function PublicHomepage() {
     } finally {
       setPricingBusyPlan("");
     }
+  };
+
+  const isCurrentSelection = (plan) =>
+    normalizePlan(plan) === activePlan && activeBillingCycle === normalizeBillingCycle(billingCycle);
+
+  const renderCtaText = (plan, fallback) => {
+    if (pricingBusyPlan === plan) return "Saving...";
+    if (isCurrentSelection(plan)) return "Current Plan";
+    if (activePlan === plan) {
+      return billingCycle === "yearly" ? "Switch to Yearly" : "Switch to Monthly";
+    }
+    if (billingCycle === "yearly" && plan !== "starter") return `${fallback} Yearly`;
+    return fallback;
   };
 
   return (
@@ -312,8 +386,22 @@ export default function PublicHomepage() {
                   <p>Start free, then scale into pro workflows when you need institutional-grade depth.</p>
                 </div>
                 <div className="pricing-billing-pill" aria-label="Billing cycle">
-                  <span className="is-active">Monthly</span>
-                  <span>Yearly</span>
+                  <button
+                    type="button"
+                    className={billingCycle === "monthly" ? "is-active" : ""}
+                    onClick={() => setBillingCycle("monthly")}
+                    aria-pressed={billingCycle === "monthly"}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    type="button"
+                    className={billingCycle === "yearly" ? "is-active" : ""}
+                    onClick={() => setBillingCycle("yearly")}
+                    aria-pressed={billingCycle === "yearly"}
+                  >
+                    Yearly
+                  </button>
                 </div>
               </div>
 
@@ -324,7 +412,13 @@ export default function PublicHomepage() {
                     <span className="pricing-badge muted">For beginners</span>
                   </div>
                   <p className="pricing-desc">Personal market tracking and portfolio journaling.</p>
-                  <div className="pricing-price"><strong>$0</strong><span>/month</span></div>
+                  <div className="pricing-price">
+                    <strong>{toMoney(getPlanPrice("starter", billingCycle).amount)}</strong>
+                    <span>{getPlanPrice("starter", billingCycle).periodLabel}</span>
+                  </div>
+                  {getPlanPrice("starter", billingCycle).helperLabel ? (
+                    <p className="pricing-price-helper">{getPlanPrice("starter", billingCycle).helperLabel}</p>
+                  ) : null}
                   <ul className="pricing-list">
                     <li>1 live portfolio</li>
                     <li>Watchlist + macro alerts</li>
@@ -334,9 +428,9 @@ export default function PublicHomepage() {
                   <button
                     className="btn btn-secondary pricing-cta"
                     onClick={() => handlePlanSelection("starter")}
-                    disabled={pricingBusyPlan === "starter" || activePlan === "starter"}
+                    disabled={pricingBusyPlan === "starter" || isCurrentSelection("starter")}
                   >
-                    {pricingBusyPlan === "starter" ? "Saving..." : activePlan === "starter" ? "Current Plan" : "Get Started"}
+                    {renderCtaText("starter", "Get Started")}
                   </button>
                 </article>
 
@@ -346,7 +440,13 @@ export default function PublicHomepage() {
                     <span className="pricing-badge">Most popular</span>
                   </div>
                   <p className="pricing-desc">Cross-market workflows for active investors and traders.</p>
-                  <div className="pricing-price"><strong>$29</strong><span>/month</span></div>
+                  <div className="pricing-price">
+                    <strong>{toMoney(getPlanPrice("pro", billingCycle).amount)}</strong>
+                    <span>{getPlanPrice("pro", billingCycle).periodLabel}</span>
+                  </div>
+                  {getPlanPrice("pro", billingCycle).helperLabel ? (
+                    <p className="pricing-price-helper">{getPlanPrice("pro", billingCycle).helperLabel}</p>
+                  ) : null}
                   <ul className="pricing-list">
                     <li>Unlimited portfolios</li>
                     <li>Company deep-dive module</li>
@@ -356,9 +456,9 @@ export default function PublicHomepage() {
                   <button
                     className="btn btn-primary pricing-cta"
                     onClick={() => handlePlanSelection("pro")}
-                    disabled={pricingBusyPlan === "pro" || activePlan === "pro"}
+                    disabled={pricingBusyPlan === "pro" || isCurrentSelection("pro")}
                   >
-                    {pricingBusyPlan === "pro" ? "Saving..." : activePlan === "pro" ? "Current Plan" : "Start Pro"}
+                    {renderCtaText("pro", "Start Pro")}
                   </button>
                 </article>
 
@@ -368,7 +468,13 @@ export default function PublicHomepage() {
                     <span className="pricing-badge muted">For teams</span>
                   </div>
                   <p className="pricing-desc">Shared workspaces, controls, and premium integrations.</p>
-                  <div className="pricing-price"><strong>$99</strong><span>/month</span></div>
+                  <div className="pricing-price">
+                    <strong>{toMoney(getPlanPrice("desk", billingCycle).amount)}</strong>
+                    <span>{getPlanPrice("desk", billingCycle).periodLabel}</span>
+                  </div>
+                  {getPlanPrice("desk", billingCycle).helperLabel ? (
+                    <p className="pricing-price-helper">{getPlanPrice("desk", billingCycle).helperLabel}</p>
+                  ) : null}
                   <ul className="pricing-list">
                     <li>5 team seats included</li>
                     <li>Role-based permissions</li>
@@ -378,9 +484,9 @@ export default function PublicHomepage() {
                   <button
                     className="btn btn-secondary pricing-cta"
                     onClick={() => handlePlanSelection("desk")}
-                    disabled={pricingBusyPlan === "desk" || activePlan === "desk"}
+                    disabled={pricingBusyPlan === "desk" || isCurrentSelection("desk")}
                   >
-                    {pricingBusyPlan === "desk" ? "Saving..." : activePlan === "desk" ? "Current Plan" : "Choose Desk"}
+                    {renderCtaText("desk", "Choose Desk")}
                   </button>
                 </article>
               </div>
