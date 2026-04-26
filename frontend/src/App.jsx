@@ -70,6 +70,45 @@ const SECTION_MIN_PLAN = {
   "Tax Estimator": "starter"
 };
 
+const FALLBACK_CATEGORIES = ["stocks", "crypto", "indicators"];
+const FALLBACK_ASSETS_BY_CATEGORY = {
+  stocks: [
+    { symbol: "AAPL", name: "Apple Inc.", type: "stock", marketType: "equity", category: "stocks", theme: "Mega Cap Tech", price: 169.3, priceChangePercent: 0.84 },
+    { symbol: "MSFT", name: "Microsoft Corporation", type: "stock", marketType: "equity", category: "stocks", theme: "Mega Cap Tech", price: 412.8, priceChangePercent: 0.46 },
+    { symbol: "NVDA", name: "NVIDIA Corporation", type: "stock", marketType: "equity", category: "stocks", theme: "AI Infrastructure", price: 875.6, priceChangePercent: 1.18 },
+    { symbol: "HIMS", name: "Hims & Hers Health", type: "stock", marketType: "equity", category: "stocks", theme: "Digital Health", price: 51.2, priceChangePercent: -0.72 }
+  ],
+  crypto: [
+    { symbol: "BTC", name: "Bitcoin", type: "crypto", marketType: "spot", category: "crypto", price: 94250, priceChangePercent: 0.38 },
+    { symbol: "ETH", name: "Ethereum", type: "crypto", marketType: "spot", category: "crypto", price: 3240, priceChangePercent: -0.21 },
+    { symbol: "SOL", name: "Solana", type: "crypto", marketType: "spot", category: "crypto", price: 146.8, priceChangePercent: 1.08 }
+  ],
+  indicators: [
+    { symbol: "CPI", name: "Consumer Price Index", type: "indicator", marketType: "macro", category: "indicators", country: "USA" },
+    { symbol: "GDP", name: "Gross Domestic Product", type: "indicator", marketType: "macro", category: "indicators", country: "USA" },
+    { symbol: "FEDFUNDS", name: "Federal Funds Rate", type: "indicator", marketType: "macro", category: "indicators", country: "USA" }
+  ]
+};
+
+const getFallbackAssetsForCategory = (category) =>
+  FALLBACK_ASSETS_BY_CATEGORY[String(category || "").toLowerCase()] || [];
+
+const searchFallbackAssets = (query, type) => {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) return [];
+  const category = String(type || "").toLowerCase() === "crypto"
+    ? "crypto"
+    : String(type || "").toLowerCase() === "indicator"
+      ? "indicators"
+      : "stocks";
+  return getFallbackAssetsForCategory(category)
+    .filter((asset) =>
+      String(asset.symbol || "").toLowerCase().includes(normalizedQuery) ||
+      String(asset.name || "").toLowerCase().includes(normalizedQuery)
+    )
+    .slice(0, 8);
+};
+
 function requiredPlanForSection(section) {
   return SECTION_MIN_PLAN[section] || "starter";
 }
@@ -218,11 +257,13 @@ function App() {
   const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
   const WATCHLIST_CATEGORY_REFRESH_TTL_MS = 5 * 60 * 1000;
 
-  const [activeOptionsTrades, setActiveOptionsTrades] = useState(() =>
-    readStoredArray("zenin_portfolio")
+  const [activeOptionsTrades, setActiveOptionsTrades] = useState(() => {
+    const storedTrades = readStoredArray("zenin_active_options_trades");
+    if (storedTrades.length > 0) return storedTrades;
+    return readStoredArray("zenin_portfolio")
       .filter((holding) => String(holding.marketType || "").toLowerCase() === "options")
-      .map(mapOptionHoldingToTrade)
-  );
+      .map(mapOptionHoldingToTrade);
+  });
   const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
 
   const stockThemes = useMemo(() => {
@@ -244,9 +285,14 @@ function App() {
   }, [assets, watchlistAssets, customStockThemes]);
 
   // Replace the localStorage balance useState with:
-const [balance, setBalance] = useState(10000);
+const [balance, setBalance] = useState(() => {
+  const rawStoredBalance = localStorage.getItem("zenin_balance");
+  const stored = rawStoredBalance == null ? NaN : Number(rawStoredBalance);
+  return Number.isFinite(stored) && stored >= 0 ? stored : 10000;
+});
 
 useEffect(() => {
+  if (!hasAuthToken()) return;
   zeninFetch(`/db/balance`)
     .then((res) => {
       if (!res.ok) throw new Error(`Failed to load balance: ${res.status}`);
@@ -257,7 +303,7 @@ useEffect(() => {
       setBalance(Number.isFinite(loaded) ? loaded : 10000);
     })
     .catch((err) => {
-      console.error(err);
+      console.warn("Balance unavailable; using local guest balance.", err);
     });
 }, []);
 
@@ -274,11 +320,16 @@ useEffect(() => {
   }, [watchlistAssets]);
 
   useEffect(() => {
+    localStorage.setItem("zenin_active_options_trades", JSON.stringify(Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []));
+  }, [activeOptionsTrades]);
+
+  useEffect(() => {
     localStorage.setItem("zenin_custom_stock_themes", JSON.stringify(customStockThemes));
   }, [customStockThemes]);
 
   // Load portfolio from database on mount
   useEffect(() => {
+    if (!hasAuthToken()) return;
     zeninFetch(`/db/portfolio`)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load portfolio: ${res.status}`);
@@ -298,11 +349,12 @@ useEffect(() => {
           setActiveOptionsTrades(optionTrades);
         }
       })
-      .catch((err) => console.error("Failed to load portfolio:", err));
+      .catch((err) => console.warn("Portfolio backend unavailable; using local portfolio.", err));
   }, []);
 
   // Load persisted watchlist from database on mount
   useEffect(() => {
+    if (!hasAuthToken()) return;
     zeninFetch(`/db/watchlist`)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load watchlist: ${res.status}`);
@@ -314,10 +366,11 @@ useEffect(() => {
           setWatchlistAssets(assets);
         }
       })
-      .catch((err) => console.error("Failed to load watchlist:", err));
+      .catch((err) => console.warn("Watchlist backend unavailable; using local watchlist.", err));
   }, []);
 
   useEffect(() => {
+    if (!hasAuthToken()) return undefined;
     let isMounted = true;
     zeninFetch(`/db/trades?limit=2000`)
       .then((res) => {
@@ -333,7 +386,7 @@ useEffect(() => {
           setTrades(backendTrades);
         }
       })
-      .catch((err) => console.error("Failed to load trade history:", err));
+      .catch((err) => console.warn("Trade history backend unavailable; using local trades.", err));
     return () => {
       isMounted = false;
     };
@@ -392,7 +445,7 @@ useEffect(() => {
 
         if (isMounted) setHomeMarketMovers(merged);
       } catch (error) {
-        console.error("Failed to refresh home movers:", error);
+        console.warn("Home movers unavailable; using current local snapshot.", error);
       }
     };
 
@@ -408,8 +461,8 @@ useEffect(() => {
   useEffect(() => {
     zeninFetch(`/categories`)
       .then((res) => res.json())
-      .then((data) => setCategories(data.categories || []))
-      .catch((err) => setError(err.message));
+      .then((data) => setCategories(Array.isArray(data.categories) && data.categories.length ? data.categories : FALLBACK_CATEGORIES))
+      .catch(() => setCategories(FALLBACK_CATEGORIES));
   }, []);
 
   useEffect(() => {
@@ -443,7 +496,7 @@ useEffect(() => {
       })
       .catch(() => {
         if (controller.signal.aborted || searchRequestSeqRef.current !== requestId) return;
-        setSearchResults([]);
+        setSearchResults(searchFallbackAssets(searchTerm, searchType));
         setSearchHasSettled(true);
       })
       .finally(() => {
@@ -653,7 +706,7 @@ useEffect(() => {
           });
         });
       } catch (err) {
-        console.error("Price refresh failed:", err);
+        console.warn("Price refresh unavailable; keeping existing prices.", err);
       }
     }
 
@@ -728,9 +781,11 @@ useEffect(() => {
         setError(err.message);
         if (cachedAssets.length > 0) {
           setAssets((prev) => mergeAssetPrices(cachedAssets, prev));
+        } else {
+          setAssets((prev) => mergeAssetPrices(getFallbackAssetsForCategory(activeCategory), prev));
         }
         setWatchlistStale(true);
-        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
+        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Using local demo market data while live data is unavailable.");
         setLoading(false);
       });
   }, [activeCategory]);
@@ -1018,7 +1073,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     }
 
   } catch (err) {
-    console.error(`Failed to ${orderType} asset:`, err);
+    console.warn(`Backend ${orderType} unavailable; recording local simulated trade.`, err);
     const localBalance = orderType === "buy" ? balance - notional : balance + notional;
     setBalance(localBalance);
     setPortfolio((prev) => {
@@ -1100,19 +1155,87 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 };
 
 const handleOptionTradeExecuted = async (tradePayload) => {
-  try {
-    const atomicPayload = {
-      symbol: tradePayload.asset || tradePayload.symbol,
-      name: tradePayload.strategy || tradePayload.name || "Strategy",
-      type: "options",
-      marketType: "options",
-      orderType: "buy",
-      quantity: tradePayload.qty || 1,
-      price: tradePayload.netPremiumAtEntry || 0,
-      strategyName: tradePayload.strategy || tradePayload.name,
-      legsJson: tradePayload.legs || [],
-      executedAt: new Date().toISOString()
+  const quantity = Number(tradePayload.qty ?? tradePayload.quantity) || 1;
+  const entryPremium = Number(tradePayload.netPremiumAtEntry ?? tradePayload.price) || 0;
+  const localNotional = Math.abs(Number(tradePayload.notional ?? tradePayload.totalNotional) || entryPremium * quantity || quantity);
+  const atomicPayload = {
+    symbol: tradePayload.asset || tradePayload.symbol,
+    name: tradePayload.strategy || tradePayload.name || "Strategy",
+    type: "options",
+    marketType: "options",
+    orderType: "buy",
+    quantity,
+    price: entryPremium,
+    strategyName: tradePayload.strategy || tradePayload.name,
+    legsJson: tradePayload.legs || [],
+    executedAt: new Date().toISOString()
+  };
+
+  const recordSimulatedOptionTrade = () => {
+    const localId = tradePayload.id || `opt-temp-${Date.now()}`;
+    const localTrade = {
+      id: localId,
+      strategy: atomicPayload.strategyName,
+      asset: atomicPayload.symbol,
+      legs: atomicPayload.legsJson || [],
+      qty: atomicPayload.quantity,
+      quantity: atomicPayload.quantity,
+      notional: localNotional,
+      totalNotional: localNotional,
+      netPremiumAtEntry: entryPremium,
+      initialDelta: Number.isFinite(Number(tradePayload.initialDelta)) ? Number(tradePayload.initialDelta) : 0,
+      initialTheta: Number.isFinite(Number(tradePayload.initialTheta)) ? Number(tradePayload.initialTheta) : 0,
+      status: "OPEN",
+      executedAt: atomicPayload.executedAt
     };
+
+    setActiveOptionsTrades((prev) => [localTrade, ...(Array.isArray(prev) ? prev : [])]);
+    setPortfolio((prev) => [
+      {
+        id: localId,
+        symbol: atomicPayload.symbol,
+        name: atomicPayload.strategyName,
+        type: "options",
+        marketType: "options",
+        quantity: atomicPayload.quantity,
+        price: entryPremium,
+        entryPrice: entryPremium,
+        strategyName: atomicPayload.strategyName,
+        legsJson: atomicPayload.legsJson || [],
+        openedAt: atomicPayload.executedAt,
+        date_added: atomicPayload.executedAt
+      },
+      ...(Array.isArray(prev) ? prev : [])
+    ]);
+    if (localNotional > 0) {
+      setBalance((prev) => Math.max(0, (Number(prev) || 0) - localNotional));
+    }
+    setTrades((prev) => [
+      normalizeTradeRecord({
+        clientId: `${atomicPayload.symbol}-options-open-${Date.now()}`,
+        date: atomicPayload.executedAt.split("T")[0],
+        executedAt: atomicPayload.executedAt,
+        asset: atomicPayload.symbol,
+        name: atomicPayload.strategyName,
+        type: "BUY",
+        side: "buy",
+        marketType: "options",
+        status: "Filled",
+        quantity: atomicPayload.quantity,
+        price: entryPremium,
+        notional: localNotional
+      }, 0),
+      ...prev
+    ]);
+    showTradeToast(`Simulated ${atomicPayload.strategyName} on ${atomicPayload.symbol}`, "success");
+  };
+
+  if (!hasAuthToken()) {
+    recordSimulatedOptionTrade();
+    return;
+  }
+
+  try {
 
     const response = await zeninFetch(`/db/execute-trade`, {
       method: "POST",
@@ -1121,7 +1244,7 @@ const handleOptionTradeExecuted = async (tradePayload) => {
     });
 
     if (!response.ok) {
-      const errData = await response.json();
+      const errData = await response.json().catch(() => ({}));
       throw new Error(errData.error || "Failed to execute option strategy");
     }
 
@@ -1197,23 +1320,83 @@ const handleOptionTradeExecuted = async (tradePayload) => {
 };
 
 const handleOptionTradeClosed = async (tradeId) => {
-  try {
-    const tradeObj = activeOptionsTrades.find(t => t.id === tradeId || t.dbId === tradeId);
-    if (!tradeObj) return;
+  const normalizeId = (value) => String(value ?? "").trim();
+  const tradeObj = activeOptionsTrades.find((trade) => {
+    const ids = [trade.id, trade.dbId, trade.dbId != null ? `opt-${trade.dbId}` : null].map(normalizeId);
+    return ids.includes(normalizeId(tradeId));
+  });
+  if (!tradeObj) return;
 
-    const dbId = tradeObj.dbId || (typeof tradeId === 'string' ? tradeId.replace("opt-", "") : tradeId);
-    
+  const dbId = tradeObj.dbId || (typeof tradeId === "string" ? tradeId.replace(/^opt-/, "") : tradeId);
+  const quantity = Number(tradeObj.qty ?? tradeObj.quantity) || 1;
+  const priceCandidates = [
+    tradeObj.currentMark,
+    tradeObj.mark,
+    tradeObj.price,
+    tradeObj.netPremiumAtEntry,
+    tradeObj.entryPrice
+  ].map((value) => (value === null || value === undefined || value === "" ? NaN : Number(value)));
+  const closePrice = priceCandidates.find(Number.isFinite) ?? 0;
+  const simulatedProceeds = Number(tradeObj.totalNotional ?? tradeObj.notional);
+  const closeNotional = Math.abs(Number.isFinite(simulatedProceeds) && simulatedProceeds > 0 ? simulatedProceeds : closePrice * quantity);
+  const executedAt = new Date().toISOString();
+  const targetIds = [tradeId, dbId, dbId != null ? `opt-${dbId}` : null].map(normalizeId).filter(Boolean);
+  const hasBackendId = Boolean(normalizeId(dbId)) && !normalizeId(tradeObj.id).startsWith("sim-") && !normalizeId(tradeObj.id).startsWith("opt-temp-");
+
+  const matchesOptionTrade = (trade) => {
+    const ids = [trade.id, trade.dbId, trade.dbId != null ? `opt-${trade.dbId}` : null].map(normalizeId).filter(Boolean);
+    return ids.some((id) => targetIds.includes(id));
+  };
+
+  const closeSimulatedOptionTrade = () => {
+    setActiveOptionsTrades((prev) => (Array.isArray(prev) ? prev.filter((trade) => !matchesOptionTrade(trade)) : []));
+    setPortfolio((prev) => {
+      if (!Array.isArray(prev)) return [];
+      return prev.filter((holding) => {
+        const holdingIds = [holding.id, holding.dbId, holding.id != null ? `opt-${holding.id}` : null].map(normalizeId).filter(Boolean);
+        return !holdingIds.some((id) => targetIds.includes(id));
+      });
+    });
+    if (closeNotional > 0) {
+      setBalance((prev) => (Number(prev) || 0) + closeNotional);
+    }
+    setTrades((prev) => [
+      normalizeTradeRecord({
+        clientId: `${tradeObj.asset}-options-close-${Date.now()}`,
+        date: executedAt.split("T")[0],
+        executedAt,
+        asset: tradeObj.asset,
+        name: tradeObj.strategy || "Options Strategy",
+        type: "SELL",
+        side: "sell",
+        marketType: "options",
+        status: "Filled",
+        quantity,
+        price: closePrice,
+        notional: closeNotional
+      }, 0),
+      ...prev
+    ]);
+    showTradeToast(`Closed ${tradeObj.strategy || "options trade"} on ${tradeObj.asset} (simulated)`, "success");
+  };
+
+  if (!hasAuthToken() || !hasBackendId) {
+    closeSimulatedOptionTrade();
+    return;
+  }
+
+  try {
     const atomicPayload = {
       symbol: tradeObj.asset,
       name: tradeObj.strategy,
       type: "options",
       marketType: "options",
       orderType: "sell",
-      quantity: tradeObj.qty || tradeObj.quantity || 1,
-      price: tradeObj.currentMark || 0,
+      quantity,
+      price: closePrice,
       strategyName: tradeObj.strategy,
       legsJson: tradeObj.legs || [],
-      executedAt: new Date().toISOString()
+      executedAt
     };
 
     const response = await zeninFetch(`/db/execute-trade`, {
@@ -1223,7 +1406,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     });
 
     if (!response.ok) {
-       const errData = await response.json();
+       const errData = await response.json().catch(() => ({}));
        throw new Error(errData.error || "Failed to close option position");
     }
 
@@ -1231,7 +1414,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     setBalance(data.balance ?? balance);
     setPortfolio(data.holdings || []);
     
-    setActiveOptionsTrades(prev => prev.filter(t => t.id !== tradeId && t.dbId !== dbId));
+    setActiveOptionsTrades(prev => prev.filter(t => !matchesOptionTrade(t)));
 
     const savedTrade = data?.trade ? normalizeTradeRecord(data.trade, 0) : null;
     if (savedTrade) {
@@ -1241,7 +1424,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     showTradeToast(`Closed ${tradeObj.strategy} on ${tradeObj.asset}`, "success");
   } catch (err) {
     console.error("Failed to close option:", err);
-    showTradeToast(err.message, "error");
+    closeSimulatedOptionTrade();
   }
 };
 

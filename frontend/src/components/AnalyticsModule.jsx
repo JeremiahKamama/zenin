@@ -1843,7 +1843,7 @@ export function AnalyticsModule({ backendUrl }) {
                       tone="neutral"
                     />
                     <AnalyticsStatCard
-                      title="Needs Attention"
+                      title="Action Center"
                       value={
                         equitiesData.marketBreadth
                           ? `${equitiesData.marketBreadth.newLows ?? 0} lows`

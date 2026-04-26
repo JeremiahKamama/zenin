@@ -667,6 +667,17 @@ export function TaxEstimator({ trades = [] }) {
     const uaeLiability = calcLiability("UAE", adjustedGains, { ordinaryIncomeTotal }).liability;
     return usLiability - uaeLiability;
   }, [gains, advanced, jurisdictions, ordinaryIncomeTotal]);
+  const workflowSteps = [
+    { id: "jurisdiction", label: "Select Jurisdiction", done: jurisdictions.length > 0 },
+    { id: "gains", label: "Enter Gains", done: summaryPreview.grossTotal > 0 },
+    { id: "advanced", label: "Add Details", done: Boolean(advanced.acquisitionDate || advanced.saleDate || advanced.notes?.trim() || Number(advanced.fees || 0) > 0) },
+    { id: "compare", label: "Compare Scenarios", done: results.length > 0 },
+    { id: "export", label: "Export / Save", done: savedEstimates.length > 0 }
+  ];
+  const activeWorkflowIndex = Math.min(
+    workflowSteps.findIndex((step) => !step.done) === -1 ? workflowSteps.length - 1 : workflowSteps.findIndex((step) => !step.done),
+    workflowSteps.length - 1
+  );
 
   return (
     <div className="tax-v2">
@@ -680,6 +691,18 @@ export function TaxEstimator({ trades = [] }) {
           <button type="button" className="pagination-button tax-v2-action-btn" onClick={handleExportCsv}>Export</button>
           <button type="button" className="pagination-button tax-v2-action-btn tax-v2-more-btn" aria-label="More options">•••</button>
         </div>
+      </div>
+
+      <div className="tax-v2-stepper" aria-label="Tax estimator workflow">
+        {workflowSteps.map((step, idx) => (
+          <div
+            key={step.id}
+            className={`tax-v2-step ${step.done ? "done" : idx === activeWorkflowIndex ? "active" : ""}`}
+          >
+            <span>{step.done ? "✓" : idx + 1}</span>
+            <strong>{step.label}</strong>
+          </div>
+        ))}
       </div>
 
       <div className="tax-v2-kpis">

@@ -191,7 +191,10 @@ export function Watchlist({
   };
 
   const starredAssets = useMemo(() => {
-    const source = Array.isArray(watchlistAssets) ? watchlistAssets : [];
+    const hasWatchlistEntries = Array.isArray(watchlistAssets) && watchlistAssets.length > 0;
+    const source = hasWatchlistEntries
+      ? watchlistAssets
+      : (Array.isArray(assets) ? assets : []).filter((asset) => doesEntryBelongToActiveCategory(asset));
     return source
       .filter((entry) => doesEntryBelongToActiveCategory(entry))
       .map((entry) => {

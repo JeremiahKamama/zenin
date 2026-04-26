@@ -46,6 +46,8 @@ export function HomeModule({
   const [quickActionFeedback, setQuickActionFeedback] = useState("");
   const [activeAttentionFlow, setActiveAttentionFlow] = useState(null);
   const [attentionFlowStep, setAttentionFlowStep] = useState(1);
+  const [dismissedAttentionCards, setDismissedAttentionCards] = useState([]);
+  const [snoozedAttentionCards, setSnoozedAttentionCards] = useState([]);
   const [flowSelection, setFlowSelection] = useState(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [flowActionLabel, setFlowActionLabel] = useState("");
@@ -800,25 +802,31 @@ export function HomeModule({
     {
       id: "missing",
       variant: "warn",
+      severity: "Warning",
       title: `${moversCoverage.unavailable || 0} assets missing data`,
-      text: "Update required for accurate tracking",
-      cta: "Review"
+      text: `${moversCoverage.unavailable || 0} assets need updated pricing. Portfolio tracking may be inaccurate until data is refreshed.`,
+      cta: "Fix Data"
     },
     {
       id: "rebalance",
       variant: "info",
+      severity: "Info",
       title: "Rebalancing suggested",
-      text: `Portfolio drift detected: ${Math.abs(allocationBreakdown.cryptoPercent - 50).toFixed(1)}% from target`,
-      cta: "View Plan"
+      text: `Portfolio drift detected. Your allocation is ${Math.abs(allocationBreakdown.cryptoPercent - 50).toFixed(1)}% away from target.`,
+      cta: "View Rebalance Plan"
     },
     {
       id: "volatility",
       variant: "risk",
+      severity: "Critical",
       title: "High volatility alert",
-      text: alerts[0]?.text || "Macro/market volatility signal detected",
-      cta: "Analyze"
+      text: alerts[0]?.text || "Tracked symbols have unusual movement or missing interval data.",
+      cta: "Review Alerts"
     }
   ];
+  const visibleAttentionCards = attentionCards.filter(
+    (card) => !dismissedAttentionCards.includes(card.id) && !snoozedAttentionCards.includes(card.id)
+  );
 
   const attentionFlowSteps = {
     missing: ["Missing Data List", "Asset Detail", "Updating", "Success"],
@@ -1044,7 +1052,7 @@ export function HomeModule({
     }
 
     return (
-      <div className="home-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Needs Attention user flow">
+      <div className="home-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Action Center user flow">
         <div className="home-v2-flow-shell">
           <div className="home-v2-flow-top">
             <h2>{activeAttentionFlow === "missing" ? "Missing Data Flow" : activeAttentionFlow === "rebalance" ? "Rebalancing Flow" : "Volatility Alert Flow"}</h2>
@@ -1088,17 +1096,38 @@ export function HomeModule({
 
       <section className="home-v2-attention">
         <div className="section-header">
-          <h2>Needs Attention</h2>
+          <div>
+            <h2>Action Center</h2>
+            <p className="home-v2-section-kicker">Prioritized issues, suggested actions, and guided fixes.</p>
+          </div>
           <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow("missing")}>View All</button>
         </div>
         <div className="home-v2-attention-grid">
-          {attentionCards.map((card) => (
+          {visibleAttentionCards.map((card) => (
             <article key={card.id} className={`home-v2-attention-card ${card.variant}`}>
+              <div className="home-v2-attention-topline">
+                <span className={`home-v2-severity-badge ${card.variant}`}>{card.severity}</span>
+                <div className="home-v2-attention-tools">
+                  <button type="button" onClick={() => setSnoozedAttentionCards((prev) => [...new Set([...prev, card.id])])}>Snooze</button>
+                  <button type="button" onClick={() => setDismissedAttentionCards((prev) => [...new Set([...prev, card.id])])}>Dismiss</button>
+                </div>
+              </div>
               <h3>{card.title}</h3>
               <p>{card.text}</p>
               <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
             </article>
           ))}
+          {visibleAttentionCards.length === 0 ? (
+            <article className="home-v2-attention-card empty">
+              <span className="home-v2-empty-icon">✓</span>
+              <h3>All clear</h3>
+              <p>No urgent portfolio issues are active right now.</p>
+              <button type="button" className="home-v2-link-btn" onClick={() => {
+                setDismissedAttentionCards([]);
+                setSnoozedAttentionCards([]);
+              }}>Restore alerts</button>
+            </article>
+          ) : null}
         </div>
       </section>
 

@@ -1395,6 +1395,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <h2>Performance Attribution</h2>
                 <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>View Flow</button>
               </div>
+              <div className="portfolio-v2-guided-strip" aria-label="Performance attribution workflow">
+                {["Overview", "Drill down", "Top contributors", "Save insight", "Export"].map((step, idx) => (
+                  <span key={`attrib-step-${step}`} className={idx === 0 ? "active" : ""}>{step}</span>
+                ))}
+              </div>
               <div className="portfolio-v2-attrib-grid">
                 {[{ key: "sector", label: "By Sector" }, { key: "region", label: "By Region" }, { key: "factor", label: "By Factor" }].map((group) => {
                   const first = attributionRows[group.key]?.[0];
@@ -1421,6 +1426,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <h2>Exposure Heatmap</h2>
                 <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure")}>View Flow</button>
               </div>
+              <div className="portfolio-v2-guided-strip" aria-label="Exposure heatmap workflow">
+                {["Sector", "Cell detail", "Holdings", "Risk", "Alert"].map((step, idx) => (
+                  <span key={`exposure-step-${step}`} className={idx === 0 ? "active" : ""}>{step}</span>
+                ))}
+              </div>
               <div className="portfolio-v2-heatmap">
                 {exposureRows.slice(0, 3).map((row) => (
                   <button
@@ -1439,7 +1449,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
 
           <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header"><h2>Rebalancing Suggestions</h2></div>
+            <div className="section-header">
+              <div>
+                <h2>Rebalancing Suggestions</h2>
+                <p className="portfolio-v2-section-kicker">Review drift, inspect suggested trades, edit the plan, confirm, and track the result.</p>
+              </div>
+              <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", rebalanceSuggestions[0] || null)}>View Flow</button>
+            </div>
             <div className="table-scroll">
               <table className="portfolio-v2-table rebalance">
                 <thead>
@@ -1498,8 +1514,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <div className="section-header"><h2>Prediction Markets</h2><div className="asset-count">{predictionMarketRows.length} Markets</div></div>
             {predictionMarketRows.length === 0 ? (
               <div className="portfolio-v2-empty">
-                <p>No prediction market trades yet.</p>
-                <button type="button" className="portfolio-v2-link">Explore Prediction Markets</button>
+                <div className="portfolio-v2-empty-icon">↗</div>
+                <h3>No prediction market positions yet</h3>
+                <p>Track event-driven opportunities across markets, macro, crypto, and equities.</p>
+                <div className="portfolio-v2-empty-actions">
+                  <button type="button" className="portfolio-v2-link">Explore Markets</button>
+                  <button type="button" className="portfolio-v2-link secondary">Learn how it works</button>
+                </div>
               </div>
             ) : (
               <div className="portfolio-v2-activity-list">

@@ -109,7 +109,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         });
       } catch (err) {
         if (cancelled) return;
-        console.error("Failed to fetch history:", err);
+        console.warn("Asset history unavailable; using cached or local context.", err);
         if (cached?.payload) {
           const cachedHistory = Array.isArray(cached.payload?.history) ? cached.payload.history : [];
           if (cachedHistory.length > 0) {
@@ -184,7 +184,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         writeResilientCache("asset-performance", cacheParams, { performance });
       } catch (err) {
         if (cancelled) return;
-        console.error("Failed to fetch performance summary:", err);
+        console.warn("Performance summary unavailable; using local context.", err);
       }
     };
 
@@ -281,7 +281,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           setFinvizData(data);
         }
       } catch (err) {
-        console.error("Failed to fetch Finviz data:", err);
+        console.warn("Finviz data unavailable; showing fundamentals fallback.", err);
       } finally {
         setFinvizLoading(false);
       }

@@ -407,7 +407,7 @@ useEffect(() => {
                setSpotPrices(prev => ({ ...prev, [symbol]: price }));
              }
           })
-          .catch(err => console.error(`Failed to fetch spot price for ${symbol}`, err))
+          .catch(err => console.warn(`Spot price unavailable for ${symbol}; using fallback pricing.`, err))
           .finally(() => {
             fetchState.spotInFlight.delete(symbol);
           });
@@ -584,7 +584,7 @@ useEffect(() => {
 
     } catch (err) {
       if (controller.signal.aborted) return;
-      console.error("Error fetching crypto options:", err);
+      console.warn("Options chain unavailable; simulator is using fallback pricing.", err);
       if (isMounted) {
         setOptionsError("");
         setOptionsStale(true);
