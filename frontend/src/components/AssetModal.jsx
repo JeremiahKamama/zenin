@@ -88,7 +88,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       } else {
         setLoading(true);
       }
-      setLoading(true);
+
       try {
         const params = new URLSearchParams({
           symbol: assetSymbol,
@@ -231,9 +231,18 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         }
       } catch (err) {
         if (controller.signal.aborted) return;
-        console.error("Failed to fetch earnings:", err);
-        if (cached?.payload && typeof cached.payload === "object") {
+        const hasCached = cached?.payload && typeof cached.payload === "object";
+        if (hasCached) {
           setEarnings(cached.payload);
+        } else {
+          setEarnings({
+            symbol: assetSymbol,
+            nextEarnings: null,
+            stale: true,
+            unavailable: true,
+            stale_reason: "earnings_temporarily_unavailable"
+          });
+          console.warn("Earnings endpoint unavailable for symbol:", assetSymbol);
         }
         setEarningsStale(true);
       } finally {
@@ -568,7 +577,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         <div className="chart-section asset-modal-body">
           <div className="chart-header-controls">
             <div className="asset-price-mini">
-              <span className="price">${displayedPrice.toFixed(2)}</span>
+              <span className="price">{displayedPrice > 0 ? `$${displayedPrice.toFixed(2)}` : "—"}</span>
               {asset.isMarketOpen === false ? (
                 <span className="market-status-badge closed" style={{ color: "var(--color-text-secondary)", marginLeft: "8px", fontSize: "0.85rem" }}>
                   — Market Closed ({asset.marketStatus || 'Weekend/Holiday'})

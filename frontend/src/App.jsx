@@ -20,6 +20,7 @@ import { SpeedInsights } from "@vercel/speed-insights/react"
 
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const ADMIN_EMAIL = String(import.meta.env.VITE_ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
 
 function parseRouteFromLocation() {
   if (typeof window === "undefined") {
@@ -73,9 +74,20 @@ function requiredPlanForSection(section) {
 }
 
 function hasSectionAccess(plan, section) {
+  return hasSectionAccessForUser(plan, false, section);
+}
+
+function hasSectionAccessForUser(plan, isAdmin, section) {
+  if (isAdmin) return true;
   const userPlan = normalizeCurrentPlan(plan);
   const requiredPlan = requiredPlanForSection(section);
   return Number(PLAN_RANK[userPlan] || 0) >= Number(PLAN_RANK[requiredPlan] || 0);
+}
+
+function isAdminUser(user) {
+  const email = String(user?.email || "").trim().toLowerCase();
+  const authProvider = String(user?.authProvider || "").trim().toLowerCase();
+  return Boolean(email && email === ADMIN_EMAIL) || authProvider === "admin";
 }
 
 const normalizeTradeRecord = (trade, idx = 0) => {
@@ -1510,6 +1522,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (isAdminUser(parsed)) return "Admin";
       return formatPlanLabel(parsed?.currentPlan, parsed?.currentBillingCycle);
     } catch {
       return "Starter Plan";
@@ -1524,15 +1537,40 @@ const handleOptionTradeClosed = async (tradeId) => {
       return "starter";
     }
   });
+  const [isAdmin, setIsAdmin] = useState(() => {
+    try {
+      const rawUser = localStorage.getItem("zenin_auth_user");
+      const parsed = rawUser ? JSON.parse(rawUser) : null;
+      return isAdminUser(parsed);
+    } catch {
+      return false;
+    }
+  });
 
-  const [themeMode, setThemeMode] = useState("dark");
+  const [themeMode, setThemeMode] = useState(() => {
+    try {
+      const saved = String(localStorage.getItem("zenin_global_theme") || "").trim().toLowerCase();
+      return saved === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
 
   useEffect(() => {
-    localStorage.setItem("zenin_global_theme", "dark");
-    document.documentElement.classList.remove("light-theme-active");
+    if (typeof document === "undefined") return;
+    const isLight = themeMode === "light";
+    const root = document.documentElement;
+    const body = document.body;
+    localStorage.setItem("zenin_global_theme", isLight ? "light" : "dark");
+    root.classList.toggle("light-theme-active", isLight);
+    body.classList.toggle("light-theme-active", isLight);
+    root.classList.toggle("page-dark-theme", !isLight);
+    body.classList.toggle("page-dark-theme", !isLight);
+    root.style.colorScheme = isLight ? "light" : "dark";
+    body.style.colorScheme = isLight ? "light" : "dark";
   }, [themeMode]);
 
-  const toggleTheme = () => setThemeMode("dark");
+  const toggleTheme = () => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
@@ -1596,17 +1634,24 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
 
   const accessibleSections = useMemo(
-    () => sections.filter((section) => hasSectionAccess(currentPlan, section)),
-    [sections, currentPlan]
+    () => sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
+    [sections, currentPlan, isAdmin]
   );
 
   useEffect(() => {
     let mounted = true;
-    const hydrateOptionalAuth = async () => {
-      const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
+    const redirectToSignin = () => {
+      const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const safeNext = nextPath.startsWith("/app") ? nextPath : "/app";
+      localStorage.setItem("zenin_post_auth_next", safeNext);
+      window.location.replace(`/auth?mode=signin&next=${encodeURIComponent(safeNext)}`);
+    };
+
+    const hydrateRequiredAuth = async () => {
+      const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
       if (!token) {
-        if (mounted) setCurrentPlan("starter");
-        if (mounted) setAccessCheckLoading(false);
+        if (mounted) setAccessCheckLoading(true);
+        redirectToSignin();
         return;
       }
 
@@ -1615,26 +1660,29 @@ const handleOptionTradeClosed = async (tradeId) => {
         const data = await res.json().catch(() => ({}));
         if (!mounted) return;
         if (!res.ok || !data?.authenticated || !data?.user) {
+          sessionStorage.removeItem("zenin_auth_token");
           localStorage.removeItem("zenin_auth_token");
           localStorage.removeItem("zenin_auth_user");
-          setCurrentPlan("starter");
-          setAccountPlanLabel(formatPlanLabel("starter", "monthly"));
+          localStorage.removeItem("zenin_auth_expires_at");
+          redirectToSignin();
+          return;
         } else {
           localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
           if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
-          setUserEmail(String(data.user.email || userEmail));
+          const userIsAdmin = isAdminUser(data.user);
+          setUserEmail(String(data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
+          setIsAdmin(userIsAdmin);
           setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
-          setAccountPlanLabel(formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
+          setAccountPlanLabel(userIsAdmin ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
         }
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
-        setCurrentPlan("starter");
-        setAccessCheckLoading(false);
+        redirectToSignin();
       }
     };
 
-    hydrateOptionalAuth();
+    hydrateRequiredAuth();
     return () => {
       mounted = false;
     };
@@ -2173,11 +2221,12 @@ const handleOptionTradeClosed = async (tradeId) => {
           </button>
         </header>
         <nav className="sidebar-nav">
-          {sections.map((section) => (
+          {accessibleSections.map((section) => (
             <button
               key={section}
               className={`nav-btn ${activeSection === section ? "active" : ""}`}
               onClick={() => {
+                if (!accessibleSections.includes(section)) return;
                 if (routeState.type === "company") navigateToAppRoute();
                 setActiveSection(section);
               }}
@@ -2193,14 +2242,14 @@ const handleOptionTradeClosed = async (tradeId) => {
           <button
             className="sidebar-theme-row"
             onClick={toggleTheme}
-            title="Theme: Dark mode"
-            aria-label="Theme set to dark mode"
+            title={`Theme: ${themeMode === "dark" ? "Dark mode" : "Light mode"}`}
+            aria-label={`Switch to ${themeMode === "dark" ? "light" : "dark"} mode`}
           >
             <span className="sidebar-theme-left">
-              <span className="sidebar-theme-icon" aria-hidden="true">☾</span>
-              <span className="sidebar-theme-label">Dark mode</span>
+              <span className="sidebar-theme-icon" aria-hidden="true">{themeMode === "dark" ? "☾" : "☀"}</span>
+              <span className="sidebar-theme-label">{themeMode === "dark" ? "Dark mode" : "Light mode"}</span>
             </span>
-            <span className="sidebar-theme-chip">Active</span>
+            <span className="sidebar-theme-chip">{themeMode === "dark" ? "Dark" : "Light"}</span>
           </button>
 
           <button
@@ -2249,6 +2298,10 @@ const handleOptionTradeClosed = async (tradeId) => {
             calculatePortfolioValue={calculatePortfolioValue}
             calculatePortfolioGain={calculatePortfolioGain}
             balance={balance}
+            onViewAllPositions={() => {
+              if (routeState.type === "company") navigateToAppRoute();
+              setActiveSection("Portfolio");
+            }}
           />
         )}
         {activeSection === "Watchlist" && (

@@ -24,6 +24,11 @@ export function PortfolioModule({
   const [selectedHolding, setSelectedHolding] = useState(null);
   const [benchmarkSymbol, setBenchmarkSymbol] = useState("SPY");
   const [selectedTaxLotMethod, setSelectedTaxLotMethod] = useState("hifo");
+  const [activeInsightFlow, setActiveInsightFlow] = useState(null);
+  const [insightFlowStep, setInsightFlowStep] = useState(1);
+  const [flowSelection, setFlowSelection] = useState(null);
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [flowActionLabel, setFlowActionLabel] = useState("");
   const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
 
 // ✅ 1) compute portfolioValue first
@@ -290,6 +295,42 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
   }, [attributionRows]);
 
+  const attributionFlowData = useMemo(() => {
+    const allRows = [
+      ...(Array.isArray(attributionRows?.sector) ? attributionRows.sector : []),
+      ...(Array.isArray(attributionRows?.region) ? attributionRows.region : []),
+      ...(Array.isArray(attributionRows?.factor) ? attributionRows.factor : [])
+    ].filter((row) => Number.isFinite(Number(row?.pnl)));
+    const positive = [...allRows].filter((row) => Number(row.pnl) >= 0).sort((a, b) => Number(b.pnl) - Number(a.pnl));
+    const negative = [...allRows].filter((row) => Number(row.pnl) < 0).sort((a, b) => Number(a.pnl) - Number(b.pnl));
+    const top = (positive[0] || negative[0] || null);
+    return {
+      positive: positive.slice(0, 4),
+      negative: negative.slice(0, 4),
+      top
+    };
+  }, [attributionRows]);
+
+  const exposureFlowData = useMemo(() => {
+    const sectors = exposureRows
+      .filter((row) => String(row?.bucket || "").toLowerCase() === "sector")
+      .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0));
+    const classify = (weight) => {
+      if (weight >= 50) return "very-high";
+      if (weight >= 25) return "high";
+      if (weight >= 10) return "moderate";
+      return "low";
+    };
+    const byRisk = sectors.map((row) => ({
+      ...row,
+      risk: classify(Number(row.weight || 0))
+    }));
+    return {
+      sectors: byRisk,
+      top: byRisk[0] || null
+    };
+  }, [exposureRows]);
+
   // Performance Metrics
   const metrics = useMemo(() => {
     const EPS = 1e-8;
@@ -480,20 +521,40 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const holdings = sortedHoldings.filter((row) => row.kind === "spot");
     const total = holdings.reduce((sum, row) => sum + Number(row.positionValue || 0), 0);
     if (!holdings.length || total <= 0) return [];
-    const target = 100 / holdings.length;
+    
+    // Equal weight target for simplicity in this example
+    const targetBase = 100 / holdings.length;
+    
     return holdings.map((row) => {
       const current = (Number(row.positionValue || 0) / total) * 100;
-      const drift = current - target;
+      const drift = current - targetBase;
       const action = drift > 2 ? "Trim" : drift < -2 ? "Add" : "Hold";
+      const tradeValue = Math.abs(drift / 100) * total;
+      
       return {
         symbol: row.row?.symbol || row.row?.asset || "—",
         current,
-        target,
+        target: targetBase,
         drift,
-        action
+        action,
+        tradeValue
       };
     }).sort((a, b) => Math.abs(b.drift) - Math.abs(a.drift));
   }, [sortedHoldings]);
+
+  const rebalanceMetrics = useMemo(() => {
+    const trades = rebalanceSuggestions.filter(s => s.action !== "Hold");
+    const totalDrift = rebalanceSuggestions.reduce((sum, s) => sum + Math.abs(s.drift), 0) / 2;
+    const estFees = trades.length * 9.99; // Mock fee
+    const tradeVolume = trades.reduce((sum, s) => sum + s.tradeValue, 0);
+    
+    return {
+      tradesRequired: trades.length,
+      totalDrift,
+      estFees,
+      tradeVolume
+    };
+  }, [rebalanceSuggestions]);
 
   const formatMoney = (value) => {
     const num = Number(value);
@@ -613,12 +674,600 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const cashWeight = currentAccountEquity > 0 ? (liveAvailableBalance / currentAccountEquity) * 100 : 0;
 
+  const insightFlowSteps = {
+    attribution: ["Dashboard", "Overview", "Drilldown", "Insight Detail", "Action / Export"],
+    exposure: ["Dashboard", "Overview", "Detailed Exposure", "Insights & Risk", "Portfolio Response"],
+    rebalancing: ["Dashboard", "Overview", "Rebalance Plan", "Confirm Trades", "Success"]
+  };
+
+  const openInsightFlow = (flow, selection = null) => {
+    setActiveInsightFlow(flow);
+    setInsightFlowStep(1);
+    setFlowSelection(selection);
+    setFlowBusy(false);
+    setFlowActionLabel("");
+  };
+
+  const closeInsightFlow = () => {
+    setActiveInsightFlow(null);
+    setInsightFlowStep(1);
+    setFlowSelection(null);
+    setFlowBusy(false);
+    setFlowActionLabel("");
+  };
+
+  const runFlowProcessing = (doneStep, label, fromStep = insightFlowStep) => {
+    setFlowBusy(true);
+    setFlowActionLabel(label);
+    setInsightFlowStep(fromStep);
+    window.setTimeout(() => {
+      setFlowBusy(false);
+      setInsightFlowStep(doneStep);
+    }, 950);
+  };
+
+  const renderInsightFlow = () => {
+    if (!activeInsightFlow) return null;
+    const steps = insightFlowSteps[activeInsightFlow] || [];
+    const pickExposure = flowSelection || exposureFlowData.top;
+    const pickAttribution = flowSelection || attributionFlowData.top;
+
+    const progress = (
+      <div className="portfolio-v2-flow-progress">
+        {steps.map((label, idx) => {
+          const stepIndex = idx + 1;
+          const state = stepIndex === insightFlowStep ? "active" : stepIndex < insightFlowStep ? "done" : "todo";
+          return (
+            <div key={`${activeInsightFlow}-${stepIndex}`} className={`portfolio-v2-flow-progress-item ${state}`}>
+              <span>{stepIndex}</span>
+              <strong>{label}</strong>
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    let body = null;
+    if (activeInsightFlow === "attribution") {
+      const contributionRows = attributionRows?.sector || [];
+      const maxAbs = Math.max(1, ...contributionRows.map((row) => Math.abs(Number(row?.pnl || 0))));
+      if (insightFlowStep === 1) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Performance Attribution</h3>
+              <span>{contributionRows.length || 0} contributors</span>
+            </div>
+            <p>Entry point from dashboard with top attribution snapshots.</p>
+            <div className="portfolio-v2-flow-mini-grid">
+              {[{ key: "sector", label: "Sector" }, { key: "region", label: "Region" }, { key: "factor", label: "Factor" }].map((item) => {
+                const row = attributionRows?.[item.key]?.[0];
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className="portfolio-v2-flow-chip"
+                    onClick={() => {
+                      setFlowSelection(row || null);
+                      setInsightFlowStep(2);
+                    }}
+                  >
+                    <small>{item.label}</small>
+                    <strong>{row?.name || "Unclassified"}</strong>
+                    <em className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{row ? formatSignedMoney(row.pnl) : "$0.00"}</em>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 2) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Attribution Overview</h3>
+              <span>{flowSelection?.group || "Sector"} view</span>
+            </div>
+            <div className="portfolio-v2-flow-bars">
+              {contributionRows.slice(0, 6).map((row) => {
+                const pnl = Number(row?.pnl || 0);
+                const width = `${Math.max(8, (Math.abs(pnl) / maxAbs) * 100)}%`;
+                return (
+                  <div key={`${row.group}-${row.name}`} className="portfolio-v2-flow-bar-row">
+                    <div className="portfolio-v2-flow-bar-copy">
+                      <strong>{row.name}</strong>
+                      <span>{formatSignedMoney(pnl)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`portfolio-v2-flow-bar ${pnl >= 0 ? "positive" : "negative"}`}
+                      style={{ width }}
+                      onClick={() => {
+                        setFlowSelection(row);
+                        setInsightFlowStep(3);
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(3)}>Continue</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(1)}>Back</button>
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 3) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Attribution Drilldown</h3>
+              <span>{pickAttribution?.name || "Contributor"}</span>
+            </div>
+            <div className="portfolio-v2-flow-two-col">
+              <div>
+                <h4>Top Positive</h4>
+                <ul className="portfolio-v2-flow-list">
+                  {attributionFlowData.positive.map((row) => (
+                    <li key={`pos-${row.group}-${row.name}`}>
+                      <span>{row.name}</span>
+                      <strong className="positive">{formatSignedMoney(row.pnl)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h4>Top Negative</h4>
+                <ul className="portfolio-v2-flow-list">
+                  {attributionFlowData.negative.map((row) => (
+                    <li key={`neg-${row.group}-${row.name}`}>
+                      <span>{row.name}</span>
+                      <strong className="negative">{formatSignedMoney(row.pnl)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(4)}>View Insight</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(2)}>Back</button>
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 4) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Contributor Insights</h3>
+              <span>{pickAttribution?.name || "AAPL"}</span>
+            </div>
+            <div className="portfolio-v2-flow-detail-grid">
+              <div>
+                <strong>Insight</strong>
+                <p>
+                  {pickAttribution?.name || "This contributor"} drove portfolio return through concentrated exposure
+                  and price movement in the current interval.
+                </p>
+              </div>
+              <div>
+                <strong>Total Contribution</strong>
+                <p className={Number(pickAttribution?.pnl || 0) >= 0 ? "positive" : "negative"}>
+                  {formatSignedMoney(Number(pickAttribution?.pnl || 0))}
+                </p>
+              </div>
+            </div>
+            <div className="portfolio-v2-flow-chart-mock">
+              <span style={{ width: "22%" }} />
+              <span style={{ width: "34%" }} />
+              <span style={{ width: "46%" }} />
+              <span style={{ width: "64%" }} />
+              <span style={{ width: "53%" }} />
+              <span style={{ width: "73%" }} />
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(5)}>Proceed</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(3)}>Back</button>
+            </div>
+          </div>
+        );
+      } else {
+        body = flowBusy ? (
+          <div className="portfolio-v2-flow-status-card">
+            <div className="portfolio-v2-flow-spinner" />
+            <h3>Saving insight...</h3>
+            <p>{flowActionLabel || "Please wait while we finish this action."}</p>
+          </div>
+        ) : (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Actions &amp; Export</h3>
+              <span>Step complete</span>
+            </div>
+            <div className="portfolio-v2-flow-list stacked">
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Exporting attribution report...")}>
+                <strong>Export report</strong><span>Download PDF / CSV</span>
+              </button>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving insight to journal...")}>
+                <strong>Add to journal</strong><span>Save this insight note</span>
+              </button>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={closeInsightFlow}>
+                <strong>Review positions</strong><span>Open related holdings</span>
+              </button>
+            </div>
+            <div className="portfolio-v2-flow-status-inline success">
+              <span>✓</span>
+              <div><strong>Insight saved successfully</strong><small>Added to your journal.</small></div>
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={closeInsightFlow}>Close</button>
+            </div>
+          </div>
+        );
+      }
+    } else {
+      const sectors = exposureFlowData.sectors;
+      const activeSector = pickExposure || sectors[0];
+      const concentrationScore = Math.min(100, Math.max(0, Number(activeSector?.weight || 0) * 1.8));
+      if (insightFlowStep === 1) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Exposure Heatmap</h3>
+              <span>{sectors.length} sectors</span>
+            </div>
+            <p>Entry point from dashboard with top sector exposure snapshots.</p>
+            <div className="portfolio-v2-flow-mini-grid">
+              {sectors.slice(0, 3).map((row) => (
+                <button
+                  key={`exp-top-${row.name}`}
+                  type="button"
+                  className={`portfolio-v2-flow-chip risk-${row.risk}`}
+                  onClick={() => {
+                    setFlowSelection(row);
+                    setInsightFlowStep(2);
+                  }}
+                >
+                  <small>{row.bucket}</small>
+                  <strong>{row.name}</strong>
+                  <em>{row.weight.toFixed(1)}%</em>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 2) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Heatmap Overview</h3>
+              <span>Sector map</span>
+            </div>
+            <div className="portfolio-v2-flow-table">
+              {sectors.slice(0, 6).map((row) => (
+                <button
+                  key={`heat-${row.name}`}
+                  type="button"
+                  className={`portfolio-v2-flow-table-row risk-${row.risk}`}
+                  onClick={() => {
+                    setFlowSelection(row);
+                    setInsightFlowStep(3);
+                  }}
+                >
+                  <span>{row.name}</span>
+                  <strong>{row.weight.toFixed(1)}%</strong>
+                  <em>{row.risk.replace("-", " ")}</em>
+                </button>
+              ))}
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(3)}>Continue</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(1)}>Back</button>
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 3) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>{activeSector?.name || "Sector"} Exposure</h3>
+              <span>{activeSector?.weight?.toFixed(1) || "0.0"}%</span>
+            </div>
+            <div className="portfolio-v2-flow-two-col">
+              <div className="portfolio-v2-flow-kpi-card">
+                <span>Exposure</span>
+                <strong>{activeSector?.weight?.toFixed(1) || "0.0"}%</strong>
+              </div>
+              <div className="portfolio-v2-flow-kpi-card">
+                <span>Unrealized P&amp;L</span>
+                <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss * ((Number(activeSector?.weight || 0) / 100) || 0))}</strong>
+              </div>
+            </div>
+            <ul className="portfolio-v2-flow-list">
+              {holdingsTableRows.slice(0, 5).map((row) => (
+                <li key={`exp-holding-${row.key}`}>
+                  <span>{row.symbol}</span>
+                  <strong>{row.allocation.toFixed(2)}%</strong>
+                </li>
+              ))}
+            </ul>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(4)}>View Insights</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(2)}>Back</button>
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 4) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Insights &amp; Risk</h3>
+              <span>{activeSector?.name || "Sector"}</span>
+            </div>
+            <div className="portfolio-v2-flow-detail-grid">
+              <div>
+                <strong>Concentration Insight</strong>
+                <p>{activeSector?.name || "Sector"} is above your target exposure band.</p>
+              </div>
+              <div>
+                <strong>Diversification Score</strong>
+                <p>{concentrationScore.toFixed(0)}/100</p>
+              </div>
+            </div>
+            <div className="portfolio-v2-flow-score-track">
+              <i style={{ width: `${concentrationScore}%` }} />
+            </div>
+            <ul className="portfolio-v2-flow-bullets">
+              <li>Reduce exposure to concentrated sectors.</li>
+              <li>Increase allocation to underweight buckets.</li>
+              <li>Review alert thresholds and rebalance cadence.</li>
+            </ul>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(5)}>Take Action</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(3)}>Back</button>
+            </div>
+          </div>
+        );
+      } else {
+        body = flowBusy ? (
+          <div className="portfolio-v2-flow-status-card">
+            <div className="portfolio-v2-flow-spinner" />
+            <h3>Applying response...</h3>
+            <p>{flowActionLabel || "Updating your portfolio preferences."}</p>
+          </div>
+        ) : (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Portfolio Response</h3>
+              <span>{activeSector?.name || "Sector"}</span>
+            </div>
+            <div className="portfolio-v2-flow-list stacked">
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Applying rebalance action...")}>
+                <strong>Rebalance portfolio</strong><span>Adjust allocations</span>
+              </button>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving new alert threshold...")}>
+                <strong>Set alert</strong><span>Notify if exposure is breached</span>
+              </button>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving heatmap view...")}>
+                <strong>Save view</strong><span>Store this heatmap configuration</span>
+              </button>
+            </div>
+            <div className="portfolio-v2-flow-status-inline success">
+              <span>✓</span>
+              <div><strong>Changes saved</strong><small>Your portfolio response has been recorded.</small></div>
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={closeInsightFlow}>Close</button>
+            </div>
+          </div>
+        );
+      }
+    } else if (activeInsightFlow === "rebalancing") {
+      const { tradesRequired, totalDrift, estFees, tradeVolume } = rebalanceMetrics;
+
+      if (insightFlowStep === 1) {
+        // This is usually reached by clicking "Action" in the table
+        // We'll advance immediately to Step 2 since the table IS the dashboard entry
+        runFlowProcessing(2, "Generating rebalance overview...");
+        body = (
+          <div className="portfolio-v2-flow-status-card">
+            <div className="portfolio-v2-flow-spinner" />
+            <h3>Analyzing Drift...</h3>
+          </div>
+        );
+      } else if (insightFlowStep === 2) {
+        const donutOptions = {
+          chart: { type: 'donut', background: 'transparent' },
+          labels: ['Current Allocation', 'Target Allocation'],
+          colors: ['#3b82f6', '#1e293b'],
+          stroke: { show: false },
+          legend: { show: false },
+          dataLabels: { enabled: false },
+          plotOptions: {
+            pie: {
+              donut: {
+                size: '75%',
+                labels: {
+                  show: true,
+                  name: { show: true, fontSize: '12px', color: '#94a3b8', offsetY: -5 },
+                  value: { show: true, fontSize: '20px', fontWeight: 700, color: '#f8fafc', offsetY: 5 },
+                  total: { show: true, label: 'Portfolio Drift', formatter: () => `${totalDrift.toFixed(1)}%` }
+                }
+              }
+            }
+          }
+        };
+
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Rebalance Overview</h3>
+              <span>Analyze portfolio drift and trade impact</span>
+            </div>
+            
+            <div className="portfolio-v2-flow-two-col" style={{ alignItems: 'center' }}>
+              <div style={{ pointerEvents: 'none' }}>
+                <ReactApexChart 
+                  options={donutOptions} 
+                  series={[100 - totalDrift, totalDrift]} 
+                  type="donut" 
+                  width={200}
+                />
+              </div>
+              <div className="portfolio-v2-flow-mini-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
+                  <span style={{ fontSize: '10px' }}>Portfolio Drift</span>
+                  <strong style={{ fontSize: '18px', color: '#f59e0b' }}>{totalDrift.toFixed(1)}%</strong>
+                </div>
+                <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
+                  <span style={{ fontSize: '10px' }}>Trades Required</span>
+                  <strong style={{ fontSize: '18px' }}>{tradesRequired}</strong>
+                </div>
+                <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
+                  <span style={{ fontSize: '10px' }}>Est. Cost</span>
+                  <strong style={{ fontSize: '18px' }}>{formatMoney(estFees)}</strong>
+                </div>
+                <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
+                  <span style={{ fontSize: '10px' }}>Cash Impact</span>
+                  <strong style={{ fontSize: '18px', color: '#38bdf8' }}>Neutral</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(3)}>Generate Plan</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={closeInsightFlow}>Cancel</button>
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 3) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Rebalance Plan</h3>
+              <span>Inspect individual trade suggestions</span>
+            </div>
+            <div className="portfolio-v2-flow-list stacked" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              {rebalanceSuggestions.filter(s => s.action !== "Hold").map((s) => (
+                <div key={s.symbol} className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
+                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                      <div className="portfolio-v2-activity-dot" style={{ 
+                        color: s.action === "Trim" ? '#f59e0b' : '#22c55e', 
+                        background: s.action === "Trim" ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)' 
+                      }}>
+                        {s.action === "Trim" ? "↘" : "↗"}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <strong>{s.action} {s.symbol}</strong>
+                        <small style={{ color: '#94a3b8' }}>{s.action === "Trim" ? 'Reduce' : 'Increase'} allocation</small>
+                      </div>
+                   </div>
+                   <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Sell" : "Buy"}</div>
+                      <div style={{ fontSize: '12px', color: '#f8fafc' }}>{formatMoney(s.tradeValue)}</div>
+                   </div>
+                </div>
+              ))}
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(4)}>Apply Plan</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(2)}>Back</button>
+            </div>
+          </div>
+        );
+      } else if (insightFlowStep === 4) {
+        body = (
+          <div className="portfolio-v2-flow-card">
+            <div className="portfolio-v2-flow-headline">
+              <h3>Confirm Rebalance</h3>
+              <span>Review expected costs and drift reduction</span>
+            </div>
+            <div className="portfolio-v2-flow-list stacked">
+               <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <div style={{ fontSize: '20px' }}>🛒</div>
+                    <div><strong>{tradesRequired} total trades</strong><span>{rebalanceSuggestions.filter(s => s.action === "Trim").length} Sell, {rebalanceSuggestions.filter(s => s.action === "Add").length} Buy</span></div>
+                  </div>
+               </div>
+               <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <div style={{ fontSize: '20px' }}>💰</div>
+                    <div><strong>Estimated fees</strong><span>{formatMoney(estFees)}</span></div>
+                  </div>
+               </div>
+               <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <div style={{ fontSize: '20px' }}>🎯</div>
+                    <div><strong>New projected drift</strong><span className="positive">0.0%</span></div>
+                  </div>
+               </div>
+            </div>
+            <div className="portfolio-v2-flow-actions">
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => runFlowProcessing(5, "Executing rebalance strategy...")}>Confirm</button>
+              <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(3)}>Back</button>
+            </div>
+          </div>
+        );
+      } else {
+        body = flowBusy ? (
+          <div className="portfolio-v2-flow-status-card">
+            <div className="portfolio-v2-flow-spinner" />
+            <h3>{flowActionLabel || "Executing trades..."}</h3>
+          </div>
+        ) : (
+          <div className="portfolio-v2-flow-card" style={{ alignItems: 'center', textAlign: 'center' }}>
+            <div className="portfolio-v2-flow-status-inline success" style={{ flexDirection: 'column', padding: '20px', gap: '16px' }}>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(34,197,94,0.15)', color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>✓</div>
+              <div style={{ textAlign: 'center' }}>
+                <h3 style={{ fontSize: '20px', color: '#f8fafc', margin: '0 0 8px' }}>Rebalance Submitted</h3>
+                <p style={{ color: '#94a3b8', fontSize: '14px' }}>Your trades have been submitted successfully.</p>
+              </div>
+            </div>
+            
+            <div className="portfolio-v2-flow-list stacked" style={{ width: '100%', marginTop: '16px' }}>
+               <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
+                  <span>Projected Drift</span><strong className="positive">0.0%</strong>
+               </div>
+               <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
+                  <span>Status</span><strong style={{ color: '#f59e0b' }}>In Progress</strong>
+               </div>
+               <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
+                  <span>Next Review</span><strong>30 days</strong>
+               </div>
+            </div>
+
+            <div className="portfolio-v2-flow-actions" style={{ width: '100%', marginTop: '20px' }}>
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={closeInsightFlow} style={{ width: '100%' }}>View Portfolio</button>
+            </div>
+          </div>
+        );
+      }
+    }
+
+    const flowTitle = activeInsightFlow === "attribution" 
+      ? "Performance Attribution Flow" 
+      : activeInsightFlow === "exposure" 
+        ? "Exposure Heatmap Flow" 
+        : "Rebalancing Suggestions Flow";
+
+    return (
+      <div className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Portfolio user flow">
+        <div className="portfolio-v2-flow-shell">
+          <div className="portfolio-v2-flow-top">
+            <h2>{flowTitle}</h2>
+            <button type="button" className="portfolio-v2-flow-close" onClick={closeInsightFlow} aria-label="Close flow">✕</button>
+          </div>
+          {progress}
+          <div className="portfolio-v2-flow-body">{body}</div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="portfolio-module portfolio-v2">
       <div className="portfolio-v2-head">
         <div className="portfolio-v2-title-row">
           <h2>Portfolio</h2>
-          <span className="portfolio-v2-badge">v2</span>
         </div>
         <div className="portfolio-v2-toolbar">
           <select className="portfolio-v2-select" defaultValue="all">
@@ -742,32 +1391,48 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
           <div className="portfolio-v2-two-col">
             <section className="watchlist-panel glass portfolio-v2-panel">
-              <div className="section-header"><h2>Performance Attribution</h2></div>
+              <div className="section-header">
+                <h2>Performance Attribution</h2>
+                <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>View Flow</button>
+              </div>
               <div className="portfolio-v2-attrib-grid">
                 {[{ key: "sector", label: "By Sector" }, { key: "region", label: "By Region" }, { key: "factor", label: "By Factor" }].map((group) => {
                   const first = attributionRows[group.key]?.[0];
                   return (
-                    <div key={group.key} className="portfolio-v2-attrib-card">
+                    <button
+                      key={group.key}
+                      type="button"
+                      className="portfolio-v2-attrib-card"
+                      onClick={() => openInsightFlow("attribution", first || null)}
+                    >
                       <span>{group.label}</span>
                       <strong>{first?.name || "Unclassified"}</strong>
                       <em className={(first?.pnl || 0) >= 0 ? "positive" : "negative"}>
                         {first ? formatSignedMoney(first.pnl) : "$0.00"}
                       </em>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
             </section>
 
             <section className="watchlist-panel glass portfolio-v2-panel">
-              <div className="section-header"><h2>Exposure Heatmap</h2></div>
+              <div className="section-header">
+                <h2>Exposure Heatmap</h2>
+                <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure")}>View Flow</button>
+              </div>
               <div className="portfolio-v2-heatmap">
                 {exposureRows.slice(0, 3).map((row) => (
-                  <div key={`${row.bucket}-${row.name}`} className="portfolio-v2-heat-cell">
+                  <button
+                    key={`${row.bucket}-${row.name}`}
+                    type="button"
+                    className="portfolio-v2-heat-cell"
+                    onClick={() => openInsightFlow("exposure", row)}
+                  >
                     <span>{row.bucket}</span>
                     <strong>{row.name}</strong>
                     <em>{row.weight.toFixed(1)}%</em>
-                  </div>
+                  </button>
                 ))}
               </div>
             </section>
@@ -793,7 +1458,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       <td>{row.current.toFixed(2)}%</td>
                       <td>{row.target.toFixed(2)}%</td>
                       <td className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</td>
-                      <td><span className="portfolio-v2-status hold">{row.action}</span></td>
+                      <td>
+                        <button 
+                          type="button" 
+                          className={`portfolio-v2-status ${row.action.toLowerCase()}`}
+                          style={{ border: 'none', cursor: row.action === 'Hold' ? 'default' : 'pointer', width: '100%', textAlign: 'center' }}
+                          onClick={() => row.action !== "Hold" && openInsightFlow("rebalancing", row)}
+                        >
+                          {row.action}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -859,6 +1533,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </section>
         </aside>
       </div>
+      {renderInsightFlow()}
 
       {showDiversificationModal ? (
         <div className="modal-overlay" onClick={() => setShowDiversificationModal(false)}>

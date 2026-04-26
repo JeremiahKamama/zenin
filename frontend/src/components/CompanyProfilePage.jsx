@@ -1016,6 +1016,13 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
     : Array.isArray(finvizData?.analystRatings)
     ? finvizData.analystRatings
     : [];
+
+  const filteredFinvizSummary = useMemo(() => {
+    if (!finvizData?.summary) return [];
+    const excluded = ["Peers", "Industry", "Sector", "Country", "Description", "Title"];
+    return Object.entries(finvizData.summary).filter(([label]) => !excluded.includes(label));
+  }, [finvizData?.summary]);
+
   const normalizedFinvizRatings = useMemo(
     () =>
       finvizRatings
@@ -1088,7 +1095,12 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
             tone,
           };
         })
-        .filter((row) => row.analyst !== "—" || row.rating !== "—" || row.target !== "—"),
+        .filter((row) => {
+          const joined = `${row.date} ${row.analyst} ${row.rating}`.toLowerCase();
+          const hasDate = row.date && row.date !== "—" && row.date.length >= 6;
+          const isNotClutter = !joined.includes("peers") && !joined.includes("scroll to") && !joined.includes("filing");
+          return hasDate && isNotClutter && (row.analyst !== "—" || row.rating !== "—" || row.target !== "—");
+        }),
     [finvizRatings]
   );
 
@@ -1277,11 +1289,11 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 </div>
 
                 {/* Summary Metrics Grid */}
-                {finvizData.summary && Object.keys(finvizData.summary).length > 0 && (
+                {filteredFinvizSummary.length > 0 && (
                   <section className="intel-section">
                     <h3 className="section-subtitle">Snapshot Overview</h3>
                     <div className="intel-summary-grid">
-                      {Object.entries(finvizData.summary).slice(0, 16).map(([label, value]) => (
+                      {filteredFinvizSummary.slice(0, 16).map(([label, value]) => (
                         <div key={label} className="intel-summary-card">
                           <span className="summary-label">{label}</span>
                           <span className={`summary-value ${value?.includes('-') ? 'negative' : (value?.includes('%') && parseFloat(value) > 0) ? 'positive' : ''}`}>

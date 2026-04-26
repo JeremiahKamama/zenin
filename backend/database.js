@@ -27,13 +27,16 @@ function resolveRejectUnauthorized(connectionString) {
     return false;
   }
 
-  // Render PostgreSQL commonly requires TLS with non-public CA chains for node-postgres.
-  // Default to non-strict verification on Render unless overridden by env.
+  // In production we always verify TLS certificates unless explicitly overridden.
+  if (process.env.NODE_ENV === "production") {
+    return true;
+  }
+
   if (isRenderEnvironment(connectionString)) {
     return false;
   }
 
-  return process.env.NODE_ENV === "production";
+  return false;
 }
 
 function createPoolConfig() {
@@ -175,7 +178,11 @@ function normalizeMarketType(type, marketType) {
 
 function toUserId(userId) {
   const parsed = Number(userId);
-  if (!Number.isInteger(parsed) || parsed <= 0) return 1;
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    const error = new Error("Invalid user id");
+    error.code = "INVALID_USER_ID";
+    throw error;
+  }
   return parsed;
 }
 
@@ -189,6 +196,173 @@ function normalizeBillingCycleValue(billingCycle) {
   const value = String(billingCycle || "").trim().toLowerCase();
   if (["monthly", "yearly"].includes(value)) return value;
   return "monthly";
+}
+
+const ADMIN_WORKSPACE_MIGRATION_SNAPSHOT_KEY = "maintenance:admin-workspace-migration-v1";
+
+async function runAdminWorkspaceMigrationTx(client, { force = false, markRun = true } = {}) {
+  if (!force) {
+    const marker = await client.query(`
+      SELECT payload_json AS payload, updated_at AS "updatedAt"
+      FROM service_snapshots
+      WHERE snapshot_key = $1
+      LIMIT 1;
+    `, [ADMIN_WORKSPACE_MIGRATION_SNAPSHOT_KEY]);
+    if (marker.rows[0]) {
+      return {
+        skipped: true,
+        alreadyRan: true,
+        marker: {
+          payload: parseJsonPayload(marker.rows[0].payload, {}),
+          updatedAt: toIsoString(marker.rows[0].updatedAt)
+        }
+      };
+    }
+  }
+
+  const adminEmail = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
+  const adminUserResult = await client.query(`
+    WITH upsert AS (
+      INSERT INTO app_users (email, password_hash, display_name, auth_provider, email_verified)
+      VALUES ($1, '', 'Admin User', 'admin', TRUE)
+      ON CONFLICT (email) DO UPDATE
+      SET display_name = EXCLUDED.display_name, updated_at = NOW()
+      RETURNING id
+    )
+    SELECT id FROM upsert
+    UNION ALL
+    SELECT id FROM app_users WHERE email = $1
+    LIMIT 1;
+  `, [adminEmail]);
+  const adminUserId = Number(adminUserResult.rows[0]?.id || 0);
+  if (!adminUserId) {
+    const err = new Error("Could not resolve admin user id.");
+    err.code = "ADMIN_USER_RESOLUTION_FAILED";
+    throw err;
+  }
+
+  await client.query(`
+    INSERT INTO user_workspace_balance (user_id, balance)
+    VALUES ($1, $2)
+    ON CONFLICT (user_id) DO NOTHING;
+  `, [adminUserId, DEFAULT_BALANCE]);
+
+  const adminPortfolioCountResult = await client.query(`
+    SELECT COUNT(*)::int AS count
+    FROM user_workspace_portfolio
+    WHERE user_id = $1;
+  `, [adminUserId]);
+  const adminPortfolioCount = Number(adminPortfolioCountResult.rows[0]?.count || 0);
+
+  let insertedPortfolio = 0;
+  let copiedPortfolioFrom = null;
+  if (adminPortfolioCount === 0) {
+    const portfolioFromGuestResult = await client.query(`
+      INSERT INTO user_workspace_portfolio (
+        user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+      )
+      SELECT
+        $1, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+      FROM user_workspace_portfolio
+      WHERE user_id = 1 AND quantity > $2
+      ON CONFLICT (user_id, symbol, market_type, strategy_name) DO NOTHING;
+    `, [adminUserId, QTY_EPSILON]);
+    insertedPortfolio = Number(portfolioFromGuestResult.rowCount || 0);
+    copiedPortfolioFrom = insertedPortfolio > 0 ? "guest_workspace" : null;
+
+    if (insertedPortfolio === 0) {
+      const portfolioFromLegacyResult = await client.query(`
+        INSERT INTO user_workspace_portfolio (
+          user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+        )
+        SELECT
+          $1, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+        FROM portfolio_holdings
+        WHERE quantity > $2
+        ON CONFLICT (user_id, symbol, market_type, strategy_name) DO NOTHING;
+      `, [adminUserId, QTY_EPSILON]);
+      insertedPortfolio = Number(portfolioFromLegacyResult.rowCount || 0);
+      copiedPortfolioFrom = insertedPortfolio > 0 ? "legacy_portfolio_holdings" : null;
+    }
+  }
+
+  const adminWatchlistCountResult = await client.query(`
+    SELECT COUNT(*)::int AS count
+    FROM user_workspace_watchlist
+    WHERE user_id = $1;
+  `, [adminUserId]);
+  const adminWatchlistCount = Number(adminWatchlistCountResult.rows[0]?.count || 0);
+
+  let insertedWatchlist = 0;
+  let copiedWatchlistFrom = null;
+  if (adminWatchlistCount === 0) {
+    const watchlistFromGuestResult = await client.query(`
+      INSERT INTO user_workspace_watchlist (
+        user_id, symbol, name, type, category, theme, market_type, date_added
+      )
+      SELECT
+        $1, symbol, name, type, category, theme, market_type, date_added
+      FROM user_workspace_watchlist
+      WHERE user_id = 1
+      ON CONFLICT (user_id, symbol, market_type, category, theme) DO NOTHING;
+    `, [adminUserId]);
+    insertedWatchlist = Number(watchlistFromGuestResult.rowCount || 0);
+    copiedWatchlistFrom = insertedWatchlist > 0 ? "guest_workspace" : null;
+
+    if (insertedWatchlist === 0) {
+      const watchlistFromLegacyResult = await client.query(`
+        INSERT INTO user_workspace_watchlist (
+          user_id, symbol, name, type, category, theme, market_type, date_added
+        )
+        SELECT
+          $1, symbol, name, type, category, theme, market_type, date_added
+        FROM watchlist_assets
+        ON CONFLICT (user_id, symbol, market_type, category, theme) DO NOTHING;
+      `, [adminUserId]);
+      insertedWatchlist = Number(watchlistFromLegacyResult.rowCount || 0);
+      copiedWatchlistFrom = insertedWatchlist > 0 ? "legacy_watchlist_assets" : null;
+    }
+  }
+
+  const payload = {
+    ranAt: new Date().toISOString(),
+    adminEmail,
+    adminUserId,
+    insertedPortfolio,
+    insertedWatchlist,
+    copiedPortfolioFrom,
+    copiedWatchlistFrom
+  };
+
+  if (markRun) {
+    await client.query(`
+      INSERT INTO service_snapshots (snapshot_key, payload_json, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (snapshot_key)
+      DO UPDATE SET payload_json = EXCLUDED.payload_json, updated_at = NOW();
+    `, [ADMIN_WORKSPACE_MIGRATION_SNAPSHOT_KEY, JSON.stringify(payload)]);
+  }
+
+  return {
+    skipped: false,
+    alreadyRan: false,
+    ...payload
+  };
+}
+
+async function runAdminWorkspaceMigration({ force = false } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await runAdminWorkspaceMigrationTx(client, { force, markRun: true });
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function initializeDatabase() {
@@ -540,6 +714,8 @@ async function initializeDatabase() {
       VALUES (1, $1)
       ON CONFLICT (user_id) DO NOTHING;
     `, [DEFAULT_BALANCE]);
+
+    await runAdminWorkspaceMigrationTx(client, { force: false, markRun: true });
 
     const guestWatchlistCountResult = await client.query(`
       SELECT COUNT(*)::int AS count
@@ -1698,6 +1874,14 @@ const userAuth = {
     `, [String(tokenHash || "")]);
   },
 
+  revokeSessionsByUserId: async (userId) => {
+    await pool.query(`
+      UPDATE auth_sessions
+      SET revoked_at = NOW()
+      WHERE user_id = $1 AND revoked_at IS NULL;
+    `, [toUserId(userId)]);
+  },
+
   updatePassword: async (userId, passwordHash) => {
     await pool.query(`
       UPDATE app_users
@@ -2414,17 +2598,85 @@ const userWorkspace = {
       const dateAdded = payload.date_added || new Date().toISOString();
       const executionTimestamp = payload.executedAt || new Date().toISOString();
       const executionDate = toDateString(payload.date || executionTimestamp) || new Date().toISOString().slice(0, 10);
-      const clientId = payload.clientId || null;
+      const clientId = String(payload.clientId || "").trim() || null;
       const strategyName = payload.strategyName || payload.strategy_name || null;
       const legsJson = parseJsonPayload(payload.legsJson || payload.legs_json);
 
       if (!symbol) throw new Error("Invalid symbol");
       if (!Number.isFinite(quantity) || quantity <= QTY_EPSILON) throw new Error("Invalid quantity");
       if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
+      if (!clientId) {
+        const err = new Error("clientId is required");
+        err.code = "INVALID_CLIENT_ID";
+        throw err;
+      }
 
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+
+        const existingTradeResult = await client.query(`
+          SELECT
+            id,
+            client_id AS "clientId",
+            date,
+            executed_at AS "executedAt",
+            asset,
+            name,
+            type,
+            side,
+            market_type AS "marketType",
+            status,
+            quantity,
+            price,
+            notional,
+            balance_after AS "balanceAfter",
+            portfolio_value_after AS "portfolioValueAfter",
+            account_equity_after AS "accountEquityAfter",
+            position_after AS "positionAfter",
+            strategy_name AS "strategyName",
+            legs_json AS "legsJson"
+          FROM user_workspace_trades
+          WHERE user_id = $1 AND client_id = $2
+          LIMIT 1
+          FOR UPDATE;
+        `, [resolvedUserId, clientId]);
+
+        if (existingTradeResult.rows[0]) {
+          const balanceSnapshot = await client.query(`
+            SELECT balance
+            FROM user_workspace_balance
+            WHERE user_id = $1
+            LIMIT 1;
+          `, [resolvedUserId]);
+          const holdingsSnapshot = await client.query(`
+            SELECT
+              id,
+              symbol,
+              name,
+              price,
+              quantity,
+              entry_price AS "entryPrice",
+              opened_at AS "openedAt",
+              type,
+              market_type AS "marketType",
+              order_type AS "orderType",
+              strategy_name AS "strategyName",
+              legs_json AS "legsJson",
+              date_added
+            FROM user_workspace_portfolio
+            WHERE user_id = $1 AND quantity > $2
+            ORDER BY date_added DESC;
+          `, [resolvedUserId, QTY_EPSILON]);
+          await client.query("COMMIT");
+          return {
+            balance: toNumber(balanceSnapshot.rows[0]?.balance, DEFAULT_BALANCE),
+            holdings: holdingsSnapshot.rows.map(mapPortfolioRow),
+            trade: mapTradeRow(existingTradeResult.rows[0]),
+            idempotentReplay: true
+          };
+        }
+
         const balanceRow = await client.query(`
           SELECT balance
           FROM user_workspace_balance
@@ -2622,6 +2874,7 @@ async function closeDatabase() {
 module.exports = {
   pool,
   initializeDatabase,
+  runAdminWorkspaceMigration,
   balance,
   portfolio,
   watchlist,

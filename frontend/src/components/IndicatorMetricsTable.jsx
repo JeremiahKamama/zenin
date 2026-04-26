@@ -1,6 +1,18 @@
-const formatMacroValue = (value) => {
+const formatMacroValue = (value, key = "") => {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
+
+  // Truncate large values for Balance of Trade
+  if (key === "balance_of_trade") {
+    const abs = Math.abs(n);
+    if (abs >= 1e9) {
+      return (n / 1e9).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "B";
+    }
+    if (abs >= 1e6) {
+      return (n / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "M";
+    }
+  }
+
   return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
 };
 
@@ -32,9 +44,9 @@ export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
                     {metric.unit ? <small>{metric.unit}</small> : null}
                   </div>
                 </td>
-                <td className="greek">{formatMacroValue(metric.previous)}</td>
-                <td style={{ color: "#e2e8f0" }}>{formatMacroValue(metric.current)}</td>
-                <td style={{ color: "#38bdf8" }}>{formatMacroValue(metric.expectation)}</td>
+                <td className="greek">{formatMacroValue(metric.previous, metric.key)}</td>
+                <td style={{ color: "#e2e8f0" }}>{formatMacroValue(metric.current, metric.key)}</td>
+                <td style={{ color: "#38bdf8" }}>{formatMacroValue(metric.expectation, metric.key)}</td>
               </tr>
             ))}
           </tbody>

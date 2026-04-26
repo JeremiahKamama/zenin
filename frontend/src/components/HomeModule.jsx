@@ -27,7 +27,8 @@ export function HomeModule({
   accountMetrics = null,
   calculatePortfolioValue,
   calculatePortfolioGain,
-  balance = 0
+  balance = 0,
+  onViewAllPositions
 }) {
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
@@ -43,7 +44,13 @@ export function HomeModule({
   });
   const [eventRows, setEventRows] = useState([]);
   const [quickActionFeedback, setQuickActionFeedback] = useState("");
+  const [activeAttentionFlow, setActiveAttentionFlow] = useState(null);
+  const [attentionFlowStep, setAttentionFlowStep] = useState(1);
+  const [flowSelection, setFlowSelection] = useState(null);
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [flowActionLabel, setFlowActionLabel] = useState("");
   const moversPerfCacheRef = useRef(new Map());
+  const flowTimerRef = useRef(null);
 
   const topPositions = useMemo(() => {
     const spotPositions = (Array.isArray(portfolio) ? portfolio : []).map((asset) => ({
@@ -391,6 +398,143 @@ export function HomeModule({
     { id: "journal", label: "Journal Note", action: () => setQuickActionFeedback("Journal shortcut ready in the Journal page.") }
   ];
 
+  useEffect(() => {
+    return () => {
+      if (flowTimerRef.current) clearTimeout(flowTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeAttentionFlow) return;
+    const handleKeydown = (event) => {
+      if (event.key === "Escape") {
+        setActiveAttentionFlow(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
+  }, [activeAttentionFlow]);
+
+  const relativeAgeLabel = (raw, fallbackDays = 2) => {
+    const ts = new Date(raw || 0).getTime();
+    if (!Number.isFinite(ts) || ts <= 0) return `${fallbackDays} days ago`;
+    const diffDays = Math.max(1, Math.round((Date.now() - ts) / (24 * 60 * 60 * 1000)));
+    return `${diffDays} days ago`;
+  };
+
+  const missingFlowRows = useMemo(() => {
+    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    const rows = (Array.isArray(moversUniverse) ? moversUniverse : []).reduce((acc, asset, idx) => {
+      const symbol = String(asset?.symbol || "").toUpperCase();
+      const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
+      const key = `${symbol}:${moverType}`;
+      const perf = moversPerformanceByKey[key];
+      const exactValue = Number(perf?.[intervalCode]);
+      const dailyFallback = Number(asset?.priceChangePercent);
+      const unavailable = !(Number.isFinite(exactValue) || (intervalCode === "1D" && Number.isFinite(dailyFallback)));
+      if (!unavailable) return acc;
+      const inferredType = moverType === "crypto" ? "Crypto" : "Stock";
+      const issue = idx % 2 === 0 ? "Price data missing" : "Reference data missing";
+      acc.push({
+        symbol,
+        name: asset?.name || symbol,
+        type: inferredType,
+        issue,
+        updatedAt: relativeAgeLabel(asset?.updatedAt || asset?.date_added, (idx % 6) + 1)
+      });
+      return acc;
+    }, []);
+
+    if (rows.length > 0) return rows.slice(0, 6);
+
+    const fallback = (Array.isArray(portfolio) ? portfolio : []).slice(0, 4).map((item, idx) => ({
+      symbol: String(item?.symbol || "ASSET").toUpperCase(),
+      name: item?.name || item?.symbol || "Asset",
+      type: String(item?.type || "Stock"),
+      issue: idx % 2 === 0 ? "Price data missing" : "Reference data missing",
+      updatedAt: relativeAgeLabel(item?.updatedAt || item?.date_added, idx + 2)
+    }));
+    return fallback;
+  }, [moversHorizon, moversUniverse, moversPerformanceByKey, portfolio]);
+
+  const volatilityFlowRows = useMemo(() => {
+    const rows = [...(Array.isArray(moversWithChange) ? moversWithChange : [])]
+      .sort((a, b) => Math.abs(Number(b.__moverChange || 0)) - Math.abs(Number(a.__moverChange || 0)))
+      .slice(0, 5)
+      .map((row, idx) => {
+        const absMove = Math.abs(Number(row.__moverChange || 0));
+        const volatility24h = Math.min(99, 20 + absMove * 8);
+        return {
+          symbol: String(row?.symbol || "ASSET").toUpperCase(),
+          asset: row?.name || row?.symbol || "Asset",
+          volatility24h,
+          change: Number(row.__moverChange || 0),
+          riskLabel: idx < 2 ? "High" : idx < 4 ? "Moderate" : "Watch"
+        };
+      });
+
+    if (rows.length > 0) return rows;
+
+    return (Array.isArray(alerts) ? alerts : []).slice(0, 4).map((row, idx) => ({
+      symbol: row?.id?.split("-")?.[1]?.toUpperCase?.() || `SYM${idx + 1}`,
+      asset: row?.text || "Volatility signal",
+      volatility24h: 62 - idx * 8,
+      change: idx % 2 === 0 ? -3.4 : 2.6,
+      riskLabel: "Watch"
+    }));
+  }, [moversWithChange, alerts]);
+
+  const rebalanceDriftPct = Math.abs(allocationBreakdown.cryptoPercent - 50);
+
+  const rebalancePlanRows = useMemo(() => {
+    const planCost = Number((20 + rebalanceDriftPct * 0.65).toFixed(2));
+    const sellValue = Math.max(0, Number((rebalanceDriftPct * 32).toFixed(2)));
+    const buyCore = Number((sellValue * 0.42).toFixed(2));
+    const buyDiversifier = Number((sellValue * 0.33).toFixed(2));
+    const buyIncome = Number((sellValue * 0.25).toFixed(2));
+    return {
+      cost: planCost,
+      rows: [
+        { action: "Sell US Large Cap", amount: -sellValue, tag: "Overweight" },
+        { action: "Buy Emerging Markets", amount: buyCore, tag: "Underweight" },
+        { action: "Buy Bonds", amount: buyIncome, tag: "Underweight" },
+        { action: "Buy International Equities", amount: buyDiversifier, tag: "Underweight" }
+      ]
+    };
+  }, [rebalanceDriftPct]);
+
+  const openAttentionFlow = (flowKind) => {
+    if (!flowKind) return;
+    setActiveAttentionFlow(flowKind);
+    setAttentionFlowStep(1);
+    setFlowBusy(false);
+    setFlowActionLabel("");
+    if (flowKind === "missing") {
+      setFlowSelection(missingFlowRows[0] || null);
+    } else if (flowKind === "rebalance") {
+      setFlowSelection(rebalancePlanRows.rows[0] || null);
+    } else {
+      setFlowSelection(volatilityFlowRows[0] || null);
+    }
+  };
+
+  const closeAttentionFlow = () => {
+    setActiveAttentionFlow(null);
+    setFlowBusy(false);
+    setFlowActionLabel("");
+  };
+
+  const runFlowProcessing = (nextStep, actionLabel, processingStep = 3, delayMs = 1300) => {
+    setFlowActionLabel(actionLabel || "");
+    setFlowBusy(true);
+    setAttentionFlowStep(processingStep);
+    if (flowTimerRef.current) clearTimeout(flowTimerRef.current);
+    flowTimerRef.current = setTimeout(() => {
+      setFlowBusy(false);
+      setAttentionFlowStep(nextStep);
+    }, delayMs);
+  };
+
   const optionTimelineAdjustments = useMemo(() => {
     return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : [])
       .map((trade) => {
@@ -676,6 +820,243 @@ export function HomeModule({
     }
   ];
 
+  const attentionFlowSteps = {
+    missing: ["Missing Data List", "Asset Detail", "Updating", "Success"],
+    rebalance: ["Overview", "Plan", "Confirm", "Success"],
+    volatility: ["Volatility List", "Detail", "Insights", "Complete"]
+  };
+
+  const renderAttentionFlow = () => {
+    if (!activeAttentionFlow) return null;
+    const steps = attentionFlowSteps[activeAttentionFlow] || [];
+
+    const renderProgress = (
+      <div className="home-v2-flow-progress">
+        {steps.map((label, idx) => {
+          const stepIndex = idx + 1;
+          const state = stepIndex === attentionFlowStep ? "active" : stepIndex < attentionFlowStep ? "done" : "todo";
+          return (
+            <div key={`${activeAttentionFlow}-step-${stepIndex}`} className={`home-v2-flow-progress-item ${state}`}>
+              <span>{stepIndex}</span>
+              <strong>{label}</strong>
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    const selectedSymbol = String(flowSelection?.symbol || "").toUpperCase();
+
+    let flowBody = null;
+    if (activeAttentionFlow === "missing") {
+      if (attentionFlowStep === 1) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>Missing Data</h3><span>{missingFlowRows.length} Assets</span></div>
+            <p>These assets are missing price or reference data.</p>
+            <div className="home-v2-flow-list">
+              {missingFlowRows.map((row) => (
+                <div key={`miss-${row.symbol}`} className="home-v2-flow-list-row">
+                  <div className="home-v2-flow-list-main"><strong>{row.symbol}</strong><span>{row.type}</span></div>
+                  <div className="home-v2-flow-list-issue"><strong>{row.issue}</strong><span>{row.updatedAt}</span></div>
+                  <button
+                    type="button"
+                    className="home-v2-flow-btn ghost"
+                    onClick={() => {
+                      setFlowSelection(row);
+                      setAttentionFlowStep(2);
+                    }}
+                  >
+                    Fix
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 2) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>{selectedSymbol || "Asset"} — Fix Data</h3><span>{flowSelection?.type || "Asset"}</span></div>
+            <div className="home-v2-flow-detail-grid">
+              <div><strong>What&apos;s missing?</strong><p>{flowSelection?.issue || "Real-time price data"}</p></div>
+              <div><strong>How to fix</strong><p>Reconnect your data source or update this asset manually.</p></div>
+            </div>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary warn" onClick={() => runFlowProcessing(4, `Updating ${selectedSymbol || "asset"} data source...`)}>Update Source</button>
+              <button type="button" className="home-v2-flow-btn" onClick={() => runFlowProcessing(4, `Applying manual update for ${selectedSymbol || "asset"}...`)}>Update Manually</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(1)}>Back</button>
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 3 || flowBusy) {
+        flowBody = (
+          <div className="home-v2-flow-status-card">
+            <div className="home-v2-flow-spinner" />
+            <h3>Updating data...</h3>
+            <p>{flowActionLabel || "This may take a few moments."}</p>
+          </div>
+        );
+      } else {
+        flowBody = (
+          <div className="home-v2-flow-status-card success">
+            <div className="home-v2-flow-success-mark">✓</div>
+            <h3>Data updated</h3>
+            <p>{selectedSymbol || "Asset"} data is now up to date.</p>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(1)}>Back to Missing Data</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
+            </div>
+          </div>
+        );
+      }
+    } else if (activeAttentionFlow === "rebalance") {
+      const buyCount = rebalancePlanRows.rows.filter((row) => row.amount > 0).length;
+      const sellCount = rebalancePlanRows.rows.filter((row) => row.amount < 0).length;
+      if (attentionFlowStep === 1) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>Rebalancing Suggested</h3><span>Drift: {rebalanceDriftPct.toFixed(1)}%</span></div>
+            <p>Your portfolio has drifted from your target allocation.</p>
+            <div className="home-v2-flow-metric-grid">
+              <div><span>Current Drift</span><strong>{rebalanceDriftPct.toFixed(1)}%</strong></div>
+              <div><span>Est. Impact (1Y)</span><strong>{formatSignedMoney(-(rebalanceDriftPct * 32))}</strong></div>
+              <div><span>Rebalance Cost</span><strong>{formatMoney(rebalancePlanRows.cost)}</strong></div>
+            </div>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => setAttentionFlowStep(2)}>View Rebalance Plan</button>
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 2) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>Rebalance Plan</h3><span>{buyCount} Buys, {sellCount} Sell</span></div>
+            <div className="home-v2-flow-list">
+              {rebalancePlanRows.rows.map((row) => (
+                <div key={`plan-${row.action}`} className="home-v2-flow-list-row">
+                  <div className="home-v2-flow-list-main"><strong>{row.action}</strong><span>{row.tag}</span></div>
+                  <div className={`home-v2-flow-money ${row.amount >= 0 ? "positive" : "negative"}`}>{formatSignedMoney(row.amount)}</div>
+                </div>
+              ))}
+            </div>
+            <div className="home-v2-flow-summary">Estimated cost: <strong>{formatMoney(rebalancePlanRows.cost)}</strong></div>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => setAttentionFlowStep(3)}>Apply Plan</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={() => setQuickActionFeedback("Plan editor opened in preview mode.")}>Edit Plan</button>
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 3 && !flowBusy) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>Confirm Rebalance</h3><span>{buyCount} Buys, {sellCount} Sell</span></div>
+            <p>You are about to place the following trades.</p>
+            <div className="home-v2-flow-summary">This will reduce drift from <strong>{rebalanceDriftPct.toFixed(1)}%</strong> to <strong>{Math.max(0, rebalanceDriftPct * 0.08).toFixed(1)}%</strong>.</div>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => runFlowProcessing(4, "Submitting rebalance orders...", 3)}>Confirm</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(2)}>Cancel</button>
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 3 && flowBusy) {
+        flowBody = (
+          <div className="home-v2-flow-status-card">
+            <div className="home-v2-flow-spinner" />
+            <h3>Submitting rebalance...</h3>
+            <p>{flowActionLabel || "Placing orders now."}</p>
+          </div>
+        );
+      } else {
+        flowBody = (
+          <div className="home-v2-flow-status-card success">
+            <div className="home-v2-flow-success-mark">✓</div>
+            <h3>Rebalance Submitted</h3>
+            <p>Your trades have been submitted successfully.</p>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => { onViewAllPositions?.(); closeAttentionFlow(); }}>View Portfolio</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
+            </div>
+          </div>
+        );
+      }
+    } else if (attentionFlowStep === 1) {
+      flowBody = (
+        <div className="home-v2-flow-card">
+          <div className="home-v2-flow-headline"><h3>High Volatility Alert</h3><span>{volatilityFlowRows.length} Symbols</span></div>
+          <p>Unusual volatility detected in your tracked assets.</p>
+          <div className="home-v2-flow-list">
+            {volatilityFlowRows.map((row) => (
+              <div key={`vol-${row.symbol}`} className="home-v2-flow-list-row">
+                <div className="home-v2-flow-list-main"><strong>{row.symbol}</strong><span>{row.asset}</span></div>
+                <div className="home-v2-flow-list-issue"><strong>{row.volatility24h.toFixed(1)}%</strong><span className={row.change >= 0 ? "negative" : "positive"}>{row.change >= 0 ? "+" : ""}{row.change.toFixed(1)}%</span></div>
+                <button type="button" className="home-v2-flow-btn ghost" onClick={() => { setFlowSelection(row); setAttentionFlowStep(2); }}>Analyze</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    } else if (attentionFlowStep === 2) {
+      flowBody = (
+        <div className="home-v2-flow-card">
+          <div className="home-v2-flow-headline"><h3>{selectedSymbol} — Analysis</h3><span>{flowSelection?.riskLabel || "Watch"}</span></div>
+          <div className="home-v2-flow-vol-grid">
+            <div><span>Volatility (24h)</span><strong>{Number(flowSelection?.volatility24h || 0).toFixed(1)}%</strong></div>
+            <div><span>Price Change</span><strong className={Number(flowSelection?.change || 0) >= 0 ? "negative" : "positive"}>{Number(flowSelection?.change || 0) >= 0 ? "+" : ""}{Number(flowSelection?.change || 0).toFixed(1)}%</strong></div>
+          </div>
+          <div className="home-v2-flow-chart-mock">
+            <span style={{ width: "18%" }} /><span style={{ width: "31%" }} /><span style={{ width: "47%" }} /><span style={{ width: "64%" }} /><span style={{ width: "52%" }} /><span style={{ width: "78%" }} />
+          </div>
+          <div className="home-v2-flow-actions">
+            <button type="button" className="home-v2-flow-btn primary risk" onClick={() => setAttentionFlowStep(3)}>View Insights</button>
+            <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(1)}>Back</button>
+          </div>
+        </div>
+      );
+    } else if (attentionFlowStep === 3) {
+      flowBody = (
+        <div className="home-v2-flow-card">
+          <div className="home-v2-flow-headline"><h3>Insights</h3><span>{selectedSymbol}</span></div>
+          <ul className="home-v2-flow-bullets">
+            <li>Earnings event risk and unusual options activity detected.</li>
+            <li>Momentum divergence suggests short-term mean reversion pressure.</li>
+            <li>Position variance is above your rolling baseline.</li>
+          </ul>
+          <div className="home-v2-flow-actions">
+            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(4)}>Review Position</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(4)}>Set Alert</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(4)}>Hedge Position</button>
+          </div>
+        </div>
+      );
+    } else {
+      flowBody = (
+        <div className="home-v2-flow-status-card success">
+          <div className="home-v2-flow-success-mark">✓</div>
+          <h3>Alert Reviewed</h3>
+          <p>We&apos;ll continue monitoring this symbol for you.</p>
+          <div className="home-v2-flow-actions">
+            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(1)}>Back to Alerts</button>
+            <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="home-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Needs Attention user flow">
+        <div className="home-v2-flow-shell">
+          <div className="home-v2-flow-top">
+            <h2>{activeAttentionFlow === "missing" ? "Missing Data Flow" : activeAttentionFlow === "rebalance" ? "Rebalancing Flow" : "Volatility Alert Flow"}</h2>
+            <button type="button" className="home-v2-flow-close" onClick={closeAttentionFlow} aria-label="Close flow">✕</button>
+          </div>
+          {renderProgress}
+          <div className="home-v2-flow-body">{flowBody}</div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="view-container home-dashboard home-v2">
       <section className="home-v2-hero glass">
@@ -708,14 +1089,14 @@ export function HomeModule({
       <section className="home-v2-attention">
         <div className="section-header">
           <h2>Needs Attention</h2>
-          <button type="button" className="home-v2-link-btn">View All</button>
+          <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow("missing")}>View All</button>
         </div>
         <div className="home-v2-attention-grid">
           {attentionCards.map((card) => (
             <article key={card.id} className={`home-v2-attention-card ${card.variant}`}>
               <h3>{card.title}</h3>
               <p>{card.text}</p>
-              <button type="button" className="home-v2-link-btn">{card.cta}</button>
+              <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
             </article>
           ))}
         </div>
@@ -766,7 +1147,13 @@ export function HomeModule({
           <div className="watchlist-panel glass home-v2-panel">
             <div className="section-header">
               <h2>Top Holdings</h2>
-              <button type="button" className="home-v2-link-btn">View All Positions</button>
+              <button
+                type="button"
+                className="home-v2-link-btn"
+                onClick={() => onViewAllPositions?.()}
+              >
+                View All Positions
+              </button>
             </div>
             <div className="home-v2-holdings-list">
               {topHoldingsRows.length ? (
@@ -926,6 +1313,7 @@ export function HomeModule({
           </div>
         </section>
       ) : null}
+      {renderAttentionFlow()}
     </div>
   );
 }

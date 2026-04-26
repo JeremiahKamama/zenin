@@ -11,7 +11,7 @@ export async function zeninFetch(endpoint, options = {}) {
   const url = endpoint.startsWith("http") ? endpoint : `${BACKEND_URL}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
   let authToken = "";
   try {
-    authToken = String(localStorage.getItem("zenin_auth_token") || "").trim();
+    authToken = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
   } catch {
     authToken = "";
   }

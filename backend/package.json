@@ -10,6 +10,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "telegram:session": "node scripts/telegram-session.js",
+    "migrate:admin-workspace": "node scripts/run-admin-workspace-migration.js",
     "test:integration": "node --test test/integration/*.test.js"
   },
   "dependencies": {
@@ -19,7 +20,6 @@
     "express": "^4.18.2",
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
-    "https": "^1.0.0",
     "node-fetch": "^3.3.2",
     "pg": "^8.16.3",
     "telegram": "^2.26.22",

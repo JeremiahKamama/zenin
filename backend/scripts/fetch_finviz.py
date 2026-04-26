@@ -73,6 +73,14 @@ def fetch_finviz_data(symbol: str) -> dict:
                     joined = " ".join(parsed).lower()
                     if "date" in joined and "analyst" in joined and "rating" in joined:
                         continue
+                    
+                    # More strict filtering to avoid layout clutter (like Peers list)
+                    # Actual ratings start with a date like "Jan 01 2024" (approx 11 chars)
+                    # and shouldn't contain "Peers" or "Scroll to"
+                    date_snippet = parsed[0].lower()
+                    if len(date_snippet) < 6 or "peers" in joined or "scroll to" in joined or "filing" in joined:
+                        continue
+
                     data["ratings"].append({
                         "date": parsed[0] if len(parsed) > 0 else "",
                         "action": parsed[1] if len(parsed) > 1 else "",

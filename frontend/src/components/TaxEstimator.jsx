@@ -676,9 +676,9 @@ export function TaxEstimator({ trades = [] }) {
           <p>Estimate capital gains liabilities across 40+ global jurisdictions.</p>
         </div>
         <div className="tax-v2-head-actions">
-          <button type="button" className="pagination-button" onClick={handleSave}>Saved scenarios</button>
-          <button type="button" className="pagination-button" onClick={handleExportCsv}>Export</button>
-          <button type="button" className="pagination-button" aria-label="More options">•••</button>
+          <button type="button" className="pagination-button tax-v2-action-btn" onClick={handleSave}>Saved scenarios</button>
+          <button type="button" className="pagination-button tax-v2-action-btn" onClick={handleExportCsv}>Export</button>
+          <button type="button" className="pagination-button tax-v2-action-btn tax-v2-more-btn" aria-label="More options">•••</button>
         </div>
       </div>
 
@@ -887,7 +887,7 @@ export function TaxEstimator({ trades = [] }) {
         <section className="tax-v2-panel">
           <div className="tax-v2-panel-head">
             <h3><span className="num">5</span> Scenario Comparison</h3>
-            <button type="button" className="pagination-button">+ Add Scenario</button>
+            <button type="button" className="pagination-button tax-v2-action-btn">+ Add Scenario</button>
           </div>
           <div className="tax-v2-scenario-grid">
             <div className="tax-v2-scenario-card">
@@ -928,8 +928,8 @@ export function TaxEstimator({ trades = [] }) {
           <div className="tax-v2-panel-head">
             <h3>Detailed Breakdown</h3>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="pagination-button" onClick={handleSave}>Save All</button>
-              <button className="pagination-button" onClick={handleExportCsv}>Export CSV</button>
+              <button className="pagination-button tax-v2-action-btn" onClick={handleSave}>Save All</button>
+              <button className="pagination-button tax-v2-action-btn" onClick={handleExportCsv}>Export CSV</button>
             </div>
           </div>
           <div className="tax-v2-results-grid">

@@ -1,11 +1,29 @@
-require("dotenv").config();
+const dotenv = require("dotenv");
+const path = require("path");
+dotenv.config({ path: path.join(__dirname, ".env") });
+dotenv.config();
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
-const crypto = require("crypto");
-const path = require("path");
 const { spawn } = require("child_process");
+const fs = require("fs");
+
+/**
+ * Resolves the correct Python binary to use.
+ * Priorities:
+ * 1. process.env.PYTHON_BINARY
+ * 2. Local venv/bin/python3
+ * 3. Default "python3"
+ */
+function resolvePythonBinary() {
+  if (process.env.PYTHON_BINARY) return process.env.PYTHON_BINARY;
+  const localVenv = path.join(__dirname, "venv", "bin", "python3");
+  if (fs.existsSync(localVenv)) return localVenv;
+  return "python3";
+}
+const pythonBinary = resolvePythonBinary();
+
 const { watchlistData } = require("./data");
 const {
   initializeDatabase,
@@ -14,6 +32,7 @@ const {
   optionsCalculations,
   userAuth,
   userWorkspace,
+  runAdminWorkspaceMigration,
   serviceSnapshots,
   tradeExecutions,
   balance,
@@ -31,9 +50,10 @@ const EODHD_API_TOKEN = String(
   ""
 ).trim().replace(/^,+|,+$/g, "");
 
-console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES (" + EODHD_API_TOKEN.slice(0, 4) + "...)" : "NO"}`);
+console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES" : "NO"}`);
 
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const EARNINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const macroIndicatorsCache = new Map();
 const EARNINGS_CALENDAR_REFRESH_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days (~quarterly cadence)
 const COUNTRY_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -308,8 +328,23 @@ app.use(express.json({ limit: "100kb" }));
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
-const AUTH_HASH_KEY = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "zenin-dev-secret").trim();
+const AUTH_HASH_KEY = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "").trim();
+if (
+  AUTH_HASH_KEY.length < 32 ||
+  AUTH_HASH_KEY.includes("replace_with") ||
+  AUTH_HASH_KEY === "zenin-dev-secret"
+) {
+  throw new Error("AUTH_HASH_KEY (or ZENIN_APP_SECRET) must be set to a strong secret (>=32 chars).");
+}
 const OAUTH_PROVIDERS = ["google", "apple", "github", "microsoft"];
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
+const ADMIN_MIGRATION_KEY = String(process.env.ADMIN_MIGRATION_KEY || "").trim();
+const ALLOW_DEV_AUTH_DEBUG =
+  process.env.NODE_ENV !== "production" &&
+  String(process.env.ENABLE_DEV_AUTH_DEBUG || "").trim().toLowerCase() === "true";
+const ALLOW_OAUTH_MOCK =
+  process.env.NODE_ENV !== "production" &&
+  String(process.env.ENABLE_OAUTH_MOCK || "").trim().toLowerCase() === "true";
 
 function hashToken(token) {
   return crypto.createHmac("sha256", AUTH_HASH_KEY).update(String(token || "")).digest("hex");
@@ -384,13 +419,13 @@ function resolveClientIp(req) {
 async function resolveAuthContext(req) {
   const token = getBearerToken(req);
   if (!token) {
-    return { isGuest: true, userId: 1, user: null, token: null };
+    return { isGuest: true, userId: null, user: null, token: null };
   }
   const tokenHash = hashToken(token);
   const session = await userAuth.findSessionByTokenHash(tokenHash);
-  if (!session) return { isGuest: true, userId: 1, user: null, token: null };
-  if (session.revokedAt) return { isGuest: true, userId: 1, user: null, token: null };
-  if (new Date(session.expiresAt).getTime() <= Date.now()) return { isGuest: true, userId: 1, user: null, token: null };
+  if (!session) return { isGuest: true, userId: null, user: null, token: null };
+  if (session.revokedAt) return { isGuest: true, userId: null, user: null, token: null };
+  if (new Date(session.expiresAt).getTime() <= Date.now()) return { isGuest: true, userId: null, user: null, token: null };
 
   return {
     isGuest: false,
@@ -414,6 +449,17 @@ function requireSignedIn(req, res, next) {
     return res.status(401).json({ error: "Authentication required" });
   }
   return next();
+}
+
+function isSignedInAdmin(req) {
+  const email = String(req?.auth?.user?.email || "").trim().toLowerCase();
+  return Boolean(email) && email === ADMIN_EMAIL;
+}
+
+function hasValidMigrationKey(req) {
+  if (!ADMIN_MIGRATION_KEY) return false;
+  const provided = String(req.headers["x-migration-key"] || "").trim();
+  return provided && provided === ADMIN_MIGRATION_KEY;
 }
 
 
@@ -1249,7 +1295,7 @@ function fetchYFinancePrices(originalSymbols) {
 
     console.log("Fetching prices — original:", originalSymbols);
     // const safeSymbol = sanitizeSymbol(symbol);
-    const child = spawn("python3", ["fetch_prices.py"], { cwd: __dirname });
+    const child = spawn(pythonBinary, ["fetch_prices.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -1365,21 +1411,21 @@ async function searchYahooFinance(query, type = "tradfi") {
 // USER BALANCE ENDPOINTS
 // ---------------------------------------------------------------------------
 
-app.get("/api/db/balance", async (_req, res) => {
+app.get("/api/db/balance", requireSignedIn, async (req, res) => {
   try {
-    const current = await userWorkspace.balance.get(_req.auth?.userId || 1);
+    const current = await userWorkspace.balance.get(req.auth.userId);
     res.json({ balance: current });
   } catch (err) {
     handleServerError(res, "Balance read failed", err);
   }
 });
 
-app.post("/api/db/balance", writeLimiter, async (req, res) => {
+app.post("/api/db/balance", requireSignedIn, writeLimiter, async (req, res) => {
   try {
     const { amount, type } = req.body;
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
     if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
-    const newBalance = await userWorkspace.balance.applyChange(req.auth?.userId || 1, amount, type);
+    const newBalance = await userWorkspace.balance.applyChange(req.auth.userId, amount, type);
     res.json({ balance: newBalance });
   } catch (err) {
     if (err.code === "INSUFFICIENT_BALANCE") {
@@ -1409,6 +1455,19 @@ app.get("/api/auth/me", async (req, res) => {
   }
   const user = await userAuth.findUserById(req.auth.userId);
   return res.json({ authenticated: true, user: sanitizeAuthUser(user) });
+});
+
+app.post("/api/admin/migrations/admin-workspace", async (req, res) => {
+  try {
+    if (!isSignedInAdmin(req) && !hasValidMigrationKey(req)) {
+      return res.status(403).json({ error: "Admin privileges or valid migration key required." });
+    }
+    const force = Boolean(req.body?.force) || String(req.query?.force || "").toLowerCase() === "true";
+    const result = await runAdminWorkspaceMigration({ force });
+    return res.json({ success: true, migration: result });
+  } catch (error) {
+    return handleServerError(res, "Admin workspace migration failed", error);
+  }
 });
 
 app.post("/api/account/plan", requireSignedIn, async (req, res) => {
@@ -1473,22 +1532,8 @@ app.post("/api/auth/signin", authLimiter, async (req, res) => {
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
-    if (user.twoFactorEnabled) {
-      if (user.twoFactorMethod === "passkey") {
-        const passkeyId = String(req.body?.passkeyId || "").trim();
-        const knownPasskey = Array.isArray(user.passkeys)
-          ? user.passkeys.some((entry) => String(entry?.id || "") === passkeyId)
-          : false;
-        if (!knownPasskey) {
-          return res.status(401).json({ error: "Passkey verification required." });
-        }
-      } else {
-        const otpCode = String(req.body?.otpCode || "").trim();
-        if (!/^\d{6}$/.test(otpCode) || hashToken(otpCode) !== String(user.twoFactorSecretHash || "")) {
-          return res.status(401).json({ error: "Invalid verification code." });
-        }
-      }
-    }
+    // MFA verification is intentionally disabled until full WebAuthn/TOTP flows are implemented.
+    // This avoids accepting insecure passkey-id/OTP-only shortcuts.
 
     const session = await issueSessionForUser(user.id, req);
     return res.json({
@@ -1533,7 +1578,7 @@ app.post("/api/auth/forgot-password/request", authLimiter, async (req, res) => {
     return res.json({
       success: true,
       message: "If an account exists for that email, a reset link/code has been issued.",
-      ...(process.env.NODE_ENV !== "production" && devResetToken ? { devResetToken } : {})
+      ...(ALLOW_DEV_AUTH_DEBUG && devResetToken ? { devResetToken } : {})
     });
   } catch (error) {
     return handleServerError(res, "Forgot password request failed", error);
@@ -1553,6 +1598,7 @@ app.post("/api/auth/forgot-password/confirm", authLimiter, async (req, res) => {
 
     const { hash } = derivePasswordHash(newPassword);
     await userAuth.updatePassword(consumed.userId, hash);
+    await userAuth.revokeSessionsByUserId(consumed.userId);
     const session = await issueSessionForUser(consumed.userId, req);
     const user = await userAuth.findUserById(consumed.userId);
     return res.json({
@@ -1568,22 +1614,9 @@ app.post("/api/auth/forgot-password/confirm", authLimiter, async (req, res) => {
 
 app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, async (req, res) => {
   try {
-    const method = String(req.body?.method || "").trim().toLowerCase();
-    if (!["authenticator", "sms", "email"].includes(method)) {
-      return res.status(400).json({ error: "Unsupported 2FA method." });
-    }
-    const verificationCode = String(req.body?.verificationCode || "").trim();
-    if (!/^\d{6}$/.test(verificationCode)) {
-      return res.status(400).json({ error: "Enter a valid 6-digit verification code." });
-    }
-    await userAuth.upsertTwoFactor({
-      userId: req.auth.userId,
-      enabled: true,
-      method,
-      secretHash: hashToken(verificationCode)
+    return res.status(501).json({
+      error: "2FA enable is temporarily disabled until secure WebAuthn/TOTP verification is implemented."
     });
-    const user = await userAuth.findUserById(req.auth.userId);
-    return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
     return handleServerError(res, "Enable 2FA failed", error);
   }
@@ -1606,17 +1639,9 @@ app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res)
 
 app.post("/api/auth/passkeys/register", authLimiter, requireSignedIn, async (req, res) => {
   try {
-    const name = String(req.body?.name || "").trim() || "Primary Device";
-    const provider = String(req.body?.provider || "Platform Authenticator").trim();
-    const passkey = {
-      id: crypto.randomBytes(10).toString("hex"),
-      name: name.slice(0, 120),
-      provider: provider.slice(0, 120),
-      createdAt: new Date().toISOString()
-    };
-    await userAuth.addPasskey({ userId: req.auth.userId, passkey });
-    const user = await userAuth.findUserById(req.auth.userId);
-    return res.json({ success: true, passkey, user: sanitizeAuthUser(user) });
+    return res.status(501).json({
+      error: "Passkey registration requires full WebAuthn support and is currently disabled."
+    });
   } catch (error) {
     return handleServerError(res, "Passkey registration failed", error);
   }
@@ -1637,12 +1662,15 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
     redirectUri,
     configured: false,
     authorizationUrl: null,
-    message: `${provider} OAuth is scaffolded but not configured. Use /api/auth/oauth/mock during local testing.`
+    message: `${provider} OAuth is scaffolded but not configured.`
   });
 });
 
 app.post("/api/auth/oauth/mock", authLimiter, async (req, res) => {
   try {
+    if (!ALLOW_OAUTH_MOCK) {
+      return res.status(404).json({ error: "Not found" });
+    }
     const provider = String(req.body?.provider || "").trim().toLowerCase();
     if (!OAUTH_PROVIDERS.includes(provider)) {
       return res.status(400).json({ error: "Unsupported provider." });
@@ -1786,7 +1814,7 @@ function fetchHistoryFromYahoo(symbol, interval) {
     const { period, interval: yfInterval } = mapping[interval] || mapping["1D"];
     const yfSymbol = normaliseSymbol(symbol);
 
-    const child = spawn("python3", ["fetch_history.py"], { cwd: __dirname });
+    const child = spawn(pythonBinary, ["fetch_history.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d.toString(); });
@@ -1822,7 +1850,7 @@ function fetchHistoryFromYahoo(symbol, interval) {
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error("history_fetch_timeout"));
-    }, 30000);
+    }, 12000);
 
     child.on("close", () => clearTimeout(timer));
     child.on("error", () => clearTimeout(timer));
@@ -2068,16 +2096,30 @@ app.get("/api/earnings", async (req, res) => {
   if (!resolvedSymbol) return res.status(400).json({ error: "Invalid symbol" });
   const snapshotParams = { symbol: requestedSymbol };
   const cached = await readServiceSnapshot("earnings", snapshotParams);
+  const cachedAt = cached?.updatedAt ? new Date(cached.updatedAt).getTime() : 0;
+  const cachedFresh =
+    Boolean(cached?.payload) &&
+    Number.isFinite(cachedAt) &&
+    cachedAt > 0 &&
+    (Date.now() - cachedAt) < EARNINGS_CACHE_TTL_MS &&
+    !cached?.payload?.stale &&
+    !cached?.payload?.unavailable;
+
+  if (cachedFresh) {
+    return res.json(cached.payload);
+  }
 
   return new Promise((resolve) => {
     let settled = false;
+    let timeoutId = null;
     const finish = (payload) => {
       if (settled) return;
       settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
       res.json(payload);
       resolve();
     };
-    const child = spawn("python3", ["fetch_earnings.py"], { cwd: __dirname });
+    const child = spawn(pythonBinary, ["fetch_earnings.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -2164,7 +2206,7 @@ app.get("/api/earnings", async (req, res) => {
     child.stdin.write(JSON.stringify({ symbol: resolvedSymbol }));
     child.stdin.end();
 
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       child.kill();
       if (cached?.payload) {
         return finish(applyStaleMeta(cached.payload, cached, "earnings_fetch_timed_out"));
@@ -2179,7 +2221,7 @@ app.get("/api/earnings", async (req, res) => {
         cache_updated_at: null,
         stale_age_seconds: null
       });
-    }, 20000);
+    }, 12000);
   });
 });
 
@@ -2203,7 +2245,7 @@ app.get("/api/finviz", async (req, res) => {
     };
 
     const scriptPath = path.join(__dirname, "scripts", "fetch_finviz.py");
-    const child = spawn("python3", [scriptPath, safeSymbol], { cwd: __dirname });
+    const child = spawn(pythonBinary, [scriptPath, safeSymbol], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -2279,7 +2321,7 @@ app.get("/api/finviz", async (req, res) => {
         return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_timed_out"));
       }
       finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "timed_out" });
-    }, 25000);
+    }, 12000);
   });
 });
 
@@ -2345,7 +2387,7 @@ app.get("/api/company-profile", async (req, res) => {
     };
 
     try {
-      const child = spawn("python3", ["fetch_company_profile.py"], { cwd: __dirname });
+      const child = spawn(pythonBinary, ["fetch_company_profile.py"], { cwd: __dirname });
       let stdout = "";
       let stderr = "";
 
@@ -2460,7 +2502,7 @@ app.get("/api/company-profile", async (req, res) => {
           cache_updated_at: null,
           stale_age_seconds: null
         }, true));
-      }, 25000);
+      }, 12000);
     } catch (error) {
       if (cached?.payload) {
         return finish(enrichPayload(applyStaleMeta(cached.payload, cached, error?.message || "company_profile_start_failed"), true));
@@ -2481,7 +2523,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
   const rawSymbols = String(req.query.symbols || "");
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 5);
 
-  const symbols = [...new Set(
+  let symbols = [...new Set(
     rawSymbols
       .split(",")
       .map((s) => s.trim())
@@ -2490,7 +2532,27 @@ app.get("/api/earnings-calendar", async (req, res) => {
   )].slice(0, limit);
 
   if (!symbols.length) {
-    return res.status(400).json({ error: "symbols required" });
+    try {
+      const seed = await watchlist.getAll();
+      const inferred = (Array.isArray(seed) ? seed : [])
+        .filter((item) => {
+          const type = String(item?.type || "").trim().toLowerCase();
+          const marketType = String(item?.marketType || "").trim().toLowerCase();
+          return (
+            ["stock", "stocks", "equity", "etf", "etfs"].includes(type) ||
+            marketType === "equity"
+          );
+        })
+        .map((item) => String(item?.symbol || "").trim().toUpperCase())
+        .filter(Boolean);
+      symbols = [...new Set(inferred)].slice(0, limit);
+    } catch {
+      symbols = [];
+    }
+  }
+
+  if (!symbols.length) {
+    symbols = ["AAPL", "MSFT", "NVDA", "AMZN", "TSLA"].slice(0, limit);
   }
 
   const snapshotParams = { symbols };
@@ -2517,7 +2579,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
       resolve();
     };
 
-    const child = spawn("python3", ["fetch_earnings_calendar_finviz.py"], { cwd: __dirname });
+    const child = spawn(pythonBinary, ["fetch_earnings_calendar_finviz.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -2532,6 +2594,16 @@ app.get("/api/earnings-calendar", async (req, res) => {
         }
         return finish({
           items: symbols.map((originalSymbol) => ({
+            symbol: originalSymbol,
+            nextEarnings: null,
+            source: "Finviz"
+          })),
+          events: symbols.map((originalSymbol) => ({
+            symbol: originalSymbol,
+            nextEarnings: null,
+            source: "Finviz"
+          })),
+          rows: symbols.map((originalSymbol) => ({
             symbol: originalSymbol,
             nextEarnings: null,
             source: "Finviz"
@@ -2561,6 +2633,8 @@ app.get("/api/earnings-calendar", async (req, res) => {
         });
         const payload = {
           items: normalizedItems,
+          events: normalizedItems,
+          rows: normalizedItems,
           updatedAt: new Date().toISOString(),
           stale: false
         };
@@ -2571,6 +2645,16 @@ app.get("/api/earnings-calendar", async (req, res) => {
         }
         finish({
           items: symbols.map((originalSymbol) => ({
+            symbol: originalSymbol,
+            nextEarnings: null,
+            source: "Finviz"
+          })),
+          events: symbols.map((originalSymbol) => ({
+            symbol: originalSymbol,
+            nextEarnings: null,
+            source: "Finviz"
+          })),
+          rows: symbols.map((originalSymbol) => ({
             symbol: originalSymbol,
             nextEarnings: null,
             source: "Finviz"
@@ -2592,6 +2676,16 @@ app.get("/api/earnings-calendar", async (req, res) => {
       }
       finish({
         items: symbols.map((originalSymbol) => ({
+          symbol: originalSymbol,
+          nextEarnings: null,
+          source: "Finviz"
+        })),
+        events: symbols.map((originalSymbol) => ({
+          symbol: originalSymbol,
+          nextEarnings: null,
+          source: "Finviz"
+        })),
+        rows: symbols.map((originalSymbol) => ({
           symbol: originalSymbol,
           nextEarnings: null,
           source: "Finviz"
@@ -2619,6 +2713,16 @@ app.get("/api/earnings-calendar", async (req, res) => {
           nextEarnings: null,
           source: "Finviz"
         })),
+        events: symbols.map((originalSymbol) => ({
+          symbol: originalSymbol,
+          nextEarnings: null,
+          source: "Finviz"
+        })),
+        rows: symbols.map((originalSymbol) => ({
+          symbol: originalSymbol,
+          nextEarnings: null,
+          source: "Finviz"
+        })),
         updatedAt: new Date().toISOString(),
         stale: true,
         unavailable: true,
@@ -2626,7 +2730,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
         cache_updated_at: null,
         stale_age_seconds: null
       });
-    }, 20000);
+    }, 12000);
   });
 });
 
@@ -4944,10 +5048,10 @@ app.get("/api/prediction/market-details/:marketId", async (req, res) => {
 // ---------------------------------------------------------------------------
 // Options Calculator Persistence
 // ---------------------------------------------------------------------------
-app.get("/api/db/options-calculations", async (req, res) => {
+app.get("/api/db/options-calculations", requireSignedIn, async (req, res) => {
   try {
     const { limit = 20, symbol } = req.query;
-    const records = (await userWorkspace.options.getRecent(req.auth?.userId || 1, limit, symbol || null)).map((row) => ({
+    const records = (await userWorkspace.options.getRecent(req.auth.userId, limit, symbol || null)).map((row) => ({
       ...row,
       breakevens: (() => {
         try { return JSON.parse(row.breakevens || "[]"); } catch { return []; }
@@ -4962,10 +5066,10 @@ app.get("/api/db/options-calculations", async (req, res) => {
   }
 });
 
-app.post("/api/db/options-calculations", writeLimiter, validateOptionsCalculation, async (req, res) => {
+app.post("/api/db/options-calculations", requireSignedIn, writeLimiter, validateOptionsCalculation, async (req, res) => {
   try {
     const payload = req.body || {};
-    const record = await userWorkspace.options.add(req.auth?.userId || 1, payload);
+    const record = await userWorkspace.options.add(req.auth.userId, payload);
     res.status(201).json(record);
   } catch (error) {
     handleServerError(res, "Options calculation write failed", error);
@@ -5005,41 +5109,41 @@ app.get("/api/crypto-market", async (req, res) => {
 // ---------------------------------------------------------------------------
 // Portfolio Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/portfolio", async (req, res) => {
+app.get("/api/db/portfolio", requireSignedIn, async (req, res) => {
   try {
-    const holdings = await userWorkspace.portfolio.getAll(req.auth?.userId || 1);
+    const holdings = await userWorkspace.portfolio.getAll(req.auth.userId);
     res.json({ holdings });
   } catch (error) {
     handleServerError(res, "Portfolio read failed", error);
   }
 });
 
-app.post("/api/db/portfolio",writeLimiter, validatePortfolioHolding, async (req, res) => {
+app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validatePortfolioHolding, async (req, res) => {
   try {
     const holding = req.body;
-    const result = await userWorkspace.portfolio.add(req.auth?.userId || 1, holding);
+    const result = await userWorkspace.portfolio.add(req.auth.userId, holding);
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Portfolio write failed", error);
   }
 });
 
-app.put("/api/db/portfolio/:id", writeLimiter, validatePortfolioUpdate, async (req, res) => {
+app.put("/api/db/portfolio/:id", requireSignedIn, writeLimiter, validatePortfolioUpdate, async (req, res) => {
   try {
     const { id } = req.params;
     if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: "Invalid id" });
     const holding = req.body;
-    const result = await userWorkspace.portfolio.update(req.auth?.userId || 1, id, holding);
+    const result = await userWorkspace.portfolio.update(req.auth.userId, id, holding);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio update failed", error);
   }
 });
 
-app.delete("/api/db/portfolio/:id", writeLimiter, async (req, res) => {
+app.delete("/api/db/portfolio/:id", requireSignedIn, writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await userWorkspace.portfolio.delete(req.auth?.userId || 1, id);
+    const result = await userWorkspace.portfolio.delete(req.auth.userId, id);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio delete failed", error);
@@ -5047,7 +5151,7 @@ app.delete("/api/db/portfolio/:id", writeLimiter, async (req, res) => {
 });
 
 // Get portfolio items by symbol and marketType
-app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
+app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50).toUpperCase();
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -5055,7 +5159,7 @@ app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const holdings = await userWorkspace.portfolio.findBySymbol(req.auth?.userId || 1, symbol, marketType);
+    const holdings = await userWorkspace.portfolio.findBySymbol(req.auth.userId, symbol, marketType);
     res.json({ holdings });
   } catch (error) {
     handleServerError(res, "Portfolio symbol lookup failed", error);
@@ -5065,16 +5169,16 @@ app.get("/api/db/portfolio/symbol/:symbol", async (req, res) => {
 // ---------------------------------------------------------------------------
 // Trade execution endpoints (Journal persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/trades", async (req, res) => {
+app.get("/api/db/trades", requireSignedIn, async (req, res) => {
   try {
-    const trades = await userWorkspace.trades.getAll(req.auth?.userId || 1, req.query.limit);
+    const trades = await userWorkspace.trades.getAll(req.auth.userId, req.query.limit);
     res.json({ trades });
   } catch (error) {
     handleServerError(res, "Trades read failed", error);
   }
 });
 
-app.post("/api/db/trades", writeLimiter, async (req, res) => {
+app.post("/api/db/trades", requireSignedIn, writeLimiter, async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.asset) {
@@ -5086,7 +5190,7 @@ app.post("/api/db/trades", writeLimiter, async (req, res) => {
     if (!Number.isFinite(Number(payload.price)) || Number(payload.price) < 0) {
       return res.status(400).json({ error: "price must be a non-negative number" });
     }
-    const saved = await userWorkspace.trades.add(req.auth?.userId || 1, payload);
+    const saved = await userWorkspace.trades.add(req.auth.userId, payload);
     res.status(201).json(saved);
   } catch (error) {
     handleServerError(res, "Trade write failed", error);
@@ -5096,26 +5200,26 @@ app.post("/api/db/trades", writeLimiter, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Watchlist Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/watchlist", async (req, res) => {
+app.get("/api/db/watchlist", requireSignedIn, async (req, res) => {
   try {
-    const assets = await userWorkspace.watchlist.getAll(req.auth?.userId || 1);
+    const assets = await userWorkspace.watchlist.getAll(req.auth.userId);
     res.json({ assets });
   } catch (error) {
     handleServerError(res, "Watchlist read failed", error);
   }
 });
 
-app.post("/api/db/watchlist",writeLimiter,  validateWatchlistAsset, async (req, res) => {
+app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validateWatchlistAsset, async (req, res) => {
   try {
     const asset = req.body;
-    const result = await userWorkspace.watchlist.add(req.auth?.userId || 1, asset);
+    const result = await userWorkspace.watchlist.add(req.auth.userId, asset);
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Watchlist write failed", error);
   }
 });
 
-app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
+app.delete("/api/db/watchlist/:symbol", requireSignedIn, writeLimiter, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50);
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -5123,7 +5227,7 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const result = await userWorkspace.watchlist.delete(req.auth?.userId || 1, symbol, marketType, category, theme);
+    const result = await userWorkspace.watchlist.delete(req.auth.userId, symbol, marketType, category, theme);
     res.json(result);
   } catch (error) {
     handleServerError(res, "Watchlist delete failed", error);
@@ -5131,14 +5235,14 @@ app.delete("/api/db/watchlist/:symbol", writeLimiter, async (req, res) => {
 });
 
 // Check if asset is in watchlist
-app.get("/api/db/watchlist/check/:symbol", async (req, res) => {
+app.get("/api/db/watchlist/check/:symbol", requireSignedIn, async (req, res) => {
   try {
     const { symbol } = req.params;
     const { marketType, category = null, theme = null } = req.query;
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const exists = await userWorkspace.watchlist.exists(req.auth?.userId || 1, symbol, marketType, category, theme);
+    const exists = await userWorkspace.watchlist.exists(req.auth.userId, symbol, marketType, category, theme);
     res.json({ exists });
   } catch (error) {
     handleServerError(res, "Watchlist exists check failed", error);
@@ -6120,14 +6224,20 @@ app.get('/api/analytics/equities', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Atomic trade execution (portfolio + balance + trade journal)
 // ---------------------------------------------------------------------------
-app.post("/api/db/execute-trade", writeLimiter, validatePortfolioHolding, async (req, res) => {
+app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validatePortfolioHolding, async (req, res) => {
   try {
     const payload = req.body || {};
-    const result = await userWorkspace.trading.executeTrade(req.auth?.userId || 1, payload);
+    if (!payload.clientId || typeof payload.clientId !== "string" || payload.clientId.trim().length > 120) {
+      return res.status(400).json({ error: "clientId is required for idempotent execution." });
+    }
+    const result = await userWorkspace.trading.executeTrade(req.auth.userId, payload);
     res.status(201).json(result);
   } catch (error) {
     if (error?.code === "INSUFFICIENT_BALANCE") {
       return res.status(400).json({ error: "Insufficient balance" });
+    }
+    if (error?.code === "INVALID_CLIENT_ID") {
+      return res.status(400).json({ error: "clientId is required for idempotent execution." });
     }
     if (error?.code === "INSUFFICIENT_POSITION" || error?.code === "NO_POSITION") {
       return res.status(400).json({ error: error.message });

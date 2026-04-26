@@ -9,7 +9,11 @@ This README reflects the current implementation in this repository.
 - `GET /` shows the public homepage (marketing/overview).
 - `GET /app` opens the trading app.
 - `GET /auth` opens sign up / sign in / forgot-password and account-security flows.
-- For now auth is **not enforced** to enter the app: clicking `Sign up` on the public homepage routes directly to `/app`.
+- `Open App` from the homepage now performs a preflight check:
+  - verifies whether a valid auth session exists (`/api/auth/me`)
+  - syncs subscription tier (`starter`/`pro`/`desk`) and billing cycle (`monthly`/`yearly`)
+  - redirects unauthenticated users to `GET /auth?mode=signin&next=/app`
+- Direct `/app` access still supports guest fallback during rollout.
 
 ## What the web app can do
 
@@ -97,6 +101,10 @@ This README reflects the current implementation in this repository.
 - Forgot-password request/confirm flow with token validation
 - 2FA and passkey scaffolding routes
 - OAuth provider discovery + mock social sign-in route for local/dev flow testing
+- New dark-themed multi-step auth UX at `/auth`:
+  - Sign up: email step → secure account (password strength) → passkey setup → account created
+  - Sign in: password flow + optional passkey-id flow + social buttons
+  - Forgot password: request reset → check-email state → token-based confirm path (dev/local)
 
 ### 11) Settings & account panel
 - Profile and security controls (email/password/2FA/passkeys UI scaffolding in settings/auth)
@@ -104,11 +112,14 @@ This README reflects the current implementation in this repository.
 - Connected accounts modal for exchange/prediction market metadata
 - Notification + layout preference toggles
 
-## Current progress (as of April 23, 2026)
+## Current progress (as of April 26, 2026)
 
 - **Auth foundation implemented**: Server-side auth/session/reset-token flows exist and are rate-limited.
 - **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
-- **Guest fallback retained**: Existing app usage remains available without forced sign-in while onboarding rollout continues.
+- **Homepage Open App preflight shipped**: CTA now verifies prior login + account tier context before app entry.
+- **Pricing-tier account linkage shipped**: Plan selection writes user `currentPlan/currentBillingCycle` and persists account context after auth.
+- **Auth UX redesign shipped**: `/auth` now uses staged screens aligned to onboarding/sign-in/reset/passkey flow states.
+- **Guest fallback retained**: Direct `/app` remains available without hard sign-in while enforcement rollout continues.
 - **Integration test harness added**: Backend integration suite exists for auth lifecycle, password reset, and user-isolation scenarios.
 - **Homepage responsive refactor completed**: Snapshot cards and footer device preview were updated to prevent overlap and improve mobile behavior.
 - **Dark theme hardening completed**: Homepage/app surfaces (including sidebar) are now enforced to dark-theme styling.
@@ -117,11 +128,11 @@ This README reflects the current implementation in this repository.
 - **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
 - **Mobile responsiveness fixes shipped**: Cross-market Analytics pills now stack cleanly on small screens; Journal and Portfolio tables were hardened for mobile overflow and clipping scenarios.
 
-## Current limitations (as of April 23, 2026)
+## Current limitations (as of April 26, 2026)
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
 - **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
-- **Auth enforcement mode**: App entry currently allows `/app` access without mandatory sign-in by design for current rollout.
+- **Auth enforcement mode**: Homepage `Open App` now validates session/tier first, but direct `/app` URL access still allows guest mode by design for current rollout.
 - **OAuth provider setup**: Google/Apple/GitHub/Microsoft routes are scaffolded in backend; production OAuth client credentials/callback exchange are not yet configured.
 - **Passkey implementation depth**: Passkey flows are scaffolded for registration + login testing, but full WebAuthn challenge/attestation verification is still a next step.
 - **MFA delivery**: OTP verification is wired, but SMS/email delivery integrations are not yet connected to external providers.
@@ -171,6 +182,44 @@ npm run telegram:session
 ```
 
 This interactive script logs in and prints a `TELEGRAM_SESSION_STRING` value.
+
+## One-time admin workspace migration (run now)
+
+Use this when you want to immediately copy current tracked portfolio/watchlist into the configured admin workspace without restarting the backend.
+
+### Option A: CLI script (direct DB connection)
+
+From `backend/`:
+
+```bash
+npm run migrate:admin-workspace
+```
+
+Force re-run (ignores one-time marker):
+
+```bash
+npm run migrate:admin-workspace -- --force
+```
+
+### Option B: Admin endpoint (live server)
+
+Route:
+
+- `POST /api/admin/migrations/admin-workspace`
+
+Auth options:
+
+- Signed-in admin user (`ADMIN_EMAIL`)
+- Or header `x-migration-key: <ADMIN_MIGRATION_KEY>`
+
+Example:
+
+```bash
+curl -X POST "https://<your-backend>/api/admin/migrations/admin-workspace?force=false" \
+  -H "x-migration-key: $ADMIN_MIGRATION_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
 
 ## Backend API surface (key routes)
 
@@ -227,6 +276,7 @@ This interactive script logs in and prints a `TELEGRAM_SESSION_STRING` value.
 - `POST /api/auth/2fa/enable`
 - `POST /api/auth/2fa/disable`
 - `POST /api/auth/passkeys/register`
+- `POST /api/admin/migrations/admin-workspace`
 - `GET /api/auth/oauth/providers`
 - `POST /api/auth/oauth/start` (scaffold response)
 - `POST /api/auth/oauth/mock` (local/dev social sign-in simulation)

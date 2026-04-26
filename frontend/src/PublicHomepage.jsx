@@ -79,9 +79,21 @@ function saveAuthUser(user) {
   }
 }
 
+function LineZMark({ className = "" }) {
+  return (
+    <div className={`line-z-mark ${className}`.trim()} aria-hidden="true">
+      <span className="line-z-top" />
+      <span className="line-z-diag" />
+      <span className="line-z-bottom" />
+      <span className="line-z-inner" />
+    </div>
+  );
+}
+
 export default function PublicHomepage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [authUser, setAuthUser] = useState(() => readStoredAuthUser());
+  const [openAppChecking, setOpenAppChecking] = useState(false);
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
   const [billingCycle, setBillingCycle] = useState(() => {
@@ -228,12 +240,63 @@ export default function PublicHomepage() {
     }
   ]), [billingCycle]);
 
+  const handleOpenAppClick = async (event) => {
+    event.preventDefault();
+    if (openAppChecking) return;
+
+    const appTarget = "/app";
+    const signinTarget = `/auth?mode=signin&next=${encodeURIComponent(appTarget)}`;
+    const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
+
+    if (!token) {
+      localStorage.setItem("zenin_post_auth_next", appTarget);
+      window.location.href = signinTarget;
+      return;
+    }
+
+    setOpenAppChecking(true);
+    try {
+      const res = await zeninFetch("/auth/me");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.authenticated || !data?.user) {
+        localStorage.removeItem("zenin_auth_token");
+        localStorage.removeItem("zenin_auth_user");
+        localStorage.setItem("zenin_post_auth_next", appTarget);
+        window.location.href = signinTarget;
+        return;
+      }
+
+      const normalizedPlan = normalizePlan(data.user.currentPlan || "starter");
+      const normalizedCycle = normalizeBillingCycle(data.user.currentBillingCycle || "monthly");
+      const normalizedUser = {
+        ...data.user,
+        currentPlan: normalizedPlan,
+        currentBillingCycle: normalizedCycle
+      };
+      setAuthUser(normalizedUser);
+      saveAuthUser(normalizedUser);
+      localStorage.setItem("zenin_last_known_plan", normalizedPlan);
+      localStorage.setItem("zenin_last_known_billing_cycle", normalizedCycle);
+      window.location.href = appTarget;
+    } catch {
+      const fallbackPlan = normalizePlan(authUser?.currentPlan || localStorage.getItem("zenin_last_known_plan") || "starter");
+      if (["starter", "pro", "desk"].includes(fallbackPlan)) {
+        window.location.href = appTarget;
+        return;
+      }
+      localStorage.setItem("zenin_post_auth_next", appTarget);
+      window.location.href = signinTarget;
+    } finally {
+      setOpenAppChecking(false);
+    }
+  };
+
   return (
     <div className="zc-home">
       <header className="site-header">
         <div className="container nav">
           <a className="brand" href="#top" aria-label="Zenin Capital home">
-            <span className="brand-mark"><span>Z</span></span>
+            <span className="brand-mark"><LineZMark className="brand-z-mark" /></span>
             <span className="brand-text">
               <strong>Zenin</strong>
               <small>Capital</small>
@@ -249,7 +312,9 @@ export default function PublicHomepage() {
           </nav>
 
           <div className={`nav-actions ${menuOpen ? "open" : ""}`}>
-            <a className="btn btn-primary" href="/app">Open App →</a>
+            <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
+              {openAppChecking ? "Checking..." : "Open App →"}
+            </a>
           </div>
 
           <button
@@ -277,7 +342,9 @@ export default function PublicHomepage() {
                 in one place.
               </p>
               <div className="hero-actions">
-                <a className="btn btn-primary" href="/app">Open App →</a>
+                <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
+                  {openAppChecking ? "Checking..." : "Open App →"}
+                </a>
                 <a className="btn btn-secondary" href="#features">Explore Features</a>
               </div>
 
@@ -399,6 +466,50 @@ export default function PublicHomepage() {
               <div className="proof-item">
                 <div className="proof-badge">🌐</div>
                 <div><strong>Global Coverage</strong><span>Markets worldwide</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="section brand-spec-section" id="brand">
+          <div className="container">
+            <div className="brand-spec-board">
+              <div className="brand-spec-topline">
+                <span>1. Ultra-thin line Z</span>
+                <span>Precision. Clarity. Trust.</span>
+              </div>
+
+              <div className="brand-spec-grid">
+                <div className="brand-spec-col brand-spec-col-large">
+                  <LineZMark className="line-z-mark-xl" />
+                </div>
+
+                <div className="brand-spec-col brand-spec-col-lockup">
+                  <div className="brand-lockup-mark"><LineZMark className="line-z-mark-lg" /></div>
+                  <div className="brand-lockup-text">
+                    <strong>ZENIN</strong>
+                    <span>CAPITAL</span>
+                  </div>
+                </div>
+
+                <div className="brand-spec-col brand-spec-col-icons">
+                  <div className="brand-icon-block">
+                    <small>APP ICON</small>
+                    <div className="brand-icon-card">
+                      <LineZMark className="line-z-mark-md" />
+                    </div>
+                  </div>
+                  <div className="brand-icon-block">
+                    <small>FAVICON</small>
+                    <div className="brand-favicon-chip">
+                      <LineZMark className="line-z-mark-sm" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="brand-spec-foot">
+                <span>Built for trust. Engineered for performance.</span>
               </div>
             </div>
           </div>
@@ -704,7 +815,9 @@ export default function PublicHomepage() {
                   Whether you’re analyzing markets, building strategies, or optimizing taxes, Zenin brings it all together so you can focus on what matters — performance.
                 </p>
                 <div className="cta-actions">
-                  <a className="btn btn-primary" href="/app">Open App →</a>
+                  <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
+                    {openAppChecking ? "Checking..." : "Open App →"}
+                  </a>
                   <a className="btn btn-secondary" href="#screens">See Screens</a>
                 </div>
               </div>
