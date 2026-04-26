@@ -21,6 +21,16 @@ function isFresh(cacheEntry, ttlMs) {
   return Number.isFinite(ts) && (Date.now() - ts < ttlMs) && (dateStr === today);
 }
 
+function hasUsableCompanyProfile(profile) {
+  if (!profile || typeof profile !== "object") return false;
+  return Boolean(
+    profile.summary ||
+    profile.marketCap ||
+    profile.totalRevenue ||
+    (profile.finvizMetrics && Object.keys(profile.finvizMetrics).length > 0)
+  );
+}
+
 function formatMoney(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "Not available";
@@ -907,7 +917,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
 
       if (cachedPayload) {
         setProfile(cachedPayload);
-        if (cacheFresh && !cachedPayload?.stale && !cachedPayload?.unavailable) {
+        if (cacheFresh && hasUsableCompanyProfile(cachedPayload) && !cachedPayload?.stale && !cachedPayload?.unavailable) {
           setLoading(false);
           return;
         }

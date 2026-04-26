@@ -2,6 +2,7 @@
 import sys
 import json
 import re
+import html as html_lib
 import requests
 from datetime import datetime, date
 import yfinance as yf
@@ -46,15 +47,40 @@ def _fetch_finviz_raw(symbol):
         return resp.text if resp.status_code == 200 else None
     except: return None
 
+def _clean_html_text(raw):
+    text = re.sub(r"<[^>]+>", " ", raw or "")
+    return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
+
+def _extract_snapshot_pairs(table_html):
+    pairs = []
+    current_pairs = re.findall(
+        r'<td[^>]*class="[^"]*\bsnapshot-td2\b[^"]*"[^>]*>(.*?)</td>\s*'
+        r'<td[^>]*class="[^"]*\bsnapshot-td2\b[^"]*"[^>]*>(.*?)</td>',
+        table_html or "",
+        re.S,
+    )
+    for label_raw, value_raw in current_pairs:
+        label = _clean_html_text(label_raw)
+        value = _clean_html_text(value_raw)
+        if label:
+            pairs.append((label, value))
+
+    if pairs:
+        return pairs
+
+    legacy_pairs = re.findall(
+        r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>',
+        table_html or "",
+        re.S,
+    )
+    return [(_clean_html_text(label_raw), _clean_html_text(value_raw)) for label_raw, value_raw in legacy_pairs]
+
 def _parse_finviz_data(html):
     data = {"summary": {}, "ratings": []}
     if not html: return data
-    summary_match = re.search(r'<table class="snapshot-table2".*?>(.*?)</table>', html, re.S)
+    summary_match = re.search(r'<table[^>]*class="[^"]*\bsnapshot-table2\b[^"]*"[^>]*>(.*?)</table>', html, re.S)
     if summary_match:
-        pairs = re.findall(r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>', summary_match.group(1), re.S)
-        for l_raw, v_raw in pairs:
-            l = re.sub(r'<.*?>', '', l_raw).strip()
-            v = re.sub(r'<.*?>', '', v_raw).strip()
+        for l, v in _extract_snapshot_pairs(summary_match.group(1)):
             if l == "Earnings": data["summary"]["earnings"] = v
             elif l == "Target Price": data["summary"]["target_price"] = v
     ratings_match = re.search(r'<table class="fullview-ratings-outer".*?>(.*?)</table>', html, re.S)

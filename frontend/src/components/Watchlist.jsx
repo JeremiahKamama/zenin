@@ -28,6 +28,11 @@ const sanitizeMacroSnapshot = (snapshot) => {
   return { ...snapshot, metrics };
 };
 
+const hasUsableEarningsPayload = (payload) => {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  return items.some((item) => item?.nextEarnings || item?.earningsText);
+};
+
 export function Watchlist({
   categories,
   activeCategory,
@@ -374,7 +379,9 @@ useEffect(() => {
     const controller = new AbortController();
     const cacheParams = { symbols: earningsSymbols };
     const cached = readResilientCache("earnings-calendar", cacheParams);
-    const cacheIsFresh = isCacheFresh(cached, EARNINGS_CLIENT_CACHE_TTL_MS);
+    const cacheIsFresh =
+      isCacheFresh(cached, EARNINGS_CLIENT_CACHE_TTL_MS) &&
+      hasUsableEarningsPayload(cached.payload);
     if (cached?.payload && Array.isArray(cached.payload?.items)) {
       setEarningsItems(cached.payload.items);
       setEarningsStale(Boolean(cached.payload?.stale || cached.payload?.unavailable));

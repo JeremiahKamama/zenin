@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import html as html_lib
 import re
 import sys
 from datetime import date, datetime
@@ -23,9 +24,19 @@ MONTHS = {
 }
 
 
+def clean_html_text(raw: str):
+    text = re.sub(r"<[^>]+>", " ", raw or "")
+    return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
+
+
 def fetch_finviz_html(symbol: str):
     url = f"https://finviz.com/quote.ashx?t={symbol.upper()}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://finviz.com/",
+    }
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
@@ -39,20 +50,35 @@ def extract_earnings_text(html: str):
     if not html:
         return None
 
-    table_match = re.search(r'<table class="snapshot-table2".*?>(.*?)</table>', html, re.S)
+    table_match = re.search(r'<table[^>]*class="[^"]*\bsnapshot-table2\b[^"]*"[^>]*>(.*?)</table>', html, re.S)
     if not table_match:
         return None
 
+    table_html = table_match.group(1)
+    label_value_pairs = re.findall(
+        r'<td[^>]*class="[^"]*\bsnapshot-td2\b[^"]*"[^>]*>(.*?)</td>\s*'
+        r'<td[^>]*class="[^"]*\bsnapshot-td2\b[^"]*"[^>]*>(.*?)</td>',
+        table_html,
+        re.S,
+    )
+    for label_raw, value_raw in label_value_pairs:
+        label = clean_html_text(label_raw).lower()
+        if label != "earnings":
+            continue
+        value = clean_html_text(value_raw)
+        return value if value and value != "-" else None
+
+    # Legacy Finviz markup used snapshot-td2-cp for label cells.
     pairs = re.findall(
         r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>',
-        table_match.group(1),
+        table_html,
         re.S,
     )
     for label_raw, value_raw in pairs:
-        label = re.sub(r"<.*?>", "", label_raw).strip().lower()
+        label = clean_html_text(label_raw).lower()
         if label != "earnings":
             continue
-        value = re.sub(r"<.*?>", "", value_raw).strip()
+        value = clean_html_text(value_raw)
         return value if value and value != "-" else None
     return None
 

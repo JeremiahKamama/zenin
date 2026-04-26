@@ -2610,9 +2610,12 @@ app.get("/api/earnings-calendar", async (req, res) => {
 
   const snapshotParams = { symbols };
   const cached = await readServiceSnapshot("earnings-calendar", snapshotParams);
+  const cachedItems = Array.isArray(cached?.payload?.items) ? cached.payload.items : [];
+  const cachedHasUsableEarnings = cachedItems.some((item) => item?.nextEarnings || item?.earningsText);
   const cachedAt = cached?.updatedAt ? new Date(cached.updatedAt).getTime() : 0;
   const cachedFresh =
     Boolean(cached?.payload) &&
+    cachedHasUsableEarnings &&
     Number.isFinite(cachedAt) &&
     cachedAt > 0 &&
     (Date.now() - cachedAt) < EARNINGS_CALENDAR_REFRESH_TTL_MS &&

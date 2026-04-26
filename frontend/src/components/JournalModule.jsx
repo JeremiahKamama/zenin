@@ -68,9 +68,24 @@ export function JournalModule({
     assetClass: "all",
     outcome: "all",
     emotion: "all",
-    search: ""
+    search: "",
+    regime: "all",
+    side: "all",
+    status: "all"
   });
   const [expandedExecutionGroups, setExpandedExecutionGroups] = useState({});
+  const [journalView, setJournalView] = useState("entries");
+  const [selectedEntry, setSelectedEntry] = useState(null);
+  const [isEntryDrawerOpen, setIsEntryDrawerOpen] = useState(false);
+  const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const [entryErrors, setEntryErrors] = useState({});
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
+  const [reviewNote, setReviewNote] = useState("");
+  const quickEntryRef = useRef(null);
+  const drawerRef = useRef(null);
 
   useEffect(() => {
     const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
@@ -155,6 +170,28 @@ export function JournalModule({
       document.removeEventListener("keydown", handleEscape);
     };
   }, []);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key !== "Escape") return;
+      setIsEntryDrawerOpen(false);
+      setIsQuickEntryOpen(false);
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, []);
+
+  useEffect(() => {
+    if (isEntryDrawerOpen) {
+      requestAnimationFrame(() => drawerRef.current?.focus());
+    }
+  }, [isEntryDrawerOpen]);
 
   const reportSymbols = useMemo(() => {
     const symbols = new Set();
@@ -311,31 +348,11 @@ export function JournalModule({
     return rows.reverse();
   }, [trades]);
 
-  const addJournalEntry = () => {
-    if (!entryDraft.symbol.trim() && !entryDraft.preThesis.trim() && !entryDraft.postReview.trim()) return;
-    const normalized = {
-      ...entryDraft,
-      symbol: String(entryDraft.symbol || "").toUpperCase(),
-      quantity: Number(entryDraft.quantity) || 0,
-      price: Number(entryDraft.price) || 0,
-      notional: Number(entryDraft.notional) || 0,
-    };
-    if (editingEntryId) {
-      setJournalEntries((prev) =>
-        prev.map((entry) =>
-          entry.id === editingEntryId
-            ? { ...entry, ...normalized, updatedAt: new Date().toISOString() }
-            : entry
-        )
-      );
-    } else {
-      const newEntry = {
-        id: `jrnl-${Date.now()}`,
-        createdAt: new Date().toISOString(),
-        ...normalized
-      };
-      setJournalEntries((prev) => [newEntry, ...prev]);
-    }
+  const notify = (message, tone = "info") => {
+    setToast({ id: Date.now(), message, tone });
+  };
+
+  const resetEntryDraft = () => {
     setEditingEntryId(null);
     setEntryDraft({
       sourceTradeKey: "",
@@ -359,6 +376,51 @@ export function JournalModule({
       learned: "",
       chartLink: ""
     });
+    setEntryErrors({});
+  };
+
+  const addJournalEntry = () => {
+    const nextErrors = {};
+    if (!String(entryDraft.symbol || "").trim()) nextErrors.symbol = "Symbol is required.";
+    if (!String(entryDraft.strategy || "").trim()) nextErrors.strategy = "Strategy is required.";
+    if (!String(entryDraft.side || "").trim()) nextErrors.side = "Side is required.";
+    setEntryErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      notify("Couldn't save entry. Try again.", "danger");
+      return;
+    }
+    setSaveStatus("saving");
+    const normalized = {
+      ...entryDraft,
+      symbol: String(entryDraft.symbol || "").toUpperCase(),
+      quantity: Number(entryDraft.quantity) || 0,
+      price: Number(entryDraft.price) || 0,
+      notional: Number(entryDraft.notional) || 0,
+      status: entryDraft.status || "Open",
+      tradeDate: entryDraft.tradeDate || new Date().toISOString()
+    };
+    if (editingEntryId) {
+      setJournalEntries((prev) =>
+        prev.map((entry) =>
+          entry.id === editingEntryId
+            ? { ...entry, ...normalized, updatedAt: new Date().toISOString() }
+            : entry
+        )
+      );
+      notify("Journal entry updated.", "success");
+    } else {
+      const newEntry = {
+        id: `jrnl-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        ...normalized
+      };
+      setJournalEntries((prev) => [newEntry, ...prev]);
+      notify("Journal entry saved.", "success");
+    }
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus("idle"), 900);
+    resetEntryDraft();
+    setIsQuickEntryOpen(false);
   };
 
   const analytics = useMemo(() => {
@@ -1164,8 +1226,6 @@ export function JournalModule({
     downloadBlob(blob, `traded-assets-report-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
-  const [journalView, setJournalView] = useState("entries");
-
   const monthDateRangeLabel = useMemo(() => {
     const start = new Date(calendarYear, calendarMonth, 1);
     const end = new Date(calendarYear, calendarMonth + 1, 0);
@@ -1271,373 +1331,940 @@ export function JournalModule({
 
   const confidenceDots = Math.max(1, Math.min(5, Number(entryDraft.confidence) || 1));
 
+  const buildTradeLogRow = (row, idx) => {
+    const key = String(row?.clientId || row?.id || `execution-${idx}`);
+    const linked = mapBySourceTradeKey.get(key);
+    const side = String(row?.type || row?.side || linked?.side || "").toUpperCase() || "BUY";
+    const pnl = Number(row?.notional || 0) * (side === "SELL" ? -1 : 1);
+    const confidence = Math.max(1, Math.min(5, Number(linked?.confidence || 3)));
+    return {
+      id: linked?.id || key,
+      sourceId: key,
+      symbol: String(row?.asset || linked?.symbol || "—").toUpperCase(),
+      assetType: String(row?.marketType || linked?.marketType || "Spot"),
+      date: row?.executionDate || linked?.tradeDate || linked?.createdAt || "—",
+      rawDate: row?.executedAt || row?.date || linked?.tradeDate || linked?.createdAt,
+      setup: linked?.setupTag || linked?.strategy || row?.strategyName || "Breakout",
+      side,
+      regime: linked?.marketRegime || "Momentum",
+      confidence,
+      status: linked?.status || row?.status || "Closed",
+      pnl,
+      notesCount: (linked?.preThesis || linked?.postReview || linked?.learned) ? 1 : 0,
+      entry: linked,
+      execution: row,
+      size: row?.quantity || linked?.quantity || 0,
+      entryPrice: row?.price || linked?.price || 0,
+      exitPrice: side === "SELL" ? row?.price || linked?.price || 0 : "",
+      fees: row?.fee || linked?.fees || 0,
+      holdingTime: formatDurationFromDays(analytics.avgHoldDays),
+      emotion: linked?.emotion || "neutral",
+      mistakeCategory: linked?.mistakeCategory || "",
+      chartLink: linked?.chartLink || "",
+      review: linked?.postReview || linked?.learned || ""
+    };
+  };
+
+  const manualTradeRows = (journalEntries || [])
+    .filter((entry) => !entry.sourceTradeKey)
+    .map((entry, idx) => ({
+      id: entry.id || `manual-${idx}`,
+      sourceId: entry.id || `manual-${idx}`,
+      symbol: String(entry.symbol || "—").toUpperCase(),
+      assetType: entry.marketType || "Manual",
+      date: entry.tradeDate ? new Date(entry.tradeDate).toLocaleDateString() : new Date(entry.createdAt || Date.now()).toLocaleDateString(),
+      rawDate: entry.tradeDate || entry.createdAt,
+      setup: entry.setupTag || entry.strategy || "Manual note",
+      side: String(entry.side || "BUY").toUpperCase(),
+      regime: entry.marketRegime || "Unspecified",
+      confidence: Math.max(1, Math.min(5, Number(entry.confidence || 3))),
+      status: entry.status || "Open",
+      pnl: Number(entry.notional || 0) * (String(entry.side || "").toUpperCase() === "SELL" ? -1 : 1),
+      notesCount: (entry.preThesis || entry.postReview || entry.learned) ? 1 : 0,
+      entry,
+      execution: null,
+      size: entry.quantity || 0,
+      entryPrice: entry.price || 0,
+      exitPrice: "",
+      fees: entry.fees || 0,
+      holdingTime: formatDurationFromDays(analytics.avgHoldDays),
+      emotion: entry.emotion || "neutral",
+      mistakeCategory: entry.mistakeCategory || "",
+      chartLink: entry.chartLink || "",
+      review: entry.postReview || entry.learned || ""
+    }));
+
+  const tradeLogRows = [
+    ...executionRows.map(buildTradeLogRow),
+    ...manualTradeRows
+  ].filter((row) => {
+    const query = String(journalFilters.search || "").trim().toLowerCase();
+    if (query) {
+      const haystack = `${row.symbol} ${row.setup} ${row.regime} ${row.entry?.preThesis || ""} ${row.entry?.postReview || ""}`.toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    if (selectedSymbols.length && !selectedSymbols.includes(row.symbol)) return false;
+    if (journalFilters.strategy !== "all" && String(row.setup || "").toLowerCase() !== journalFilters.strategy) return false;
+    if (journalFilters.regime !== "all" && String(row.regime || "").toLowerCase() !== journalFilters.regime) return false;
+    if (journalFilters.side !== "all" && String(row.side || "").toLowerCase() !== journalFilters.side) return false;
+    if (journalFilters.status !== "all" && String(row.status || "").toLowerCase() !== journalFilters.status) return false;
+    return true;
+  }).slice(0, 50);
+
+  const statCards = [
+    { label: "Total Trades", value: analytics.totalTrades, delta: `+${Math.max(0, weeklyMonthlyReview.monthly.wins - weeklyMonthlyReview.weekly.wins)} vs last 30d`, tone: "neutral", icon: "T" },
+    { label: "Win Rate", value: `${analytics.winRate.toFixed(1)}%`, delta: `${analytics.winRate >= 50 ? "+" : "-"}${Math.abs(analytics.winRate - 50).toFixed(1)}pp vs last 30d`, tone: analytics.winRate >= 50 ? "positive" : "negative", icon: "W" },
+    { label: "Avg Hold Time", value: formatDurationFromDays(analytics.avgHoldDays), delta: `${(analytics.avgHoldDays * 24 * 0.17).toFixed(1)}h vs last 30d`, tone: "neutral", icon: "H" },
+    { label: "Realized P&L", value: formatValue(analytics.realizedPnl, true), delta: `${analytics.realizedPnl >= 0 ? "+" : "-"}${formatValue(Math.abs(analytics.realizedPnl * 0.33), true)} vs last 30d`, tone: analytics.realizedPnl >= 0 ? "positive" : "negative", icon: "R" },
+    { label: "Unrealized P&L", value: formatValue(analytics.unrealizedPnl, true), delta: `${analytics.unrealizedPnl >= 0 ? "+" : "-"}${formatValue(Math.abs(analytics.unrealizedPnl * 0.44), true)} vs last 30d`, tone: analytics.unrealizedPnl >= 0 ? "positive" : "negative", icon: "U" },
+    { label: "Journal Notes", value: journalEntries.length, delta: "This month", tone: "info", icon: "N" }
+  ];
+
+  const openTradeDetail = (row) => {
+    setSelectedEntry(row);
+    setIsEntryDrawerOpen(true);
+  };
+
+  const openNewEntry = () => {
+    if (window.innerWidth < 768) {
+      setIsQuickEntryOpen(true);
+      return;
+    }
+    quickEntryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    quickEntryRef.current?.focus();
+  };
+
+  const resetFilters = () => {
+    setSelectedSymbols([]);
+    setJournalFilters((prev) => ({ ...prev, strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", search: "" }));
+  };
+
+  const handleExportChoice = (choice) => {
+    setIsExportMenuOpen(false);
+    if (choice === "entries") exportTradedAssetsToExcel();
+    notify("Export is being prepared.", "info");
+  };
+
+  const selectedDay = selectedCalendarDay || calendarCells.find((cell) => cell.type === "day" && cell.pnl != null) || calendarCells.find((cell) => cell.type === "day");
+  const selectedDayTrades = tradeLogRows.filter((row) => String(row.rawDate || row.date || "").slice(0, 10) === String(selectedDay?.key || "").slice(0, 10));
+  const assetPnlRows = marketTypeDistribution.map((row) => ({
+    ...row,
+    pnl: tradeLogRows.filter((trade) => String(trade.assetType || "").toLowerCase().includes(row.name.toLowerCase().slice(0, -1))).reduce((sum, trade) => sum + Number(trade.pnl || 0), 0)
+  }));
+  const setupPnlRows = Object.values(tradeLogRows.reduce((acc, row) => {
+    const key = row.setup || "Unspecified";
+    const item = acc[key] || { setup: key, trades: 0, wins: 0, pnl: 0 };
+    item.trades += 1;
+    item.pnl += Number(row.pnl || 0);
+    if (Number(row.pnl || 0) > 0) item.wins += 1;
+    acc[key] = item;
+    return acc;
+  }, {})).slice(0, 6);
+  const mistakeRows = ["Entered late", "Ignored stop", "Oversized position", "Chased move", "Took low-quality setup", "Closed winner early"].map((mistake, idx) => ({
+    mistake,
+    count: Math.max(0, journalEntries.filter((entry) => String(entry.mistakeCategory || "").toLowerCase().includes(mistake.toLowerCase())).length || (idx < 3 ? idx + 1 : 0)),
+    cost: idx < 3 ? -Math.abs(analytics.avgTradeLoss || 0) * (idx + 1) : 0,
+    action: idx === 0 ? "Wait for trigger confirmation" : idx === 1 ? "Pre-place invalidation" : "Review before entry"
+  }));
+
   return (
-    <div className="view-container journal-dashboard journal-v2">
-      <div className="journal-v2-head">
-        <div>
-          <div className="journal-v2-title-row">
-            <h2>Journal</h2>
-          </div>
-          <p>Track trades, review performance, and capture market context</p>
-        </div>
-        <div className="journal-v2-actions">
-          <input
-            className="search-input journal-v2-search"
-            placeholder="Search entries, notes, symbols..."
-            value={journalFilters.search}
-            onChange={(e) => setJournalFilters((prev) => ({ ...prev, search: e.target.value }))}
-          />
-          <button
-            className="pagination-button"
-            onClick={() => {
-              if (isExportMenuOpen) {
-                setIsExportMenuOpen(false);
-              } else {
-                exportTradedAssetsToExcel();
-              }
-            }}
-          >
-            Export
-          </button>
-          <button className="pagination-button active" onClick={addJournalEntry}>New Entry</button>
-        </div>
-      </div>
+    <div className="view-container journal-page">
+      <JournalToast toast={toast} />
+      <JournalHeader
+        search={journalFilters.search}
+        onSearch={(value) => setJournalFilters((prev) => ({ ...prev, search: value }))}
+        onNewEntry={openNewEntry}
+        exportMenuOpen={isExportMenuOpen}
+        setExportMenuOpen={setIsExportMenuOpen}
+        exportMenuRef={exportMenuRef}
+        onExportChoice={handleExportChoice}
+      />
 
-      <div className="journal-v2-metrics">
-        <article className="journal-v2-metric-card">
-          <span>Total Trades</span>
-          <strong>{analytics.totalTrades}</strong>
-          <em className="positive">↑ {Math.max(0, weeklyMonthlyReview.monthly.wins - weeklyMonthlyReview.weekly.wins)}% vs last 30d</em>
-        </article>
-        <article className="journal-v2-metric-card">
-          <span>Win Rate</span>
-          <strong>{analytics.winRate.toFixed(1)}%</strong>
-          <em className="positive">↑ {Math.max(0, analytics.winRate - 50).toFixed(1)}pp vs last 30d</em>
-        </article>
-        <article className="journal-v2-metric-card">
-          <span>Avg Hold Time</span>
-          <strong>{formatDurationFromDays(analytics.avgHoldDays)}</strong>
-          <em className="positive">↑ {(analytics.avgHoldDays * 24 * 0.17).toFixed(1)}h vs last 30d</em>
-        </article>
-        <article className="journal-v2-metric-card">
-          <span>Realized P&amp;L</span>
-          <strong className={analytics.realizedPnl >= 0 ? "positive" : "negative"}>{formatValue(analytics.realizedPnl, true)}</strong>
-          <em className={analytics.realizedPnl >= 0 ? "positive" : "negative"}>{analytics.realizedPnl >= 0 ? "↑" : "↓"} {formatValue(Math.abs(analytics.realizedPnl * 0.33), true)} vs last 30d</em>
-        </article>
-        <article className="journal-v2-metric-card">
-          <span>Unrealized P&amp;L</span>
-          <strong className={analytics.unrealizedPnl >= 0 ? "positive" : "negative"}>{formatValue(analytics.unrealizedPnl, true)}</strong>
-          <em className={analytics.unrealizedPnl >= 0 ? "positive" : "negative"}>{analytics.unrealizedPnl >= 0 ? "↑" : "↓"} {formatValue(Math.abs(analytics.unrealizedPnl * 0.44), true)} vs last 30d</em>
-        </article>
-        <article className="journal-v2-metric-card">
-          <span>Journal Notes</span>
-          <strong>{journalEntries.length}</strong>
-          <em>This month</em>
-        </article>
-      </div>
+      <JournalStatsGrid stats={statCards} />
+      <JournalTabNav activeTab={journalView} onChange={setJournalView} />
 
-      <div className="journal-v2-tabs">
-        {[
-          ["entries", "Entries"],
-          ["calendar", "Calendar"],
-          ["analytics", "Analytics"],
-          ["review", "Review"]
-        ].map(([key, label]) => (
-          <button
-            key={key}
-            className={`journal-v2-tab ${journalView === key ? "active" : ""}`}
-            onClick={() => setJournalView(key)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="journal-v2-main-grid">
-        <div className="journal-v2-left">
+      <div className="journal-workspace">
+        <main className="journal-main-panel">
           {journalView === "entries" ? (
-            <section className="watchlist-panel glass journal-v2-panel">
-              <div className="journal-v2-filter-row">
-                <button className="pagination-button active">All Entries</button>
-                <button className="pagination-button">{monthDateRangeLabel}</button>
-                <select
-                  className="search-input"
-                  value={selectedSymbols[0] || ""}
-                  onChange={(e) => setSelectedSymbols(e.target.value ? [e.target.value] : [])}
-                >
-                  <option value="">All Symbols</option>
-                  {symbolOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <select
-                  className="search-input"
-                  value={journalFilters.strategy}
-                  onChange={(e) => setJournalFilters((prev) => ({ ...prev, strategy: e.target.value }))}
-                >
-                  <option value="all">All Setups</option>
-                  {setupOptions.map((s) => <option key={s} value={s.toLowerCase()}>{s}</option>)}
-                </select>
-                <select
-                  className="search-input"
-                  value={journalFilters.timeframe}
-                  onChange={(e) => setJournalFilters((prev) => ({ ...prev, timeframe: e.target.value }))}
-                >
-                  <option value="all">All Regimes</option>
-                  {regimeOptions.map((s) => <option key={s} value={s.toLowerCase()}>{s}</option>)}
-                </select>
-              </div>
-              <div className="journal-v2-table-wrap">
-                <table className="journal-v2-table">
-                  <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th>Date</th>
-                      <th>Setup</th>
-                      <th>Side</th>
-                      <th>Regime</th>
-                      <th>Conf.</th>
-                      <th>Status</th>
-                      <th>P&amp;L</th>
-                      <th>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayedExecutionRows.map((row) => {
-                      const key = String(row?.clientId || row?.id || "");
-                      const linked = mapBySourceTradeKey.get(key);
-                      const pnl = Number(row?.notional || 0) * (String(row?.type || "").toUpperCase() === "SELL" ? -1 : 1);
-                      const conf = Math.max(1, Math.min(5, Number(linked?.confidence || 3)));
-                      return (
-                        <tr key={`journal-row-${key}`}>
-                          <td>
-                            <div className="journal-v2-symbol-cell">
-                              <span className="journal-v2-symbol-dot">{String(row.asset || "A")[0]}</span>
-                              <div>
-                                <strong>{row.asset}</strong>
-                                <span>{String(row.marketType || "Spot") || "Spot"}</span>
-                              </div>
-                            </div>
-                          </td>
-                          <td>{row.executionDate}</td>
-                          <td>{linked?.setupTag || linked?.strategy || "Breakout"}</td>
-                          <td><span className={`journal-v2-chip ${String(row.type || "").toUpperCase() === "BUY" ? "buy" : "sell"}`}>{String(row.type || "").toUpperCase()}</span></td>
-                          <td>{linked?.marketRegime || "Momentum"}</td>
-                          <td>{"●".repeat(conf)}{"○".repeat(5 - conf)}</td>
-                          <td><span className="journal-v2-chip status">Closed</span></td>
-                          <td className={pnl >= 0 ? "positive" : "negative"}>{formatValue(pnl, true)}</td>
-                          <td>{(linked?.preThesis || linked?.postReview) ? "1" : "0"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div className="journal-v2-footer-row">
-                <span>Showing 1-{displayedExecutionRows.length} of {executionRows.length} entries</span>
-                <div className="pagination-controls">
-                  <button className="pagination-button" onClick={() => setRecentPage((p) => Math.max(1, p - 1))}>Prev</button>
-                  <button className="pagination-button" onClick={() => setRecentPage((p) => Math.min(recentTotalPages, p + 1))}>Next</button>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <section className="watchlist-panel glass journal-v2-panel">
-              <div className="journal-v2-filter-row">
-                <button className="pagination-button">{monthDateRangeLabel}</button>
-                <button className="pagination-button">{journalView === "calendar" ? "P&L (Daily)" : "Summary"}</button>
-                <select className="search-input" value={selectedSymbols[0] || ""} onChange={(e) => setSelectedSymbols(e.target.value ? [e.target.value] : [])}>
-                  <option value="">All Assets</option>
-                  {symbolOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <button className="pagination-button" onClick={() => setSelectedSymbols([])}>Reset</button>
-              </div>
-              <div className="journal-v2-heatmap-layout">
-                <div className="journal-v2-heatmap-panel">
-                  <h3>Daily P&amp;L Heatmap</h3>
-                  <div className="journal-v2-week-header">
-                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <span key={d}>{d}</span>)}
-                  </div>
-                  <div className="journal-v2-heat-grid">
-                    {calendarCells.map((cell) => {
-                      if (cell.type === "blank") return <div key={cell.key} className="journal-v2-heat-cell blank" />;
-                      const pnl = Number(cell.pnl || 0);
-                      const tone = pnl > 0 ? "positive" : pnl < 0 ? "negative" : "neutral";
-                      return (
-                        <div key={cell.key} className={`journal-v2-heat-cell ${tone}`}>
-                          <span className="day">{cell.dayNum}</span>
-                          {cell.pnl != null ? <strong>{formatValue(pnl, true)}</strong> : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="journal-v2-heat-stats">
-                    <div><span>Month P&amp;L</span><strong className={monthPnL >= 0 ? "positive" : "negative"}>{formatValue(monthPnL, true)}</strong></div>
-                    <div><span>Best Day</span><strong className="positive">{formatValue(bestDay, true)}</strong></div>
-                    <div><span>Worst Day</span><strong className="negative">{formatValue(worstDay, true)}</strong></div>
-                    <div><span>Avg Daily P&amp;L</span><strong>{formatValue(avgDayPnL, true)}</strong></div>
-                    <div><span>Profitable Days</span><strong>{profitableDays}</strong></div>
-                    <div><span>Losing Days</span><strong>{losingDays}</strong></div>
-                    <div><span>Breakeven</span><strong>{breakevenDays}</strong></div>
-                  </div>
-                </div>
-                <aside className="journal-v2-overview-panel">
-                  <h3>Performance Overview</h3>
-                  <div className="journal-v2-donut-wrap">
-                    <Chart
-                      options={winLossOptions}
-                      series={winLossSeries.some((v) => v > 0) ? winLossSeries : [1, 1]}
-                      type="donut"
-                      height={180}
-                    />
-                    <div className="journal-v2-overview-list">
-                      <div><span>Winners</span><strong>{winnersCount} ({analytics.winRate.toFixed(1)}%)</strong></div>
-                      <div><span>Losers</span><strong>{losersCount}</strong></div>
-                      <div><span>Breakeven</span><strong>{breakevenCount}</strong></div>
-                    </div>
-                  </div>
-                  <div className="journal-v2-market-type">
-                    {marketTypeDistribution.map((row) => (
-                      <div key={row.name} className="row">
-                        <span>{row.name}</span>
-                        <div className="bar"><i style={{ width: `${row.pct}%` }} /></div>
-                        <strong>{row.count}</strong>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="journal-v2-mini-stats">
-                    <div><span>Profit Factor</span><strong>{weeklyMonthlyReview.monthly.profitFactor.toFixed(2)}</strong></div>
-                    <div><span>Expectancy</span><strong>{formatValue(analytics.tradeExpectancy, true)}</strong></div>
-                    <div><span>Avg Win</span><strong className="positive">{formatValue(analytics.avgTradeWin, true)}</strong></div>
-                    <div><span>Avg Loss</span><strong className="negative">{formatValue(analytics.avgTradeLoss, true)}</strong></div>
-                  </div>
-                </aside>
-              </div>
-              <section className="journal-v2-executions">
-                <div className="section-header">
-                  <h2>Recent Executions</h2>
-                  <button className="pagination-button">View All Trades</button>
-                </div>
-                <div className="journal-v2-table-wrap">
-                  <table className="journal-v2-table compact">
-                    <thead>
-                      <tr>
-                        <th>Date / Time</th>
-                        <th>Symbol</th>
-                        <th>Side</th>
-                        <th>Regime</th>
-                        <th>Hold Time</th>
-                        <th>P&amp;L</th>
-                        <th>Notes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {executionRows.slice(0, 6).map((row) => {
-                        const linked = mapBySourceTradeKey.get(String(row?.clientId || row?.id || ""));
-                        const pnl = Number(row?.notional || 0) * (String(row?.type || "").toUpperCase() === "SELL" ? -1 : 1);
-                        return (
-                          <tr key={`compact-${row.id || row.clientId || row.executionDate}`}>
-                            <td>{row.executionDate}</td>
-                            <td>{row.asset}</td>
-                            <td><span className={`journal-v2-chip ${String(row.type || "").toUpperCase() === "BUY" ? "buy" : "sell"}`}>{String(row.type || "").toUpperCase()}</span></td>
-                            <td>{linked?.marketRegime || "Momentum"}</td>
-                            <td>{formatDurationFromDays(analytics.avgHoldDays)}</td>
-                            <td className={pnl >= 0 ? "positive" : "negative"}>{formatValue(pnl, true)}</td>
-                            <td>{linked?.postReview || linked?.preThesis || "—"}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            </section>
-          )}
-        </div>
+            <JournalEntriesView
+              rows={tradeLogRows}
+              totalRows={executionRows.length + manualTradeRows.length}
+              filters={journalFilters}
+              setFilters={setJournalFilters}
+              showMoreFilters={showMoreFilters}
+              setShowMoreFilters={setShowMoreFilters}
+              symbolOptions={symbolOptions}
+              setupOptions={setupOptions}
+              regimeOptions={regimeOptions}
+              selectedSymbols={selectedSymbols}
+              setSelectedSymbols={setSelectedSymbols}
+              onReset={resetFilters}
+              onNewEntry={openNewEntry}
+              onOpenDetail={openTradeDetail}
+              formatValue={formatValue}
+            />
+          ) : null}
 
-        <aside className="journal-v2-right">
-          <section className="watchlist-panel glass journal-v2-panel">
-            <div className="section-header">
-              <h2>Quick Entry</h2>
-            </div>
-            <div className="journal-v2-form-grid">
-              <label>Symbol<input className="search-input" placeholder="e.g. BTC, AAPL" value={entryDraft.symbol} onChange={(e) => setEntryDraft((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))} /></label>
-              <label>Strategy<input className="search-input" placeholder="Breakout" value={entryDraft.strategy} onChange={(e) => setEntryDraft((p) => ({ ...p, strategy: e.target.value }))} /></label>
-              <label>Setup Tag<input className="search-input" placeholder="Setup" value={entryDraft.setupTag} onChange={(e) => setEntryDraft((p) => ({ ...p, setupTag: e.target.value }))} /></label>
-              <label>Side
-                <div className="journal-v2-toggle">
-                  <button type="button" className={String(entryDraft.side || "").toUpperCase() === "BUY" ? "active" : ""} onClick={() => setEntryDraft((p) => ({ ...p, side: "BUY" }))}>BUY</button>
-                  <button type="button" className={String(entryDraft.side || "").toUpperCase() === "SELL" ? "active" : ""} onClick={() => setEntryDraft((p) => ({ ...p, side: "SELL" }))}>SELL</button>
-                </div>
-              </label>
-              <label>Timeframe
-                <select className="search-input" value={entryDraft.timeframe} onChange={(e) => setEntryDraft((p) => ({ ...p, timeframe: e.target.value }))}>
-                  <option value="intraday">Intraday</option>
-                  <option value="swing">Swing</option>
-                  <option value="position">Position</option>
-                </select>
-              </label>
-              <label>Regime<input className="search-input" placeholder="Momentum" value={entryDraft.marketRegime} onChange={(e) => setEntryDraft((p) => ({ ...p, marketRegime: e.target.value }))} /></label>
-              <label>Emotion
-                <select className="search-input" value={entryDraft.emotion} onChange={(e) => setEntryDraft((p) => ({ ...p, emotion: e.target.value }))}>
-                  <option value="neutral">Neutral</option>
-                  <option value="confident">Confident</option>
-                  <option value="fearful">Fearful</option>
-                  <option value="fomo">FOMO</option>
-                  <option value="disciplined">Disciplined</option>
-                </select>
-              </label>
-              <label>Confidence
-                <div className="journal-v2-conf-row">
-                  {"●".repeat(confidenceDots)}{"○".repeat(5 - confidenceDots)}
-                  <input
-                    type="range"
-                    min={1}
-                    max={5}
-                    step={1}
-                    value={confidenceDots}
-                    onChange={(e) => setEntryDraft((p) => ({ ...p, confidence: Number(e.target.value) }))}
-                  />
-                </div>
-              </label>
-              <label className="full">Notes
-                <textarea
-                  className="search-input"
-                  rows={4}
-                  maxLength={500}
-                  placeholder="Add notes about your trade..."
-                  value={entryDraft.postReview}
-                  onChange={(e) => setEntryDraft((p) => ({ ...p, postReview: e.target.value }))}
-                />
-              </label>
-              <label className="full">Screenshot / Link
-                <input className="search-input" placeholder="https://..." value={entryDraft.chartLink} onChange={(e) => setEntryDraft((p) => ({ ...p, chartLink: e.target.value }))} />
-              </label>
-              <button className="pagination-button active full" onClick={addJournalEntry}>
-                {editingEntryId ? "Update Entry" : "Save Entry"}
-              </button>
-            </div>
-          </section>
+          {journalView === "calendar" ? (
+            <JournalCalendarView
+              calendarMonthLabel={calendarMonthLabel}
+              monthDateRangeLabel={monthDateRangeLabel}
+              calendarCells={calendarCells}
+              selectedDay={selectedDay}
+              selectedDayTrades={selectedDayTrades}
+              onSelectDay={setSelectedCalendarDay}
+              onMoveMonth={moveCalendarMonth}
+              selectedSymbol={selectedSymbols[0] || ""}
+              setSelectedSymbols={setSelectedSymbols}
+              symbolOptions={symbolOptions}
+              monthPnL={monthPnL}
+              bestDay={bestDay}
+              worstDay={worstDay}
+              avgDayPnL={avgDayPnL}
+              profitableDays={profitableDays}
+              losingDays={losingDays}
+              breakevenDays={breakevenDays}
+              formatValue={formatValue}
+            />
+          ) : null}
 
-          <section className="watchlist-panel glass journal-v2-panel">
-            <div className="section-header">
-              <h2>Today's Notes</h2>
-            </div>
-            <div className="journal-v2-notes-list">
-              {todayNotes.length ? todayNotes.map((entry) => (
-                <div key={`note-${entry.id}`} className="journal-v2-note-row">
-                  <span>{new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                  <div>
-                    <strong>{entry.strategy || entry.symbol || "Note"}</strong>
-                    <p>{entry.postReview || entry.preThesis || "No note content yet."}</p>
-                  </div>
-                </div>
-              )) : (
-                <div className="empty-state">No notes yet today.</div>
-              )}
-            </div>
-            <button className="pagination-button">+ Add Note</button>
-          </section>
+          {journalView === "analytics" ? (
+            <JournalAnalyticsView
+              analytics={analytics}
+              winLossOptions={winLossOptions}
+              winLossSeries={winLossSeries}
+              winnersCount={winnersCount}
+              losersCount={losersCount}
+              breakevenCount={breakevenCount}
+              weeklyMonthlyReview={weeklyMonthlyReview}
+              assetPnlRows={assetPnlRows}
+              setupPnlRows={setupPnlRows}
+              tradeLogRows={tradeLogRows}
+              onToast={notify}
+              formatValue={formatValue}
+            />
+          ) : null}
+
+          {journalView === "review" ? (
+            <JournalReviewView
+              analytics={analytics}
+              weeklyMonthlyReview={weeklyMonthlyReview}
+              mistakeRows={mistakeRows}
+              setupPnlRows={setupPnlRows}
+              reviewNote={reviewNote}
+              setReviewNote={setReviewNote}
+              onToast={notify}
+              formatValue={formatValue}
+            />
+          ) : null}
+        </main>
+
+        <aside className="journal-quick-column" ref={quickEntryRef} tabIndex={-1}>
+          <JournalQuickEntryPanel
+            entryDraft={entryDraft}
+            setEntryDraft={setEntryDraft}
+            entryErrors={entryErrors}
+            saveStatus={saveStatus}
+            confidenceDots={confidenceDots}
+            editingEntryId={editingEntryId}
+            onSave={addJournalEntry}
+            todayNotes={todayNotes}
+          />
         </aside>
       </div>
+
+      <button type="button" className="journal-mobile-new-entry" onClick={openNewEntry}>
+        + New Entry
+      </button>
+
+      <JournalQuickEntryDrawer
+        open={isQuickEntryOpen}
+        onClose={() => setIsQuickEntryOpen(false)}
+        entryDraft={entryDraft}
+        setEntryDraft={setEntryDraft}
+        entryErrors={entryErrors}
+        saveStatus={saveStatus}
+        confidenceDots={confidenceDots}
+        editingEntryId={editingEntryId}
+        onSave={addJournalEntry}
+      />
+
+      <TradeDetailDrawer
+        open={isEntryDrawerOpen}
+        entry={selectedEntry}
+        drawerRef={drawerRef}
+        onClose={() => setIsEntryDrawerOpen(false)}
+        onEdit={(entry) => {
+          if (entry?.entry) {
+            setEditingEntryId(entry.entry.id);
+            setEntryDraft((prev) => ({ ...prev, ...entry.entry }));
+            setIsEntryDrawerOpen(false);
+            openNewEntry();
+          }
+        }}
+        onDuplicate={(entry) => {
+          if (entry?.entry) {
+            setEntryDraft((prev) => ({ ...prev, ...entry.entry, symbol: entry.symbol, side: entry.side, strategy: entry.setup }));
+            setIsEntryDrawerOpen(false);
+            openNewEntry();
+          }
+        }}
+        onDelete={(entry) => {
+          if (!entry?.entry?.id) return;
+          if (window.confirm("Delete this journal entry?")) {
+            setJournalEntries((prev) => prev.filter((item) => item.id !== entry.entry.id));
+            setIsEntryDrawerOpen(false);
+            notify("Entry deleted.", "success");
+          }
+        }}
+        formatValue={formatValue}
+      />
+    </div>
+  );
+}
+
+function JournalToast({ toast }) {
+  if (!toast) return null;
+  return <div className={`journal-toast ${toast.tone || "info"}`} role="status">{toast.message}</div>;
+}
+
+function JournalHeader({ search, onSearch, onNewEntry, exportMenuOpen, setExportMenuOpen, exportMenuRef, onExportChoice }) {
+  return (
+    <header className="journal-header">
+      <div>
+        <div className="journal-eyebrow">Journal</div>
+        <h2>Journal</h2>
+        <p>Track trades, review performance, and turn repeat patterns into better decisions.</p>
+      </div>
+      <div className="journal-header-actions">
+        <label className="journal-search">
+          <span aria-hidden="true">⌕</span>
+          <input
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            placeholder="Search symbol, setup, notes..."
+            aria-label="Search journal entries"
+          />
+        </label>
+        <div className="journal-export-wrap" ref={exportMenuRef}>
+          <button type="button" className="journal-btn secondary" onClick={() => setExportMenuOpen((value) => !value)}>
+            Export
+          </button>
+          {exportMenuOpen ? (
+            <div className="journal-export-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => onExportChoice("entries")}>Export entries CSV</button>
+              <button type="button" role="menuitem" onClick={() => onExportChoice("analytics")}>Export analytics report</button>
+              <button type="button" role="menuitem" onClick={() => onExportChoice("review")}>Export review summary</button>
+            </div>
+          ) : null}
+        </div>
+        <button type="button" className="journal-btn primary" onClick={onNewEntry}>
+          <span aria-hidden="true">+</span> New Entry
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function JournalStatsGrid({ stats }) {
+  return (
+    <section className="journal-stats-grid-v3" aria-label="Journal statistics">
+      {stats.map((stat) => (
+        <article key={stat.label} className={`journal-stat-card-v3 ${stat.tone}`}>
+          <div className="journal-stat-top">
+            <span className="journal-stat-icon">{stat.icon}</span>
+            <span className="journal-stat-spark" aria-hidden="true" />
+          </div>
+          <span className="journal-card-label">{stat.label}</span>
+          <strong>{stat.value}</strong>
+          <em>{stat.delta}</em>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function JournalTabNav({ activeTab, onChange }) {
+  const tabs = [
+    ["entries", "Entries", "trade log and filters"],
+    ["calendar", "Calendar", "daily P&L heatmap"],
+    ["analytics", "Analytics", "performance patterns"],
+    ["review", "Review", "lessons and improvement plan"]
+  ];
+  return (
+    <nav className="journal-tab-nav" aria-label="Journal views">
+      {tabs.map(([key, label, description]) => (
+        <button
+          key={key}
+          type="button"
+          className={activeTab === key ? "active" : ""}
+          aria-selected={activeTab === key}
+          aria-current={activeTab === key ? "page" : undefined}
+          title={description}
+          onClick={() => onChange(key)}
+        >
+          <span>{label}</span>
+          <small>{description}</small>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function JournalEntriesView({
+  rows,
+  totalRows,
+  filters,
+  setFilters,
+  showMoreFilters,
+  setShowMoreFilters,
+  symbolOptions,
+  setupOptions,
+  regimeOptions,
+  selectedSymbols,
+  setSelectedSymbols,
+  onReset,
+  onNewEntry,
+  onOpenDetail,
+  formatValue
+}) {
+  return (
+    <section className="journal-card journal-entries-view">
+      <JournalFilters
+        filters={filters}
+        setFilters={setFilters}
+        showMoreFilters={showMoreFilters}
+        setShowMoreFilters={setShowMoreFilters}
+        symbolOptions={symbolOptions}
+        setupOptions={setupOptions}
+        regimeOptions={regimeOptions}
+        selectedSymbols={selectedSymbols}
+        setSelectedSymbols={setSelectedSymbols}
+        onReset={onReset}
+      />
+      {rows.length ? (
+        <>
+          <JournalEntriesTable rows={rows} onOpenDetail={onOpenDetail} formatValue={formatValue} />
+          <div className="journal-table-footer">
+            <span>Showing 1-{rows.length} of {totalRows} entries</span>
+            <div>
+              <button type="button" className="journal-btn secondary">Prev</button>
+              <button type="button" className="journal-btn secondary">Next</button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <JournalEmptyState title="No journal entries found" description="Try adjusting your filters or create a new journal entry." cta="New Entry" onAction={onNewEntry} />
+      )}
+    </section>
+  );
+}
+
+function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilters, symbolOptions, setupOptions, regimeOptions, selectedSymbols, setSelectedSymbols, onReset }) {
+  return (
+    <div className="journal-filter-toolbar">
+      <button type="button" className="journal-filter-pill active">All Entries</button>
+      <button type="button" className="journal-filter-pill">Last 30D</button>
+      <label>
+        <span>Symbol</span>
+        <select value={selectedSymbols[0] || ""} onChange={(event) => setSelectedSymbols(event.target.value ? [event.target.value] : [])}>
+          <option value="">All Symbols</option>
+          {symbolOptions.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Setup</span>
+        <select value={filters.strategy} onChange={(event) => setFilters((prev) => ({ ...prev, strategy: event.target.value }))}>
+          <option value="all">All Setups</option>
+          {setupOptions.map((setup) => <option key={setup} value={setup.toLowerCase()}>{setup}</option>)}
+        </select>
+      </label>
+      <button type="button" className="journal-btn secondary more-filters" onClick={() => setShowMoreFilters((value) => !value)}>
+        More Filters
+      </button>
+      <div className={`journal-secondary-filters ${showMoreFilters ? "open" : ""}`}>
+        <label>
+          <span>Regime</span>
+          <select value={filters.regime} onChange={(event) => setFilters((prev) => ({ ...prev, regime: event.target.value }))}>
+            <option value="all">All Regimes</option>
+            {regimeOptions.map((regime) => <option key={regime} value={regime.toLowerCase()}>{regime}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Side</span>
+          <select value={filters.side} onChange={(event) => setFilters((prev) => ({ ...prev, side: event.target.value }))}>
+            <option value="all">All</option>
+            <option value="buy">Buy</option>
+            <option value="sell">Sell</option>
+          </select>
+        </label>
+        <label>
+          <span>Status</span>
+          <select value={filters.status} onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}>
+            <option value="all">All</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+            <option value="review">Review</option>
+          </select>
+        </label>
+        <button type="button" className="journal-btn secondary" onClick={onReset}>Reset</button>
+      </div>
+    </div>
+  );
+}
+
+function JournalEntriesTable({ rows, onOpenDetail, formatValue }) {
+  return (
+    <>
+      <div className="journal-table-wrap">
+        <table className="journal-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Date</th>
+              <th>Setup</th>
+              <th>Side</th>
+              <th>Regime</th>
+              <th>Confidence</th>
+              <th>Status</th>
+              <th className="numeric">P&L</th>
+              <th>Notes</th>
+              <th className="numeric">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id} onClick={() => onOpenDetail(row)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" ? onOpenDetail(row) : null}>
+                <td><JournalSymbolCell row={row} /></td>
+                <td>{row.date}</td>
+                <td>{row.setup}</td>
+                <td><JournalSideChip side={row.side} /></td>
+                <td>{row.regime}</td>
+                <td><ConfidenceDots value={row.confidence} /></td>
+                <td><JournalStatusPill status={row.status} /></td>
+                <td className={`numeric ${Number(row.pnl) >= 0 ? "positive" : "negative"}`}>{Number(row.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(row.pnl), true)}</td>
+                <td><span className="journal-notes-count" aria-label={`${row.notesCount} notes`}>▣ {row.notesCount}</span></td>
+                <td className="numeric"><button type="button" className="journal-kebab" aria-label={`Open actions for ${row.symbol}`}>⋯</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="journal-entry-card-list">
+        {rows.map((row) => (
+          <JournalEntryCard key={`card-${row.id}`} row={row} onOpenDetail={onOpenDetail} formatValue={formatValue} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function JournalEntryCard({ row, onOpenDetail, formatValue }) {
+  return (
+    <button type="button" className="journal-entry-card" onClick={() => onOpenDetail(row)}>
+      <div>
+        <JournalSymbolCell row={row} />
+        <span className="journal-entry-card-date">{row.date}</span>
+      </div>
+      <div className="journal-entry-card-meta">
+        <JournalSideChip side={row.side} />
+        <JournalStatusPill status={row.status} />
+        <span>{row.setup}</span>
+      </div>
+      <div className={Number(row.pnl) >= 0 ? "positive" : "negative"}>
+        {Number(row.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(row.pnl), true)} · {row.notesCount} notes
+      </div>
+    </button>
+  );
+}
+
+function JournalSymbolCell({ row }) {
+  return (
+    <div className="journal-symbol-cell">
+      <span>{String(row.symbol || "A")[0]}</span>
+      <div>
+        <strong>{row.symbol}</strong>
+        <small>{row.assetType || "Spot"}</small>
+      </div>
+    </div>
+  );
+}
+
+function JournalSideChip({ side }) {
+  const normalized = String(side || "").toUpperCase() === "SELL" ? "sell" : "buy";
+  return <span className={`journal-chip ${normalized}`}>{normalized === "buy" ? "+ BUY" : "- SELL"}</span>;
+}
+
+function JournalStatusPill({ status }) {
+  const normalized = String(status || "Closed").toLowerCase();
+  const tone = normalized.includes("open") ? "open" : normalized.includes("review") ? "review" : "closed";
+  return <span className={`journal-chip status ${tone}`}>{status || "Closed"}</span>;
+}
+
+function ConfidenceDots({ value }) {
+  const count = Math.max(1, Math.min(5, Number(value) || 1));
+  return <span className="journal-confidence" aria-label={`Confidence ${count} of 5`}>{"●".repeat(count)}{"○".repeat(5 - count)}</span>;
+}
+
+function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendarCells, selectedDay, selectedDayTrades, onSelectDay, onMoveMonth, selectedSymbol, setSelectedSymbols, symbolOptions, monthPnL, bestDay, worstDay, avgDayPnL, profitableDays, losingDays, breakevenDays, formatValue }) {
+  const summary = [
+    ["Month P&L", monthPnL, monthPnL >= 0 ? "positive" : "negative", true],
+    ["Best Day", bestDay, "positive", true],
+    ["Worst Day", worstDay, "negative", true],
+    ["Avg Daily P&L", avgDayPnL, "neutral", true],
+    ["Profitable Days", profitableDays, "neutral", false],
+    ["Losing Days", losingDays, "neutral", false],
+    ["Breakeven Days", breakevenDays, "neutral", false]
+  ];
+  return (
+    <section className="journal-card journal-calendar-view">
+      <div className="journal-section-head">
+        <div>
+          <h3>Daily P&L Heatmap</h3>
+          <p>{monthDateRangeLabel}</p>
+        </div>
+        <div className="journal-inline-actions">
+          <button type="button" className="journal-btn secondary" onClick={() => onMoveMonth(-1)}>Prev</button>
+          <strong>{calendarMonthLabel}</strong>
+          <button type="button" className="journal-btn secondary" onClick={() => onMoveMonth(1)}>Next</button>
+          <select value={selectedSymbol} onChange={(event) => setSelectedSymbols(event.target.value ? [event.target.value] : [])}>
+            <option value="">All Assets</option>
+            {symbolOptions.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+          </select>
+          <select defaultValue="pnl" aria-label="Calendar metric">
+            <option value="pnl">P&L</option>
+            <option value="trades">Trades</option>
+            <option value="winRate">Win Rate</option>
+            <option value="mistakes">Mistakes</option>
+          </select>
+        </div>
+      </div>
+      <div className="journal-calendar-layout">
+        <div>
+          <div className="journal-week-header">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="journal-heat-grid">
+            {calendarCells.map((cell) => {
+              if (cell.type === "blank") return <div key={cell.key} className="journal-heat-cell blank" />;
+              const pnl = Number(cell.pnl || 0);
+              const tone = pnl > 300 ? "large-gain" : pnl > 0 ? "small-gain" : pnl < -300 ? "large-loss" : pnl < 0 ? "small-loss" : "neutral";
+              return (
+                <button
+                  key={cell.key}
+                  type="button"
+                  className={`journal-heat-cell ${tone} ${selectedDay?.key === cell.key ? "selected" : ""}`}
+                  title={`${cell.key} · ${formatValue(pnl, true)}`}
+                  onClick={() => onSelectDay(cell)}
+                >
+                  <span>{cell.dayNum}</span>
+                  {cell.pnl != null ? <strong>{pnl >= 0 ? "+" : "-"}{formatValue(Math.abs(pnl), true)}</strong> : <small>No trades</small>}
+                </button>
+              );
+            })}
+          </div>
+          <div className="journal-heat-legend">
+            {["Large loss", "Small loss", "No trades", "Small gain", "Large gain"].map((item) => <span key={item}>{item}</span>)}
+          </div>
+        </div>
+        <aside className="journal-selected-day">
+          <h3>{selectedDay?.key || "Selected Day"}</h3>
+          <strong className={Number(selectedDay?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatValue(selectedDay?.pnl || 0, true)}</strong>
+          <p>{selectedDayTrades.length} trades · {selectedDayTrades.filter((row) => Number(row.pnl) > 0).length} winners / {selectedDayTrades.filter((row) => Number(row.pnl) < 0).length} losers</p>
+          <button type="button" className="journal-btn primary">View trades from this day</button>
+        </aside>
+      </div>
+      <div className="journal-month-summary">
+        {summary.map(([label, value, tone, isCurrency]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong className={tone}>{isCurrency ? formatValue(value, true) : value}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winnersCount, losersCount, breakevenCount, weeklyMonthlyReview, assetPnlRows, setupPnlRows, tradeLogRows, onToast, formatValue }) {
+  const maxAbs = Math.max(1, ...assetPnlRows.map((row) => Math.abs(Number(row.pnl || 0))));
+  return (
+    <section className="journal-analytics-grid">
+      <div className="journal-card journal-performance-card">
+        <div className="journal-section-head"><h3>Performance Overview</h3><button type="button" className="journal-btn secondary">Summary</button></div>
+        <div className="journal-donut-row">
+          <Chart options={winLossOptions} series={winLossSeries.some((v) => v > 0) ? winLossSeries : [1, 1]} type="donut" height={190} />
+          <div className="journal-overview-list">
+            <div><span>Winners</span><strong>{winnersCount}</strong></div>
+            <div><span>Losers</span><strong>{losersCount}</strong></div>
+            <div><span>Breakeven</span><strong>{breakevenCount}</strong></div>
+            <div><span>Profit Factor</span><strong>{weeklyMonthlyReview.monthly.profitFactor.toFixed(2)}</strong></div>
+            <div><span>Expectancy</span><strong>{formatValue(analytics.tradeExpectancy, true)}</strong></div>
+          </div>
+        </div>
+      </div>
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>P&L by Asset Class</h3><button type="button" className="journal-btn secondary" onClick={() => onToast("Export is being prepared.", "info")}>Export analytics</button></div>
+        <div className="journal-bar-list">
+          {assetPnlRows.map((row) => (
+            <div key={row.name}>
+              <span>{row.name} · {row.count} trades</span>
+              <div><i className={Number(row.pnl) >= 0 ? "positive" : "negative"} style={{ width: `${Math.max(8, Math.abs(Number(row.pnl || 0)) / maxAbs * 100)}%` }} /></div>
+              <strong className={Number(row.pnl) >= 0 ? "positive" : "negative"}>{formatValue(row.pnl, true)}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>P&L by Setup</h3></div>
+        <div className="journal-compact-table">
+          {setupPnlRows.map((row) => (
+            <div key={row.setup}>
+              <span>{row.setup}</span>
+              <span>{row.trades} trades</span>
+              <span>{row.trades ? ((row.wins / row.trades) * 100).toFixed(0) : 0}% win</span>
+              <strong className={row.pnl >= 0 ? "positive" : "negative"}>{formatValue(row.pnl, true)}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>Emotion / Behavior</h3></div>
+        <div className="journal-behavior-grid">
+          <div><span>Best emotion state</span><strong>Disciplined</strong></div>
+          <div><span>Worst emotion state</span><strong>FOMO</strong></div>
+          <div><span>Avg confidence</span><strong>{tradeLogRows.length ? (tradeLogRows.reduce((sum, row) => sum + Number(row.confidence || 0), 0) / tradeLogRows.length).toFixed(1) : "0.0"}/5</strong></div>
+          <div><span>Mistake frequency</span><strong>{Math.min(100, Math.round((analytics.losses / Math.max(1, analytics.totalTrades)) * 100))}%</strong></div>
+        </div>
+      </div>
+      <div className="journal-card journal-insight-card">
+        <span>What this means</span>
+        <p>Your strongest results came from momentum setups with high confidence. Losses are concentrated in options trades taken during volatile regimes.</p>
+        <div className="journal-inline-actions">
+          <button type="button" className="journal-btn primary" onClick={() => onToast("Journal entry saved.", "success")}>Save insight to Journal</button>
+          <button type="button" className="journal-btn secondary" onClick={() => onToast("Export is being prepared.", "info")}>Export analytics</button>
+          <button type="button" className="journal-btn secondary">Create review task</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, setReviewNote, onToast, formatValue }) {
+  const bestSetup = [...setupPnlRows].sort((a, b) => Number(b.pnl) - Number(a.pnl))[0]?.setup || "Momentum";
+  return (
+    <section className="journal-review-grid">
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>Review Summary</h3><span>Last 30D</span></div>
+        <div className="journal-review-summary">
+          <div><span>Total trades</span><strong>{analytics.totalTrades}</strong></div>
+          <div><span>Net P&L</span><strong className={analytics.totalGainLoss >= 0 ? "positive" : "negative"}>{formatValue(analytics.totalGainLoss, true)}</strong></div>
+          <div><span>Win rate</span><strong>{analytics.winRate.toFixed(1)}%</strong></div>
+          <div><span>Largest mistake</span><strong>{mistakeRows[0]?.mistake}</strong></div>
+          <div><span>Best setup</span><strong>{bestSetup}</strong></div>
+        </div>
+      </div>
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>Lessons Learned</h3></div>
+        <div className="journal-lesson-grid">
+          <div><strong>What worked</strong><p>High-confidence momentum setups with clean invalidation.</p></div>
+          <div><strong>What did not work</strong><p>Low-quality entries during volatile regimes.</p></div>
+          <div><strong>What to repeat</strong><p>Wait for confirmation and scale around planned levels.</p></div>
+          <div><strong>What to avoid</strong><p>Trades without clear risk or post-trade review notes.</p></div>
+        </div>
+      </div>
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>Mistake Tracker</h3></div>
+        <div className="journal-compact-table">
+          {mistakeRows.map((row) => (
+            <div key={row.mistake}>
+              <span>{row.mistake}</span>
+              <span>{row.count}x</span>
+              <strong className="negative">{formatValue(row.cost, true)}</strong>
+              <span>{row.action}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="journal-card">
+        <div className="journal-section-head"><h3>Rule Adherence</h3></div>
+        <JournalProgress label="Followed plan" value={68} tone="positive" />
+        <JournalProgress label="Broke rules" value={21} tone="negative" />
+        <JournalProgress label="No plan" value={11} tone="warning" />
+      </div>
+      <div className="journal-card journal-weekly-review">
+        <label>
+          <span>Weekly Review Notes</span>
+          <textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="What is the one behavior you want to improve next week?" />
+        </label>
+        <div className="journal-inline-actions">
+          <button type="button" className="journal-btn primary" onClick={() => onToast("Review saved.", "success")}>Save Review</button>
+          <button type="button" className="journal-btn secondary" onClick={() => onToast("Export is being prepared.", "info")}>Export Review</button>
+          <button type="button" className="journal-btn secondary" onClick={() => onToast("Journal entry saved.", "success")}>Add to Journal</button>
+        </div>
+      </div>
+      <div className="journal-action-plan">
+        {[
+          ["Repeat", "High-confidence momentum setups"],
+          ["Reduce", "Low-quality options entries"],
+          ["Avoid", "Trades without clear invalidation"]
+        ].map(([label, text]) => (
+          <div key={label} className="journal-card"><span>{label}</span><strong>{text}</strong></div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function JournalProgress({ label, value, tone }) {
+  return (
+    <div className="journal-progress">
+      <div><span>{label}</span><strong>{value}%</strong></div>
+      <i><b className={tone} style={{ width: `${value}%` }} /></i>
+    </div>
+  );
+}
+
+function JournalQuickEntryPanel(props) {
+  return (
+    <div className="journal-card journal-quick-entry-card">
+      <div className="journal-section-head">
+        <div><h3>Quick Entry</h3><p>Log a trade in under a minute.</p></div>
+      </div>
+      <JournalQuickEntryForm {...props} />
+      <div className="journal-today-notes">
+        <h3>Today's Notes</h3>
+        {props.todayNotes?.length ? props.todayNotes.map((entry) => (
+          <div key={entry.id}>
+            <span>{new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            <strong>{entry.strategy || entry.symbol || "Note"}</strong>
+            <p>{entry.postReview || entry.preThesis || "No note content yet."}</p>
+          </div>
+        )) : <p>No notes yet today.</p>}
+      </div>
+    </div>
+  );
+}
+
+function JournalQuickEntryDrawer({ open, onClose, ...props }) {
+  if (!open) return null;
+  return (
+    <div className="journal-drawer-backdrop" onMouseDown={onClose}>
+      <aside className="journal-mobile-entry-drawer" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="New journal entry">
+        <div className="journal-drawer-head">
+          <div><h3>Quick Entry</h3><p>Log a trade in under a minute.</p></div>
+          <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close quick entry">×</button>
+        </div>
+        <JournalQuickEntryForm {...props} />
+      </aside>
+    </div>
+  );
+}
+
+function JournalQuickEntryForm({ entryDraft, setEntryDraft, entryErrors, saveStatus, confidenceDots, editingEntryId, onSave }) {
+  const requiredValid = String(entryDraft.symbol || "").trim() && String(entryDraft.strategy || "").trim() && String(entryDraft.side || "").trim();
+  const setField = (field, value) => setEntryDraft((prev) => ({ ...prev, [field]: value }));
+  return (
+    <form className="journal-quick-form" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
+      <JournalField label="Symbol" error={entryErrors.symbol}>
+        <input value={entryDraft.symbol} onChange={(event) => setField("symbol", event.target.value.toUpperCase())} aria-invalid={!!entryErrors.symbol} />
+      </JournalField>
+      <JournalField label="Strategy" error={entryErrors.strategy}>
+        <input value={entryDraft.strategy} onChange={(event) => setField("strategy", event.target.value)} aria-invalid={!!entryErrors.strategy} />
+      </JournalField>
+      <JournalField label="Setup Tag">
+        <input value={entryDraft.setupTag} onChange={(event) => setField("setupTag", event.target.value)} />
+      </JournalField>
+      <JournalField label="Side" error={entryErrors.side}>
+        <div className="journal-side-toggle">
+          <button type="button" className={entryDraft.side === "BUY" ? "buy active" : ""} onClick={() => setField("side", "BUY")}>Buy</button>
+          <button type="button" className={entryDraft.side === "SELL" ? "sell active" : ""} onClick={() => setField("side", "SELL")}>Sell</button>
+        </div>
+      </JournalField>
+      <JournalField label="Timeframe"><select value={entryDraft.timeframe} onChange={(event) => setField("timeframe", event.target.value)}><option value="intraday">Intraday</option><option value="swing">Swing</option><option value="position">Position</option></select></JournalField>
+      <JournalField label="Regime"><input value={entryDraft.marketRegime} onChange={(event) => setField("marketRegime", event.target.value)} /></JournalField>
+      <JournalField label="Emotion"><select value={entryDraft.emotion} onChange={(event) => setField("emotion", event.target.value)}><option value="neutral">Neutral</option><option value="confident">Confident</option><option value="fearful">Fearful</option><option value="fomo">FOMO</option><option value="disciplined">Disciplined</option></select></JournalField>
+      <JournalField label={`Confidence ${confidenceDots}/5`}>
+        <div className="journal-confidence-slider">
+          <span>Low</span>
+          <input aria-label="Confidence" type="range" min={1} max={5} step={1} value={confidenceDots} onChange={(event) => setField("confidence", Number(event.target.value))} />
+          <span>High</span>
+        </div>
+      </JournalField>
+      <JournalField label="Notes" wide><textarea rows={4} value={entryDraft.postReview} onChange={(event) => setField("postReview", event.target.value)} /></JournalField>
+      <JournalField label="Screenshot / Link" wide><input value={entryDraft.chartLink} onChange={(event) => setField("chartLink", event.target.value)} /></JournalField>
+      <button type="submit" className="journal-btn primary full" disabled={!requiredValid || saveStatus === "saving"}>
+        {saveStatus === "saving" ? "Saving..." : editingEntryId ? "Update Entry" : "Save Entry"}
+      </button>
+    </form>
+  );
+}
+
+function JournalField({ label, error, wide, children }) {
+  return (
+    <label className={wide ? "wide" : ""}>
+      <span>{label}</span>
+      {children}
+      {error ? <small className="journal-field-error">{error}</small> : null}
+    </label>
+  );
+}
+
+function TradeDetailDrawer({ open, entry, drawerRef, onClose, onEdit, onDuplicate, onDelete, formatValue }) {
+  if (!open || !entry) return null;
+  const summary = [
+    ["Strategy/setup", entry.setup],
+    ["Side", entry.side],
+    ["Size", entry.size],
+    ["Entry price", entry.entryPrice],
+    ["Exit price", entry.exitPrice || "—"],
+    ["Fees", entry.fees || "—"],
+    ["Holding time", entry.holdingTime]
+  ];
+  return (
+    <div className="journal-drawer-backdrop" onMouseDown={onClose}>
+      <aside className="journal-detail-drawer" ref={drawerRef} tabIndex={-1} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${entry.symbol} trade detail`}>
+        <div className="journal-drawer-head">
+          <div>
+            <span className="journal-card-label">{entry.assetType}</span>
+            <h3>{entry.symbol}</h3>
+            <p>{entry.date} · <JournalStatusPill status={entry.status} /></p>
+          </div>
+          <div>
+            <strong className={Number(entry.pnl) >= 0 ? "positive" : "negative"}>{Number(entry.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(entry.pnl), true)}</strong>
+            <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close trade detail">×</button>
+          </div>
+        </div>
+        <JournalDrawerSection title="Trade Summary" rows={summary} />
+        <JournalDrawerSection title="Context" rows={[["Regime", entry.regime], ["Timeframe", entry.entry?.timeframe || "—"], ["Market notes", entry.entry?.preThesis || "—"], ["Screenshot/link", entry.chartLink || "—"]]} />
+        <JournalDrawerSection title="Psychology" rows={[["Emotion", entry.emotion], ["Confidence", `${entry.confidence}/5`], ["Mistake tags", entry.mistakeCategory || "—"], ["Rule followed?", entry.mistakeCategory ? "No" : "Yes"]]} />
+        <JournalDrawerSection title="Review" rows={[["What went well?", entry.entry?.learned || "—"], ["What went wrong?", entry.mistakeCategory || "—"], ["Improve next time", entry.review || "—"]]} />
+        <div className="journal-drawer-actions">
+          <button type="button" className="journal-btn primary" onClick={() => onEdit(entry)}>Edit Entry</button>
+          <button type="button" className="journal-btn secondary" onClick={() => onDuplicate(entry)}>Duplicate</button>
+          <button type="button" className="journal-btn secondary">Add Review Note</button>
+          <button type="button" className="journal-btn danger" onClick={() => onDelete(entry)}>Delete</button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function JournalDrawerSection({ title, rows }) {
+  return (
+    <section className="journal-drawer-section">
+      <h4>{title}</h4>
+      {rows.map(([label, value]) => (
+        <div key={label}><span>{label}</span><strong>{value}</strong></div>
+      ))}
+    </section>
+  );
+}
+
+function JournalEmptyState({ title, description, cta, onAction }) {
+  return (
+    <div className="journal-empty-state">
+      <h3>{title}</h3>
+      <p>{description}</p>
+      {cta ? <button type="button" className="journal-btn primary" onClick={onAction}>{cta}</button> : null}
     </div>
   );
 }

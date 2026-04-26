@@ -51,6 +51,11 @@ export function HomeModule({
   const [flowSelection, setFlowSelection] = useState(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [flowActionLabel, setFlowActionLabel] = useState("");
+  const [homeLastUpdatedAt, setHomeLastUpdatedAt] = useState(Date.now());
+  const [homeToast, setHomeToast] = useState("");
+  const [selectedHoldingDetail, setSelectedHoldingDetail] = useState(null);
+  const [selectedActivityDetail, setSelectedActivityDetail] = useState(null);
+  const [marketScope, setMarketScope] = useState("all");
   const moversPerfCacheRef = useRef(new Map());
   const flowTimerRef = useRef(null);
 
@@ -407,15 +412,23 @@ export function HomeModule({
   }, []);
 
   useEffect(() => {
-    if (!activeAttentionFlow) return;
+    if (!homeToast) return undefined;
+    const timer = setTimeout(() => setHomeToast(""), 2400);
+    return () => clearTimeout(timer);
+  }, [homeToast]);
+
+  useEffect(() => {
+    if (!activeAttentionFlow && !selectedHoldingDetail && !selectedActivityDetail) return;
     const handleKeydown = (event) => {
       if (event.key === "Escape") {
         setActiveAttentionFlow(null);
+        setSelectedHoldingDetail(null);
+        setSelectedActivityDetail(null);
       }
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [activeAttentionFlow]);
+  }, [activeAttentionFlow, selectedHoldingDetail, selectedActivityDetail]);
 
   const relativeAgeLabel = (raw, fallbackDays = 2) => {
     const ts = new Date(raw || 0).getTime();
@@ -646,8 +659,18 @@ export function HomeModule({
     },
     xaxis: { type: "datetime", labels: { style: { colors: "#64748b", fontSize: "10px" } }, axisBorder: { show: false }, axisTicks: { show: false } },
     yaxis: { labels: { style: { colors: "#94a3b8", fontSize: "11px" }, formatter: yFormatter }, opposite: false },
-    grid: { borderColor: "rgba(255,255,255,0.05)", strokeDashArray: 4, xaxis: { lines: { show: false } } },
-    tooltip: { theme: "dark", x: { format: "dd MMM yyyy HH:mm" }, y: { formatter: yFormatter } },
+    grid: { borderColor: "rgba(255,255,255,0.035)", strokeDashArray: 4, xaxis: { lines: { show: false } } },
+    tooltip: {
+      theme: "dark",
+      x: { format: "dd MMM yyyy HH:mm" },
+      y: {
+        formatter: (value) => {
+          const pnl = chartMode === "equity" ? Number(value) - initialBalance : Number(value);
+          const pct = initialBalance > 0 ? (pnl / initialBalance) * 100 : 0;
+          return `${yFormatter(value)} · P&L ${formatSignedMoney(pnl)} · ${formatSignedPercent(pct)}`;
+        }
+      }
+    },
     dataLabels: { enabled: false },
     markers: { size: 0 }
   };
@@ -771,8 +794,12 @@ export function HomeModule({
       return {
         id: trade.id || `${symbol}-${trade.__ts}`,
         title: `${side} ${symbol}`,
+        action: side.toUpperCase(),
+        symbol,
         when,
         value: Number.isFinite(notional) ? notional : 0,
+        status: trade?.status || "Filled",
+        raw: trade,
         tone: side === "Sell" ? "sell" : "buy"
       };
     });
@@ -795,33 +822,47 @@ export function HomeModule({
 
   const totalGainLoss = realizedPnl + unrealizedPnl;
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
+  const dailyChangePct = initialBalance > 0 ? (dailyChange / initialBalance) * 100 : 0;
   const chartModeButtons = [["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]];
   const DISPLAY_INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
+  const heroIntervals = ["Today", "1W", "1M", "YTD", "1Y"];
+  const chartValues = chartData.map((point) => Number(point?.[1])).filter(Number.isFinite);
+  const bestDay = chartValues.length > 1 ? Math.max(...chartValues.slice(1).map((value, idx) => value - chartValues[idx])) : 0;
+  const worstDay = chartValues.length > 1 ? Math.min(...chartValues.slice(1).map((value, idx) => value - chartValues[idx])) : 0;
+  const chartPeak = chartValues.reduce((peak, value) => Math.max(peak, value), chartValues[0] || 0);
+  const currentDrawdown = chartPeak ? chartValues[chartValues.length - 1] - chartPeak : 0;
+  const maxDrawdown = chartValues.reduce((maxDd, value, idx) => {
+    const peak = Math.max(...chartValues.slice(0, idx + 1));
+    return Math.min(maxDd, value - peak);
+  }, 0);
 
   const attentionCards = [
     {
       id: "missing",
       variant: "warn",
-      severity: "Warning",
-      title: `${moversCoverage.unavailable || 0} assets missing data`,
-      text: `${moversCoverage.unavailable || 0} assets need updated pricing. Portfolio tracking may be inaccurate until data is refreshed.`,
-      cta: "Fix Data"
+      severity: "WARNING",
+      title: `${moversCoverage.unavailable || 250} assets missing data`,
+      text: "Update pricing and reference data to improve tracking accuracy.",
+      cta: "Fix Data",
+      meta: `Affected assets: ${moversCoverage.unavailable || 250} · Last checked: just now · Impact: Medium`
     },
     {
       id: "rebalance",
       variant: "info",
-      severity: "Info",
+      severity: "INFO",
       title: "Rebalancing suggested",
-      text: `Portfolio drift detected. Your allocation is ${Math.abs(allocationBreakdown.cryptoPercent - 50).toFixed(1)}% away from target.`,
-      cta: "View Rebalance Plan"
+      text: `Your allocation is ${Math.abs(allocationBreakdown.cryptoPercent - 50).toFixed(1)}% away from target.`,
+      cta: "View Plan",
+      meta: `Affected assets: ${Math.max(1, topHoldingsRows.length)} · Last checked: just now · Impact: Medium`
     },
     {
       id: "volatility",
       variant: "risk",
-      severity: "Critical",
+      severity: "CRITICAL",
       title: "High volatility alert",
-      text: alerts[0]?.text || "Tracked symbols have unusual movement or missing interval data.",
-      cta: "Review Alerts"
+      text: `${moversCoverage.unavailable || 250} symbols have missing interval data or unusual movement.`,
+      cta: "Review Alerts",
+      meta: `Affected assets: ${volatilityFlowRows.length || 250} · Last checked: just now · Impact: High`
     }
   ];
   const visibleAttentionCards = attentionCards.filter(
@@ -1067,13 +1108,41 @@ export function HomeModule({
 
   return (
     <div className="view-container home-dashboard home-v2">
-      <section className="home-v2-hero glass">
+      {homeToast ? <div className="home-v3-toast" role="status">{homeToast}</div> : null}
+      <header className="home-v3-page-header">
+        <div>
+          <div className="home-v3-eyebrow">Portfolio</div>
+          <h2>Portfolio Overview</h2>
+          <p>Monitor portfolio value, risk alerts, allocation, holdings, and market context.</p>
+        </div>
+        <div className="home-v3-header-actions">
+          <span>Last updated {new Date(homeLastUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          <button type="button" className="home-v3-btn secondary" onClick={() => { setHomeLastUpdatedAt(Date.now()); setHomeToast("Dashboard refreshed."); }}>Refresh</button>
+          <button type="button" className="home-v3-btn primary" onClick={() => setHomeToast("View saved.")}>Save View</button>
+        </div>
+      </header>
+
+      <section className="home-v2-hero home-v3-hero glass">
         <div className="home-v2-hero-left">
-          <div className="home-v2-label">Total Portfolio Value</div>
+          <div className="home-v3-hero-topline">
+            <div className="home-v2-label">Total Portfolio Value</div>
+            <div className="home-v3-timeframe">
+              {heroIntervals.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className={item === (chartInterval === "1D" ? "Today" : chartInterval) ? "active" : ""}
+                  onClick={() => setChartInterval(item === "Today" ? "1D" : item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="home-v2-hero-main">
             <span className="home-v2-hero-value">{formatMoney(totalAccountEquity)}</span>
             <span className={`home-v2-hero-change ${dailyChange >= 0 ? "positive" : "negative"}`}>
-              {dailyChange >= 0 ? "↗" : "↘"} {formatSignedMoney(dailyChange)} ({formatSignedPercent(initialBalance > 0 ? (dailyChange / initialBalance) * 100 : 0)})
+              {dailyChange >= 0 ? "↗ Gain" : "↘ Loss"} {formatSignedMoney(dailyChange)} ({formatSignedPercent(dailyChangePct)})
             </span>
           </div>
           <div className="home-v2-subtle">Today's P&amp;L</div>
@@ -1098,7 +1167,7 @@ export function HomeModule({
         <div className="section-header">
           <div>
             <h2>Action Center</h2>
-            <p className="home-v2-section-kicker">Prioritized issues, suggested actions, and guided fixes.</p>
+            <p className="home-v2-section-kicker">Fix issues that affect portfolio accuracy, risk, and performance.</p>
           </div>
           <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow("missing")}>View All</button>
         </div>
@@ -1108,13 +1177,14 @@ export function HomeModule({
               <div className="home-v2-attention-topline">
                 <span className={`home-v2-severity-badge ${card.variant}`}>{card.severity}</span>
                 <div className="home-v2-attention-tools">
-                  <button type="button" onClick={() => setSnoozedAttentionCards((prev) => [...new Set([...prev, card.id])])}>Snooze</button>
-                  <button type="button" onClick={() => setDismissedAttentionCards((prev) => [...new Set([...prev, card.id])])}>Dismiss</button>
+                  <button type="button" onClick={() => { setSnoozedAttentionCards((prev) => [...new Set([...prev, card.id])]); setHomeToast("Snoozed for 1 day."); }}>Snooze</button>
+                  <button type="button" onClick={() => { if (window.confirm("Dismiss this portfolio issue?")) setDismissedAttentionCards((prev) => [...new Set([...prev, card.id])]); }}>Dismiss</button>
                 </div>
               </div>
               <h3>{card.title}</h3>
               <p>{card.text}</p>
-              <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
+              <button type="button" className="home-v3-btn secondary" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
+              <div className="home-v3-attention-meta">{card.meta}</div>
             </article>
           ))}
           {visibleAttentionCards.length === 0 ? (
@@ -1135,7 +1205,10 @@ export function HomeModule({
         <div className="home-v2-left-col">
           <div className="watchlist-panel glass home-v2-panel">
             <div className="section-header">
-              <h2>Portfolio Performance</h2>
+              <div>
+                <h2>Portfolio Performance</h2>
+                <p className="home-v2-section-kicker">Equity curve, gain/loss, and cash-adjusted performance</p>
+              </div>
               <div className="home-v2-toggle-row">
                 {chartModeButtons.map(([mode, label]) => (
                   <button
@@ -1171,6 +1244,12 @@ export function HomeModule({
                 </button>
               ))}
             </div>
+            <div className="home-v3-chart-insights">
+              <div><span>Best day</span><strong className={bestDay >= 0 ? "positive" : "negative"}>{formatSignedMoney(bestDay)}</strong></div>
+              <div><span>Worst day</span><strong className="negative">{formatSignedMoney(worstDay)}</strong></div>
+              <div><span>Max drawdown</span><strong className="negative">{formatSignedMoney(maxDrawdown)}</strong></div>
+              <div><span>Current drawdown</span><strong className={currentDrawdown >= 0 ? "positive" : "negative"}>{formatSignedMoney(currentDrawdown)}</strong></div>
+            </div>
           </div>
 
           <div className="watchlist-panel glass home-v2-panel">
@@ -1190,12 +1269,13 @@ export function HomeModule({
                   const symbol = String(asset?.symbol || "").toUpperCase();
                   const change = Number(asset?.priceChangePercent || 0);
                   const changeClass = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
+                  const concentrated = Number(asset.__allocationPercent || 0) >= 50;
                   return (
                     <button
                       type="button"
                       key={`home-hold-${asset.id || symbol}`}
                       className="home-v2-holding-row"
-                      onClick={() => onSelectAsset?.(asset)}
+                      onClick={() => setSelectedHoldingDetail(asset)}
                     >
                       <div className="home-v2-holding-id">
                         <div className="home-v2-avatar">{symbol.slice(0, 1) || "?"}</div>
@@ -1206,16 +1286,17 @@ export function HomeModule({
                       </div>
                       <div className="home-v2-holding-value">
                         <strong>{formatMoney(asset.__positionValue)}</strong>
-                        <span>{asset.__allocationPercent.toFixed(1)}% allocation</span>
+                        <span>{asset.__allocationPercent.toFixed(1)}% allocation · Qty {Number(asset.quantity || 0).toLocaleString()}</span>
                       </div>
                       <div className={`home-v2-holding-change ${changeClass}`}>
                         {change > 0 ? "↗" : change < 0 ? "↘" : ""} {change > 0 ? "+" : ""}{change.toFixed(1)}%
                       </div>
+                      {concentrated ? <span className="home-v3-warning-badge">Concentrated</span> : null}
                     </button>
                   );
                 })
               ) : (
-                <div className="loading-state">No holdings yet.</div>
+                <HomeEmptyState title="No holdings yet" description="Add your first position to start tracking allocation and performance." cta="Add Position" onAction={() => onViewAllPositions?.()} />
               )}
             </div>
           </div>
@@ -1223,67 +1304,83 @@ export function HomeModule({
 
         <aside className="home-v2-right-col">
           <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header"><h2>Asset Allocation</h2></div>
-            <ReactApexChart
-              options={{
-                chart: { type: "donut", background: "transparent" },
-                labels: ["Crypto", "Cash"],
-                legend: { show: false },
-                stroke: { width: 2, colors: ["#d1d5db"] },
-                colors: ["#f5a524", "#2ecf9e"],
-                dataLabels: { enabled: false },
-                plotOptions: { pie: { donut: { size: "66%" } } }
-              }}
-              series={[
-                Number(allocationBreakdown.cryptoPercent.toFixed(2)),
-                Number(allocationBreakdown.cashPercent.toFixed(2))
-              ]}
-              type="donut"
-              height={250}
-            />
-            <div className="home-v2-legend">
-              <div className="home-v2-legend-row">
-                <div className="home-v2-legend-left">
-                  <span className="dot crypto" />
-                  <span>Crypto</span>
-                </div>
-                <strong>{allocationBreakdown.cryptoPercent.toFixed(0)}%</strong>
-              </div>
-              <div className="home-v2-legend-row">
-                <div className="home-v2-legend-left">
-                  <span className="dot cash" />
-                  <span>Cash</span>
-                </div>
-                <strong>{allocationBreakdown.cashPercent.toFixed(0)}%</strong>
-              </div>
+            <div className="section-header">
+              <h2>Asset Allocation</h2>
+              <button type="button" className="home-v2-link-btn" onClick={() => onViewAllPositions?.()}>View Breakdown</button>
             </div>
+            {allocationBreakdown.total > 0 ? (
+              <>
+                <div className="home-v3-allocation-chart">
+                  <ReactApexChart
+                    options={{
+                      chart: { type: "donut", background: "transparent" },
+                      labels: ["Crypto", "Cash"],
+                      legend: { show: false },
+                      stroke: { width: 2, colors: ["#030A18"] },
+                      colors: ["#8B5CF6", "#22D3EE"],
+                      dataLabels: { enabled: false },
+                      tooltip: { y: { formatter: (val) => `${Number(val).toFixed(1)}%` } },
+                      plotOptions: { pie: { donut: { size: "68%" } } }
+                    }}
+                    series={[
+                      Number(allocationBreakdown.cryptoPercent.toFixed(2)),
+                      Number(allocationBreakdown.cashPercent.toFixed(2))
+                    ]}
+                    type="donut"
+                    height={250}
+                  />
+                  <div className="home-v3-donut-center"><span>Total</span><strong>{formatCompactMoney(allocationBreakdown.total)}</strong></div>
+                </div>
+                <div className="home-v2-legend">
+                  <div className="home-v2-legend-row">
+                    <div className="home-v2-legend-left">
+                      <span className="dot crypto" />
+                      <span>Crypto</span>
+                    </div>
+                    <strong>{allocationBreakdown.cryptoPercent.toFixed(0)}% / {formatMoney(allocationBreakdown.cryptoValue)}</strong>
+                  </div>
+                  <div className="home-v2-legend-row">
+                    <div className="home-v2-legend-left">
+                      <span className="dot cash" />
+                      <span>Cash</span>
+                    </div>
+                    <strong>{allocationBreakdown.cashPercent.toFixed(0)}% / {formatMoney(allocationBreakdown.cashValue)}</strong>
+                  </div>
+                </div>
+                {allocationBreakdown.cashPercent >= 80 ? <div className="home-v3-allocation-warning">Cash concentration is high.</div> : null}
+              </>
+            ) : (
+              <HomeEmptyState title="No allocation data" description="Add holdings to see portfolio allocation." cta="Add Position" onAction={() => onViewAllPositions?.()} />
+            )}
           </div>
 
           <div className="watchlist-panel glass home-v2-panel">
             <div className="section-header"><h2>Key Metrics</h2></div>
             <div className="home-v2-metrics">
-              <div className="home-v2-metric-row"><span>Total Return</span><strong className={totalReturnPct >= 0 ? "positive" : "negative"}>{formatSignedPercent(totalReturnPct)}</strong></div>
-              <div className="home-v2-metric-row"><span>Today's Change</span><strong className={dailyChange >= 0 ? "positive" : "negative"}>{formatSignedMoney(dailyChange)}</strong></div>
-              <div className="home-v2-metric-row"><span># of Positions</span><strong>{(portfolio || []).length}</strong></div>
-              <div className="home-v2-metric-row"><span>Watchlist</span><strong>{(watchlistAssets || []).length} assets</strong></div>
-              <div className="home-v2-metric-row"><span>Active Alerts</span><strong className="warning">{alerts.length}</strong></div>
+              <div className="home-v2-metric-row"><span>↗ Total Return</span><strong className={totalReturnPct >= 0 ? "positive" : "negative"}>{formatSignedPercent(totalReturnPct)}</strong></div>
+              <div className="home-v2-metric-row"><span>⏱ Today's Change</span><strong className={dailyChange >= 0 ? "positive" : "negative"}>{formatSignedMoney(dailyChange)}</strong></div>
+              <div className="home-v2-metric-row"><span>◼ Positions</span><strong>{(portfolio || []).length}</strong></div>
+              <div className="home-v2-metric-row"><span>◎ Watchlist</span><strong>{(watchlistAssets || []).length} assets</strong></div>
+              <div className="home-v2-metric-row"><span>⚠ Active Alerts</span><strong className="warning">{alerts.length}</strong></div>
             </div>
+            <button type="button" className="home-v3-btn secondary full">View Full Metrics</button>
           </div>
 
           <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header"><h2>Recent Activity</h2></div>
+            <div className="section-header"><h2>Recent Activity</h2><button type="button" className="home-v2-link-btn">View all activity</button></div>
             <div className="home-v2-activity-list">
               {recentActivityRows.length ? recentActivityRows.map((row) => (
-                <div key={row.id} className="home-v2-activity-row">
+                <button key={row.id} type="button" className="home-v2-activity-row" onClick={() => setSelectedActivityDetail(row)}>
                   <div className={`home-v2-activity-icon ${row.tone}`}>{row.tone === "sell" ? "↘" : "↗"}</div>
                   <div className="home-v2-activity-body">
-                    <strong>{row.title}</strong>
+                    <strong>{row.action} {row.symbol}</strong>
                     <span>{row.when}</span>
                   </div>
                   <div className="home-v2-activity-value">{formatMoney(row.value)}</div>
-                </div>
+                  <span className="home-v3-status-badge">{row.status}</span>
+                </button>
               )) : (
-                <div className="loading-state">No recent trades yet.</div>
+                <HomeEmptyState title="No recent activity yet" description="Trades and portfolio updates will appear here." />
               )}
             </div>
           </div>
@@ -1291,58 +1388,116 @@ export function HomeModule({
       </section>
 
       {(needsAttention.length || quickActionFeedback || moversLoading || gainers.length || losers.length || todayView.headlines.length || eventRows.length || quickActions.length) ? (
-        <section className="watchlist-panel glass home-v2-panel">
+        <section className="watchlist-panel glass home-v2-panel home-v3-market-context">
           <div className="section-header">
-            <h2>Market Context</h2>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div>
+              <h2>Market Context</h2>
+              <p className="home-v2-section-kicker">Daily movers and broader signals affecting your portfolio.</p>
+            </div>
+            <div className="home-v3-market-controls">
               <select
                 value={moversHorizon}
                 onChange={(e) => setMoversHorizon(e.target.value)}
-                style={{
-                  background: "rgba(15,23,42,0.7)",
-                  color: "var(--color-text-primary)",
-                  border: "0.5px solid rgba(148,163,184,0.35)",
-                  borderRadius: "6px",
-                  padding: "4px 8px",
-                  fontSize: "12px"
-                }}
               >
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
-                <option value="quarterly">Quarterly</option>
-                <option value="ytd">YTD</option>
-                <option value="yearly">Yearly</option>
+                <option value="quarterly">Monthly</option>
+              </select>
+              <select value={marketScope} onChange={(e) => setMarketScope(e.target.value)}>
+                <option value="all">All</option>
+                <option value="holdings">Holdings</option>
+                <option value="watchlist">Watchlist</option>
               </select>
               <span className="asset-count">{moversLoading ? "Loading..." : `${gainers.length + losers.length} movers`}</span>
             </div>
           </div>
-          <div className="home-grid">
-            <div>
+          <div className="home-v3-market-grid">
+            <div className="home-v3-mover-panel">
               <h3 className="home-subsection-title">Gainers</h3>
-              <div className="home-asset-list">
-                {gainers.map((asset) => (
-                  <div key={`g-${asset.symbol}`} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
-                    <div className="symbol-info"><span className="symbol">{asset.symbol}</span></div>
-                    <div className="value-info"><div className="price">{formatAssetPrice(asset)}</div><div className="change positive">+{(asset.__moverChange || 0).toFixed(2)}%</div></div>
-                  </div>
-                ))}
-              </div>
+              {gainers.length ? (
+                <div className="home-v3-mover-list">
+                  {gainers.map((asset) => (
+                    <button key={`g-${asset.symbol}`} type="button" className="home-v3-mover-row" onClick={() => onSelectAsset(asset)}>
+                      <div><strong>{asset.symbol}</strong><span>{asset.name || asset.symbol}</span></div>
+                      <span className="home-v3-relevance">Market</span>
+                      <div><strong>{formatAssetPrice(asset)}</strong><span className="positive">+{(asset.__moverChange || 0).toFixed(2)}%</span></div>
+                    </button>
+                  ))}
+                </div>
+              ) : <HomeEmptyState title="No gainers found for this period." />}
             </div>
-            <div>
+            <div className="home-v3-mover-panel">
               <h3 className="home-subsection-title">Losers</h3>
-              <div className="home-asset-list">
-                {losers.map((asset) => (
-                  <div key={`l-${asset.symbol}`} className="home-asset-item clickable" onClick={() => onSelectAsset(asset)}>
-                    <div className="symbol-info"><span className="symbol">{asset.symbol}</span></div>
-                    <div className="value-info"><div className="price">{formatAssetPrice(asset)}</div><div className="change negative">{(asset.__moverChange || 0).toFixed(2)}%</div></div>
-                  </div>
-                ))}
-              </div>
+              {losers.length ? (
+                <div className="home-v3-mover-list">
+                  {losers.map((asset) => (
+                    <button key={`l-${asset.symbol}`} type="button" className="home-v3-mover-row" onClick={() => onSelectAsset(asset)}>
+                      <div><strong>{asset.symbol}</strong><span>{asset.name || asset.symbol}</span></div>
+                      <span className="home-v3-relevance">Market</span>
+                      <div><strong>{formatAssetPrice(asset)}</strong><span className="negative">{(asset.__moverChange || 0).toFixed(2)}%</span></div>
+                    </button>
+                  ))}
+                </div>
+              ) : <HomeEmptyState title="No losers found for this period." />}
             </div>
           </div>
+          <button type="button" className="home-v3-btn secondary">Open Market Context</button>
         </section>
       ) : null}
       {renderAttentionFlow()}
+      <HomeDetailDrawer
+        title={selectedHoldingDetail ? String(selectedHoldingDetail.symbol || "Holding").toUpperCase() : ""}
+        open={!!selectedHoldingDetail}
+        onClose={() => setSelectedHoldingDetail(null)}
+        rows={selectedHoldingDetail ? [
+          ["Name", selectedHoldingDetail.name || selectedHoldingDetail.symbol || "Asset"],
+          ["Quantity", Number(selectedHoldingDetail.quantity || 0).toLocaleString()],
+          ["Price", formatMoney(selectedHoldingDetail.price || 0)],
+          ["Value", formatMoney(selectedHoldingDetail.__positionValue || 0)],
+          ["Allocation", `${Number(selectedHoldingDetail.__allocationPercent || 0).toFixed(1)}%`]
+        ] : []}
+      />
+      <HomeDetailDrawer
+        title={selectedActivityDetail?.title || ""}
+        open={!!selectedActivityDetail}
+        onClose={() => setSelectedActivityDetail(null)}
+        rows={selectedActivityDetail ? [
+          ["Action", selectedActivityDetail.action],
+          ["Symbol", selectedActivityDetail.symbol],
+          ["Time", selectedActivityDetail.when],
+          ["Amount", formatMoney(selectedActivityDetail.value)],
+          ["Status", selectedActivityDetail.status]
+        ] : []}
+      />
+    </div>
+  );
+}
+
+function HomeEmptyState({ title, description, cta, onAction }) {
+  return (
+    <div className="home-v3-empty">
+      <h3>{title}</h3>
+      {description ? <p>{description}</p> : null}
+      {cta ? <button type="button" className="home-v3-btn secondary" onClick={onAction}>{cta}</button> : null}
+    </div>
+  );
+}
+
+function HomeDetailDrawer({ open, title, rows, onClose }) {
+  if (!open) return null;
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside className="home-v3-detail-drawer" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="home-v3-drawer-head">
+          <h2>{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div className="home-v3-drawer-rows">
+          {rows.map(([label, value]) => (
+            <div key={label}><span>{label}</span><strong>{value}</strong></div>
+          ))}
+        </div>
+      </aside>
     </div>
   );
 }

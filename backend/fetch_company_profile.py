@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import html as html_lib
 import math
 import os
 import re
@@ -108,6 +109,32 @@ def _safe_number(value):
         return None
 
 
+def _parse_finviz_number(value, *, percent=False):
+    text = str(value or "").strip()
+    if not text or text in {"-", "N/A", "nan"}:
+        return None
+
+    match = re.search(r"(-?)\$?([\d,.]+)\s*([KMBT%]?)", text, re.I)
+    if not match:
+        return None
+
+    try:
+        numeric = float(match.group(2).replace(",", ""))
+    except Exception:
+        return None
+
+    if match.group(1) == "-":
+        numeric *= -1
+
+    suffix = match.group(3).upper()
+    multipliers = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
+    if suffix in multipliers:
+        numeric *= multipliers[suffix]
+    if percent or suffix == "%":
+        numeric /= 100
+    return _safe_number(numeric)
+
+
 def _clean_text(value):
     text = str(value or "").strip()
     return text or None
@@ -161,18 +188,44 @@ def _fetch_finviz_raw(symbol):
     return None
 
 
+def _clean_html_text(raw):
+    text = re.sub(r"<[^>]+>", " ", raw or "")
+    return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
+
+
+def _extract_snapshot_pairs(table_html):
+    pairs = []
+    current_pairs = re.findall(
+        r'<td[^>]*class="[^"]*\bsnapshot-td2\b[^"]*"[^>]*>(.*?)</td>\s*'
+        r'<td[^>]*class="[^"]*\bsnapshot-td2\b[^"]*"[^>]*>(.*?)</td>',
+        table_html or "",
+        re.S,
+    )
+    for label_raw, value_raw in current_pairs:
+        label = _clean_html_text(label_raw)
+        value = _clean_html_text(value_raw)
+        if label:
+            pairs.append((label, value))
+
+    if pairs:
+        return pairs
+
+    legacy_pairs = re.findall(
+        r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>',
+        table_html or "",
+        re.S,
+    )
+    return [(_clean_html_text(label_raw), _clean_html_text(value_raw)) for label_raw, value_raw in legacy_pairs]
+
+
 def _parse_finviz_data(html):
     data = {"summary": {}, "ratings": []}
     if not html: return data
     
     # 1. Summary table (Earnings, Target Price)
-    summary_match = re.search(r'<table class="snapshot-table2".*?>(.*?)</table>', html, re.S)
+    summary_match = re.search(r'<table[^>]*class="[^"]*\bsnapshot-table2\b[^"]*"[^>]*>(.*?)</table>', html, re.S)
     if summary_match:
-        pairs = re.findall(r'<td.*?class="snapshot-td2-cp".*?>(.*?)</td>.*?<td.*?class="snapshot-td2".*?>(.*?)</td>', summary_match.group(1), re.S)
-        for label_raw, value_raw in pairs:
-            label = re.sub(r'<.*?>', '', label_raw).strip()
-            value = re.sub(r'<.*?>', '', value_raw).strip()
-            
+        for label, value in _extract_snapshot_pairs(summary_match.group(1)):
             if label:
                 data["summary"][label] = value
                 
@@ -181,6 +234,19 @@ def _parse_finviz_data(html):
                 data["summary"]["earnings"] = value
             elif key_lower == "target price":
                 data["summary"]["target_price"] = value
+
+    profile_match = re.search(
+        r'<div[^>]*class="[^"]*\bquote_profile-bio\b[^"]*"[^>]*>(.*?)</div>',
+        html,
+        re.S,
+    )
+    if profile_match:
+        bio = _clean_html_text(profile_match.group(1))
+        if bio:
+            data["profileBio"] = bio
+            name_match = re.match(r"(.+?)\s+(?:engages|operates|provides|develops|designs|manufactures|offers)\b", bio, re.I)
+            if name_match:
+                data["profileName"] = name_match.group(1).strip()
 
     # 2. Ratings
     ratings_match = re.search(r'<table class="fullview-ratings-outer".*?>(.*?)</table>', html, re.S)
@@ -947,14 +1013,25 @@ def _build_research_and_sources(payload, theme=None, category=None):
 
 def fetch_company_profile(symbol, theme=None, category=None):
     ticker = yf.Ticker(symbol)
-    info = ticker.info or {}
-    calendar = ticker.calendar
+    info = {}
+    yahoo_error = None
+    try:
+        info = ticker.info or {}
+    except Exception as exc:
+        yahoo_error = str(exc)
+
+    calendar = None
+    try:
+        calendar = ticker.calendar
+    except Exception as exc:
+        yahoo_error = yahoo_error or str(exc)
 
     # 1. Fetch Finviz data for high-accuracy fields (Stock only)
     finviz_raw = _fetch_finviz_raw(symbol)
     finviz_data = _parse_finviz_data(finviz_raw)
+    finviz_summary = finviz_data.get("summary", {})
     top_target, top_agency = _get_top_analyst_target(finviz_data.get("ratings", []))
-    finviz_earnings = finviz_data.get("summary", {}).get("earnings")
+    finviz_earnings = finviz_summary.get("earnings")
 
     calendar_dict = {}
     try:
@@ -982,9 +1059,9 @@ def fetch_company_profile(symbol, theme=None, category=None):
     payload = {
         "topAnalystTarget": top_target,
         "topAnalystAgency": top_agency,
-        "finvizMetrics": finviz_data.get("summary", {}),
+        "finvizMetrics": finviz_summary,
         "symbol": str(symbol or "").upper(),
-        "name": info.get("longName") or info.get("shortName") or str(symbol or "").upper(),
+        "name": info.get("longName") or info.get("shortName") or finviz_data.get("profileName") or str(symbol or "").upper(),
         "shortName": info.get("shortName"),
         "website": info.get("website"),
         "phone": info.get("phone"),
@@ -997,27 +1074,27 @@ def fetch_company_profile(symbol, theme=None, category=None):
         "city": info.get("city"),
         "zip": info.get("zip"),
         "address1": info.get("address1"),
-        "summary": info.get("longBusinessSummary") or info.get("businessSummary"),
+        "summary": info.get("longBusinessSummary") or info.get("businessSummary") or finviz_data.get("profileBio"),
         "employees": info.get("fullTimeEmployees"),
-        "marketCap": info.get("marketCap"),
-        "enterpriseValue": info.get("enterpriseValue"),
-        "currentPrice": info.get("currentPrice") or info.get("regularMarketPrice"),
-        "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
-        "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
-        "beta": info.get("beta"),
-        "trailingPE": info.get("trailingPE"),
-        "forwardPE": info.get("forwardPE"),
-        "priceToBook": info.get("priceToBook"),
-        "enterpriseToRevenue": info.get("enterpriseToRevenue"),
-        "enterpriseToEbitda": info.get("enterpriseToEbitda"),
-        "dividendYield": info.get("dividendYield"),
-        "totalRevenue": info.get("totalRevenue"),
-        "revenueGrowth": info.get("revenueGrowth"),
-        "earningsGrowth": info.get("earningsGrowth"),
-        "grossMargins": info.get("grossMargins"),
-        "operatingMargins": info.get("operatingMargins"),
-        "ebitdaMargins": info.get("ebitdaMargins"),
-        "profitMargins": info.get("profitMargins"),
+        "marketCap": info.get("marketCap") or _parse_finviz_number(finviz_summary.get("Market Cap")),
+        "enterpriseValue": info.get("enterpriseValue") or _parse_finviz_number(finviz_summary.get("Enterprise Value")),
+        "currentPrice": info.get("currentPrice") or info.get("regularMarketPrice") or _parse_finviz_number(finviz_summary.get("Price")),
+        "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow") or _parse_finviz_number(finviz_summary.get("52W Low")),
+        "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh") or _parse_finviz_number(finviz_summary.get("52W High")),
+        "beta": info.get("beta") or _parse_finviz_number(finviz_summary.get("Beta")),
+        "trailingPE": info.get("trailingPE") or _parse_finviz_number(finviz_summary.get("P/E")),
+        "forwardPE": info.get("forwardPE") or _parse_finviz_number(finviz_summary.get("Forward P/E")),
+        "priceToBook": info.get("priceToBook") or _parse_finviz_number(finviz_summary.get("P/B")),
+        "enterpriseToRevenue": info.get("enterpriseToRevenue") or _parse_finviz_number(finviz_summary.get("EV/Sales")),
+        "enterpriseToEbitda": info.get("enterpriseToEbitda") or _parse_finviz_number(finviz_summary.get("EV/EBITDA")),
+        "dividendYield": info.get("dividendYield") or _parse_finviz_number(finviz_summary.get("Dividend %"), percent=True),
+        "totalRevenue": info.get("totalRevenue") or _parse_finviz_number(finviz_summary.get("Sales")),
+        "revenueGrowth": info.get("revenueGrowth") or _parse_finviz_number(finviz_summary.get("Sales Q/Q"), percent=True),
+        "earningsGrowth": info.get("earningsGrowth") or _parse_finviz_number(finviz_summary.get("EPS Q/Q"), percent=True),
+        "grossMargins": info.get("grossMargins") or _parse_finviz_number(finviz_summary.get("Gross Margin"), percent=True),
+        "operatingMargins": info.get("operatingMargins") or _parse_finviz_number(finviz_summary.get("Oper. Margin"), percent=True),
+        "ebitdaMargins": info.get("ebitdaMargins") or _parse_finviz_number(finviz_summary.get("EBITDA Margin"), percent=True),
+        "profitMargins": info.get("profitMargins") or _parse_finviz_number(finviz_summary.get("Profit Margin"), percent=True),
         "freeCashflow": info.get("freeCashflow"),
         "operatingCashflow": info.get("operatingCashflow"),
         "returnOnAssets": info.get("returnOnAssets"),
@@ -1027,7 +1104,7 @@ def fetch_company_profile(symbol, theme=None, category=None):
         "debtToEquity": info.get("debtToEquity"),
         "currentRatio": info.get("currentRatio"),
         "quickRatio": info.get("quickRatio"),
-        "targetMeanPrice": info.get("targetMeanPrice"),
+        "targetMeanPrice": info.get("targetMeanPrice") or _parse_finviz_number(finviz_summary.get("Target Price")),
         "targetHighPrice": info.get("targetHighPrice"),
         "targetLowPrice": info.get("targetLowPrice"),
         "analystRating": info.get("recommendationKey"),
@@ -1043,7 +1120,7 @@ def fetch_company_profile(symbol, theme=None, category=None):
                 "previous": info.get("totalRevenue"),
             },
         },
-        "earningsHistory": _extract_recent_earnings(ticker),
+        "earningsHistory": [] if yahoo_error and not info else _extract_recent_earnings(ticker),
         "leadership": _extract_leadership(info),
         "risk": {
             "overallRisk": info.get("overallRisk"),
@@ -1053,6 +1130,8 @@ def fetch_company_profile(symbol, theme=None, category=None):
             "shareHolderRightsRisk": info.get("shareHolderRightsRisk"),
         },
     }
+    if yahoo_error and finviz_summary:
+        payload["profileFallbackReason"] = yahoo_error
 
     enriched = _build_research_and_sources(payload, theme=theme, category=category)
     return _normalize_json(enriched)

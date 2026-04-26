@@ -114,11 +114,16 @@ def fetch_finviz_data(symbol: str) -> dict:
         # 4. Snapshot Table (Summary Metrics)
         snapshot_table = soup.find("table", class_="snapshot-table2")
         if snapshot_table:
-            labels = snapshot_table.find_all("td", class_="snapshot-td2-cp")
-            values = snapshot_table.find_all("td", class_="snapshot-td2")
-            for label_td, value_td in zip(labels, values):
-                label = label_td.get_text(strip=True)
-                value = value_td.get_text(strip=True)
+            for label_td in snapshot_table.find_all("td"):
+                label_node = label_td.select_one(".snapshot-td-label")
+                if not label_node:
+                    continue
+                value_td = label_td.find_next_sibling("td")
+                if not value_td:
+                    continue
+                value_node = value_td.select_one(".snapshot-td-content") or value_td
+                label = label_node.get_text(" ", strip=True)
+                value = value_node.get_text(" ", strip=True)
                 if label:
                     data["summary"][label] = value
                     

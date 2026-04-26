@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { createChart, CrosshairMode } from 'lightweight-charts';
+import {
+  AreaSeries,
+  CandlestickSeries,
+  createChart,
+  CrosshairMode,
+  LineSeries,
+} from 'lightweight-charts';
 
 export function TradingViewChart({
   series = [], // Array of { name, data: [{time, value}], type: 'area' | 'line' | 'candlestick', color }
@@ -72,7 +78,7 @@ export function TradingViewChart({
     Object.keys(seriesRef.current).forEach(name => {
       if (!currentSeriesNames.includes(name) && chartRef.current?.removeSeries) {
         try {
-          chartRef.current.removeSeries(seriesRef.current[name]);
+          chartRef.current.removeSeries(seriesRef.current[name].api);
         } catch (e) {
           console.warn("TradingViewChart: Error removing series", e);
         }
@@ -82,34 +88,59 @@ export function TradingViewChart({
 
     // Add or update series
     series.forEach(({ name, data, type = 'area', color = '#38bdf8' }) => {
-      let activeSeries = seriesRef.current[name];
+      let activeSeries = seriesRef.current[name]?.api;
       const chart = chartRef.current;
-      if (!chart || typeof chart.addLineSeries !== 'function') return;
+      if (!chart) return;
 
-      if (!activeSeries) {
-        // Create new series
-        if (type === 'area' && typeof chart.addAreaSeries === 'function') {
-          activeSeries = chart.addAreaSeries({
+      const addSeries = () => {
+        if (type === 'area') {
+          const options = {
             lineColor: color,
             topColor: `${color}88`,
             bottomColor: `${color}00`,
             lineWidth: 2,
-          });
-        } else if (type === 'candlestick' && typeof chart.addCandlestickSeries === 'function') {
-          activeSeries = chart.addCandlestickSeries({
+          };
+          return typeof chart.addSeries === 'function'
+            ? chart.addSeries(AreaSeries, options)
+            : chart.addAreaSeries?.(options);
+        }
+
+        if (type === 'candlestick') {
+          const options = {
             upColor: '#22c55e',
             downColor: '#ef4444',
             borderVisible: false,
             wickUpColor: '#22c55e',
             wickDownColor: '#ef4444',
-          });
-        } else if (typeof chart.addLineSeries === 'function') {
-          activeSeries = chart.addLineSeries({
-            color: color,
-            lineWidth: 2,
-          });
+          };
+          return typeof chart.addSeries === 'function'
+            ? chart.addSeries(CandlestickSeries, options)
+            : chart.addCandlestickSeries?.(options);
         }
-        seriesRef.current[name] = activeSeries;
+
+        const options = {
+          color: color,
+          lineWidth: 2,
+        };
+        return typeof chart.addSeries === 'function'
+          ? chart.addSeries(LineSeries, options)
+          : chart.addLineSeries?.(options);
+      };
+
+      if (activeSeries && seriesRef.current[name]?.type !== type && chart.removeSeries) {
+        try {
+          chart.removeSeries(activeSeries);
+        } catch (e) {
+          console.warn("TradingViewChart: Error replacing series", e);
+        }
+        activeSeries = null;
+        delete seriesRef.current[name];
+      }
+
+      if (!activeSeries) {
+        activeSeries = addSeries();
+        if (!activeSeries) return;
+        seriesRef.current[name] = { api: activeSeries, type };
       }
 
       // Ensure data is sorted by time and time is standard unix timestamp

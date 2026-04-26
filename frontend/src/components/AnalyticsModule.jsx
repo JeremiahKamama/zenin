@@ -3,11 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 
 const CATEGORY_TABS = [
-  { id: "crypto", label: "Crypto", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
-  { id: "options", label: "Options", description: "Binance + Deribit options data" },
-  { id: "equities", label: "Equities", description: "Asset Classes, Industries, Regions" },
-  { id: "macro", label: "Macro", description: "Macro indicators, FX and risk context" },
-  { id: "commodities", label: "Commodities", description: "Commodities hub, flows, inventory and curve" },
+  { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
+  { id: "options", label: "Options", icon: "O", description: "Binance + Deribit options data" },
+  { id: "equities", label: "Equities", icon: "E", description: "Asset Classes, Industries, Regions" },
+  { id: "macro", label: "Macro", icon: "M", description: "Macro indicators, FX and risk context" },
+  { id: "commodities", label: "Commodities", icon: "X", description: "Commodities hub, flows, inventory and curve" },
 ];
 
 const EMPTY_CRYPTO = {
@@ -328,6 +328,42 @@ function normalizeCommoditiesPayload(payload) {
   };
 }
 
+const getToneColor = (tone = "neutral") => {
+  if (tone === "positive" || tone === "success" || tone === "up") return "#22C55E";
+  if (tone === "negative" || tone === "danger" || tone === "down") return "#EF4444";
+  if (tone === "warning" || tone === "watch") return "#F59E0B";
+  if (tone === "purple" || tone === "advanced") return "#8B5CF6";
+  if (tone === "info" || tone === "primary") return "#22D3EE";
+  return "#94A3B8";
+};
+
+const getTrendTone = (value) => {
+  const text = String(value || "").toLowerCase();
+  if (text.includes("down") || text.includes("elevated") || text.includes("tight")) return "warning";
+  if (text.includes("up") || text.includes("steep")) return "positive";
+  if (text.includes("watch")) return "watch";
+  return "neutral";
+};
+
+const getRiskSeverity = (row) => {
+  const status = String(row?.status || "").trim();
+  if (status) return status;
+  const label = String(row?.indicator || "").toLowerCase();
+  const value = Number(row?.value);
+  if (label.includes("vix")) return value >= 25 ? "Elevated" : value >= 18 ? "Watch" : "Normal";
+  if (label.includes("move")) return value >= 120 ? "Elevated" : "Contained";
+  if (label.includes("liquidity")) return value < 0 ? "Tightening" : "Normal";
+  if (label.includes("oas")) return value >= 4 ? "Watch" : "Contained";
+  return "Contained";
+};
+
+const getCorrelationTone = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || Math.abs(numeric) < 0.25) return "neutral";
+  if (Math.abs(numeric) >= 0.65) return "purple";
+  return numeric >= 0 ? "positive" : "negative";
+};
+
 
 
 export function AnalyticsModule({ backendUrl }) {
@@ -353,6 +389,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [selectedMMFCountry, setSelectedMMFCountry] = useState("ALL");
   const [selectedREITCountry, setSelectedREITCountry] = useState("ALL");
   const [selectedMarketView, setSelectedMarketView] = useState("benchmarks");
+  const [marketSnapshotFilter, setMarketSnapshotFilter] = useState("all");
   const [compareItems, setCompareItems] = useState([]);
   const [timeRange, setTimeRange] = useState("1Y");
   const [equitiesSavedViews, setEquitiesSavedViews] = useState([]);
@@ -408,6 +445,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [macroCorrelationRows, setMacroCorrelationRows] = useState([]);
   const [macroSourceInfo, setMacroSourceInfo] = useState(null);
   const [sourceDrawerOpen, setSourceDrawerOpen] = useState(false);
+  const [macroSourceDataExpanded, setMacroSourceDataExpanded] = useState(false);
   const [macroTimeseriesPageIndex, setMacroTimeseriesPageIndex] = useState(0);
   const [selectedCommodityGroup, setSelectedCommodityGroup] = useState("all");
   const [selectedCommoditySymbol, setSelectedCommoditySymbol] = useState("GC");
@@ -420,9 +458,13 @@ export function AnalyticsModule({ backendUrl }) {
   const [commoditySearchQuery, setCommoditySearchQuery] = useState("");
   const [commoditySearchRows, setCommoditySearchRows] = useState([]);
   const [commodityAssetsPageIndex, setCommodityAssetsPageIndex] = useState(0);
+  const [commodityPriceSeriesPageIndex, setCommodityPriceSeriesPageIndex] = useState(0);
+  const [commoditySeasonalityPageIndex, setCommoditySeasonalityPageIndex] = useState(0);
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
   const MACRO_TIMESERIES_PAGE_SIZE = 10;
   const COMMODITY_ASSETS_PAGE_SIZE = 5;
+  const COMMODITY_PRICE_SERIES_PAGE_SIZE = 10;
+  const COMMODITY_SEASONALITY_PAGE_SIZE = 6;
 
   const macroGeoTypePath = selectedGeoType === "Country" ? "country" : selectedGeoType === "Region" ? "region" : "global";
 
@@ -808,6 +850,14 @@ export function AnalyticsModule({ backendUrl }) {
   }, [activeTab, backendUrl, commoditySearchQuery, commoditiesData.list]);
 
   useEffect(() => {
+    setCommodityPriceSeriesPageIndex(0);
+  }, [selectedCommoditySymbol, selectedCommodityTimeRange, selectedCommodityRegion]);
+
+  useEffect(() => {
+    setCommoditySeasonalityPageIndex(0);
+  }, [selectedCommoditySymbol]);
+
+  useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
 
@@ -1116,6 +1166,31 @@ export function AnalyticsModule({ backendUrl }) {
     };
   }, [equitiesData, equitiesSpecData, correlationRows, equitiesSearch]);
 
+  const marketSnapshotRows = useMemo(() => {
+    const rows = [
+      ...(filteredEquities.benchmarkIndexHistory || []).slice(0, 4).map((row, idx) => ({
+        id: `hub-bmk-${idx}`,
+        group: "Benchmark",
+        name: row.name || row.symbol || "Benchmark",
+        value: row?.[rangeKey],
+      })),
+      ...(filteredEquities.sectorPerformance || []).slice(0, 7).map((row, idx) => ({
+        id: `hub-sec-${idx}`,
+        group: "Sector",
+        name: row.sector || row.name || "Sector",
+        value: row?.[rangeKey],
+      })),
+      ...(filteredEquities.regionalPerformance || []).slice(0, 5).map((row, idx) => ({
+        id: `hub-reg-${idx}`,
+        group: "Region",
+        name: row.region || row.name || "Region",
+        value: row?.[rangeKey],
+      })),
+    ];
+    if (marketSnapshotFilter === "all") return rows;
+    return rows.filter((row) => String(row.group || "").toLowerCase() === marketSnapshotFilter);
+  }, [filteredEquities, marketSnapshotFilter, rangeKey]);
+
   const filteredCommodities = useMemo(() => {
     const q = String(commoditySearchQuery || "").trim().toLowerCase();
     const rows = (commoditiesData.list || []).filter((row) => {
@@ -1146,103 +1221,20 @@ export function AnalyticsModule({ backendUrl }) {
   const currentLoading = loading[activeTab];
 
   return (
-    <div className="view-container" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {/* Header */}
-      <section
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 12,
-              letterSpacing: "0.09em",
-              textTransform: "uppercase",
-              color: "#64748b",
-            }}
-          >
-            Analytics
-          </div>
-          <h2
-            style={{
-              margin: "6px 0 0",
-              fontSize: 24,
-              fontWeight: 700,
-              color: "#f8fafc",
-            }}
-          >
-            Cross-market dashboards
-          </h2>
-          <p
-            style={{
-              margin: "8px 0 0",
-              maxWidth: 760,
-              fontSize: 13,
-              lineHeight: 1.55,
-              color: "#94a3b8",
-            }}
-          >
-            Switch between Crypto, Options, Equities, and Macro analytics. The module is
-            structured for Hyperliquid + Dune on crypto, Binance + Derive + Deribit
-            on options, and benchmark/regional/fund intelligence for equities.
-          </p>
-        </div>
-        <div style={{ fontSize: 12, color: "#94a3b8", paddingTop: 6 }}>
-          Last update: {formatDateTime(currentUpdatedAt)}
-        </div>
-      </section>
-
-      {/* Tabs */}
-      <section className="analytics-tab-section">
-        <div className="analytics-tab-list">
-          {CATEGORY_TABS.map((tab) => {
-            const active = tab.id === activeTab;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`analytics-tab-pill ${active ? "active" : ""}`}
-              >
-                <div className="analytics-tab-pill-label">{tab.label}</div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+    <AnalyticsLayout
+      eyebrow="Analytics"
+      title="Cross-market dashboards"
+      description="Switch between Crypto, Options, Equities, Macro, and Commodities analytics."
+      updatedAt={currentUpdatedAt}
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+    >
 
       {/* Loading / error */}
-      {currentLoading && (
-        <div
-          style={{
-            padding: 18,
-            borderRadius: 14,
-            background: "rgba(15,23,42,0.72)",
-            border: "1px solid rgba(148,163,184,0.16)",
-            color: "#cbd5e1",
-          }}
-        >
-          Loading {activeTab} analytics...
-        </div>
-      )}
+      {currentLoading && <LoadingSkeleton label={`Loading ${activeTab} analytics...`} />}
 
       {currentError && !currentLoading && (
-        <div
-          style={{
-            padding: 18,
-            borderRadius: 14,
-            background: "rgba(15,23,42,0.72)",
-            border: "1px solid rgba(245,158,11,0.22)",
-            color: "#fbbf24",
-          }}
-        >
-          {currentError}
-        </div>
+        <ErrorState title={`Couldn't load ${activeTab} analytics`} description={currentError} onRetry={() => setActiveTab(activeTab)} />
       )}
 
       {/* Content */}
@@ -1709,47 +1701,13 @@ export function AnalyticsModule({ backendUrl }) {
           ) : activeTab === "equities" ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
-                <div
-                  style={{
-                    display: "grid",
-                    gap: 10,
-                    background: "rgba(2,6,23,0.55)",
-                    border: "1px solid rgba(148,163,184,0.2)",
-                    borderRadius: 14,
-                    padding: 12,
-                  }}
-                >
+                <div className="analytics-card" style={{ display: "grid", gap: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <div style={{ fontSize: 13, color: "#cbd5e1" }}>
-                      Equities command center
+                    <div>
+                      <div className="analytics-section-title">Equities command center</div>
+                      <div className="analytics-card-subtitle">Screen benchmarks, sectors, funds, REITs, money markets, and market breadth.</div>
                     </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {[
-                        { key: "1D", label: "1D" },
-                        { key: "1W", label: "1W" },
-                        { key: "1M", label: "1M" },
-                        { key: "YTD", label: "YTD" },
-                        { key: "1Y", label: "1Y" },
-                        { key: "5Y", label: "5Y" },
-                        { key: "MAX", label: "MAX" },
-                      ].map((h) => (
-                        <button
-                          key={h.key}
-                          onClick={() => setTimeRange(h.key)}
-                          style={{
-                            padding: "5px 10px",
-                            borderRadius: 8,
-                            border: `1px solid ${timeRange === h.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                            background: timeRange === h.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                            color: timeRange === h.key ? "#7dd3fc" : "#cbd5e1",
-                            cursor: "pointer",
-                            fontSize: 12
-                          }}
-                        >
-                          {h.label}
-                        </button>
-                      ))}
-                    </div>
+                    <TimeframeSelector options={["1D", "1W", "1M", "YTD", "1Y", "5Y", "MAX"]} value={timeRange} onChange={setTimeRange} />
                   </div>
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1758,16 +1716,8 @@ export function AnalyticsModule({ backendUrl }) {
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Universal search across equities data..."
-                      style={{
-                        flex: "1 1 280px",
-                        minWidth: 200,
-                        background: "rgba(15,23,42,0.75)",
-                        border: "1px solid rgba(148,163,184,0.2)",
-                        color: "#e2e8f0",
-                        borderRadius: 8,
-                        padding: "8px 10px",
-                        fontSize: 12,
-                      }}
+                      className="analytics-input"
+                      style={{ flex: "1 1 280px", minWidth: 200 }}
                     />
                     <button
                       type="button"
@@ -1782,15 +1732,7 @@ export function AnalyticsModule({ backendUrl }) {
                           },
                         ])
                       }
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        border: "1px solid rgba(148,163,184,0.2)",
-                        background: "rgba(15,23,42,0.7)",
-                        color: "#cbd5e1",
-                        fontSize: 12,
-                        cursor: "pointer",
-                      }}
+                      className="analytics-btn secondary"
                     >
                       Save View
                     </button>
@@ -1806,15 +1748,7 @@ export function AnalyticsModule({ backendUrl }) {
                           },
                         ])
                       }
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        border: "1px solid rgba(148,163,184,0.2)",
-                        background: "rgba(15,23,42,0.7)",
-                        color: "#cbd5e1",
-                        fontSize: 12,
-                        cursor: "pointer",
-                      }}
+                      className="analytics-btn primary"
                     >
                       Create Alert
                     </button>
@@ -1855,7 +1789,7 @@ export function AnalyticsModule({ backendUrl }) {
                     />
                   </div>
 
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <div className="analytics-pill-group">
                       {[
                         { key: "hub", label: "Hub" },
                         { key: "stocks", label: "Stock Metrics" },
@@ -1870,15 +1804,7 @@ export function AnalyticsModule({ backendUrl }) {
                           key={section.key}
                           type="button"
                           onClick={() => setSelectedMainCategory(section.key)}
-                          style={{
-                            padding: "6px 10px",
-                            borderRadius: 8,
-                            border: `1px solid ${active ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                            background: active ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                            color: active ? "#7dd3fc" : "#cbd5e1",
-                            cursor: "pointer",
-                            fontSize: 12,
-                          }}
+                          className={`analytics-chip-button ${active ? "active" : ""}`}
                         >
                           {section.label}
                         </button>
@@ -1927,30 +1853,27 @@ export function AnalyticsModule({ backendUrl }) {
 
                 {selectedMainCategory === "hub" ? (
                   <div style={{ display: "grid", gap: 16 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
+                    <InsightCard tone="info">
+                      Equity returns are concentrated in technology and US benchmarks, while breadth stress remains elevated. Review sector exposure and downside alerts.
+                    </InsightCard>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
                       {[
-                        { key: "stocks", title: "Stock Metrics", body: "Screener, benchmark, risk and valuation views." },
-                        { key: "funds", title: "Funds", body: "Directory, AUM, fee structure, and REIT links." },
-                        { key: "mmf", title: "MMF", body: "Money market yields and short-duration cash views." },
-                        { key: "reits", title: "REITs", body: "Income, FFO/AFFO, occupancy and property exposure." },
-                        { key: "market", title: "General Market", body: "Sector, region, breadth, flows and actions." },
+                        { key: "stocks", title: "Stock Metrics", body: "Screener, benchmark, risk and valuation views.", cta: "Open screener" },
+                        { key: "funds", title: "Funds", body: "Directory, AUM, fee structure, and fund links.", cta: "View funds" },
+                        { key: "mmf", title: "MMF", body: "Money market yields and short-duration cash views.", cta: "View yields" },
+                        { key: "reits", title: "REITs", body: "Income, FFO/AFFO, occupancy and property exposure.", cta: "View REITs" },
+                        { key: "market", title: "General Market", body: "Sector, region, breadth, flows and actions.", cta: "Open market view" },
                       ].map((card) => (
                         <button
                           key={card.key}
                           type="button"
                           onClick={() => setSelectedMainCategory(card.key)}
-                          style={{
-                            textAlign: "left",
-                            background: "rgba(0,0,0,0.82)",
-                            border: "1px solid rgba(148,163,184,0.16)",
-                            borderRadius: 12,
-                            padding: 12,
-                            color: "#e2e8f0",
-                            cursor: "pointer",
-                          }}
+                          className="analytics-card"
+                          style={{ textAlign: "left", color: "#e2e8f0", cursor: "pointer", minHeight: 150 }}
                         >
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{card.title}</div>
-                          <div style={{ marginTop: 6, fontSize: 12, color: "#94a3b8", lineHeight: 1.4 }}>{card.body}</div>
+                          <div className="analytics-section-title" style={{ fontSize: 16 }}>{card.title}</div>
+                          <div className="analytics-card-subtitle">{card.body}</div>
+                          <div style={{ marginTop: 14, color: "#22D3EE", fontSize: 12, fontWeight: 800 }}>{card.cta}</div>
                         </button>
                       ))}
                     </div>
@@ -1958,32 +1881,32 @@ export function AnalyticsModule({ backendUrl }) {
                     <AnalyticsTableCard
                       title="Market Snapshot Strip"
                       subtitle="Top benchmark, sector, region and flow context"
-                      emptyText="No snapshot rows."
+                      emptyText="No snapshot rows match this filter."
+                      filters={["all", "benchmark", "sector", "region"].map((filter) => (
+                        <button
+                          key={filter}
+                          type="button"
+                          className={`analytics-chip-button ${marketSnapshotFilter === filter ? "active" : ""}`}
+                          onClick={() => setMarketSnapshotFilter(filter)}
+                        >
+                          {filter === "all" ? "All" : `${filter.charAt(0).toUpperCase()}${filter.slice(1)}s`}
+                        </button>
+                      ))}
                       columns={[
-                        { key: "group", label: "Group" },
+                        { key: "group", label: "Group", render: (v) => <StatusPill tone={v === "Benchmark" ? "info" : v === "Sector" ? "purple" : "neutral"}>{v}</StatusPill> },
                         { key: "name", label: "Name" },
-                        { key: "metric", label: timeRange, align: "right" },
+                        {
+                          key: "value",
+                          label: timeRange,
+                          align: "right",
+                          render: (v) => {
+                            const numeric = Number(v);
+                            const tone = numeric > 0 ? "positive" : numeric < 0 ? "negative" : "neutral";
+                            return <span style={{ color: getToneColor(tone), fontVariantNumeric: "tabular-nums" }}>{formatPercent(v)}</span>;
+                          },
+                        },
                       ]}
-                      rows={[
-                        ...(filteredEquities.benchmarkIndexHistory || []).slice(0, 2).map((row, idx) => ({
-                          id: `hub-bmk-${idx}`,
-                          group: "Benchmark",
-                          name: row.name,
-                          metric: formatPercent(row?.[rangeKey]),
-                        })),
-                        ...(filteredEquities.sectorPerformance || []).slice(0, 2).map((row, idx) => ({
-                          id: `hub-sec-${idx}`,
-                          group: "Sector",
-                          name: row.sector,
-                          metric: formatPercent(row?.[rangeKey]),
-                        })),
-                        ...(filteredEquities.regionalPerformance || []).slice(0, 2).map((row, idx) => ({
-                          id: `hub-reg-${idx}`,
-                          group: "Region",
-                          name: row.region,
-                          metric: formatPercent(row?.[rangeKey]),
-                        })),
-                      ]}
+                      rows={marketSnapshotRows}
                     />
                   </div>
                 ) : null}
@@ -2625,183 +2548,98 @@ export function AnalyticsModule({ backendUrl }) {
             </>
           ) : activeTab === "macro" ? (
             <>
-              <div style={{ display: "grid", gap: 14 }}>
-                <GeographySwitcher
-                  selectedGeoType={selectedGeoType}
-                  onChange={setSelectedGeoType}
-                  regimeLabel={regimeLabel}
-                  regimeScore={regimeScore}
-                  regimeExplain={regimeExplain}
-                />
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
-                  <GeographySearch
-                    geographies={macroGeographies}
-                    selectedGeoType={selectedGeoType}
-                    selectedGeoCode={selectedGeoCode}
-                    searchQuery={geoSearchQuery}
-                    onSearchChange={setGeoSearchQuery}
-                    onSelectGeo={(code) => {
-                      setSelectedGeoCode(code);
-                      setRecentGeoCodes((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 6));
-                      if (selectedGeoType === "Country") {
-                        setRecentCountries((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 8));
-                      }
-                    }}
-                    favoriteGeoCodes={favoriteGeoCodes}
-                    recentGeoCodes={recentGeoCodes}
-                    onToggleFavorite={(code) =>
-                      setFavoriteGeoCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]))
-                    }
-                  />
-
-                  <div style={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(148,163,184,0.16)", borderRadius: 14, padding: 12 }}>
-                    <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Indicator Configuration</div>
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <input
-                        type="text"
-                        value={countrySearch}
-                        onChange={(e) => setCountrySearch(e.target.value)}
-                        placeholder="Country search (ISO3/name)"
-                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
-                      />
-                      {searchResults.length > 0 ? (
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {searchResults.slice(0, 6).map((row, idx) => {
-                            const code = row?.code || row?.iso3 || row?.id || `geo-${idx}`;
-                            return (
-                              <button
-                                key={`sr-${code}-${idx}`}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedGeoCode(code);
-                                  setCountrySearch("");
-                                  setSearchResults([]);
-                                  setRecentCountries((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 8));
-                                }}
-                                style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
-                              >
-                                {row?.name || code} ({code})
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                      {recentCountries.length > 0 ? (
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {recentCountries.slice(0, 5).map((code) => (
-                            <button
-                              key={`rc-${code}`}
-                              type="button"
-                              onClick={() => setSelectedGeoCode(code)}
-                              style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
-                            >
-                              Recent country: {code}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                      <input
-                        type="text"
-                        value={indicatorSearch}
-                        onChange={(e) => setIndicatorSearch(e.target.value)}
-                        placeholder="Search indicators..."
-                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
-                      />
-                      <select
-                        value={selectedCategory}
-                        onChange={(e) => setSelectedCategory(e.target.value)}
-                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
-                      >
-                        {MACRO_CATEGORY_OPTIONS.map((cat) => (
-                          <option key={cat.key} value={cat.key}>{cat.label}</option>
-                        ))}
-                      </select>
-                      <select
-                        value={selectedIndicator}
-                        onChange={(e) => setSelectedIndicator(e.target.value)}
-                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
-                      >
-                        {(filteredMacroIndicators.length ? filteredMacroIndicators : macroIndicators).map((indicator) => (
-                          <option key={indicator.code} value={indicator.code}>{indicator.name || indicator.code}</option>
-                        ))}
-                      </select>
-                      <select
-                        value={globalTrendMode}
-                        onChange={(e) => setGlobalTrendMode(e.target.value)}
-                        style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
-                      >
-                        <option value="weighted">Global trend mode: Weighted</option>
-                        <option value="equal">Global trend mode: Equal-weighted</option>
-                      </select>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {["1Y", "5Y", "10Y", "MAX"].map((range) => (
-                          <button
-                            key={range}
-                            onClick={() => setChartRange(range)}
-                            style={{
-                              padding: "5px 10px",
-                              borderRadius: 8,
-                              border: `1px solid ${chartRange === range ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                              background: chartRange === range ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                              color: chartRange === range ? "#7dd3fc" : "#cbd5e1",
-                              cursor: "pointer",
-                              fontSize: 12
-                            }}
-                          >
-                            {range}
-                          </button>
-                        ))}
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {["levels", "change", "YoY", "MoM"].map((mode) => (
-                          <button
-                            key={mode}
-                            onClick={() => setChartMode(mode)}
-                            style={{
-                              padding: "5px 10px",
-                              borderRadius: 8,
-                              border: `1px solid ${chartMode === mode ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                              background: chartMode === mode ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                              color: chartMode === mode ? "#7dd3fc" : "#cbd5e1",
-                              cursor: "pointer",
-                              fontSize: 12
-                            }}
-                          >
-                            {mode}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+              <div style={{ display: "grid", gap: 18 }}>
+                <div className="analytics-card" style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                  <div>
+                    <div className="analytics-section-title">Macro Intelligence</div>
+                    <div className="analytics-card-subtitle">Track country, regional, and global indicators across growth, inflation, rates, labor, FX, and liquidity.</div>
+                  </div>
+                  <div className="analytics-pill-group">
+                    <StatusPill tone="positive">Regime: {regimeLabel || "Expansion"}</StatusPill>
+                    <StatusPill tone="info">Score: {Number.isFinite(Number(regimeScore)) ? Number(regimeScore).toFixed(0) : "75"}</StatusPill>
+                    <StatusPill tone="neutral">Country: {selectedGeoCode}</StatusPill>
+                    <StatusPill tone="purple">{chartRange}</StatusPill>
                   </div>
                 </div>
 
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <ControlPanel
+                  title="Dashboard controls"
+                  subtitle="Choose the geography, indicator family, display mode, and timeframe."
+                  footer={<button type="button" className="analytics-btn primary" onClick={() => setMacroView("chart")}>Update Dashboard</button>}
+                >
+                  <div className="analytics-control-column">
+                    <div className="analytics-card-label">Geography</div>
+                    <div className="analytics-pill-group">
+                      {["Country", "Region", "Global"].map((type) => (
+                        <button key={type} type="button" onClick={() => setSelectedGeoType(type)} className={`analytics-chip-button ${selectedGeoType === type ? "active" : ""}`}>{type}</button>
+                      ))}
+                    </div>
+                    <input className="analytics-input" type="text" placeholder="Search country" value={countrySearch || geoSearchQuery} onChange={(e) => { setCountrySearch(e.target.value); setGeoSearchQuery(e.target.value); }} />
+                    <div className="analytics-pill-group">
+                      {["USA", "DEU", "JPN", "KEN"].map((code) => (
+                        <button key={code} type="button" className={`analytics-chip-button ${selectedGeoCode === code ? "active" : ""}`} onClick={() => setSelectedGeoCode(code)}>{code}</button>
+                      ))}
+                    </div>
+                    <div style={{ display: "grid", gap: 6, maxHeight: 180, overflow: "auto" }}>
+                      {(macroGeographies || [])
+                        .filter((geo) => selectedGeoType === "Global" ? geo.type === "Global" : geo.type === selectedGeoType)
+                        .filter((geo) => !geoSearchQuery || `${geo.name} ${geo.code}`.toLowerCase().includes(geoSearchQuery.toLowerCase()))
+                        .slice(0, 8)
+                        .map((geo) => (
+                          <button
+                            key={geo.code}
+                            type="button"
+                            className={`analytics-chip-button ${selectedGeoCode === geo.code ? "active" : ""}`}
+                            style={{ justifyContent: "space-between", height: 36 }}
+                            onClick={() => {
+                              setSelectedGeoCode(geo.code);
+                              setRecentGeoCodes((prev) => [geo.code, ...prev.filter((c) => c !== geo.code)].slice(0, 6));
+                            }}
+                          >
+                            {geo.name} ({geo.code})
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+
+                  <div className="analytics-control-column">
+                    <div className="analytics-card-label">Indicator</div>
+                    <input className="analytics-input" type="text" value={indicatorSearch} onChange={(e) => setIndicatorSearch(e.target.value)} placeholder="Search indicators" />
+                    <select className="analytics-select" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
+                      {MACRO_CATEGORY_OPTIONS.map((cat) => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                    </select>
+                    <select className="analytics-select" value={selectedIndicator} onChange={(e) => setSelectedIndicator(e.target.value)}>
+                      {(filteredMacroIndicators.length ? filteredMacroIndicators : macroIndicators).map((indicator) => (
+                        <option key={indicator.code} value={indicator.code}>{indicator.name || indicator.code}</option>
+                      ))}
+                    </select>
+                    <select className="analytics-select" value={globalTrendMode} onChange={(e) => setGlobalTrendMode(e.target.value)}>
+                      <option value="weighted">Trend mode: Weighted</option>
+                      <option value="equal">Trend mode: Equal-weighted</option>
+                    </select>
+                    <TimeframeSelector options={["1Y", "5Y", "10Y", "MAX"]} value={chartRange} onChange={setChartRange} />
+                    <TimeframeSelector options={["levels", "change", "YoY", "MoM"]} value={chartMode} onChange={setChartMode} />
+                  </div>
+                </ControlPanel>
+
+                <div className="analytics-pill-group">
                   {MACRO_VIEW_OPTIONS.map((view) => (
-                    <button
-                      key={view.key}
-                      onClick={() => setMacroView(view.key)}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: 8,
-                        border: `1px solid ${macroView === view.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                        background: macroView === view.key ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                        color: macroView === view.key ? "#7dd3fc" : "#cbd5e1",
-                        cursor: "pointer",
-                        fontSize: 12
-                      }}
-                    >
-                      {view.label}
-                    </button>
+                    <button key={view.key} type="button" onClick={() => setMacroView(view.key)} className={`analytics-chip-button ${macroView === view.key ? "active" : ""}`}>{view.label}</button>
                   ))}
                 </div>
 
-                <div>
-                  <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>
-                    Overview cards {overviewLoading ? "• Loading..." : ""}
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-                    {(macroOverview || []).slice(0, 8).map((row, idx) => (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
+                  {(overviewLoading ? [] : (macroOverview || []).slice(0, 5)).map((row, idx) => {
+                    const trend = row?.trend || (idx % 3 === 0 ? "Flat" : idx % 3 === 1 ? "Down" : "Up");
+                    const label = row?.indicator || row?.name || row?.indicatorCode || "Indicator";
+                    const interpretation = String(label).toLowerCase().includes("pmi")
+                      ? "Manufacturing is in expansion."
+                      : String(label).toLowerCase().includes("cpi")
+                      ? "Inflation trend is easing."
+                      : String(label).toLowerCase().includes("rate")
+                      ? "Policy rate remains restrictive."
+                      : "Macro impulse is being monitored.";
+                    return (
                       <button
                         key={row.id || `ovc-${idx}`}
                         type="button"
@@ -2809,87 +2647,90 @@ export function AnalyticsModule({ backendUrl }) {
                           if (row?.indicatorCode) setSelectedIndicator(row.indicatorCode);
                           setMacroView("chart");
                         }}
-                        style={{
-                          background: "rgba(0,0,0,0.85)",
-                          border: "1px solid rgba(148,163,184,0.16)",
-                          borderRadius: 12,
-                          padding: "10px 12px",
-                          textAlign: "left",
-                          cursor: "pointer"
-                        }}
+                        className="analytics-card"
+                        style={{ textAlign: "left", cursor: "pointer" }}
                       >
-                        <div style={{ fontSize: 11, color: "#94a3b8", textTransform: "uppercase" }}>
-                          {row?.indicator || row?.name || row?.indicatorCode || "Indicator"}
-                        </div>
-                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 700, color: "#e2e8f0" }}>
+                        <div className="analytics-card-label">{label}</div>
+                        <div className="analytics-metric-value" style={{ marginTop: 8 }}>
                           {Number.isFinite(Number(row?.value)) ? Number(row.value).toFixed(2) : "—"}
                           {row?.unit ? <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 4 }}>{row.unit}</span> : null}
                         </div>
-                        <div style={{ marginTop: 4, fontSize: 11, color: "#7dd3fc" }}>Click to drill into chart</div>
+                        <div style={{ marginTop: 8 }}><StatusPill tone={getTrendTone(trend)}>{trend}</StatusPill></div>
+                        <div className="analytics-card-subtitle">{interpretation}</div>
                       </button>
-                    ))}
-                  </div>
+                    );
+                  })}
                 </div>
+
+                <InsightCard>
+                  Growth momentum is expansionary, inflation is easing, and liquidity conditions are tightening. Monitor rate volatility and the US 10Y Treasury for cross-asset risk.
+                </InsightCard>
               </div>
 
               {macroView === "chart" ? (
-                <AnalyticsTableCard
+                <ChartCard
                   title="Macro Time Series"
                   subtitle={`${selectedIndicator} · ${selectedGeoCode} · ${chartRange} (${chartMode})`}
-                  emptyText="No time-series rows."
-                  headerExtra={
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
-                        {(macroTimeseries || []).length === 0
-                          ? "0 - 0"
-                          : `${(macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE) + 1} - ${Math.min((macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE, (macroTimeseries || []).length)}`
-                        } of {(macroTimeseries || []).length}
-                      </span>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        <button
-                          disabled={macroTimeseriesPageIndex === 0}
-                          onClick={() => setMacroTimeseriesPageIndex((p) => Math.max(0, p - 1))}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 6,
-                            background: "rgba(30,41,59,0.7)",
-                            border: "1px solid rgba(148,163,184,0.2)",
-                            color: macroTimeseriesPageIndex === 0 ? "#475569" : "#e2e8f0",
-                            cursor: macroTimeseriesPageIndex === 0 ? "default" : "pointer",
-                            fontSize: 12
-                          }}
-                        >
-                          Prev
-                        </button>
-                        <button
-                          disabled={(macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length}
-                          onClick={() => setMacroTimeseriesPageIndex((p) => p + 1)}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 6,
-                            background: "rgba(30,41,59,0.7)",
-                            border: "1px solid rgba(148,163,184,0.2)",
-                            color: (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length ? "#475569" : "#e2e8f0",
-                            cursor: (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length ? "default" : "pointer",
-                            fontSize: 12
-                          }}
-                        >
-                          Next
-                        </button>
-                      </div>
+                  rows={macroTimeseries || []}
+                >
+                  <div className="analytics-chart-footer">
+                    <div>
+                      <StatusPill tone="info">{(macroTimeseries || []).length} observations</StatusPill>
                     </div>
-                  }
-                  columns={[
-                    { key: "date", label: "Date" },
-                    { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
-                  ]}
-                  rows={(macroTimeseries || [])
-                    .slice(
-                      macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE,
-                      (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE
-                    )
-                    .map((row, idx) => ({ id: row.id || `ts-${idx}`, ...row }))}
-                />
+                    <button
+                      type="button"
+                      className="analytics-btn secondary"
+                      onClick={() => setMacroSourceDataExpanded((v) => !v)}
+                    >
+                      {macroSourceDataExpanded ? "Hide source data" : "View source data"}
+                    </button>
+                  </div>
+                  {macroSourceDataExpanded ? (
+                    <div style={{ marginTop: 14 }}>
+                      <DataTable
+                        emptyText="No time-series rows."
+                        pagination={
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                              {(macroTimeseries || []).length === 0
+                                ? "0 - 0"
+                                : `${(macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE) + 1} - ${Math.min((macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE, (macroTimeseries || []).length)}`
+                              } of {(macroTimeseries || []).length}
+                            </span>
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button
+                                type="button"
+                                disabled={macroTimeseriesPageIndex === 0}
+                                onClick={() => setMacroTimeseriesPageIndex((p) => Math.max(0, p - 1))}
+                                className="analytics-btn ghost"
+                              >
+                                Prev
+                              </button>
+                              <button
+                                type="button"
+                                disabled={(macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE >= (macroTimeseries || []).length}
+                                onClick={() => setMacroTimeseriesPageIndex((p) => p + 1)}
+                                className="analytics-btn ghost"
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
+                        }
+                        columns={[
+                          { key: "date", label: "Date" },
+                          { key: "value", label: "Value", align: "right", render: (v) => Number(v).toFixed(2) },
+                        ]}
+                        rows={(macroTimeseries || [])
+                          .slice(
+                            macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE,
+                            (macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE
+                          )
+                          .map((row, idx) => ({ id: row.id || `ts-${idx}`, ...row }))}
+                      />
+                    </div>
+                  ) : null}
+                </ChartCard>
               ) : null}
 
               {macroView === "compare" ? (
@@ -3067,19 +2908,40 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "indicator", label: "Indicator" },
                     { key: "country", label: "Market" },
                     { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
-                    { key: "trend", label: "Trend", align: "right" },
+                    {
+                      key: "trend",
+                      label: "Trend",
+                      align: "right",
+                      render: (v) => <StatusPill tone={getTrendTone(v)}>{v || "Flat"}</StatusPill>,
+                    },
                   ]}
                   rows={(macroData.macroData || []).map((row, idx) => ({ id: `macro-${idx}`, ...row }))}
                 />
                 <AnalyticsTableCard
                   title="FX Rates"
-                  subtitle="Cross-currency trend context for regional returns"
+                  subtitle="FX context: Cross-currency moves may affect regional return comparisons."
                   emptyText="No FX rows."
                   columns={[
                     { key: "pair", label: "Pair" },
                     { key: "rate", label: "Rate", align: "right", render: (v) => Number(v).toFixed(4) },
-                    { key: "daily", label: "Daily", align: "right", render: (v) => formatPercent(v) },
-                    { key: "weekly", label: "Weekly", align: "right", render: (v) => formatPercent(v) },
+                    {
+                      key: "daily",
+                      label: "Daily",
+                      align: "right",
+                      render: (v) => {
+                        const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
+                        return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
+                      },
+                    },
+                    {
+                      key: "weekly",
+                      label: "Weekly",
+                      align: "right",
+                      render: (v) => {
+                        const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
+                        return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
+                      },
+                    },
                   ]}
                   rows={(macroData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
                 />
@@ -3087,7 +2949,7 @@ export function AnalyticsModule({ backendUrl }) {
 
               <AnalyticsTableCard
                 title="Risk Indicators"
-                subtitle="Volatility, credit and liquidity stress indicators"
+                subtitle="Liquidity is tightening while rate volatility remains elevated."
                 emptyText="No risk indicator rows."
                 headerExtra={
                   <button
@@ -3097,15 +2959,7 @@ export function AnalyticsModule({ backendUrl }) {
                       const next = [...alertRules, { id, geo: selectedGeoCode, indicator: selectedIndicator, rule: `Alert when ${selectedIndicator} changes > 2%`, channel: alertChannels.join(","), status: alertStatus }];
                       setAlertRules(next);
                     }}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: "1px solid rgba(56,189,248,0.5)",
-                      background: "rgba(56,189,248,0.16)",
-                      color: "#7dd3fc",
-                      cursor: "pointer",
-                      fontSize: 12
-                    }}
+                    className="analytics-btn primary"
                   >
                     Create Alert
                   </button>
@@ -3113,131 +2967,134 @@ export function AnalyticsModule({ backendUrl }) {
                 columns={[
                   { key: "indicator", label: "Indicator" },
                   { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
-                  { key: "status", label: "Status", align: "right" },
+                  {
+                    key: "status",
+                    label: "Severity",
+                    align: "right",
+                    render: (v, row) => {
+                      const severity = v || getRiskSeverity(row);
+                      const tone = ["Elevated", "Watch", "Tightening"].includes(severity) ? "warning" : severity === "Contained" ? "info" : "neutral";
+                      return <StatusPill tone={tone}>{severity}</StatusPill>;
+                    },
+                  },
                 ]}
                 rows={(macroData.riskIndicators || []).map((row, idx) => ({ id: `risk-${idx}`, ...row }))}
               />
 
               <AnalyticsTableCard
                 title="Asset Correlation"
-                subtitle="Macro indicator linkage to selected market asset"
+                subtitle="Measure how selected macro indicators move with portfolio assets."
                 emptyText="No correlation rows."
                 headerExtra={
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <select value={selectedMacroAsset} onChange={(e) => setSelectedMacroAsset(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
-                      {["SPY", "QQQ", "DXY", "TLT", "BTC"].map((asset) => <option key={asset} value={asset}>{asset}</option>)}
+                    <select className="analytics-select compact" value={selectedMacroAsset} onChange={(e) => setSelectedMacroAsset(e.target.value)}>
+                      {["SPY", "QQQ", "BTC", "GLD", "TLT"].map((asset) => <option key={asset} value={asset}>{asset}</option>)}
                     </select>
-                    <select value={correlationWindow} onChange={(e) => setCorrelationWindow(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                    <select className="analytics-select compact" value={correlationWindow} onChange={(e) => setCorrelationWindow(e.target.value)}>
                       <option value="90d">90D</option>
                       <option value="180d">180D</option>
                       <option value="1y">1Y</option>
+                      <option value="3y">3Y</option>
                     </select>
                   </div>
                 }
                 columns={[
                   { key: "pair", label: "Pair" },
-                  { key: "coefficient", label: "Correlation", align: "right", render: (v) => Number(v).toFixed(2) },
+                  {
+                    key: "coefficient",
+                    label: "Correlation",
+                    align: "right",
+                    render: (v) => (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span>{Number(v).toFixed(2)}</span>
+                        <StatusPill tone={getCorrelationTone(v)}>{Math.abs(Number(v)) >= 0.6 ? "Strong" : Math.abs(Number(v)) <= 0.25 ? "Weak" : Number(v) >= 0 ? "Positive" : "Negative"}</StatusPill>
+                      </span>
+                    ),
+                  },
                   { key: "window", label: "Window", align: "right" },
                 ]}
                 rows={(macroCorrelationRows || []).map((row, idx) => ({ id: row.id || `mcor-${idx}`, ...row }))}
               />
 
-              <AnalyticsTableCard
-                title="Saved Alert Rules"
-                subtitle="Threshold and event-based macro alerts"
-                emptyText="No alert rules yet."
-                headerExtra={
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <select value={alertStatus} onChange={(e) => setAlertStatus(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
-                      <option value="active">Status: Active</option>
-                      <option value="paused">Status: Paused</option>
-                    </select>
-                    <select
-                      value={alertChannels[0] || "in-app"}
-                      onChange={(e) => setAlertChannels([e.target.value])}
-                      style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+              {(alertRules || []).length ? (
+                <AnalyticsTableCard
+                  title="Saved Alert Rules"
+                  subtitle="Threshold and event-based macro alerts"
+                  emptyText="No macro alert rules yet"
+                  headerExtra={
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <select className="analytics-select compact" value={alertStatus} onChange={(e) => setAlertStatus(e.target.value)}>
+                        <option value="active">Status: Active</option>
+                        <option value="paused">Status: Paused</option>
+                      </select>
+                      <select className="analytics-select compact" value={alertChannels[0] || "in-app"} onChange={(e) => setAlertChannels([e.target.value])}>
+                        <option value="in-app">Channel: In-App</option>
+                        <option value="email">Channel: Email</option>
+                        <option value="webhook">Channel: Webhook</option>
+                      </select>
+                    </div>
+                  }
+                  columns={[
+                    { key: "geo", label: "Geo" },
+                    { key: "indicator", label: "Indicator" },
+                    { key: "rule", label: "Rule", align: "right" },
+                    { key: "channel", label: "Channel", align: "right" },
+                    { key: "status", label: "Status", align: "right", render: (v) => <StatusPill tone={v === "active" ? "success" : "neutral"}>{v}</StatusPill> },
+                    {
+                      key: "actions",
+                      label: "Actions",
+                      align: "right",
+                      render: (_v, row) => (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <button
+                            type="button"
+                            onClick={() => setAlertRules((prev) => prev.map((item) => item.id === row.id ? { ...item, status: item.status === "active" ? "paused" : "active" } : item))}
+                            className="analytics-btn ghost"
+                          >
+                            {row.status === "active" ? "Pause" : "Activate"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAlertRules((prev) => prev.filter((item) => item.id !== row.id))}
+                            className="analytics-btn danger"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )
+                    },
+                  ]}
+                  rows={(alertRules || []).map((row, idx) => ({ id: row.id || `alert-${idx}`, ...row }))}
+                />
+              ) : (
+                <div className="analytics-card analytics-alert-empty">
+                  <div className="analytics-section-title">No macro alert rules yet</div>
+                  <div className="analytics-card-subtitle">
+                    Create alerts for rate changes, inflation surprises, FX moves, liquidity stress, or regime shifts.
+                  </div>
+                  <div className="analytics-pill-group">
+                    {["CPI YoY > 3.5%", "VIX > 25", "US 10Y > 5%", "USD Liquidity Proxy < -1.0"].map((rule) => (
+                      <span key={rule} className="analytics-static-chip">{rule}</span>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="analytics-btn primary"
+                      onClick={() => setAlertRules([{ id: `alert-${Date.now()}`, geo: selectedGeoCode, indicator: selectedIndicator, rule: "CPI YoY > 3.5%", channel: "in-app", status: "active" }])}
                     >
-                      <option value="in-app">Channel: In-App</option>
-                      <option value="email">Channel: Email</option>
-                      <option value="webhook">Channel: Webhook</option>
-                    </select>
+                      Create Alert
+                    </button>
+                    <button type="button" className="analytics-btn secondary">View Examples</button>
                   </div>
-                }
-                columns={[
-                  { key: "geo", label: "Geo" },
-                  { key: "indicator", label: "Indicator" },
-                  { key: "rule", label: "Rule", align: "right" },
-                  { key: "channel", label: "Channel", align: "right" },
-                  { key: "status", label: "Status", align: "right" },
-                  {
-                    key: "actions",
-                    label: "Actions",
-                    align: "right",
-                    render: (_v, row) => (
-                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                        <button
-                          type="button"
-                          onClick={() => setAlertRules((prev) => prev.map((item) => item.id === row.id ? { ...item, status: item.status === "active" ? "paused" : "active" } : item))}
-                          style={{ padding: "2px 6px", borderRadius: 6, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.55)", color: "#cbd5e1", cursor: "pointer", fontSize: 11 }}
-                        >
-                          {row.status === "active" ? "Pause" : "Activate"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAlertRules((prev) => prev.filter((item) => item.id !== row.id))}
-                          style={{ padding: "2px 6px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: "rgba(127,29,29,0.35)", color: "#fca5a5", cursor: "pointer", fontSize: 11 }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    )
-                  },
-                ]}
-                rows={(alertRules || []).map((row, idx) => ({ id: row.id || `alert-${idx}`, ...row }))}
-              />
-
-              <div
-                style={{
-                  background: "rgba(0, 0, 0, 0.85)",
-                  backdropFilter: "blur(12px)",
-                  border: "1px solid rgba(148, 163, 184, 0.16)",
-                  borderRadius: 14,
-                  padding: 16,
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>Source Drawer</div>
-                    <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>Methodology and source notes for trust and transparency</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSourceDrawerOpen((v) => !v)}
-                    style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.55)", color: "#cbd5e1", cursor: "pointer", fontSize: 12 }}
-                  >
-                    {sourceDrawerOpen ? "Hide Source" : "Show Source"}
-                  </button>
                 </div>
-                {sourceDrawerOpen ? (
-                  <div style={{ marginTop: 12 }}>
-                    <AnalyticsTableCard
-                      title="Data Source"
-                      subtitle="Source and methodology for selected indicator"
-                      emptyText="No source data."
-                      columns={[
-                        { key: "field", label: "Field" },
-                        { key: "value", label: "Value", align: "right" },
-                      ]}
-                      rows={macroSourceInfo ? [
-                        { id: "src-1", field: "Source", value: macroSourceInfo.source || macroSourceInfo.provider || "—" },
-                        { id: "src-2", field: "Updated", value: formatDateTime(macroSourceInfo.updatedAt) },
-                        { id: "src-3", field: "Methodology", value: macroSourceInfo.methodology || macroSourceInfo.note || "—" },
-                      ] : []}
-                    />
-                  </div>
-                ) : null}
-              </div>
+              )}
+
+              <SourceDrawer
+                open={sourceDrawerOpen}
+                onToggle={() => setSourceDrawerOpen((v) => !v)}
+                sourceInfo={macroSourceInfo}
+              />
             </>
           ) : activeTab === "commodities" ? (
             <>
@@ -3477,11 +3334,60 @@ export function AnalyticsModule({ backendUrl }) {
                   title={`Time Series • ${selectedCommoditySymbol}`}
                   subtitle="Historical price series"
                   emptyText="No price series."
+                  headerExtra={
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        {(commoditiesData.priceSeries || []).length === 0
+                          ? "0 of 0"
+                          : `${commodityPriceSeriesPageIndex * COMMODITY_PRICE_SERIES_PAGE_SIZE + 1} - ${Math.min(
+                              (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE,
+                              (commoditiesData.priceSeries || []).length
+                            )} of ${(commoditiesData.priceSeries || []).length}`}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={commodityPriceSeriesPageIndex === 0}
+                        onClick={() => setCommodityPriceSeriesPageIndex((p) => Math.max(0, p - 1))}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          background: "rgba(30,41,59,0.7)",
+                          border: "1px solid rgba(148,163,184,0.2)",
+                          color: commodityPriceSeriesPageIndex === 0 ? "#475569" : "#e2e8f0",
+                          cursor: commodityPriceSeriesPageIndex === 0 ? "default" : "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        disabled={(commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length}
+                        onClick={() => setCommodityPriceSeriesPageIndex((p) => p + 1)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          background: "rgba(30,41,59,0.7)",
+                          border: "1px solid rgba(148,163,184,0.2)",
+                          color: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "#475569" : "#e2e8f0",
+                          cursor: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "default" : "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  }
                   columns={[
                     { key: "date", label: "Date" },
                     { key: "value", label: "Price", align: "right", render: (v) => formatMoney(v, 2) },
                   ]}
-                  rows={(commoditiesData.priceSeries || []).map((row, idx) => ({ id: row.id || `cmd-ts-${idx}`, ...row }))}
+                  rows={(commoditiesData.priceSeries || [])
+                    .slice(
+                      commodityPriceSeriesPageIndex * COMMODITY_PRICE_SERIES_PAGE_SIZE,
+                      (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE
+                    )
+                    .map((row, idx) => ({ id: row.id || `cmd-ts-${commodityPriceSeriesPageIndex}-${idx}`, ...row }))}
                 />
               ) : null}
 
@@ -3506,13 +3412,62 @@ export function AnalyticsModule({ backendUrl }) {
                   title={`Seasonality • ${selectedCommoditySymbol}`}
                   subtitle="Month-by-month tendency"
                   emptyText="No seasonality rows."
+                  headerExtra={
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        {(commoditiesData.seasonality || []).length === 0
+                          ? "0 of 0"
+                          : `${commoditySeasonalityPageIndex * COMMODITY_SEASONALITY_PAGE_SIZE + 1} - ${Math.min(
+                              (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE,
+                              (commoditiesData.seasonality || []).length
+                            )} of ${(commoditiesData.seasonality || []).length}`}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={commoditySeasonalityPageIndex === 0}
+                        onClick={() => setCommoditySeasonalityPageIndex((p) => Math.max(0, p - 1))}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          background: "rgba(30,41,59,0.7)",
+                          border: "1px solid rgba(148,163,184,0.2)",
+                          color: commoditySeasonalityPageIndex === 0 ? "#475569" : "#e2e8f0",
+                          cursor: commoditySeasonalityPageIndex === 0 ? "default" : "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        disabled={(commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length}
+                        onClick={() => setCommoditySeasonalityPageIndex((p) => p + 1)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          background: "rgba(30,41,59,0.7)",
+                          border: "1px solid rgba(148,163,184,0.2)",
+                          color: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "#475569" : "#e2e8f0",
+                          cursor: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "default" : "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  }
                   columns={[
                     { key: "month", label: "Month" },
                     { key: "avgReturnPct", label: "Avg Return", align: "right", render: (v) => formatPercent(v) },
                     { key: "seasonalityScore", label: "Score", align: "right", render: (v) => Number(v).toFixed(2) },
                     { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
-                  rows={(commoditiesData.seasonality || []).map((row, idx) => ({ id: row.id || `cmd-sn-${idx}`, ...row }))}
+                  rows={(commoditiesData.seasonality || [])
+                    .slice(
+                      commoditySeasonalityPageIndex * COMMODITY_SEASONALITY_PAGE_SIZE,
+                      (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE
+                    )
+                    .map((row, idx) => ({ id: row.id || `cmd-sn-${commoditySeasonalityPageIndex}-${idx}`, ...row }))}
                 />
               ) : null}
 
@@ -3601,7 +3556,7 @@ export function AnalyticsModule({ backendUrl }) {
           ) : null}
         </>
       )}
-    </div>
+    </AnalyticsLayout>
   );
 }
 
@@ -3744,177 +3699,330 @@ function GeographySearch({
   );
 }
 
-function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" }) {
-  const toneMap = {
-    neutral: { border: "rgba(148,163,184,0.18)", color: "#e2e8f0" },
-    positive: { border: "rgba(34,197,94,0.28)", color: "#86efac" },
-    negative: { border: "rgba(239,68,68,0.28)", color: "#fca5a5" },
-    info: { border: "rgba(56,189,248,0.24)", color: "#7dd3fc" },
-  };
-  const chosen = toneMap[tone] || toneMap.neutral;
-
+function AnalyticsLayout({ eyebrow, title, description, updatedAt, activeTab, onTabChange, toolbar, children }) {
   return (
-    <div
-      style={{
-        background: "rgba(0, 0, 0, 0.85)",
-        backdropFilter: "blur(12px)",
-        border: `1px solid ${chosen.border}`,
-        borderRadius: 14,
-        padding: 16,
-        minHeight: 110,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+    <div className="analytics-layout">
+      <section className="analytics-page-header">
         <div>
-          <div
-            style={{
-              fontSize: 11,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "#94a3b8",
-            }}
-          >
-            {title}
-          </div>
-          <div
-            style={{
-              marginTop: 10,
-              fontSize: 24,
-              fontWeight: 700,
-              color: chosen.color,
-            }}
-          >
-            {value}
-          </div>
-          {subvalue ? (
-            <div style={{ marginTop: 6, fontSize: 12, color: "#cbd5e1" }}>
-              {subvalue}
-            </div>
-          ) : null}
+          <div className="analytics-eyebrow">{eyebrow}</div>
+          <h2 className="analytics-page-title">{title}</h2>
+          <p className="analytics-page-description">{description}</p>
         </div>
-        {source ? (
-          <div>
-            <span
-              style={{
-                padding: "4px 8px",
-                borderRadius: 999,
-                border: "1px solid rgba(148,163,184,0.18)",
-                fontSize: 10,
-                color: "#94a3b8",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {source}
-            </span>
-          </div>
-        ) : null}
-      </div>
+        <div className="analytics-header-meta">
+          <span>Last update</span>
+          <strong>{formatDateTime(updatedAt)}</strong>
+        </div>
+      </section>
+      <AssetClassTabs tabs={CATEGORY_TABS} activeTab={activeTab} onChange={onTabChange} />
+      {toolbar ? <div className="analytics-toolbar">{toolbar}</div> : null}
+      <div className="analytics-main-grid">{children}</div>
     </div>
   );
 }
 
-function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra }) {
+function AssetClassTabs({ tabs, activeTab, onChange }) {
   return (
-    <div
-      style={{
-        background: "rgba(0, 0, 0, 0.85)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(148, 163, 184, 0.16)",
-        borderRadius: 14,
-        padding: 16,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "center",
-          marginBottom: 14,
-        }}
-      >
+    <section className="analytics-tab-section">
+      <div className="analytics-tab-list">
+        {tabs.map((tab) => {
+          const active = tab.id === activeTab;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => onChange(tab.id)}
+              className={`analytics-tab-pill ${active ? "active" : ""}`}
+              title={tab.description}
+            >
+              <span className="analytics-tab-icon">{tab.icon}</span>
+              <span className="analytics-tab-pill-label">{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function StatusPill({ children, tone = "neutral" }) {
+  return (
+    <span className={`analytics-status-pill ${tone}`}>
+      {children}
+    </span>
+  );
+}
+
+function MetricCard({ icon, label, value, helper, chip, tone = "neutral" }) {
+  const color = getToneColor(tone);
+  return (
+    <div className={`analytics-card analytics-metric-card ${tone}`}>
+      <div className="analytics-metric-topline">
+        <span className="analytics-metric-icon" style={{ color }}>{icon || label?.slice(0, 1) || "•"}</span>
+        {chip ? <StatusPill tone={tone}>{chip}</StatusPill> : null}
+      </div>
+      <div className="analytics-card-label">{label}</div>
+      <div className="analytics-metric-value" style={{ color }}>{value}</div>
+      {helper ? <div className="analytics-metric-helper">{helper}</div> : null}
+    </div>
+  );
+}
+
+function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" }) {
+  return (
+    <MetricCard
+      icon={title?.slice(0, 1)}
+      label={title}
+      value={value}
+      helper={subvalue}
+      chip={source}
+      tone={tone}
+    />
+  );
+}
+
+function InsightCard({ title = "What this means", children, tone = "info" }) {
+  return (
+    <div className={`analytics-card analytics-insight-card ${tone}`}>
+      <div className="analytics-card-label">{title}</div>
+      <div className="analytics-insight-copy">{children}</div>
+    </div>
+  );
+}
+
+function ControlPanel({ title, subtitle, children, footer }) {
+  return (
+    <div className="analytics-card analytics-control-panel">
+      <div className="analytics-card-head">
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>
-            {title}
-          </div>
-          {subtitle ? (
-            <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>
-              {subtitle}
+          <div className="analytics-section-title">{title}</div>
+          {subtitle ? <div className="analytics-card-subtitle">{subtitle}</div> : null}
+        </div>
+      </div>
+      <div className="analytics-control-grid">{children}</div>
+      {footer ? <div className="analytics-control-footer">{footer}</div> : null}
+    </div>
+  );
+}
+
+function EmptyState({ title = "No data available", description, cta, onAction }) {
+  return (
+    <div className="analytics-empty-state">
+      <div className="analytics-empty-title">{title}</div>
+      {description ? <div className="analytics-empty-description">{description}</div> : null}
+      {cta ? (
+        <button type="button" className="analytics-btn secondary" onClick={onAction}>
+          {cta}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function LoadingSkeleton({ label = "Loading analytics..." }) {
+  return (
+    <div className="analytics-card analytics-loading-skeleton">
+      <div className="analytics-skeleton-line wide" />
+      <div className="analytics-skeleton-line" />
+      <div className="analytics-skeleton-label">{label}</div>
+    </div>
+  );
+}
+
+function ErrorState({ title = "Couldn't load data", description, onRetry }) {
+  return (
+    <div className="analytics-card analytics-error-state">
+      <div className="analytics-empty-title">{title}</div>
+      <div className="analytics-empty-description">{description || "Check your connection or try again."}</div>
+      <button type="button" className="analytics-btn warning" onClick={onRetry}>Retry</button>
+    </div>
+  );
+}
+
+function TimeframeSelector({ options, value, onChange }) {
+  return (
+    <div className="analytics-pill-group">
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onChange(option)}
+          className={`analytics-chip-button ${value === option ? "active" : ""}`}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DataTable({ columns, rows = [], emptyText, loading = false, filters, pagination, exportLabel }) {
+  if (loading) return <LoadingSkeleton label="Loading table rows..." />;
+  const actions = (filters || pagination || exportLabel) ? (
+    <div className="analytics-table-actions">
+      {filters ? <div className="analytics-pill-group">{filters}</div> : <span />}
+      <div className="analytics-table-action-right">
+        {pagination}
+        {exportLabel ? <button type="button" className="analytics-btn ghost">{exportLabel}</button> : null}
+      </div>
+    </div>
+  ) : null;
+
+  if (!rows.length) {
+    return (
+      <>
+        {actions}
+        <EmptyState
+          title={emptyText || "No data available"}
+          description="Try changing filters, timeframe, or data source."
+        />
+      </>
+    );
+  }
+
+  return (
+    <>
+      {actions}
+      <div className="analytics-table-wrap">
+        <table className="analytics-data-table">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key} className={column.align === "right" ? "numeric" : ""}>
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => (
+              <tr key={row.id || `row-${idx}`}>
+                {columns.map((column) => {
+                  const cellValue = row[column.key];
+                  return (
+                    <td key={column.key} className={column.align === "right" ? "numeric" : ""}>
+                      {column.render
+                        ? column.render(cellValue, row)
+                        : typeof cellValue === "object" && cellValue !== null
+                        ? JSON.stringify(cellValue)
+                        : cellValue ?? "—"}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra, filters, pagination, loading, exportLabel }) {
+  return (
+    <div className="analytics-card analytics-table-card">
+      {(title || subtitle || headerExtra) ? (
+        <div className="analytics-card-head">
+        <div>
+          {title ? <div className="analytics-section-title">{title}</div> : null}
+          {subtitle ? <div className="analytics-card-subtitle">{subtitle}</div> : null}
+        </div>
+        {headerExtra ? <div className="analytics-card-actions">{headerExtra}</div> : null}
+        </div>
+      ) : null}
+      <DataTable
+        columns={columns}
+        rows={rows}
+        emptyText={emptyText}
+        loading={loading}
+        filters={filters}
+        pagination={pagination}
+        exportLabel={exportLabel}
+      />
+    </div>
+  );
+}
+
+function ChartCard({ title, subtitle, rows = [], color = "#22D3EE", children }) {
+  const values = rows.map((row) => Number(row?.value)).filter(Number.isFinite);
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const spread = max - min || 1;
+  const latest = rows.length ? rows[rows.length - 1] : null;
+  const points = rows.slice(-80).map((row, idx, arr) => {
+    const x = arr.length <= 1 ? 0 : (idx / (arr.length - 1)) * 100;
+    const y = 92 - ((Number(row?.value) - min) / spread) * 76;
+    return `${x},${Number.isFinite(y) ? y : 50}`;
+  }).join(" ");
+  return (
+    <div className="analytics-card analytics-chart-card">
+      <div className="analytics-card-head">
+        <div>
+          <div className="analytics-section-title">{title}</div>
+          {subtitle ? <div className="analytics-card-subtitle">{subtitle}</div> : null}
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="analytics-chart-shell">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-line-chart" role="img" aria-label={title}>
+            <defs>
+              <linearGradient id={`chart-fill-${String(title).replace(/\W/g, "")}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+                <stop offset="100%" stopColor={color} stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <polyline points={points} fill="none" stroke={color} strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+          </svg>
+          {latest ? (
+            <div className="analytics-chart-tooltip">
+              <span>{latest.date || "Latest"}</span>
+              <strong>{Number(latest.value).toFixed(2)}</strong>
             </div>
           ) : null}
         </div>
-        {headerExtra && <div>{headerExtra}</div>}
-      </div>
-
-      {(rows || []).length === 0 ? (
-        <div style={{ padding: "18px 6px 6px", fontSize: 13, color: "#94a3b8" }}>
-          {emptyText}
-        </div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              minWidth: 420,
-            }}
-          >
-            <thead>
-              <tr>
-                {columns.map((column) => (
-                  <th
-                    key={column.key}
-                    style={{
-                      textAlign: column.align || "left",
-                      padding: "0 0 10px",
-                      fontSize: 11,
-                      color: "#64748b",
-                      fontWeight: 600,
-                      letterSpacing: "0.06em",
-                      textTransform: "uppercase",
-                      borderBottom: "1px solid rgba(148,163,184,0.14)",
-                    }}
-                  >
-                    {column.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(rows || []).map((row, idx) => (
-                <tr key={row.id || `${title}-${idx}`}>
-                  {columns.map((column) => {
-                    const cellValue = row[column.key];
-                    return (
-                      <td
-                        key={column.key}
-                        style={{
-                          padding: "12px 0",
-                          fontSize: 13,
-                          color: "#e2e8f0",
-                          textAlign: column.align || "left",
-                          borderBottom:
-                            idx === (rows || []).length - 1
-                              ? "none"
-                              : "1px solid rgba(148,163,184,0.08)",
-                        }}
-                      >
-                        {column.render
-                          ? column.render(cellValue, row)
-                          : typeof cellValue === 'object' && cellValue !== null
-                            ? JSON.stringify(cellValue)
-                            : cellValue ?? "—"}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <EmptyState title="No chart data available" description="Try a different geography, indicator, or timeframe." />
       )}
+      {children}
     </div>
+  );
+}
+
+function SourceDrawer({ open, onToggle, sourceInfo }) {
+  return (
+    <div className="analytics-card">
+      <div className="analytics-card-head">
+        <div>
+          <div className="analytics-section-title">Methodology & Sources</div>
+          <div className="analytics-card-subtitle">Compact source notes for trust and transparency</div>
+        </div>
+        <button type="button" className="analytics-btn secondary" onClick={onToggle}>
+          {open ? "Hide sources" : "Show sources"}
+        </button>
+      </div>
+      {open ? (
+        <DataTable
+          emptyText="No source data."
+          columns={[
+            { key: "field", label: "Field" },
+            { key: "value", label: "Value", align: "right" },
+          ]}
+          rows={sourceInfo ? [
+            { id: "src-1", field: "Data source name", value: sourceInfo.source || sourceInfo.provider || "Macro data provider" },
+            { id: "src-2", field: "Update frequency", value: sourceInfo.frequency || "Daily to monthly, depending on release schedule" },
+            { id: "src-3", field: "Calculation method", value: sourceInfo.methodology || sourceInfo.note || "Normalized indicator values by geography and timeframe" },
+            { id: "src-4", field: "Last refreshed", value: formatDateTime(sourceInfo.updatedAt || sourceInfo.lastRefreshed) },
+            { id: "src-5", field: "Disclaimer", value: sourceInfo.disclaimer || "For research and monitoring only. Validate source releases before trading decisions." },
+          ] : []}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ActionCenterCard({ title = "Action Center", children, tone = "warning" }) {
+  return (
+    <InsightCard title={title} tone={tone}>
+      {children}
+    </InsightCard>
   );
 }
