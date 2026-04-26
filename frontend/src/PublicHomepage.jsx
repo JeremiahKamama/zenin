@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo, LineZMark } from "./components/Branding";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
 const VALID_BILLING_CYCLES = ["monthly", "yearly"];
@@ -756,6 +757,7 @@ export default function PublicHomepage() {
           <span>Responsive homepage concept built for all screen sizes.</span>
         </div>
       </footer>
+      <SpeedInsights />
     </div>
   );
 }
