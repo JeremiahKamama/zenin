@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo } from "./components/Branding";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 const OAUTH_PROVIDERS = [
   { key: "google", label: "Google", icon: "G" },
@@ -639,6 +640,7 @@ export default function AuthPage() {
           {error ? <p className="auth-v2-error">{error}</p> : null}
         </section>
       </main>
+      <SpeedInsights />
     </div>
   );
 }
