@@ -2473,3 +2473,101 @@ body.page-dark-theme #root {
     font-size: 2.7rem;
   }
 }
+
+/* Dark Black Theme Override */
+html.page-dark-theme,
+body.page-dark-theme,
+body.page-dark-theme #root {
+  background: #000000 !important;
+}
+
+.zc-home {
+  --bg: #000000;
+  --bg-2: #050505;
+  --panel: rgba(7, 7, 7, 0.9);
+  --panel-2: rgba(10, 10, 10, 0.94);
+  --panel-3: rgba(12, 12, 12, 0.92);
+  --border: rgba(255, 255, 255, 0.13);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --text: #f8fafc;
+  --muted: #a1a1aa;
+  --muted-2: #71717a;
+  --primary: #f8fafc;
+  --primary-2: #d4d4d8;
+  --primary-soft: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, #000000 0%, #050505 52%, #000000 100%);
+}
+
+.zc-home input:not([type="checkbox"]):not([type="radio"]),
+.zc-home select,
+.zc-home textarea,
+.zc-home .site-header,
+.zc-home .eyebrow,
+.zc-home .dashboard-shell,
+.zc-home .mock-sidebar,
+.zc-home .stat-card,
+.zc-home .panel,
+.zc-home .feature-card,
+.zc-home .bottom-cta,
+.zc-home .brand-spec-board,
+.zc-home .brand-icon-card,
+.zc-home .brand-favicon-chip,
+.zc-home .coverage-section,
+.zc-home .coverage-plan-chip,
+.zc-home .coverage-card,
+.zc-home .coverage-kpis div,
+.zc-home .pricing-section,
+.zc-home .pricing-billing-pill,
+.zc-home .pricing-card,
+.zc-home .company-summary-card,
+.zc-home .chart,
+.zc-home .market-screen,
+.zc-home .terminal,
+.zc-home .workflow-card,
+.zc-home .security-card,
+.zc-home .testimonial-card,
+.zc-home .faq-card,
+.zc-home .auth-v2-card,
+.zc-home .auth-v2-input,
+.zc-home .auth-v2-tile-grid article,
+.auth-v2-card,
+.auth-v2-input,
+.auth-v2-tile-grid article {
+  background: rgba(5, 5, 5, 0.92) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+.zc-home .hero-visual::before,
+.zc-home .brand-spec-board,
+.zc-home .pricing-section,
+.zc-home .auth-v2-bg,
+.auth-v2-bg {
+  background-image: none !important;
+}
+
+.zc-home .btn-primary,
+.zc-home .pricing-billing-pill .is-active,
+.auth-v2-btn-primary {
+  background: linear-gradient(180deg, #f8fafc, #cbd5e1) !important;
+  color: #000000 !important;
+  box-shadow: 0 16px 34px rgba(255, 255, 255, 0.12) !important;
+}
+
+.zc-home .btn-secondary,
+.zc-home .menu-toggle,
+.zc-home .tab.active,
+.zc-home .mock-side-link.active,
+.zc-home .pricing-badge,
+.zc-home .auth-v2-btn-ghost,
+.auth-v2-btn-ghost {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+.auth-v2-shell {
+  background: #000000 !important;
+}
+
+.auth-v2-card {
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.72) !important;
+}

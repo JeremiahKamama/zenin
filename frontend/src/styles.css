@@ -5800,17 +5800,23 @@ button {
 
 .portfolio-v2-attrib-card,
 .portfolio-v2-heat-cell {
+  min-width: 0;
   border: 1px solid rgba(51, 65, 85, 0.5);
   border-radius: 10px;
   padding: 10px;
   background: rgba(2, 14, 34, 0.8);
+  white-space: normal;
 }
 
 .portfolio-v2-attrib-card span,
 .portfolio-v2-heat-cell span {
+  display: block;
   color: #8fa0b8;
   text-transform: uppercase;
   font-size: 0.73rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .portfolio-v2-attrib-card strong,
@@ -5821,6 +5827,7 @@ button {
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.25;
+  white-space: normal;
 }
 
 .portfolio-v2-attrib-card em,
@@ -5832,6 +5839,7 @@ button {
   font-weight: 700;
   overflow-wrap: anywhere;
   word-break: break-word;
+  white-space: normal;
 }
 
 .portfolio-v2-attrib-card em.positive {
@@ -10378,4 +10386,170 @@ button {
   .journal-v2-heat-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* Dark Black Theme Override */
+body:not(.light-theme-active),
+body:not(.light-theme-active) #root,
+html.page-dark-theme:not(.light-theme-active),
+body.page-dark-theme:not(.light-theme-active),
+body.page-dark-theme:not(.light-theme-active) #root {
+  background: #000000 !important;
+}
+
+body:not(.light-theme-active) {
+  --color-bg-base: #000000;
+  --color-surface-card: rgba(5, 5, 5, 0.86);
+  --color-surface-card-strong: rgba(5, 5, 5, 0.94);
+  --color-surface-panel: rgba(7, 7, 7, 0.92);
+  --color-surface-elevated: rgba(12, 12, 12, 0.88);
+  --color-border-subtle: rgba(255, 255, 255, 0.14);
+}
+
+body:not(.light-theme-active) .page-shell-dark {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.98), rgba(5, 5, 5, 0.96)) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+body:not(.light-theme-active) .app-access-loading,
+body:not(.light-theme-active) .sidebar,
+body:not(.light-theme-active) .sidebar-theme-row,
+body:not(.light-theme-active) .sidebar-footer,
+body:not(.light-theme-active) .settings-overlay,
+body:not(.light-theme-active) .watchlist-panel,
+body:not(.light-theme-active) .portfolio-panel,
+body:not(.light-theme-active) .asset-card,
+body:not(.light-theme-active) .portfolio-card,
+body:not(.light-theme-active) .metric-card,
+body:not(.light-theme-active) .glass,
+body:not(.light-theme-active) .prediction-market-panel,
+body:not(.light-theme-active) .prediction-whale-panel,
+body:not(.light-theme-active) .whale-trades-panel,
+body:not(.light-theme-active) .prediction-category-card,
+body:not(.light-theme-active) .prediction-market-row,
+body:not(.light-theme-active) .prediction-split-card,
+body:not(.light-theme-active) .prediction-split-pane,
+body:not(.light-theme-active) .prediction-column,
+body:not(.light-theme-active) .journal-stat-card,
+body:not(.light-theme-active) .trade-item,
+body:not(.light-theme-active) .options-calculator-symbol-panel,
+body:not(.light-theme-active) .options-calculator-strategy-panel,
+body:not(.light-theme-active) .options-calculator-position-panel,
+body:not(.light-theme-active) .options-calculator-pnl-panel,
+body:not(.light-theme-active) .options-leg-card,
+body:not(.light-theme-active) .modal-content,
+body:not(.light-theme-active) .prediction-modal-window,
+body:not(.light-theme-active) .watchlist-add-modal,
+body:not(.light-theme-active) .settings-window,
+body:not(.light-theme-active) .connect-account-window,
+body:not(.light-theme-active) .payment-method-modal,
+body:not(.light-theme-active) .settings-panel,
+body:not(.light-theme-active) .settings-panel-header,
+body:not(.light-theme-active) .settings-panel-body,
+body:not(.light-theme-active) .connected-account-item,
+body:not(.light-theme-active) .calendar-symbol-dropdown,
+body:not(.light-theme-active) .journal-report-table-wrap,
+body:not(.light-theme-active) .table-scroll,
+body:not(.light-theme-active) .analytics-tab-pill,
+body:not(.light-theme-active) .portfolio-v2-attrib-card,
+body:not(.light-theme-active) .portfolio-v2-heat-cell,
+body:not(.light-theme-active) .portfolio-v2-flow-shell,
+body:not(.light-theme-active) .portfolio-v2-flow-progress-item,
+body:not(.light-theme-active) .journal-v2-table th:first-child,
+body:not(.light-theme-active) .journal-v2-table td:first-child,
+body:not(.light-theme-active) .greek-box {
+  background: rgba(5, 5, 5, 0.92) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+body:not(.light-theme-active) .sidebar {
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.78) !important;
+}
+
+body:not(.light-theme-active) .nav-btn:hover,
+body:not(.light-theme-active) .nav-btn.active,
+body:not(.light-theme-active) .analytics-tab-pill.active {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+body:not(.light-theme-active) input:not([type="checkbox"]):not([type="radio"]),
+body:not(.light-theme-active) select,
+body:not(.light-theme-active) textarea,
+body:not(.light-theme-active) .settings-field input,
+body:not(.light-theme-active) .settings-field select,
+body:not(.light-theme-active) .settings-field textarea,
+body:not(.light-theme-active) .options-leg-input,
+body:not(.light-theme-active) .options-leg-card select,
+body:not(.light-theme-active) .options-calculator-symbol-input {
+  background: rgba(0, 0, 0, 0.78) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+body:not(.light-theme-active) .tax-v2 {
+  color: #f8fafc;
+}
+
+body:not(.light-theme-active) .tax-v2-kpi,
+body:not(.light-theme-active) .tax-v2-panel,
+body:not(.light-theme-active) .tax-v2-action-btn,
+body:not(.light-theme-active) .tax-v2-input,
+body:not(.light-theme-active) .tax-v2-pill,
+body:not(.light-theme-active) .tax-v2-jur-item,
+body:not(.light-theme-active) .tax-v2-gain-row,
+body:not(.light-theme-active) .tax-v2-total-row,
+body:not(.light-theme-active) .tax-v2-live-header,
+body:not(.light-theme-active) .tax-v2-adv-input,
+body:not(.light-theme-active) .tax-v2-scenario-card,
+body:not(.light-theme-active) .tax-v2-result-card,
+body:not(.light-theme-active) .tax-v2-source-links a,
+body:not(.light-theme-active) .tax-v2-base-pill {
+  background: rgba(5, 5, 5, 0.94) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+body:not(.light-theme-active) .tax-v2-kpi-icon,
+body:not(.light-theme-active) .tax-v2 .num,
+body:not(.light-theme-active) .tax-v2-pill.active,
+body:not(.light-theme-active) .tax-v2-jur-item.active {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  color: #f8fafc !important;
+}
+
+body:not(.light-theme-active) .tax-v2-calc-btn {
+  background: linear-gradient(180deg, #f8fafc, #cbd5e1) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #000000 !important;
+}
+
+body:not(.light-theme-active) .tax-v2-action-btn:hover:not(:disabled),
+body:not(.light-theme-active) .tax-v2-source-links a:hover,
+body:not(.light-theme-active) .tax-v2-link-btn {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #f8fafc !important;
+}
+
+body:not(.light-theme-active) .tax-v2-head p,
+body:not(.light-theme-active) .tax-v2-panel .sub,
+body:not(.light-theme-active) .tax-v2-kpi span,
+body:not(.light-theme-active) .tax-v2-kpi em,
+body:not(.light-theme-active) .tax-v2-inline-row span,
+body:not(.light-theme-active) .tax-v2-jur-main span,
+body:not(.light-theme-active) .tax-v2-gain-row span,
+body:not(.light-theme-active) .tax-v2-total-row span,
+body:not(.light-theme-active) .tax-v2-live-header span,
+body:not(.light-theme-active) .tax-v2-live-rows div span,
+body:not(.light-theme-active) .tax-v2-note,
+body:not(.light-theme-active) .tax-v2-adv-field > span,
+body:not(.light-theme-active) .tax-v2-notes-field,
+body:not(.light-theme-active) .tax-v2-scenario-card span,
+body:not(.light-theme-active) .tax-v2-footer p {
+  color: #a1a1aa !important;
+}
+
+body:not(.light-theme-active) .tax-v2-total-row strong,
+body:not(.light-theme-active) .tax-v2-source-links a,
+body:not(.light-theme-active) .tax-v2-base-pill {
+  color: #e5e7eb !important;
 }

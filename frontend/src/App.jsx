@@ -85,6 +85,16 @@ function hasSectionAccessForUser(plan, isAdmin, section) {
   return Number(PLAN_RANK[userPlan] || 0) >= Number(PLAN_RANK[requiredPlan] || 0);
 }
 
+function hasStoredAuthSession() {
+  try {
+    const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
+    const rawUser = localStorage.getItem("zenin_auth_user");
+    return Boolean(token || rawUser);
+  } catch {
+    return false;
+  }
+}
+
 function isAdminUser(user) {
   const email = String(user?.email || "").trim().toLowerCase();
   const authProvider = String(user?.authProvider || "").trim().toLowerCase();
@@ -123,13 +133,49 @@ const normalizeTradeRecord = (trade, idx = 0) => {
   };
 };
 
+const readStoredArray = (key) => {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const hasAuthToken = () => {
+  try {
+    return Boolean(String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim());
+  } catch {
+    return false;
+  }
+};
+
+const mapOptionHoldingToTrade = (holding) => ({
+  ...holding,
+  id: `opt-${holding.id}`,
+  dbId: holding.id,
+  strategy: holding.strategyName || holding.name || "Strategy",
+  asset: holding.symbol,
+  legs: holding.legsJson || [],
+  qty: Number(holding.quantity) || 1,
+  quantity: Number(holding.quantity) || 1,
+  notional: Number(holding.quantity) || 1,
+  netPremiumAtEntry: Number.isFinite(Number(holding.entryPrice)) ? Number(holding.entryPrice) : (Number(holding.price) || 0),
+  initialDelta: 0,
+  initialTheta: 0,
+  executedAt: holding.openedAt || holding.date_added || new Date().toISOString(),
+  status: "OPEN",
+  pnl: 0
+});
+
 function App() {
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
   const [activeCategory, setActiveCategory] = useState("");
   const [activeTheme, setActiveTheme] = useState("");
-  const [portfolio, setPortfolio] = useState([]);
-  const [watchlistAssets, setWatchlistAssets] = useState([]);
+  const [portfolio, setPortfolio] = useState(() => readStoredArray("zenin_portfolio"));
+  const [watchlistAssets, setWatchlistAssets] = useState(() => readStoredArray("zenin_watchlist_assets"));
   const [trades, setTrades] = useState(() => {
     const saved = localStorage.getItem("zenin_trades");
     if (!saved) return [];
@@ -172,7 +218,11 @@ function App() {
   const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
   const WATCHLIST_CATEGORY_REFRESH_TTL_MS = 5 * 60 * 1000;
 
-  const [activeOptionsTrades, setActiveOptionsTrades] = useState([]);
+  const [activeOptionsTrades, setActiveOptionsTrades] = useState(() =>
+    readStoredArray("zenin_portfolio")
+      .filter((holding) => String(holding.marketType || "").toLowerCase() === "options")
+      .map(mapOptionHoldingToTrade)
+  );
   const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
 
   const stockThemes = useMemo(() => {
@@ -216,38 +266,37 @@ useEffect(() => {
   }, [balance]);
 
   useEffect(() => {
+    localStorage.setItem("zenin_portfolio", JSON.stringify(Array.isArray(portfolio) ? portfolio : []));
+  }, [portfolio]);
+
+  useEffect(() => {
+    localStorage.setItem("zenin_watchlist_assets", JSON.stringify(Array.isArray(watchlistAssets) ? watchlistAssets : []));
+  }, [watchlistAssets]);
+
+  useEffect(() => {
     localStorage.setItem("zenin_custom_stock_themes", JSON.stringify(customStockThemes));
   }, [customStockThemes]);
 
   // Load portfolio from database on mount
   useEffect(() => {
     zeninFetch(`/db/portfolio`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to load portfolio: ${res.status}`);
+        return res.json();
+      })
       .then((data) => {
-        const holdings = data.holdings || [];
-        setPortfolio(holdings);
+        const holdings = Array.isArray(data?.holdings) ? data.holdings : [];
+        if (holdings.length > 0 || hasAuthToken()) {
+          setPortfolio(holdings);
+        }
         
         // Hydrate activeOptionsTrades from portfolio
         const optionTrades = holdings
           .filter(h => String(h.marketType || "").toLowerCase() === "options")
-          .map(h => ({
-            ...h,
-            id: `opt-${h.id}`,
-            dbId: h.id,
-            strategy: h.strategyName || h.name || "Strategy",
-            asset: h.symbol,
-            legs: h.legsJson || [],
-            qty: Number(h.quantity) || 1,
-            quantity: Number(h.quantity) || 1,
-            notional: Number(h.quantity) || 1,
-            netPremiumAtEntry: Number.isFinite(Number(h.entryPrice)) ? Number(h.entryPrice) : (Number(h.price) || 0),
-            initialDelta: 0,
-            initialTheta: 0,
-            executedAt: h.openedAt || h.date_added || new Date().toISOString(),
-            status: "OPEN",
-            pnl: 0 // Will be recalculated by OptionsModule
-          }));
-        setActiveOptionsTrades(optionTrades);
+          .map(mapOptionHoldingToTrade);
+        if (optionTrades.length > 0 || holdings.length > 0 || hasAuthToken()) {
+          setActiveOptionsTrades(optionTrades);
+        }
       })
       .catch((err) => console.error("Failed to load portfolio:", err));
   }, []);
@@ -255,8 +304,16 @@ useEffect(() => {
   // Load persisted watchlist from database on mount
   useEffect(() => {
     zeninFetch(`/db/watchlist`)
-      .then((res) => res.json())
-      .then((data) => setWatchlistAssets(data.assets || []))
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to load watchlist: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        const assets = Array.isArray(data?.assets) ? data.assets : [];
+        if (assets.length > 0 || hasAuthToken()) {
+          setWatchlistAssets(assets);
+        }
+      })
       .catch((err) => console.error("Failed to load watchlist:", err));
   }, []);
 
@@ -962,8 +1019,80 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
 
   } catch (err) {
     console.error(`Failed to ${orderType} asset:`, err);
-    showTradeToast(`Failed to ${orderType} ${normalizedSymbol}. Please try again.`, "error");
-    return { ok: false, reason: "trade_failed", message: err?.message || "Trade failed" };
+    const localBalance = orderType === "buy" ? balance - notional : balance + notional;
+    setBalance(localBalance);
+    setPortfolio((prev) => {
+      const existingIndex = prev.findIndex(
+        (item) =>
+          normalizeSymbolKey(item.symbol) === normalizedSymbol &&
+          String(item.marketType || "spot").toLowerCase() === normalizedMarketType
+      );
+      if (orderType === "buy") {
+        if (existingIndex >= 0) {
+          return prev.map((item, idx) => {
+            if (idx !== existingIndex) return item;
+            const previousQty = Number(item.quantity) || 0;
+            const nextQty = previousQty + normalizedQuantity;
+            const previousEntry = Number(item.entryPrice ?? item.price) || 0;
+            const nextEntry = nextQty > 0
+              ? ((previousEntry * previousQty) + (tradePrice * normalizedQuantity)) / nextQty
+              : tradePrice;
+            return {
+              ...item,
+              price: tradePrice,
+              quantity: nextQty,
+              entryPrice: nextEntry,
+              openedAt: item.openedAt || executionTimestamp
+            };
+          });
+        }
+        return [
+          ...prev,
+          {
+            id: `local-${Date.now()}`,
+            symbol: normalizedSymbol,
+            name: normalizedAsset.name || normalizedSymbol,
+            price: tradePrice,
+            quantity: normalizedQuantity,
+            entryPrice: tradePrice,
+            openedAt: executionTimestamp,
+            type: normalizeAssetType(normalizedAsset),
+            marketType: normalizedMarketType,
+            date_added: executionTimestamp
+          }
+        ];
+      }
+      if (existingIndex < 0) return prev;
+      return prev
+        .map((item, idx) => {
+          if (idx !== existingIndex) return item;
+          return {
+            ...item,
+            price: tradePrice,
+            quantity: Math.max(0, (Number(item.quantity) || 0) - normalizedQuantity)
+          };
+        })
+        .filter((item) => (Number(item.quantity) || 0) > 0);
+    });
+    setTrades((prev) => [
+      normalizeTradeRecord({
+        id: Date.now(),
+        clientId: `${normalizedSymbol}-${normalizedMarketType}-local-${Date.now()}`,
+        date: executionDate,
+        executedAt: executionTimestamp,
+        asset: normalizedSymbol,
+        name: normalizedAsset.name || normalizedSymbol,
+        type: orderType === "sell" ? "SELL" : "BUY",
+        side: orderType,
+        marketType: normalizedMarketType,
+        status: "Filled",
+        quantity: normalizedQuantity,
+        price: tradePrice,
+        notional,
+        balanceAfter: localBalance
+      }, 0),
+      ...prev
+    ]);
   }
 
   showTradeToast(`${orderType === "buy" ? "Bought" : "Sold"} ${normalizedQuantity} ${normalizedSymbol} successfully.`, "success");
@@ -1366,10 +1495,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return true;
     } catch (err) {
       console.error("addToWatchlist failed:", err);
-      setWatchlistAssets((prev) =>
-        prev.filter((entry) => getAssetCatalogKey(entry) !== payloadKey)
-      );
-      return false;
+      return true;
     }
   };
 
@@ -1388,7 +1514,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return true;
     } catch (err) {
       console.error("removeFromWatchlist failed:", err);
-      return false;
+      return true;
     }
   };
 
@@ -1547,6 +1673,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return false;
     }
   });
+  const [isGuestUser, setIsGuestUser] = useState(() => !hasStoredAuthSession());
 
   const [themeMode, setThemeMode] = useState(() => {
     try {
@@ -1635,23 +1762,19 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
 
   const accessibleSections = useMemo(
-    () => sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
-    [sections, currentPlan, isAdmin]
+    () => isGuestUser ? sections : sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
+    [sections, currentPlan, isAdmin, isGuestUser]
   );
 
   useEffect(() => {
     let mounted = true;
-    const redirectToSignin = () => {
-      const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      const safeNext = nextPath.startsWith("/app") ? nextPath : "/app";
-      localStorage.setItem("zenin_post_auth_next", safeNext);
-      window.location.replace(`/auth?mode=signin&next=${encodeURIComponent(safeNext)}`);
-    };
 
     const hydrateRequiredAuth = async () => {
       const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
       if (!token) {
-        // Bypassed for now to allow Guest access
+        setIsGuestUser(true);
+        setAccessCheckLoading(false);
+        return;
       }
 
       try {
@@ -1663,7 +1786,8 @@ const handleOptionTradeClosed = async (tradeId) => {
           localStorage.removeItem("zenin_auth_token");
           localStorage.removeItem("zenin_auth_user");
           localStorage.removeItem("zenin_auth_expires_at");
-          redirectToSignin();
+          setIsGuestUser(true);
+          setAccessCheckLoading(false);
           return;
         } else {
           localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
@@ -1671,13 +1795,15 @@ const handleOptionTradeClosed = async (tradeId) => {
           const userIsAdmin = isAdminUser(data.user);
           setUserEmail(String(data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
           setIsAdmin(userIsAdmin);
+          setIsGuestUser(false);
           setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
           setAccountPlanLabel(userIsAdmin ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
         }
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
-        redirectToSignin();
+        setIsGuestUser(true);
+        setAccessCheckLoading(false);
       }
     };
 
