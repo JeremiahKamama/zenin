@@ -28,7 +28,7 @@ function resolveRejectUnauthorized(connectionString) {
   }
 
   // In production we always verify TLS certificates unless explicitly overridden.
-  if (process.env.NODE_ENV === "production") {
+  if (process.env.NODE_ENV === "production" && !isRenderEnvironment(connectionString)) {
     return true;
   }
 
