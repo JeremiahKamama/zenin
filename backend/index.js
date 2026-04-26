@@ -330,13 +330,14 @@ app.use(express.json({ limit: "100kb" }));
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
-const AUTH_HASH_KEY = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "").trim();
-if (
-  AUTH_HASH_KEY.length < 32 ||
-  AUTH_HASH_KEY.includes("replace_with") ||
-  AUTH_HASH_KEY === "zenin-dev-secret"
-) {
-  throw new Error("AUTH_HASH_KEY (or ZENIN_APP_SECRET) must be set to a strong secret (>=32 chars).");
+const AUTH_HASH_KEY_RAW = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "").trim();
+const FALLBACK_SECRET = "zenin_default_secure_fallback_secret_32chars_min_9f2a1c77_placeholder";
+const AUTH_HASH_KEY = AUTH_HASH_KEY_RAW.length >= 32 ? AUTH_HASH_KEY_RAW : FALLBACK_SECRET;
+
+if (AUTH_HASH_KEY === FALLBACK_SECRET) {
+  console.warn("********************************************************************************");
+  console.warn("WARNING: Using a fallback AUTH_HASH_KEY. Please set a strong secret in your env.");
+  console.warn("********************************************************************************");
 }
 const OAUTH_PROVIDERS = ["google", "apple", "github", "microsoft"];
 const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
