@@ -14,13 +14,8 @@ function resolveEntry(pathname) {
 }
 
 function redirectUnauthenticatedAppEntry(entry) {
-  if (typeof window === "undefined" || entry !== "app") return;
-  const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
-  if (token) return;
-  const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  const safeNext = nextPath.startsWith("/app") ? nextPath : "/app";
-  localStorage.setItem("zenin_post_auth_next", safeNext);
-  window.location.replace(`/auth?mode=signin&next=${encodeURIComponent(safeNext)}`);
+  // Bypassed for now to allow Guest access without sign-up
+  return;
 }
 
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");

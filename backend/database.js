@@ -695,10 +695,10 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
-      INSERT INTO app_users (id, email, password_hash, display_name, auth_provider, email_verified)
-      VALUES (1, 'guest@zenin.app', '', 'Guest User', 'guest', TRUE)
+      INSERT INTO app_users (id, email, password_hash, display_name, auth_provider, email_verified, current_plan)
+      VALUES (1, 'guest@zenin.app', '', 'Guest User', 'guest', TRUE, 'desk')
       ON CONFLICT (id) DO UPDATE
-      SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, auth_provider = EXCLUDED.auth_provider, email_verified = TRUE;
+      SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, auth_provider = EXCLUDED.auth_provider, email_verified = TRUE, current_plan = 'desk';
     `);
 
     await client.query(`

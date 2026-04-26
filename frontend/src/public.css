@@ -114,29 +114,12 @@ body.page-dark-theme #root {
 }
 
 .zc-home .brand {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 14px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .zc-home .brand-mark {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  border: 1px solid var(--border-strong);
-  display: grid;
-  place-items: center;
-  background: linear-gradient(180deg, rgba(16, 34, 76, 0.95), rgba(8, 16, 33, 0.95));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 30px rgba(19, 45, 110, 0.35);
-  flex: 0 0 auto;
-}
-
-.zc-home .brand-z-mark {
-  width: 26px;
-  height: 26px;
+  display: none; /* Removed old brand mark in favor of ZeninLogo component */
 }
 
 .zc-home .brand-text {
@@ -701,9 +684,38 @@ body.page-dark-theme #root {
   font-size: 0.9rem;
 }
 
+.zc-home .zenin-brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.zc-home .brand-text-block {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+}
+
+.zc-home .brand-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fff;
+}
+
+.zc-home .brand-subtitle {
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.38em;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
 .zc-home .line-z-mark {
   position: relative;
   display: inline-block;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
 }
 
 .zc-home .line-z-mark span {
@@ -717,56 +729,43 @@ body.page-dark-theme #root {
 .zc-home .line-z-bottom {
   left: 8%;
   right: 8%;
-  height: max(1px, 0.8%);
-  background: linear-gradient(90deg, #4db9ff, #b57cff);
-  box-shadow: 0 0 14px rgba(77, 185, 255, 0.42);
+  height: 1.6%;
+  background: linear-gradient(90deg, #38bdf8, #a855f7);
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
 }
 
 .zc-home .line-z-top {
-  top: 12%;
+  top: 15%;
 }
 
 .zc-home .line-z-bottom {
-  bottom: 12%;
+  bottom: 15%;
 }
 
 .zc-home .line-z-diag {
   left: 20%;
-  top: 20%;
-  width: 78%;
-  height: max(1px, 0.9%);
-  background: linear-gradient(90deg, #eef5ff, #d4ddf2);
-  transform: rotate(-51deg);
+  top: 48%;
+  width: 76%;
+  height: 1.8%;
+  background: #f8fafc;
+  transform: translateY(-50%) rotate(-51deg);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
 
 .zc-home .line-z-inner {
   left: 36%;
-  top: 30%;
-  width: 45%;
-  height: max(1px, 0.55%);
-  background: linear-gradient(90deg, rgba(189, 222, 255, 0.86), rgba(161, 177, 235, 0.86));
-  transform: rotate(-51deg);
+  top: 52%;
+  width: 48%;
+  height: 1.2%;
+  background: rgba(248, 250, 252, 0.7);
+  transform: translateY(-50%) rotate(-51deg);
+  opacity: 0.8;
 }
 
-.zc-home .line-z-mark-sm {
-  width: 62px;
-  height: 62px;
-}
-
-.zc-home .line-z-mark-md {
-  width: 152px;
-  height: 152px;
-}
-
-.zc-home .line-z-mark-lg {
-  width: 210px;
-  height: 210px;
-}
-
-.zc-home .line-z-mark-xl {
-  width: min(100%, 320px);
-  aspect-ratio: 1 / 1;
-}
+.zc-home .line-z-mark-sm { width: 24px; height: 24px; }
+.zc-home .line-z-mark-md { width: 34px; height: 34px; }
+.zc-home .line-z-mark-lg { width: 48px; height: 48px; }
+.zc-home .line-z-mark-xl { width: 120px; height: 120px; }
 
 .zc-home .brand-spec-section {
   padding-top: 34px;

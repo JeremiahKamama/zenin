@@ -484,25 +484,6 @@ export function HomeModule({
     }));
   }, [moversWithChange, alerts]);
 
-  const rebalanceDriftPct = Math.abs(allocationBreakdown.cryptoPercent - 50);
-
-  const rebalancePlanRows = useMemo(() => {
-    const planCost = Number((20 + rebalanceDriftPct * 0.65).toFixed(2));
-    const sellValue = Math.max(0, Number((rebalanceDriftPct * 32).toFixed(2)));
-    const buyCore = Number((sellValue * 0.42).toFixed(2));
-    const buyDiversifier = Number((sellValue * 0.33).toFixed(2));
-    const buyIncome = Number((sellValue * 0.25).toFixed(2));
-    return {
-      cost: planCost,
-      rows: [
-        { action: "Sell US Large Cap", amount: -sellValue, tag: "Overweight" },
-        { action: "Buy Emerging Markets", amount: buyCore, tag: "Underweight" },
-        { action: "Buy Bonds", amount: buyIncome, tag: "Underweight" },
-        { action: "Buy International Equities", amount: buyDiversifier, tag: "Underweight" }
-      ]
-    };
-  }, [rebalanceDriftPct]);
-
   const openAttentionFlow = (flowKind) => {
     if (!flowKind) return;
     setActiveAttentionFlow(flowKind);
@@ -746,6 +727,25 @@ export function HomeModule({
     const cashPercent = total > 0 ? (cashValue / total) * 100 : 0;
     return { cryptoValue, cashValue, total, cryptoPercent, cashPercent };
   }, [portfolio, liveAvailableBalance]);
+
+  const rebalanceDriftPct = Math.abs(allocationBreakdown.cryptoPercent - 50);
+
+  const rebalancePlanRows = useMemo(() => {
+    const planCost = Number((20 + rebalanceDriftPct * 0.65).toFixed(2));
+    const sellValue = Math.max(0, Number((rebalanceDriftPct * 32).toFixed(2)));
+    const buyCore = Number((sellValue * 0.42).toFixed(2));
+    const buyDiversifier = Number((sellValue * 0.33).toFixed(2));
+    const buyIncome = Number((sellValue * 0.25).toFixed(2));
+    return {
+      cost: planCost,
+      rows: [
+        { action: "Sell US Large Cap", amount: -sellValue, tag: "Overweight" },
+        { action: "Buy Emerging Markets", amount: buyCore, tag: "Underweight" },
+        { action: "Buy Bonds", amount: buyIncome, tag: "Underweight" },
+        { action: "Buy International Equities", amount: buyDiversifier, tag: "Underweight" }
+      ]
+    };
+  }, [rebalanceDriftPct]);
 
   const recentActivityRows = useMemo(() => {
     const rows = (Array.isArray(trades) ? trades : [])

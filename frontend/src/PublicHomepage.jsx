@@ -167,10 +167,8 @@ export default function PublicHomepage() {
 
     const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
     if (!token) {
-      localStorage.setItem("zenin_pending_plan", normalizedPlan);
-      localStorage.setItem("zenin_pending_billing_cycle", normalizedBillingCycle);
-      localStorage.setItem("zenin_post_auth_next", postPlanTarget);
-      window.location.href = `/auth?mode=signup&plan=${encodeURIComponent(normalizedPlan)}&billing=${encodeURIComponent(normalizedBillingCycle)}&next=${encodeURIComponent(postPlanTarget)}`;
+      // Allow guest to "select" a plan which will be reflected in the dashboard session
+      window.location.href = postPlanTarget;
       return;
     }
 
@@ -233,53 +231,7 @@ export default function PublicHomepage() {
 
   const handleOpenAppClick = async (event) => {
     event.preventDefault();
-    if (openAppChecking) return;
-
-    const appTarget = "/app";
-    const signinTarget = `/auth?mode=signin&next=${encodeURIComponent(appTarget)}`;
-    const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
-
-    if (!token) {
-      localStorage.setItem("zenin_post_auth_next", appTarget);
-      window.location.href = signinTarget;
-      return;
-    }
-
-    setOpenAppChecking(true);
-    try {
-      const res = await zeninFetch("/auth/me");
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.authenticated || !data?.user) {
-        localStorage.removeItem("zenin_auth_token");
-        localStorage.removeItem("zenin_auth_user");
-        localStorage.setItem("zenin_post_auth_next", appTarget);
-        window.location.href = signinTarget;
-        return;
-      }
-
-      const normalizedPlan = normalizePlan(data.user.currentPlan || "starter");
-      const normalizedCycle = normalizeBillingCycle(data.user.currentBillingCycle || "monthly");
-      const normalizedUser = {
-        ...data.user,
-        currentPlan: normalizedPlan,
-        currentBillingCycle: normalizedCycle
-      };
-      setAuthUser(normalizedUser);
-      saveAuthUser(normalizedUser);
-      localStorage.setItem("zenin_last_known_plan", normalizedPlan);
-      localStorage.setItem("zenin_last_known_billing_cycle", normalizedCycle);
-      window.location.href = appTarget;
-    } catch {
-      const fallbackPlan = normalizePlan(authUser?.currentPlan || localStorage.getItem("zenin_last_known_plan") || "starter");
-      if (["starter", "pro", "desk"].includes(fallbackPlan)) {
-        window.location.href = appTarget;
-        return;
-      }
-      localStorage.setItem("zenin_post_auth_next", appTarget);
-      window.location.href = signinTarget;
-    } finally {
-      setOpenAppChecking(false);
-    }
+    window.location.href = "/app";
   };
 
   return (

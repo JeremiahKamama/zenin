@@ -401,11 +401,11 @@ button {
 }
 
 .brand-subtitle {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 500;
-  letter-spacing: 0.35em;
+  letter-spacing: 0.38em;
   color: #94a3b8;
-  margin-top: 2px;
+  margin-top: 3px;
 }
 
 /* Ultra-thin Line Z Mark */
@@ -426,7 +426,7 @@ button {
 .line-z-bottom {
   left: 8%;
   right: 8%;
-  height: 1.5%;
+  height: 1.6%;
   background: var(--gradient-brand);
   box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
 }
@@ -451,10 +451,10 @@ button {
 
 .line-z-inner {
   left: 36%;
-  top: 50%;
+  top: 52%;
   width: 48%;
   height: 1.2%;
-  background: rgba(248, 250, 252, 0.65);
+  background: rgba(248, 250, 252, 0.7);
   transform: translateY(-50%) rotate(-51deg);
   opacity: 0.8;
 }
@@ -462,7 +462,7 @@ button {
 /* Logo Sizes */
 .line-z-mark-xs { width: 14px; height: 14px; }
 .line-z-mark-sm { width: 24px; height: 24px; }
-.line-z-mark-md { width: 36px; height: 36px; }
+.line-z-mark-md { width: 34px; height: 34px; }
 .line-z-mark-lg { width: 48px; height: 48px; }
 .line-z-mark-xl { width: 120px; height: 120px; }
 

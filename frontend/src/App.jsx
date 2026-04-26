@@ -688,7 +688,7 @@ useEffect(() => {
     const visibleSymbols = themeAssets.slice(0, 10).map((a) => a.symbol);
     if (!visibleSymbols.length) return;
     refreshSymbolsForCategory("stocks", visibleSymbols);
-  }, [activeTheme, activeCategory, assets]);
+  }, [activeTheme, activeCategory]);
 
   const handlePageChange = (page, visibleSymbols) => {
   if (!visibleSymbols.length) return;
@@ -1651,9 +1651,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     const hydrateRequiredAuth = async () => {
       const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
       if (!token) {
-        if (mounted) setAccessCheckLoading(true);
-        redirectToSignin();
-        return;
+        // Bypassed for now to allow Guest access
       }
 
       try {

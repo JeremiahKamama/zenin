@@ -3,6 +3,8 @@ const path = require("path");
 dotenv.config({ path: path.join(__dirname, ".env") });
 dotenv.config();
 const express = require("express");
+const crypto = require("crypto");
+const { sendPasswordResetEmail } = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -419,11 +421,41 @@ function resolveClientIp(req) {
 async function resolveAuthContext(req) {
   const token = getBearerToken(req);
   if (!token) {
-    return { isGuest: true, userId: null, user: null, token: null };
+    // For now, allow access without sign-up by defaulting to the Guest User (ID 1)
+    return {
+      isGuest: false,
+      userId: 1,
+      user: {
+        id: 1,
+        email: "guest@zenin.app",
+        displayName: "Guest User",
+        authProvider: "guest",
+        emailVerified: true,
+        currentPlan: "desk", // Upgraded to Desk for full app access (Options/Predictions)
+        currentBillingCycle: "monthly"
+      },
+      token: null
+    };
   }
   const tokenHash = hashToken(token);
   const session = await userAuth.findSessionByTokenHash(tokenHash);
-  if (!session) return { isGuest: true, userId: null, user: null, token: null };
+  if (!session) {
+    // If a token was provided but is invalid, still fall back to Guest instead of blocking
+    return {
+      isGuest: false,
+      userId: 1,
+      user: {
+        id: 1,
+        email: "guest@zenin.app",
+        displayName: "Guest User",
+        authProvider: "guest",
+        emailVerified: true,
+        currentPlan: "desk",
+        currentBillingCycle: "monthly"
+      },
+      token: null
+    };
+  }
   if (session.revokedAt) return { isGuest: true, userId: null, user: null, token: null };
   if (new Date(session.expiresAt).getTime() <= Date.now()) return { isGuest: true, userId: null, user: null, token: null };
 
@@ -1573,6 +1605,10 @@ app.post("/api/auth/forgot-password/request", authLimiter, async (req, res) => {
         tokenHash: hashToken(rawToken),
         expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString()
       });
+
+      // Send actual email (fire and forget for better response time, or await if preferred)
+      // For now, we await to ensure we catch potential configuration errors in logs
+      await sendPasswordResetEmail(email, rawToken);
     }
 
     return res.json({
