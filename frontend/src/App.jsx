@@ -3484,6 +3484,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         </div>
       )}
+      <SpeedInsights />
     </div>
     )
   );
