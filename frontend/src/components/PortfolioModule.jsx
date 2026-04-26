@@ -904,7 +904,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         );
       }
-    } else {
+    } else if (activeInsightFlow === "exposure") {
       const sectors = exposureFlowData.sectors;
       const activeSector = pickExposure || sectors[0];
       const concentrationScore = Math.min(100, Math.max(0, Number(activeSector?.weight || 0) * 1.8));
