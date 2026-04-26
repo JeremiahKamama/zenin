@@ -12,6 +12,7 @@ import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { TaxEstimator } from "./components/TaxEstimator";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
+import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch } from "./utils/zeninFetch";
@@ -2207,10 +2208,11 @@ const handleOptionTradeClosed = async (tradeId) => {
       )}
       <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header">
-          <h1 className="sidebar-brand">
-            <span className="sidebar-brand-mark">Z</span>
-            <span className="sidebar-brand-text">Zenin</span>
-          </h1>
+          {!isSidebarCollapsed ? (
+            <ZeninLogo size="md" />
+          ) : (
+            <ZeninLogo size="sm" showText={false} />
+          )}
           <button
             className="sidebar-toggle-btn mobile-close-btn"
             onClick={() => setIsSidebarCollapsed((prev) => !prev)}

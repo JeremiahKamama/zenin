@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
+import { ZeninLogo } from "./components/Branding";
 
 const OAUTH_PROVIDERS = [
   { key: "google", label: "Google", icon: "G" },
@@ -348,8 +349,7 @@ export default function AuthPage() {
       <div className="auth-v2-bg" aria-hidden="true" />
       <main className="auth-v2-main">
         <a className="auth-v2-logo" href="/" aria-label="Zenin Capital homepage">
-          <span className="auth-v2-logo-mark">Z</span>
-          <span>ZENIN CAPITAL</span>
+          <ZeninLogo size="md" />
         </a>
 
         <section className="auth-v2-card">

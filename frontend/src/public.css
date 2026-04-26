@@ -2050,24 +2050,8 @@ body.page-dark-theme #root {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  color: #f6f9ff;
   text-decoration: none;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  font-size: 1.08rem;
-}
-
-.auth-v2-logo-mark {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.32rem;
-  font-weight: 800;
-  color: #0b1029;
-  background: linear-gradient(130deg, #2bb5ff, #7357ff);
+  margin-bottom: 8px;
 }
 
 .auth-v2-card {
@@ -2468,14 +2452,7 @@ body.page-dark-theme #root {
   }
 
   .auth-v2-logo {
-    font-size: 0.95rem;
-    letter-spacing: 0.12em;
-  }
-
-  .auth-v2-logo-mark {
-    width: 32px;
-    height: 32px;
-    font-size: 1.06rem;
+    margin-bottom: 4px;
   }
 
   .auth-v2-card h1 {

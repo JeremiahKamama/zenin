@@ -9,7 +9,11 @@
   --color-text-primary: #f8fafc;
   --color-text-secondary: #94a3b8;
   --color-text-danger: #ef4444;
-  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Open Sans', 'Helvetica Neue', sans-serif;
+  --color-brand-cyan: #38bdf8;
+  --color-brand-purple: #a855f7;
+  --gradient-brand: linear-gradient(90deg, var(--color-brand-cyan), var(--color-brand-purple));
+  --font-brand: 'Geist', 'Inter', -apple-system, sans-serif;
+  font-family: var(--font-brand);
   background: var(--color-bg-base);
   color: #e2e8f0;
   font-size: 90%;
@@ -368,9 +372,104 @@ button {
 
 .sidebar-brand-text {
   color: #f8fafc;
-  font-size: 2.05rem;
+  font-size: 1.5rem;
   font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+/* ── New Branding Components ────────────────────────────────────────── */
+
+/* Brand Lockup (Sidebar / Header) */
+.zenin-brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-text-block {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+}
+
+.brand-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fff;
+}
+
+.brand-subtitle {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.35em;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+/* Ultra-thin Line Z Mark */
+.line-z-mark {
+  position: relative;
+  display: inline-block;
+  aspect-ratio: 1 / 1;
+}
+
+.line-z-mark span {
+  position: absolute;
+  display: block;
+  border-radius: 999px;
+  transform-origin: center;
+}
+
+.line-z-top,
+.line-z-bottom {
+  left: 8%;
+  right: 8%;
+  height: 1.5%;
+  background: var(--gradient-brand);
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+}
+
+.line-z-top {
+  top: 15%;
+}
+
+.line-z-bottom {
+  bottom: 15%;
+}
+
+.line-z-diag {
+  left: 20%;
+  top: 48%;
+  width: 76%;
+  height: 1.8%;
+  background: #f8fafc;
+  transform: translateY(-50%) rotate(-51deg);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+}
+
+.line-z-inner {
+  left: 36%;
+  top: 50%;
+  width: 48%;
+  height: 1.2%;
+  background: rgba(248, 250, 252, 0.65);
+  transform: translateY(-50%) rotate(-51deg);
+  opacity: 0.8;
+}
+
+/* Logo Sizes */
+.line-z-mark-xs { width: 14px; height: 14px; }
+.line-z-mark-sm { width: 24px; height: 24px; }
+.line-z-mark-md { width: 36px; height: 36px; }
+.line-z-mark-lg { width: 48px; height: 48px; }
+.line-z-mark-xl { width: 120px; height: 120px; }
+
+/* Dashboard adjustments for new header */
+.sidebar-header {
+  padding: 12px 6px;
+  margin-bottom: 8px;
 }
 
 .sidebar-nav {

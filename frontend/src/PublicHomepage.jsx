@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
+import { ZeninLogo, LineZMark } from "./components/Branding";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
 const VALID_BILLING_CYCLES = ["monthly", "yearly"];
@@ -79,16 +80,6 @@ function saveAuthUser(user) {
   }
 }
 
-function LineZMark({ className = "" }) {
-  return (
-    <div className={`line-z-mark ${className}`.trim()} aria-hidden="true">
-      <span className="line-z-top" />
-      <span className="line-z-diag" />
-      <span className="line-z-bottom" />
-      <span className="line-z-inner" />
-    </div>
-  );
-}
 
 export default function PublicHomepage() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -296,11 +287,7 @@ export default function PublicHomepage() {
       <header className="site-header">
         <div className="container nav">
           <a className="brand" href="#top" aria-label="Zenin Capital home">
-            <span className="brand-mark"><LineZMark className="brand-z-mark" /></span>
-            <span className="brand-text">
-              <strong>Zenin</strong>
-              <small>Capital</small>
-            </span>
+            <ZeninLogo size="md" />
           </a>
 
           <nav className={`nav-links ${menuOpen ? "open" : ""}`} aria-label="Primary navigation">
@@ -471,49 +458,6 @@ export default function PublicHomepage() {
           </div>
         </section>
 
-        <section className="section brand-spec-section" id="brand">
-          <div className="container">
-            <div className="brand-spec-board">
-              <div className="brand-spec-topline">
-                <span>1. Ultra-thin line Z</span>
-                <span>Precision. Clarity. Trust.</span>
-              </div>
-
-              <div className="brand-spec-grid">
-                <div className="brand-spec-col brand-spec-col-large">
-                  <LineZMark className="line-z-mark-xl" />
-                </div>
-
-                <div className="brand-spec-col brand-spec-col-lockup">
-                  <div className="brand-lockup-mark"><LineZMark className="line-z-mark-lg" /></div>
-                  <div className="brand-lockup-text">
-                    <strong>ZENIN</strong>
-                    <span>CAPITAL</span>
-                  </div>
-                </div>
-
-                <div className="brand-spec-col brand-spec-col-icons">
-                  <div className="brand-icon-block">
-                    <small>APP ICON</small>
-                    <div className="brand-icon-card">
-                      <LineZMark className="line-z-mark-md" />
-                    </div>
-                  </div>
-                  <div className="brand-icon-block">
-                    <small>FAVICON</small>
-                    <div className="brand-favicon-chip">
-                      <LineZMark className="line-z-mark-sm" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="brand-spec-foot">
-                <span>Built for trust. Engineered for performance.</span>
-              </div>
-            </div>
-          </div>
-        </section>
 
         <section className="section" id="features">
           <div className="container">
