@@ -17,6 +17,7 @@ import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch } from "./utils/zeninFetch";
 import { SpeedInsights } from "@vercel/speed-insights/react"
+import { Analytics } from "@vercel/analytics/react"
 
 
 
@@ -3485,6 +3486,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         </div>
       )}
       <SpeedInsights />
+      <Analytics />
     </div>
     )
   );
