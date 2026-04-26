@@ -1327,7 +1327,7 @@ export function HomeModule({
                       Number(allocationBreakdown.cashPercent.toFixed(2))
                     ]}
                     type="donut"
-                    height={250}
+                    height={220}
                   />
                   <div className="home-v3-donut-center"><span>Total</span><strong>{formatCompactMoney(allocationBreakdown.total)}</strong></div>
                 </div>

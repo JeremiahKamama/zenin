@@ -13,10 +13,54 @@
   --color-brand-purple: #a855f7;
   --gradient-brand: linear-gradient(90deg, var(--color-brand-cyan), var(--color-brand-purple));
   --font-brand: 'Geist', 'Inter', -apple-system, sans-serif;
+  
+  /* Density Token System */
+  --card-padding-compact: 12px;
+  --card-padding-standard: 16px;
+  --card-padding-large: 22px;
+  --card-radius-compact: 14px;
+  --card-radius-standard: 16px;
+  --card-radius-large: 18px;
+  --section-gap: 24px;
+  --grid-gap: 18px;
+  --control-height-sm: 34px;
+  --control-height-md: 40px;
+  --table-row-height: 52px;
+
   font-family: var(--font-brand);
   background: var(--color-bg-base);
   color: #e2e8f0;
   font-size: 90%;
+}
+
+.cardCompact {
+  padding: var(--card-padding-compact);
+  border-radius: var(--card-radius-compact);
+}
+
+.cardStandard {
+  padding: var(--card-padding-standard);
+  border-radius: var(--card-radius-standard);
+}
+
+.cardLarge {
+  padding: var(--card-padding-large);
+  border-radius: var(--card-radius-large);
+}
+
+.metricCard {
+  min-height: 84px;
+  max-height: 110px;
+}
+
+.dashboardPanel {
+  padding: var(--card-padding-standard);
+  border-radius: var(--card-radius-standard);
+}
+
+.chartPanel {
+  padding: var(--card-padding-large);
+  border-radius: var(--card-radius-large);
 }
 
 * {
@@ -722,10 +766,10 @@ button {
 .analytics-layout {
   width: min(100%, 1400px);
   margin: 0 auto;
-  padding: 32px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 16px;
   border-radius: 24px;
   background:
     radial-gradient(circle at top left, rgba(37, 99, 235, 0.10), transparent 34%),
@@ -5798,7 +5842,7 @@ button {
   align-items: center;
   gap: 16px;
   text-align: left;
-  padding: 12px 2px;
+  padding: 8px 2px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.08);
   cursor: pointer;
 }
@@ -11753,9 +11797,9 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-page {
   width: min(100%, 1400px);
   margin: 0 auto;
-  padding: 32px;
+  padding: 24px;
   display: grid;
-  gap: 22px;
+  gap: 16px;
   border-radius: 24px;
   background:
     radial-gradient(circle at top left, rgba(37, 99, 235, 0.09), transparent 34%),
@@ -11765,8 +11809,8 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 18px;
+  align-items: center;
+  gap: 16px;
   flex-wrap: wrap;
 }
 
@@ -11782,8 +11826,8 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 }
 
 .journal-header h2 {
-  margin: 8px 0 0;
-  font-size: 32px;
+  margin: 4px 0 0;
+  font-size: 28px;
   line-height: 1.05;
   font-weight: 750;
   color: #f8fafc;
@@ -11793,10 +11837,10 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-section-head p,
 .journal-card p,
 .journal-empty-state p {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: #94A3B8;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .journal-header-actions {
@@ -11828,7 +11872,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-quick-form textarea,
 .journal-weekly-review textarea {
   width: 100%;
-  min-height: 42px;
+  min-height: 38px;
   border-radius: 10px;
   border: 1px solid rgba(148,163,184,0.16);
   background: rgba(2,6,23,0.72);
@@ -11847,7 +11891,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-quick-form textarea,
 .journal-weekly-review textarea {
   padding: 10px 12px;
-  min-height: 96px;
+  min-height: 88px;
   resize: vertical;
 }
 
@@ -11952,14 +11996,31 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   background: rgba(59,130,246,0.10);
 }
 
-.journal-card,
+.journal-card {
+  background: rgba(3, 10, 24, 0.78);
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  border-radius: var(--card-radius-standard);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 16px 40px rgba(0,0,0,0.22);
+  padding: var(--card-padding-standard);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+  overflow: hidden;
+  min-width: 0;
+}
+
 .journal-stat-card-v3 {
   background: rgba(3, 10, 24, 0.78);
   border: 1px solid rgba(96, 165, 250, 0.14);
-  border-radius: 18px;
+  border-radius: var(--card-radius-compact);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 16px 40px rgba(0,0,0,0.22);
-  padding: 16px;
+  padding: var(--card-padding-compact);
   transition: border-color 0.2s ease, transform 0.2s ease;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 96px;
+  max-height: 112px;
+  display: grid;
+  align-content: start;
+  gap: 4px;
 }
 
 .journal-card:hover,
@@ -11971,14 +12032,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-stats-grid-v3 {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.journal-stat-card-v3 {
-  min-height: 132px;
-  display: grid;
-  align-content: start;
-  gap: 8px;
+  gap: 12px;
 }
 
 .journal-stat-top {
@@ -11988,9 +12042,9 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 }
 
 .journal-stat-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -12001,14 +12055,11 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 }
 
 .journal-stat-spark {
-  width: 44px;
-  height: 18px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(34,211,238,0.08), rgba(34,211,238,0.26), rgba(139,92,246,0.10));
+  display: none;
 }
 
 .journal-stat-card-v3 strong {
-  font-size: clamp(24px, 2vw, 32px);
+  font-size: clamp(24px, 2vw, 28px);
   font-weight: 750;
   line-height: 1;
   color: #f8fafc;
@@ -12018,7 +12069,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-stat-card-v3 em {
   font-style: normal;
   color: #94A3B8;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .journal-stat-card-v3.positive strong,
@@ -12090,7 +12141,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 
 .journal-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 20px;
   align-items: start;
 }
@@ -12196,7 +12247,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 }
 
 .journal-table td {
-  padding: 12px 12px 12px 0;
+  padding: 10px 12px 10px 0;
   color: #e2e8f0;
   font-size: 13px;
   border-bottom: 1px solid rgba(148,163,184,0.10);
@@ -12353,6 +12404,8 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   color: #e2e8f0;
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .journal-heat-cell.blank {
@@ -12366,12 +12419,19 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-heat-cell.selected { outline: 2px solid rgba(34,211,238,0.65); }
 
 .journal-heat-cell strong {
-  font-size: 12px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .journal-heat-cell small {
   color: #64748B;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .journal-heat-legend {
@@ -12422,6 +12482,8 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   border-radius: 14px;
   border: 1px solid rgba(148,163,184,0.12);
   background: rgba(15,23,42,0.54);
+  overflow: hidden;
+  min-width: 0;
 }
 
 .journal-month-summary span,
@@ -12442,6 +12504,9 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   margin-top: 6px;
   color: #f8fafc;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .journal-analytics-grid,
@@ -12459,9 +12524,16 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 
 .journal-donut-row {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: minmax(140px, 190px) minmax(0, 1fr);
   gap: 14px;
   align-items: center;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.journal-donut-row > div:first-child {
+  overflow: hidden;
+  min-width: 0;
 }
 
 .journal-overview-list,
@@ -12481,6 +12553,15 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   align-items: center;
   padding: 10px 0;
   border-bottom: 1px solid rgba(148,163,184,0.10);
+}
+
+.journal-overview-list span,
+.journal-bar-list > div > span:first-child,
+.journal-compact-table > div > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .journal-overview-list div {
@@ -12562,12 +12643,13 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 .journal-quick-entry-card {
   display: grid;
   gap: 16px;
+  padding: 16px;
 }
 
 .journal-quick-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .journal-quick-form label,
@@ -12592,7 +12674,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 }
 
 .journal-side-toggle button {
-  min-height: 42px;
+  min-height: 38px;
   border-radius: 10px;
   border: 1px solid rgba(148,163,184,0.16);
   background: rgba(15,23,42,0.72);
@@ -12978,7 +13060,8 @@ body.light-theme-active .recharts-legend-item-text {
 .home-v2-attention-card {
   display: grid;
   gap: 8px;
-  min-height: 138px;
+  min-height: 150px;
+  max-height: 190px;
   padding: 16px;
 }
 
@@ -13031,9 +13114,9 @@ body.light-theme-active .recharts-legend-item-text {
   border-radius: 999px;
   background: rgba(2, 6, 23, 0.42);
   color: #94a3b8;
-  min-height: 26px;
+  min-height: 28px;
   padding: 0 8px;
-  font-size: 0.72rem;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -13042,7 +13125,7 @@ body.light-theme-active .recharts-legend-item-text {
   grid-column: 1 / -1;
   place-items: center;
   text-align: center;
-  min-height: 160px;
+  min-height: 150px;
 }
 
 .home-v2-empty-icon,
@@ -13252,7 +13335,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-v2 {
   width: min(100%, 1400px);
   margin: 0 auto;
-  padding: 32px;
+  padding: 24px;
   display: grid;
   gap: 24px;
   background:
@@ -13264,8 +13347,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-v3-page-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 18px;
+  align-items: center;
+  gap: 16px;
   flex-wrap: wrap;
 }
 
@@ -13279,17 +13362,17 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-v3-page-header h2 {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: #f8fafc;
-  font-size: 32px;
+  font-size: 28px;
   line-height: 1.05;
   font-weight: 750;
 }
 
 .home-v3-page-header p {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: #94A3B8;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .home-v3-header-actions {
@@ -13303,7 +13386,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-v3-btn {
-  min-height: 40px;
+  min-height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -13351,7 +13434,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.9fr);
   gap: 18px;
-  padding: 22px;
+  padding: 20px;
   border-radius: 18px;
 }
 
@@ -13412,10 +13495,10 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-v2-hero-stat {
-  min-height: 92px;
+  min-height: 84px;
   display: grid;
   align-content: center;
-  gap: 8px;
+  gap: 6px;
   padding: 14px;
   border-radius: 16px;
   border: 1px solid rgba(148,163,184,0.12);
@@ -13546,14 +13629,14 @@ body.light-theme-active .portfolio-v2-empty h3 {
   display: inline-flex;
   align-items: center;
   width: max-content;
-  min-height: 26px;
-  margin-top: 10px;
-  padding: 0 9px;
+  min-height: 22px;
+  margin-top: 8px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid rgba(245,158,11,0.30);
   background: rgba(245,158,11,0.08);
   color: #F59E0B;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
@@ -13614,7 +13697,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
   grid-template-columns: 34px minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: center;
-  padding: 11px 0;
+  padding: 8px 0;
 }
 
 .home-v3-status-badge,
