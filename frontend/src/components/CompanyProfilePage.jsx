@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = ZENIN_API_BASE_URL;
 const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_DATE_KEY = "zenin_profile_session_date";
 
@@ -208,7 +209,7 @@ function buildFrameworkContext(profile, displayMeta) {
             href={`https://en.wikipedia.org/wiki/${encodeURIComponent(leader.name)}`}
             target="_blank"
             rel="noreferrer"
-            style={{ color: "#38bdf8", textDecoration: "none", borderBottom: "1px dashed rgba(56,189,248,0.4)" }}
+            style={{ color: "var(--color-primary)", textDecoration: "none", borderBottom: "1px dashed var(--color-primary)" }}
             title={`View ${leader.name} on Wikipedia`}
           >
             {leader.name}
@@ -1234,7 +1235,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
             {finvizEntries.map(([label, value]) => (
               <div key={label} className="company-finviz-cell">
                 <span className="finviz-label">{label}</span>
-                <span className="finviz-value" style={{ color: value?.includes('-') ? '#f87171' : value?.includes('%') && parseFloat(value) > 0 ? '#4ade80' : '#f8fafc' }}>{value}</span>
+                <span className="finviz-value" style={{ color: value?.includes('-') ? '#f87171' : value?.includes('%') && parseFloat(value) > 0 ? '#4ade80' : 'var(--color-text-primary)' }}>{value}</span>
               </div>
             ))}
           </div>

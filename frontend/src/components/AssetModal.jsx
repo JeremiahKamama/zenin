@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+const BACKEND_URL = ZENIN_API_BASE_URL;
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -263,6 +264,15 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
           const fallback = Number(lastPoint?.close ?? lastPoint?.price);
           return Number.isFinite(fallback) ? fallback : 0;
         })();
+
+  // Resolve display currency symbol from asset metadata
+  const currencyPrefix = (() => {
+    const curr = String(asset?.currency || "").toUpperCase();
+    if (asset?.market === "Treasury") return "";
+    const map = { JPY: "¥", EUR: "€", GBP: "£", CHF: "CHF ", AUD: "A$", CAD: "C$", HKD: "HK$", KRW: "₩", INR: "₹", CNY: "¥", BTC: "₿" };
+    return map[curr] ?? "$";
+  })();
+
   const displayedChangePercent = Number.isFinite(Number(asset?.priceChangePercent))
     ? Number(asset.priceChangePercent)
     : Number.isFinite(Number(liveQuote.priceChangePercent))
@@ -394,76 +404,11 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     }];
   }, [history, chartType]);
 
-  const chartOptions = useMemo(() => ({
-    chart: {
-      type: chartType,
-      toolbar: { show: false },
-      sparkline: { enabled: false },
-      animations: { enabled: true },
-      background: 'transparent'
-    },
-    theme: { mode: "dark" },
-    grid: {
-      show: true,
-      borderColor: "rgba(255, 255, 255, 0.05)",
-      strokeDashArray: 4,
-      xaxis: { lines: { show: false } },
-      yaxis: { lines: { show: true } },
-      padding: { top: 0, right: 0, bottom: 20, left: 0 }
-    },
-    xaxis: {
-      type: "datetime",
-      labels: {
-        show: true,
-        style: { colors: "#64748b", fontSize: "10px" },
-        datetimeUTC: false,
-      },
-      axisBorder: { show: false },
-      axisTicks: { show: false },
-      crosshairs: {
-        show: true,
-        width: 1,
-        position: 'back',
-        stroke: { color: '#ffffff', width: 1, dashArray: 0 },
-      },
-    },
-    yaxis: {
-      opposite: true,
-      floating: true,
-      tickAmount: 6,
-      labels: {
-        show: true,
-        offsetX: -10,
-        style: { colors: "#94a3b8", fontSize: "11px", fontWeight: 600 },
-        formatter: (val) => `$${val.toFixed(2)}`
-      }
-    },
-    stroke: {
-      curve: "smooth",
-      width: 1.5,
-      colors: chartType === "line" ? ["#94a3b8"] : undefined
-    },
-    markers: { size: 0, hover: { size: 5 } },
-    tooltip: {
-      theme: "dark",
-      shared: true,
-      intersect: false,
-      x: { show: true, format: 'dd MMM yyyy, HH:mm' },
-      y: {
-        formatter: (val) => `$${val.toFixed(2)}`,
-        title: { formatter: () => "Price :" }
-      },
-      marker: { show: false },
-    },
-    plotOptions: {
-      candlestick: {
-        colors: {
-          upward: "#22c55e",
-          downward: "#ef4444"
-        }
-      }
-    }
-  }), [chartType]);
+  // Stable empty options — TradingViewChart uses LightweightCharts internally,
+  // not ApexCharts. Passing a stable ref prevents unnecessary chart recreation
+  // when chartType changes (which was causing the Line-mode blank bug).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chartOptions = useMemo(() => ({}), []);
 
   const formatCompactNumber = (value, digits = 2) => {
     const numeric = Number(value);
@@ -577,7 +522,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         <div className="chart-section asset-modal-body">
           <div className="chart-header-controls">
             <div className="asset-price-mini">
-              <span className="price">{displayedPrice > 0 ? `$${displayedPrice.toFixed(2)}` : "—"}</span>
+              <span className="price" style={{ color: "var(--color-text-primary)" }}>{displayedPrice > 0 ? `${currencyPrefix}${displayedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</span>
               {asset.isMarketOpen === false ? (
                 <span className="market-status-badge closed" style={{ color: "var(--color-text-secondary)", marginLeft: "8px", fontSize: "0.85rem" }}>
                   — Market Closed ({asset.marketStatus || 'Weekend/Holiday'})
@@ -683,21 +628,21 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                     </thead>
                     <tbody>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Market Cap</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
+                        <td style={{ padding: "8px 12px", color: "var(--color-text-secondary)" }}>Market Cap</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-text-primary)", fontWeight: 600 }}>
                           {finvizData?.summary?.["Market Cap"] || (earnings?.marketCap != null ? formatCompactMoney(earnings.marketCap) : "—")}
                         </td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8", fontSize: "10px" }}>Live</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-text-secondary)", fontSize: "10px" }}>Live</td>
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Revenue</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#f1f5f9", fontWeight: 600 }}>
+                        <td style={{ padding: "8px 12px", color: "var(--color-text-secondary)" }}>Revenue</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-text-primary)", fontWeight: 600 }}>
                           {finvizData?.summary?.["Sales"] || (earnings?.revenue?.consensus != null ? formatCompactMoney(earnings.revenue.consensus) : "—")}
                         </td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#94a3b8", fontSize: "10px" }}>Annual</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-text-secondary)", fontSize: "10px" }}>Annual</td>
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Analyst Target</td>
+                        <td style={{ padding: "8px 12px", color: "var(--color-text-secondary)" }}>Analyst Target</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", color: "#38bdf8", fontWeight: 600 }}>
                           {finvizData?.summary?.["Target Price"] || (earnings?.targetPrice != null ? `$${Number(earnings.targetPrice).toFixed(2)}` : "—")}
                         </td>
@@ -714,7 +659,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                         </td>
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
-                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>Next Earnings</td>
+                        <td style={{ padding: "8px 12px", color: "var(--color-text-secondary)" }}>Next Earnings</td>
                         <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 600, fontSize: "11px" }}>
                           {finvizData?.summary?.["Earnings"] || earnings?.nextEarnings || "—"}
                         </td>

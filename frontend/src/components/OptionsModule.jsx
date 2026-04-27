@@ -4,8 +4,8 @@ import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+const BACKEND_URL = ZENIN_API_BASE_URL;
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
 const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
@@ -40,7 +40,7 @@ const StrategySimulatorCard = ({
             style={{
               fontSize: "0.75rem",
               textTransform: "uppercase",
-              color: "#94a3b8",
+              color: "var(--color-text-secondary, #94a3b8)",
               marginRight: 8,
             }}
           >
@@ -105,11 +105,10 @@ export const OptionsModule = ({
   const [whaleMeta, setWhaleMeta] = useState({});
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(10000);
-  const [whaleSource, setWhaleSource] = useState("derive");
+  const [whaleSource, setWhaleSource] = useState("telegram");
   const lastSyncToastRef = useRef(null); // Ref to track the last toasted request key
   const [simulatorError, setSimulatorError] = useState("");
   const [strikeWindow, setStrikeWindow] = useState("all");
-  const [selectedStrike, setSelectedStrike] = useState("");
   const [earningsCalendar, setEarningsCalendar] = useState([]);
   const [termIvByExpiry, setTermIvByExpiry] = useState({});
   const supplementalFetchStateRef = useRef({
@@ -416,7 +415,6 @@ useEffect(() => {
 
 useEffect(() => {
   setActiveExpiry(null); // Reset expiry when asset changes
-  setSelectedStrike("");
   setTermIvByExpiry({});
 }, [activeAsset]);
 
@@ -781,39 +779,8 @@ useEffect(() => {
     : `Waiting for options data for ${activeAsset}.`;
 
   const activeSpot = Number(spotPrices?.[activeAsset] || 0);
-  const nearestStrikeValue = useMemo(() => {
-    const rows = Array.isArray(chain) ? chain : [];
-    if (!rows.length) return "";
-    const center = Number.isFinite(activeSpot) && activeSpot > 0 ? activeSpot : Number(rows[Math.floor(rows.length / 2)]?.strike || 0);
-    let best = rows[0];
-    let minDist = Math.abs(Number(rows[0]?.strike || 0) - center);
-    rows.forEach((row) => {
-      const strike = Number(row?.strike || 0);
-      const d = Math.abs(strike - center);
-      if (d < minDist) {
-        minDist = d;
-        best = row;
-      }
-    });
-    return String(best?.strike ?? "");
-  }, [chain, activeSpot]);
-
-  useEffect(() => {
-    if (!nearestStrikeValue) return;
-    if (!selectedStrike) {
-      setSelectedStrike(nearestStrikeValue);
-      return;
-    }
-    const exists = (chain || []).some((row) => String(row?.strike) === String(selectedStrike));
-    if (!exists) setSelectedStrike(nearestStrikeValue);
-  }, [nearestStrikeValue, selectedStrike, chain]);
-
   const filteredChain = useMemo(() => {
     if (!Array.isArray(chain) || chain.length === 0) return [];
-    if (selectedStrike) {
-      const picked = chain.filter((row) => String(row?.strike) === String(selectedStrike));
-      if (picked.length) return picked;
-    }
     if (!Number.isFinite(activeSpot) || activeSpot <= 0 || strikeWindow === "all") return chain;
     const bandPct = strikeWindow === "tight" ? 0.1 : strikeWindow === "medium" ? 0.2 : 0.35;
     return chain.filter((row) => {
@@ -821,7 +788,77 @@ useEffect(() => {
       if (!Number.isFinite(strike) || strike <= 0) return false;
       return Math.abs(strike - activeSpot) / activeSpot <= bandPct;
     });
-  }, [chain, strikeWindow, activeSpot, selectedStrike]);
+  }, [chain, strikeWindow, activeSpot]);
+
+  const atmStrike = useMemo(() => {
+    if (!filteredChain.length || !activeSpot) return null;
+    let closest = filteredChain[0].strike;
+    let minDiff = Math.abs(closest - activeSpot);
+    for (const row of filteredChain) {
+      const diff = Math.abs(row.strike - activeSpot);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = row.strike;
+      }
+    }
+    return closest;
+  }, [filteredChain, activeSpot]);
+
+  const chainScrollRef = useRef(null);
+
+  useEffect(() => {
+    if (chainScrollRef.current && atmStrike) {
+      const atmRow = chainScrollRef.current.querySelector('.atm-strike-row');
+      if (atmRow) {
+        const containerHeight = chainScrollRef.current.clientHeight;
+        const rowTop = atmRow.offsetTop;
+        const rowHeight = atmRow.clientHeight;
+        chainScrollRef.current.scrollTop = rowTop - (containerHeight / 2) + (rowHeight / 2);
+      }
+    }
+  }, [atmStrike, filteredChain]);
+
+  const scrollToStrike = (strike) => {
+    if (!strike) return;
+    // If strike is hidden by window, reset to show all
+    setStrikeWindow("all");
+    
+    // Use a small timeout to allow the window reset to render
+    setTimeout(() => {
+      if (chainScrollRef.current) {
+        const rows = chainScrollRef.current.querySelectorAll('tr');
+        for (const row of rows) {
+          const strikeCell = row.querySelector('.strike-col span');
+          if (strikeCell && strikeCell.textContent.replace(/,/g, '') === String(strike)) {
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Brief highlight
+            row.style.transition = 'background-color 0.3s';
+            row.style.backgroundColor = 'rgba(56, 189, 248, 0.25)';
+            setTimeout(() => {
+              row.style.backgroundColor = '';
+            }, 1500);
+            break;
+          }
+        }
+      }
+    }, 100);
+  };
+
+  const handleWhaleTradeClick = (trade) => {
+    if (!trade) return;
+    const symbol = String(trade.symbol || trade.asset || "").split('-')[0].toUpperCase();
+    if (symbol && symbol !== activeAsset) {
+      setActiveAsset(symbol);
+    }
+    
+    // If the trade has an expiration, try to find a matching ts in availableExpiries
+    if (trade.expiration) {
+      const tradeExp = new Date(trade.expiration).getTime() / 1000;
+      // Find closest timestamp in availableExpiries (within 24h)
+      const match = (availableExpiries || []).find(ts => Math.abs(ts - tradeExp) < 86400);
+      if (match) setActiveExpiry(match);
+    }
+  };
 
   const greekSummary = useMemo(() => {
     const totals = { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 };
@@ -849,21 +886,19 @@ useEffect(() => {
       const bestDist = Math.abs(Number(best?.strike || 0) - centerSpot);
       return currentDist < bestDist ? row : best;
     }, null);
+    
+    // For "Market" greeks, we typically reference the ATM Call option as the benchmark
     const call = nearest?.call || {};
-    const put = nearest?.put || {};
     const callDelta = Number(call?.delta);
-    const putDelta = Number(put?.delta);
     const callGamma = Number(call?.gamma);
-    const putGamma = Number(put?.gamma);
     const callTheta = Number(call?.theta);
-    const putTheta = Number(put?.theta);
     const callVega = Number(call?.vega);
-    const putVega = Number(put?.vega);
+
     return {
-      delta: (Number.isFinite(callDelta) ? callDelta : 0) + (Number.isFinite(putDelta) ? putDelta : 0),
-      gamma: (Number.isFinite(callGamma) ? callGamma : 0) + (Number.isFinite(putGamma) ? putGamma : 0),
-      theta: (Number.isFinite(callTheta) ? callTheta : 0) + (Number.isFinite(putTheta) ? putTheta : 0),
-      vega: (Number.isFinite(callVega) ? callVega : 0) + (Number.isFinite(putVega) ? putVega : 0),
+      delta: Number.isFinite(callDelta) ? callDelta : 0,
+      gamma: Number.isFinite(callGamma) ? callGamma : 0,
+      theta: Number.isFinite(callTheta) ? callTheta : 0,
+      vega: Number.isFinite(callVega) ? callVega : 0,
       rho: 0
     };
   }, [filteredChain, chain, activeSpot]);
@@ -914,13 +949,22 @@ useEffect(() => {
 
   const termStructureRows = useMemo(() => {
     const liveBaseIv = Number(metrics?.iv);
-    return (availableExpiries || []).map((expiryTs) => {
+    const expiries = Array.isArray(availableExpiries) ? availableExpiries : [];
+    
+    return expiries.map((expiryTs) => {
       const days = Math.max(1, Math.round((Number(expiryTs) * 1000 - Date.now()) / (24 * 60 * 60 * 1000)));
-      const mappedIv = Number(termIvByExpiry?.[String(expiryTs)]);
-      const impliedVol =
-        Number.isFinite(mappedIv) && mappedIv > 0
-          ? mappedIv
-          : (Number.isFinite(liveBaseIv) && liveBaseIv > 0 ? liveBaseIv : 0);
+      const mappedIv = termIvByExpiry?.[String(expiryTs)];
+      
+      let impliedVol = 0;
+      if (Number.isFinite(mappedIv) && mappedIv > 0) {
+        impliedVol = mappedIv;
+      } else if (Number.isFinite(liveBaseIv) && liveBaseIv > 0) {
+        impliedVol = liveBaseIv;
+      } else {
+        // Fallback to a baseline IV if nothing else is available yet
+        impliedVol = 0.60; 
+      }
+
       return {
         expiryTs,
         days,
@@ -1020,13 +1064,13 @@ useEffect(() => {
                       </td>
                       <td className="active-trades-symbol">{trade.asset}</td>
                       <td>{trade.qty || trade.quantity || 1}</td>
-                      <td style={{ fontSize: "11px", color: "#94a3b8" }}>
+                      <td style={{ fontSize: "11px", color: "var(--color-text-secondary, #94a3b8)" }}>
                         {trade.legs?.[0]?.expiry || "—"}
                       </td>
-                      <td style={{ color: "#94a3b8" }}>
+                      <td style={{ color: "var(--color-text-secondary, #94a3b8)" }}>
                         ${getTradeEntryPremium(trade).toFixed(2)}
                       </td>
-                      <td style={{ fontWeight: 600, color: "#e2e8f0" }}>
+                      <td style={{ fontWeight: 600, color: "var(--color-text-primary, #e2e8f0)" }}>
                         ${(currentMark || 0).toFixed(2)}
                       </td>
                       <td style={{ color: (delta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
@@ -1075,7 +1119,7 @@ useEffect(() => {
             <select
               value={strikeWindow}
               onChange={(e) => setStrikeWindow(e.target.value)}
-              style={{ background: "rgba(15,23,42,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
+              style={{ background: "var(--color-surface-panel, rgba(15,23,42,0.7))", color: "var(--color-text-primary, #e2e8f0)", border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.25))", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
             >
               <option value="all">All Strikes</option>
               <option value="medium">ATM ±20%</option>
@@ -1104,14 +1148,29 @@ useEffect(() => {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
           <div style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
-            <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>IV / OI Heatmap (sample)</div>
+            <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>IV / OI Heatmap (sample)</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {filteredChain.slice(0, 8).map((row) => {
                 const callIv = Number(row?.call?.iv || 0) * 100;
                 const callOi = Number(row?.call?.openInterest || row?.call?.oi || 0);
                 const intensity = Math.min(1, Math.max(0.08, (callIv / 120) + (callOi / 100000)));
                 return (
-                  <div key={`heat-${row.strike}`} style={{ borderRadius: "6px", padding: "6px 8px", background: `rgba(56,189,248,${intensity.toFixed(2)})`, display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+                  <div 
+                    key={`heat-${row.strike}`} 
+                    onClick={() => scrollToStrike(row.strike)}
+                    style={{ 
+                      borderRadius: "6px", 
+                      padding: "6px 8px", 
+                      background: `rgba(56,189,248,${intensity.toFixed(2)})`, 
+                      display: "flex", 
+                      justifyContent: "space-between", 
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      transition: "transform 0.1s"
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.02)'}
+                    onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+                  >
                     <span>{Number(row.strike).toLocaleString()}</span>
                     <span>IV {callIv.toFixed(1)}% · OI {callOi.toLocaleString()}</span>
                   </div>
@@ -1120,15 +1179,31 @@ useEffect(() => {
             </div>
           </div>
           <div style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
-            <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>Volatility Term Structure</div>
+            <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>Volatility Term Structure</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {termStructureRows.slice(0, 8).map((row) => (
-                <div key={`term-${row.expiryTs}`} style={{ display: "grid", gridTemplateColumns: "68px 1fr 48px", gap: "8px", alignItems: "center", fontSize: "12px" }}>
-                  <span>{formatDate(row.expiryTs)}</span>
-                  <div style={{ height: "8px", background: "rgba(15,23,42,0.8)", borderRadius: "999px", overflow: "hidden" }}>
-                    <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: "linear-gradient(90deg, #22c55e, #38bdf8)" }} />
+                  <div 
+                    key={`term-${row.expiryTs}`} 
+                    onClick={() => setActiveExpiry(row.expiryTs)}
+                    style={{ 
+                      display: "grid", 
+                      gridTemplateColumns: "68px 1fr 48px", 
+                      gap: "8px", 
+                      alignItems: "center", 
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      padding: "2px 4px",
+                      borderRadius: "4px",
+                      transition: "background 0.1s"
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(148,163,184,0.08)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                  <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit", fontWeight: activeExpiry === row.expiryTs ? "bold" : "normal" }}>{formatDate(row.expiryTs)}</span>
+                  <div style={{ height: "8px", background: "var(--color-surface-elevated, rgba(15,23,42,0.8))", borderRadius: "999px", overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: activeExpiry === row.expiryTs ? "linear-gradient(90deg, #38bdf8, #60a5fa)" : "linear-gradient(90deg, #22c55e, #38bdf8)" }} />
                   </div>
-                  <span>{(row.impliedVol * 100).toFixed(1)}%</span>
+                  <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit" }}>{(row.impliedVol * 100).toFixed(1)}%</span>
                 </div>
               ))}
             </div>
@@ -1143,12 +1218,12 @@ useEffect(() => {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {upcomingEarningsForAsset.map((evt, idx) => (
-              <div key={`earnwarn-${idx}`} style={{ border: "1px solid rgba(245,158,11,0.28)", borderRadius: "8px", padding: "8px 10px", color: "#fbbf24", fontSize: "12px", background: "rgba(120,53,15,0.2)" }}>
+              <div key={`earnwarn-${idx}`} style={{ border: "1px solid rgba(245,158,11,0.36)", borderRadius: "8px", padding: "8px 10px", color: "var(--options-warning-text, #fbbf24)", fontSize: "12px", background: "var(--options-warning-bg, rgba(120,53,15,0.2))" }}>
                 Earnings volatility warning: {activeAsset} has earnings on {evt?.date || evt?.reportDate || "upcoming"}; avoid overlapping expiries unless intentional.
               </div>
             ))}
             {assignmentReminders.map((item) => (
-              <div key={`assign-${item.id}`} style={{ border: "1px solid rgba(148,163,184,0.22)", borderRadius: "8px", padding: "8px 10px", color: "#cbd5e1", fontSize: "12px", background: "rgba(15,23,42,0.5)" }}>
+              <div key={`assign-${item.id}`} style={{ border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.22))", borderRadius: "8px", padding: "8px 10px", color: "var(--color-text-secondary, #cbd5e1)", fontSize: "12px", background: "var(--color-surface-panel, rgba(15,23,42,0.5))" }}>
                 {item.label}: expires in {item.hoursToExpiry}h{item.inTheMoneyRisk ? " · Assignment risk elevated (ITM)." : ""}.
               </div>
             ))}
@@ -1211,7 +1286,7 @@ useEffect(() => {
           ) : filteredChain.length === 0 ? (
             <div className="loading-state">{emptyChainText}</div>
           ) : (
-            <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto" }}>
+            <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto", scrollBehavior: "smooth" }} ref={chainScrollRef}>
               <table className="option-chain-table">
                 <thead>
                   <tr>
@@ -1232,19 +1307,28 @@ useEffect(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredChain.map((row) => (
-                    <tr key={row.strike}>
+                  {filteredChain.map((row) => {
+                    const isAtm = row.strike === atmStrike;
+                    return (
+                    <tr key={row.strike} className={isAtm ? "atm-strike-row" : ""}>
                       <td className="greek">{formatIv(row.call?.iv)}</td>
                       <td className="greek">{formatGreek(row.call?.delta, 3)}</td>
                       <td className="bid-ask positive">{formatOptionPx(row.call?.bid)}</td>
                       <td className="bid-ask positive">{formatOptionPx(row.call?.ask)}</td>
-                      <td className="strike-col">{Number(row.strike || 0).toLocaleString()}</td>
+                      <td className="strike-col" style={{ position: "relative" }}>
+                        {isAtm ? (
+                          <div style={{ position: "absolute", top: "-10px", left: "50%", transform: "translateX(-50%)", background: "#3b82f6", color: "#fff", padding: "1px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: "bold", zIndex: 10, whiteSpace: "nowrap" }}>
+                            {activeAsset} {activeSpot.toFixed(2)}
+                          </div>
+                        ) : null}
+                        <span style={{ color: isAtm ? "#60a5fa" : "inherit", fontWeight: isAtm ? "bold" : "normal" }}>{Number(row.strike || 0).toLocaleString()}</span>
+                      </td>
                       <td className="bid-ask negative">{formatOptionPx(row.put?.bid)}</td>
                       <td className="bid-ask negative">{formatOptionPx(row.put?.ask)}</td>
                       <td className="greek">{formatGreek(row.put?.delta, 3)}</td>
                       <td className="greek">{formatIv(row.put?.iv)}</td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
@@ -1273,16 +1357,7 @@ useEffect(() => {
           </div>
           <div className="whale-options-controls">
             <div className="search-type-buttons" style={{ marginLeft: 0 }}>
-              {whaleSourceOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={`search-type-button ${whaleSource === opt.value ? "active" : ""}`}
-                  onClick={() => setWhaleSource(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
+              <span className="search-type-button active" style={{ pointerEvents: 'none' }}>Telegram</span>
             </div>
             <div className="asset-dropdown-container">
               <select
@@ -1324,9 +1399,15 @@ useEffect(() => {
                   <th>Total Notional</th>
                 </tr>
               </thead>
-              <tbody>
+               <tbody>
                 {pagedWhaleTrades.map((trade) => (
-                  <tr key={trade.id}>
+                  <tr 
+                    key={trade.id} 
+                    onClick={() => handleWhaleTradeClick(trade)}
+                    style={{ cursor: "pointer" }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(148,163,184,0.08)'}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
                     <td className="greek">{trade.symbol}</td>
                     <td className="greek">{trade.expiration || "—"}</td>
                     <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>

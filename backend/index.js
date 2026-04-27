@@ -254,6 +254,9 @@ const configuredOrigins = String(process.env.FRONTEND_URLS || process.env.FRONTE
   .filter(Boolean);
 const allowedOrigins = Array.from(new Set([
   "http://localhost:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
   "http://localhost:3000",
   "https://zenin.capital",
   "https://www.zenin.capital",
@@ -2572,6 +2575,27 @@ app.get("/api/company-profile", async (req, res) => {
   });
 });
 
+app.get("/api/economic-calendar", async (req, res) => {
+  try {
+    const events = await fetchForexFactoryEvents();
+    res.json({
+      events: events.map(e => ({
+        date: e.date,
+        title: e.event,
+        time: e.time,
+        impact: e.impact,
+        country: e.country,
+        forecast: e.forecast,
+        previous: e.previous
+      })),
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Failed to fetch economic calendar:", error);
+    res.status(500).json({ error: "Failed to fetch economic calendar" });
+  }
+});
+
 app.get("/api/earnings-calendar", async (req, res) => {
   const rawSymbols = String(req.query.symbols || "");
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 5);
@@ -4635,6 +4659,7 @@ app.post("/api/options/crypto", async (req, res) => {
           t?.asks?.[0]?.price
         );
       const fallbackPx = firstFiniteNumber(
+        t?.option_pricing?.mark_price,
         t?.mark_price,
         t?.last_price,
         t?.last,
@@ -4653,17 +4678,33 @@ app.post("/api/options/crypto", async (req, res) => {
         ? normalizedAsk
         : (Number.isFinite(normalizedFallback) && normalizedFallback > 0 ? normalizedFallback : 0);
 
+      let totalOi = 0;
+      if (typeof t?.open_interest === 'object' && t.open_interest !== null) {
+        Object.values(t.open_interest).forEach(pools => {
+          if (Array.isArray(pools)) {
+            pools.forEach(p => {
+              if (p?.current_open_interest) {
+                totalOi += Number(p.current_open_interest);
+              }
+            });
+          }
+        });
+      } else {
+        totalOi = firstFiniteNumber(t?.open_interest, t?.stats?.open_interest, t?.openInterest, 0);
+      }
+
       const data = {
         bid,
         ask,
         mark: Number.isFinite(normalizedFallback) ? normalizedFallback : 0,
-        oi: firstFiniteNumber(t?.open_interest, t?.stats?.open_interest, t?.openInterest, 0),
-        openInterest: firstFiniteNumber(t?.open_interest, t?.stats?.open_interest, t?.openInterest, 0),
-        delta: firstFiniteNumber(t?.greeks?.delta, t?.stats?.delta, t?.delta, 0),
-        gamma: firstFiniteNumber(t?.greeks?.gamma, t?.stats?.gamma, t?.gamma, 0),
-        vega: firstFiniteNumber(t?.greeks?.vega, t?.stats?.vega, t?.vega, 0),
-        theta: firstFiniteNumber(t?.greeks?.theta, t?.stats?.theta, t?.theta, 0),
+        oi: totalOi,
+        openInterest: totalOi,
+        delta: firstFiniteNumber(t?.option_pricing?.delta, t?.greeks?.delta, t?.stats?.delta, t?.delta, 0),
+        gamma: firstFiniteNumber(t?.option_pricing?.gamma, t?.greeks?.gamma, t?.stats?.gamma, t?.gamma, 0),
+        vega: firstFiniteNumber(t?.option_pricing?.vega, t?.greeks?.vega, t?.stats?.vega, t?.vega, 0),
+        theta: firstFiniteNumber(t?.option_pricing?.theta, t?.greeks?.theta, t?.stats?.theta, t?.theta, 0),
         iv: firstFiniteNumber(
+          t?.option_pricing?.iv,
           t?.mark_iv,
           t?.iv,
           t?.bid_iv,
@@ -4673,17 +4714,15 @@ app.post("/api/options/crypto", async (req, res) => {
           0
         ),
       };
-
       if (type === "call") strikesMap[strike].call = data;
       else if (type === "put") strikesMap[strike].put = data;
     });
 
     const chain = Object.values(strikesMap)
-      .sort((a, b) => a.strike - b.strike)
-      .slice(0, 30);
+      .sort((a, b) => a.strike - b.strike);
 
     const avgIv =
-      allTickers.reduce((s, t) => s + (firstFiniteNumber(t?.iv, t?.mark_iv, t?.bid_iv, t?.ask_iv, 0) || 0), 0) /
+      allTickers.reduce((s, t) => s + (firstFiniteNumber(t?.option_pricing?.iv, t?.iv, t?.mark_iv, t?.bid_iv, t?.ask_iv, 0) || 0), 0) /
       (allTickers.length || 1);
 
     const referenceTicker = allTickers.find(Boolean) || null;

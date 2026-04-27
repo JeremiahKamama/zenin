@@ -3,9 +3,9 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const BACKEND_URL = ZENIN_API_BASE_URL;
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const EARNINGS_CLIENT_CACHE_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 const ALLOWED_MACRO_INDICATOR_KEYS = [
@@ -678,12 +678,12 @@ useEffect(() => {
                     alignItems: "center",
                     padding: "8px 10px",
                     borderRadius: "8px",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    background: "rgba(15,23,42,0.35)"
+                    border: "1px solid rgba(148,163,184,0.15)",
+                    background: "var(--color-surface, rgba(15,23,42,0.35))"
                   }}
                 >
-                  <strong style={{ fontSize: "13px", color: "#e2e8f0" }}>{symbol}</strong>
-                  <span style={{ fontSize: "12px", color: "#94a3b8" }}>
+                  <strong style={{ fontSize: "13px", color: "var(--color-text-primary)" }}>{symbol}</strong>
+                  <span style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>
                     {formatEarningsDate(item?.nextEarnings || item?.earningsText)}
                   </span>
                 </div>

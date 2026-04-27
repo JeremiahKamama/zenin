@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 export function JournalModule({ 

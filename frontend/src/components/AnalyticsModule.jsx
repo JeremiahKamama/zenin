@@ -1355,13 +1355,13 @@ export function AnalyticsModule({ backendUrl }) {
                       <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>Asset flows by manager</div>
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
-                      <select style={{ background: "#1e293b", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.2)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfAssetToggle} onChange={(e) => setEtfAssetToggle(e.target.value)}>
+                      <select style={{ background: "var(--color-surface-elevated)", color: "var(--color-text-primary)", border: "1px solid var(--color-border-subtle)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfAssetToggle} onChange={(e) => setEtfAssetToggle(e.target.value)}>
                         <option value="All">All Assets</option>
                         <option value="BTC">BTC</option>
                         <option value="ETH">ETH</option>
                         <option value="SOL">SOL</option>
                       </select>
-                      <select style={{ background: "#1e293b", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.2)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfPeriodToggle} onChange={(e) => setEtfPeriodToggle(e.target.value)}>
+                      <select style={{ background: "var(--color-surface-elevated)", color: "var(--color-text-primary)", border: "1px solid var(--color-border-subtle)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfPeriodToggle} onChange={(e) => setEtfPeriodToggle(e.target.value)}>
                         <option value="daily">Daily</option>
                         <option value="weekly">Weekly</option>
                         <option value="quarterly">Quarterly</option>
@@ -3110,9 +3110,9 @@ export function AnalyticsModule({ backendUrl }) {
                         style={{
                           padding: "6px 10px",
                           borderRadius: 8,
-                          border: `1px solid ${active ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                          background: active ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                          color: active ? "#7dd3fc" : "#cbd5e1",
+                          border: active ? "1px solid var(--color-brand-cyan)" : "1px solid var(--color-border-subtle)",
+                          background: active ? "rgba(56,189,248,0.16)" : "var(--color-surface-elevated)",
+                          color: active ? "var(--color-brand-cyan)" : "var(--color-text-secondary)",
                           cursor: "pointer",
                           fontSize: 12,
                           textTransform: "capitalize",
@@ -3125,7 +3125,7 @@ export function AnalyticsModule({ backendUrl }) {
                   <select
                     value={selectedCommodityRegion}
                     onChange={(e) => setSelectedCommodityRegion(e.target.value)}
-                    style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                    style={{ background: "var(--color-surface-elevated)", border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                   >
                     <option value="global">Global</option>
                     <option value="usa">USA</option>
@@ -3136,7 +3136,7 @@ export function AnalyticsModule({ backendUrl }) {
                   <select
                     value={selectedCommodityTimeRange}
                     onChange={(e) => setSelectedCommodityTimeRange(e.target.value)}
-                    style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                    style={{ background: "var(--color-surface-elevated)", border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                   >
                     <option value="1M">1M</option>
                     <option value="3M">3M</option>
@@ -3197,7 +3197,7 @@ export function AnalyticsModule({ backendUrl }) {
                   <select
                     value={commodityFlowMode}
                     onChange={(e) => setCommodityFlowMode(e.target.value)}
-                    style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                    style={{ background: "var(--color-surface-elevated)", border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                   >
                     <option value="etf">ETF flows</option>
                     <option value="fund">Fund flows</option>
@@ -3218,7 +3218,7 @@ export function AnalyticsModule({ backendUrl }) {
                             setSelectedCommoditySymbol(symbol);
                             setCompareCommoditySymbols((prev) => (prev.includes(symbol) ? prev : [...prev.slice(-3), symbol]));
                           }}
-                          style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(15,23,42,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+                          style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid var(--color-border-subtle)", background: "var(--color-surface-elevated)", color: "var(--color-text-secondary)", fontSize: 11, cursor: "pointer" }}
                         >
                           {row?.name || symbol} ({symbol})
                         </button>
@@ -3238,9 +3238,9 @@ export function AnalyticsModule({ backendUrl }) {
                         style={{
                           padding: "6px 10px",
                           borderRadius: 8,
-                          border: `1px solid ${active ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                          background: active ? "rgba(56,189,248,0.16)" : "rgba(2,6,23,0.55)",
-                          color: active ? "#7dd3fc" : "#cbd5e1",
+                          border: `1px solid ${active ? "var(--color-brand-cyan)" : "var(--color-border-subtle)"}`,
+                          background: active ? "rgba(56,189,248,0.16)" : "var(--color-surface-elevated)",
+                          color: active ? "var(--color-brand-cyan)" : "var(--color-text-secondary)",
                           cursor: "pointer",
                           fontSize: 12,
                           textTransform: "capitalize",

@@ -10,18 +10,19 @@ import { AnalyticsModule } from './components/AnalyticsModule';
 import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { TaxEstimator } from "./components/TaxEstimator";
+import { FullMetricsPage } from "./components/FullMetricsPage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
 import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
-import { zeninFetch } from "./utils/zeninFetch";
+import { zeninFetch, ZENIN_API_BASE_URL } from "./utils/zeninFetch";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
 
 
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
+const BACKEND_URL = ZENIN_API_BASE_URL;
 const ADMIN_EMAIL = String(import.meta.env.VITE_ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
 
 function parseRouteFromLocation() {
@@ -68,7 +69,8 @@ const SECTION_MIN_PLAN = {
   Journal: "pro",
   Options: "desk",
   Predictions: "desk",
-  "Tax Estimator": "starter"
+  "Tax Estimator": "starter",
+  Metrics: "pro"
 };
 
 const FALLBACK_CATEGORIES = ["stocks", "crypto", "indicators"];
@@ -1821,14 +1823,14 @@ const handleOptionTradeClosed = async (tradeId) => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Metrics", "Options", "Predictions", "Journal", "Tax Estimator"];
   const [activeSection, setActiveSection] = useState(() => {
     const saved = localStorage.getItem("zenin_active_section");
     return sections.includes(saved) ? saved : "Home";
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
-  const [accessCheckLoading, setAccessCheckLoading] = useState(true);
+  const [accessCheckLoading, setAccessCheckLoading] = useState(false);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
@@ -2470,6 +2472,13 @@ const handleOptionTradeClosed = async (tradeId) => {
         </svg>
       );
     }
+    if (section === "Metrics") {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 20V10M18 20V4M6 20v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
     if (section === "Watchlist") {
       return (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -2500,10 +2509,9 @@ const handleOptionTradeClosed = async (tradeId) => {
     );
   };
 
+
+
   return (
-    accessCheckLoading ? (
-      <div className="app-access-loading">Verifying account access...</div>
-    ) : (
     <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       {isSidebarCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
         <button
@@ -2530,8 +2538,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             {isSidebarCollapsed ? "›" : "‹"}
           </button>
         </header>
+        <div className="sidebar-section-header">MAIN</div>
         <nav className="sidebar-nav">
-          {accessibleSections.map((section) => (
+          {accessibleSections.filter(s => s !== "Metrics").map((section) => (
             <button
               key={section}
               className={`nav-btn ${activeSection === section ? "active" : ""}`}
@@ -2544,10 +2553,14 @@ const handleOptionTradeClosed = async (tradeId) => {
             >
               <span className="nav-icon">{sectionIcon(section)}</span>
               <span className="nav-full">{section}</span>
+              {section === "Watchlist" && watchlistAssets.length > 0 && (
+                <span className="nav-badge">{watchlistAssets.length}</span>
+              )}
             </button>
           ))}
         </nav>
 
+        <div className="sidebar-section-header">ACCOUNT</div>
         <div className="sidebar-bottom">
           <button
             className="sidebar-theme-row"
@@ -2557,9 +2570,12 @@ const handleOptionTradeClosed = async (tradeId) => {
           >
             <span className="sidebar-theme-left">
               <span className="sidebar-theme-icon" aria-hidden="true">{themeMode === "dark" ? "☾" : "☀"}</span>
-              <span className="sidebar-theme-label">{themeMode === "dark" ? "Dark mode" : "Light mode"}</span>
+              <span className="sidebar-theme-label">Theme</span>
             </span>
-            <span className="sidebar-theme-chip">{themeMode === "dark" ? "Dark" : "Light"}</span>
+            <div className="sidebar-theme-right">
+              <span className="sidebar-theme-chip">{themeMode === "dark" ? "Dark" : "Light"}</span>
+              <span className="sidebar-theme-arrow">›</span>
+            </div>
           </button>
 
           <button
@@ -2573,6 +2589,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             <div className="sidebar-account-meta">
               <span className="sidebar-footer-email" title={userEmail}>
                 {userEmail}
+                <span className="verified-badge">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="#3b82f6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                </span>
               </span>
               <span className="sidebar-plan-label">{accountPlanLabel}</span>
             </div>
@@ -2612,8 +2631,29 @@ const handleOptionTradeClosed = async (tradeId) => {
               if (routeState.type === "company") navigateToAppRoute();
               setActiveSection("Portfolio");
             }}
+            onViewFullMetrics={() => {
+              if (routeState.type === "company") navigateToAppRoute();
+              setActiveSection("Metrics");
+            }}
           />
         )}
+        {activeSection === "Metrics" && (
+          <div className="view-container">
+            <FullMetricsPage 
+              onBack={() => setActiveSection("Home")} 
+              themeMode={themeMode} 
+              toggleTheme={toggleTheme} 
+              portfolio={portfolioWithEntry}
+              trades={trades}
+              activeOptionsTrades={activeOptionsTrades}
+              accountMetrics={accountMetrics}
+              assets={assets}
+              spotPrices={spotPrices}
+              multiChainCache={multiChainCache}
+            />
+          </div>
+        )}
+
         {activeSection === "Watchlist" && (
           <div className="view-container">
             <div className="search-section" ref={searchSectionRef}>
@@ -3488,7 +3528,6 @@ const handleOptionTradeClosed = async (tradeId) => {
       <SpeedInsights />
       <Analytics />
     </div>
-    )
   );
 }
 

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import ReactApexChart from "react-apexcharts";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const BACKEND_URL = ZENIN_API_BASE_URL;
 
 const STRATEGIES = [
   { name: "Long Call", legs: [{ type: "call", direction: "long", qty: 1 }] },
@@ -583,21 +583,6 @@ export function OptionsCalculator({   spotPrice = 0,
                   className={`options-calculator-strategy-btn ${activeStrategy === s.name ? "active" : ""}`}
                   key={s.name}
                   onClick={() => applyStrategy(s)}
-                  style={{
-                    padding: "8px 10px",
-                    textAlign: "left",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    lineHeight: 1.35,
-                    background: activeStrategy === s.name ? "rgba(56,189,248,0.12)" : "transparent",
-                    color: activeStrategy === s.name ? "#38bdf8" : "#94a3b8",
-                    borderLeft: activeStrategy === s.name ? "2px solid #38bdf8" : "2px solid transparent",
-                    transition: "all 0.15s"
-                  }}
-                  onMouseEnter={e => { if (activeStrategy !== s.name) { e.currentTarget.style.background = "rgba(148,163,184,0.06)"; e.currentTarget.style.color = "#f1f5f9"; } }}
-                  onMouseLeave={e => { if (activeStrategy !== s.name) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#94a3b8"; } }}
                 >
                   {s.name}
                 </button>

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const BACKEND_URL = ZENIN_API_BASE_URL;
 const PREDICTION_REFRESH_MS = 21600000; // 6 hours
 
 export function PredictionMarketModule() {

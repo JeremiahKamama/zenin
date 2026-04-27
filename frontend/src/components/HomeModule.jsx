@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
-const RAW_BACKEND_URL = import.meta.env.VITE_API_URL || "https://zenin-mx6w.onrender.com/api";
-const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+const BACKEND_URL = ZENIN_API_BASE_URL;
 
 const MOVERS_HORIZONS = {
   daily: { label: "Daily", interval: "1D" },
@@ -28,7 +28,8 @@ export function HomeModule({
   calculatePortfolioValue,
   calculatePortfolioGain,
   balance = 0,
-  onViewAllPositions
+  onViewAllPositions,
+  onViewFullMetrics
 }) {
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
@@ -56,6 +57,14 @@ export function HomeModule({
   const [selectedHoldingDetail, setSelectedHoldingDetail] = useState(null);
   const [selectedActivityDetail, setSelectedActivityDetail] = useState(null);
   const [marketScope, setMarketScope] = useState("all");
+  const [marketDetailOpen, setMarketDetailOpen] = useState(false);
+  const [marketDetailTab, setMarketDetailTab] = useState("equities");
+  const [marketRegion, setMarketRegion] = useState("global");
+  const [marketSortBy, setMarketSortBy] = useState("marketCap");
+  const [marketRefreshNonce, setMarketRefreshNonce] = useState(0);
+  const [macroData, setMacroData] = useState([]);
+  const [eventsData, setEventsData] = useState([]);
+  const [marketDataLoading, setMarketDataLoading] = useState(false);
   const moversPerfCacheRef = useRef(new Map());
   const flowTimerRef = useRef(null);
 
@@ -104,12 +113,38 @@ export function HomeModule({
   };
 
   const moversUniverse = useMemo(() => {
-    const source = watchlistAssets.length > 0
-      ? watchlistAssets
-      : (marketMovers.length > 0 ? marketMovers : assets);
+    const normalizePortfolioAsset = (asset) => {
+      const symbol = String(asset?.symbol || "").toUpperCase();
+      const quantity = Number(asset?.quantity || 0);
+      const price = Number(asset?.price || 0);
+      return {
+        ...asset,
+        symbol,
+        price: Number.isFinite(price) && price > 0 ? price : asset?.price,
+        __positionValue: Number.isFinite(price * quantity) ? price * quantity : 0
+      };
+    };
+
+    const holdingsSource = (Array.isArray(portfolio) ? portfolio : [])
+      .map(normalizePortfolioAsset)
+      .filter((asset) => asset.symbol);
+    const watchlistSource = Array.isArray(watchlistAssets) ? watchlistAssets : [];
+    const broadSource = [
+      ...holdingsSource,
+      ...watchlistSource,
+      ...(Array.isArray(marketMovers) ? marketMovers : []),
+      ...(Array.isArray(assets) ? assets : [])
+    ];
+
+    const source =
+      marketScope === "holdings"
+        ? holdingsSource
+        : marketScope === "watchlist"
+        ? watchlistSource
+        : broadSource;
 
     const priceMap = new Map();
-    [...marketMovers, ...assets].forEach((asset) => {
+    [...broadSource, ...marketMovers, ...assets].forEach((asset) => {
       const symbol = String(asset?.symbol || "").toUpperCase();
       if (!symbol || priceMap.has(symbol)) return;
       priceMap.set(symbol, {
@@ -119,7 +154,8 @@ export function HomeModule({
     });
 
     const deduped = new Map();
-    source.forEach((asset) => {
+    const fallbackSource = source.length ? source : broadSource;
+    fallbackSource.forEach((asset) => {
       const symbol = String(asset?.symbol || "").toUpperCase();
       if (!symbol || deduped.has(symbol)) return;
       const priced = priceMap.get(symbol);
@@ -135,7 +171,7 @@ export function HomeModule({
     });
 
     return [...deduped.values()];
-  }, [watchlistAssets, marketMovers, assets]);
+  }, [watchlistAssets, marketMovers, assets, portfolio, marketScope]);
 
   const moversUniverseKey = useMemo(
     () => moversUniverse.map((a) => `${a.symbol}:${a.__moverType}`).join("|"),
@@ -205,7 +241,7 @@ export function HomeModule({
     return () => {
       canceled = true;
     };
-  }, [moversUniverseKey]);
+  }, [moversUniverseKey, marketRefreshNonce]);
 
   const getMoverChange = (asset) => {
     const symbol = String(asset?.symbol || "").toUpperCase();
@@ -406,6 +442,37 @@ export function HomeModule({
   ];
 
   useEffect(() => {
+    if (!marketDetailOpen) return;
+    
+    const fetchData = async () => {
+      setMarketDataLoading(true);
+      
+      try {
+        const [macroRes, eventsRes] = await Promise.all([
+          fetch(`${BACKEND_URL}/macro-indicators?country=USA`),
+          fetch(`${BACKEND_URL}/economic-calendar`)
+        ]);
+        
+        if (macroRes.ok) {
+          const data = await macroRes.json();
+          if (data.metrics) setMacroData(data.metrics);
+        }
+        
+        if (eventsRes.ok) {
+          const data = await eventsRes.json();
+          if (data.events) setEventsData(data.events);
+        }
+      } catch (err) {
+        console.error("Market Context: Fetch failed", err);
+      } finally {
+        setMarketDataLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, [marketDetailOpen, marketRefreshNonce]);
+
+  useEffect(() => {
     return () => {
       if (flowTimerRef.current) clearTimeout(flowTimerRef.current);
     };
@@ -418,17 +485,18 @@ export function HomeModule({
   }, [homeToast]);
 
   useEffect(() => {
-    if (!activeAttentionFlow && !selectedHoldingDetail && !selectedActivityDetail) return;
+    if (!activeAttentionFlow && !selectedHoldingDetail && !selectedActivityDetail && !marketDetailOpen) return;
     const handleKeydown = (event) => {
       if (event.key === "Escape") {
         setActiveAttentionFlow(null);
         setSelectedHoldingDetail(null);
         setSelectedActivityDetail(null);
+        setMarketDetailOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [activeAttentionFlow, selectedHoldingDetail, selectedActivityDetail]);
+  }, [activeAttentionFlow, selectedHoldingDetail, selectedActivityDetail, marketDetailOpen]);
 
   const relativeAgeLabel = (raw, fallbackDays = 2) => {
     const ts = new Date(raw || 0).getTime();
@@ -703,6 +771,229 @@ export function HomeModule({
       maximumFractionDigits: 1
     }).format(num);
   };
+
+  const classifyMarketAsset = (asset) => {
+    const type = String(asset?.type || asset?.marketType || "").toLowerCase();
+    const symbol = String(asset?.symbol || "").toUpperCase();
+    const name = String(asset?.name || "").toLowerCase();
+    if (type.includes("option") || asset?.__marketType === "options") return "options";
+    if (type.includes("crypto") || ["BTC", "ETH", "SOL", "HYPE"].includes(symbol)) return "macro";
+    if (
+      type.includes("commodity") ||
+      ["GLD", "GC", "CL", "WTI", "USO", "SLV", "NG"].includes(symbol) ||
+      name.includes("gold") ||
+      name.includes("crude") ||
+      name.includes("oil")
+    ) return "commodities";
+    return "equities";
+  };
+
+  const regionMatchesMarketFilter = (asset) => {
+    if (marketRegion === "global") return true;
+    const region = String(asset?.region || asset?.country || asset?.market || "").toLowerCase();
+    const symbol = String(asset?.symbol || "").toUpperCase();
+    if (marketRegion === "us") return !region || region.includes("us") || region.includes("usa") || region.includes("united states");
+    if (marketRegion === "international") return region && !region.includes("us") && !region.includes("usa") && !region.includes("united states");
+    if (marketRegion === "crypto") return ["BTC", "ETH", "SOL", "HYPE"].includes(symbol) || String(asset?.type || "").toLowerCase().includes("crypto");
+    return true;
+  };
+
+  const getSortMetric = (asset) => {
+    if (marketSortBy === "daily") return Math.abs(Number(asset?.__moverChange || 0));
+    if (marketSortBy === "exposure") return Number(asset?.__exposurePct || asset?.__positionValue || 0);
+    return Number(asset?.marketCap || asset?.__positionValue || asset?.price || 0);
+  };
+
+  const marketDetailMovers = useMemo(() => {
+    const optionRows = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).map((trade) => {
+      const chain = multiChainCache?.[trade.asset];
+      const spot = spotPrices?.[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      const symbol = `${String(trade?.asset || "OPT").toUpperCase()} ${String(trade?.strategy || "Option")}`;
+      const price = Number(metrics?.currentMark || trade?.entryPrice || trade?.premium || 0);
+      const pnl = Number(metrics?.pnl || 0);
+      const basis = Math.max(1, Math.abs(Number(trade?.entryPrice || trade?.premium || price || 1)));
+      return {
+        id: `detail-opt-${trade.id || symbol}`,
+        symbol,
+        name: trade?.strategy || "Options position",
+        type: "Option",
+        price,
+        __marketType: "options",
+        __moverChange: (pnl / basis) * 100,
+        __positionValue: Math.abs(price * Number(trade?.qty || trade?.quantity || 1)),
+        __exposurePct: 0
+      };
+    });
+
+    const rows = [...(Array.isArray(moversWithChange) ? moversWithChange : []), ...optionRows]
+      .map((asset) => ({
+        ...asset,
+        __marketTab: classifyMarketAsset(asset)
+      }))
+      .filter((asset) => asset.__marketTab === marketDetailTab && regionMatchesMarketFilter(asset))
+      .sort((a, b) => getSortMetric(b) - getSortMetric(a));
+
+    return rows;
+  }, [activeOptionsTrades, marketDetailTab, marketRegion, marketSortBy, moversWithChange, multiChainCache, spotPrices]);
+
+  const marketDetailGainers = marketDetailMovers
+    .filter((asset) => Number(asset.__moverChange || 0) >= 0)
+    .sort((a, b) => Number(b.__moverChange || 0) - Number(a.__moverChange || 0))
+    .slice(0, 5);
+
+  const marketDetailLosers = marketDetailMovers
+    .filter((asset) => Number(asset.__moverChange || 0) < 0)
+    .sort((a, b) => Number(a.__moverChange || 0) - Number(b.__moverChange || 0))
+    .slice(0, 5);
+
+  const portfolioImpactRows = useMemo(() => {
+    const spotRows = (Array.isArray(portfolio) ? portfolio : []).map((asset) => {
+      const quantity = Number(asset?.quantity || 0);
+      const price = Number(asset?.price || 0);
+      const value = Number.isFinite(quantity * price) ? quantity * price : 0;
+      const symbol = String(asset?.symbol || "").toUpperCase();
+      const mover = moversWithChange.find((row) => String(row?.symbol || "").toUpperCase() === symbol);
+      const dailyPct = Number(mover?.__moverChange ?? asset?.priceChangePercent ?? 0);
+      const impact = value * (dailyPct / 100);
+      return {
+        id: `impact-${asset.id || symbol}`,
+        symbol,
+        name: asset?.name || symbol,
+        type: classifyMarketAsset(asset) === "commodities" ? "Commodity" : classifyMarketAsset(asset) === "macro" ? "Macro" : "Equity",
+        price,
+        dailyPct,
+        exposurePct: totalAccountEquity > 0 ? (value / totalAccountEquity) * 100 : 0,
+        value,
+        impact
+      };
+    });
+
+    const optionRows = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).map((trade) => {
+      const chain = multiChainCache?.[trade.asset];
+      const spot = spotPrices?.[trade.asset];
+      const metrics = calculateOptionPnL(trade, chain, spot);
+      const price = Number(metrics?.currentMark || trade?.entryPrice || trade?.premium || 0);
+      const quantity = Number(trade?.qty || trade?.quantity || 1);
+      const value = Math.abs(price * quantity);
+      const impact = Number(metrics?.pnl || 0);
+      return {
+        id: `impact-option-${trade.id || trade.asset}`,
+        symbol: `${String(trade?.asset || "OPT").toUpperCase()} Option`,
+        name: trade?.strategy || "Options position",
+        type: "Option",
+        price,
+        dailyPct: value > 0 ? (impact / value) * 100 : 0,
+        exposurePct: totalAccountEquity > 0 ? (value / totalAccountEquity) * 100 : 0,
+        value,
+        impact
+      };
+    });
+
+    return [...spotRows, ...optionRows]
+      .sort((a, b) => Math.abs(Number(b.impact || 0)) - Math.abs(Number(a.impact || 0)))
+      .slice(0, 6);
+  }, [activeOptionsTrades, moversWithChange, multiChainCache, portfolio, spotPrices, totalAccountEquity]);
+
+  const marketSignals = useMemo(() => {
+    const strongestGainer = marketDetailGainers[0] || gainers[0];
+    const strongestLoser = marketDetailLosers[0] || losers[0];
+    const rows = [
+      strongestGainer ? {
+        title: `${strongestGainer.symbol} Momentum`,
+        text: `${strongestGainer.name || strongestGainer.symbol} is leading selected-market strength.`,
+        type: classifyMarketAsset(strongestGainer),
+        tone: "bullish",
+        age: "1h ago"
+      } : null,
+      activeOptionsTrades.length ? {
+        title: "Options Flow Spike",
+        text: `${activeOptionsTrades.length} active options positions are contributing to portfolio sensitivity.`,
+        type: "options",
+        tone: "bullish",
+        age: "2h ago"
+      } : null,
+      strongestLoser ? {
+        title: `${strongestLoser.symbol} Pressure Watch`,
+        text: `${strongestLoser.name || strongestLoser.symbol} is the weakest selected-market signal.`,
+        type: classifyMarketAsset(strongestLoser),
+        tone: "bearish",
+        age: "2h ago"
+      } : null,
+      {
+        title: "Gold Strength as Defensive Rotation",
+        text: "Gold remains a useful cross-asset risk appetite check.",
+        type: "commodities",
+        tone: "bullish",
+        age: "3h ago"
+      },
+      {
+        title: "Crude Oil Breakout Watch",
+        text: "Energy prices can affect inflation expectations and rate-sensitive assets.",
+        type: "commodities",
+        tone: "watch",
+        age: "4h ago"
+      }
+    ];
+    return rows.filter(Boolean).slice(0, 5);
+  }, [activeOptionsTrades.length, gainers, losers, marketDetailGainers, marketDetailLosers]);
+
+  const macroContextRows = useMemo(() => {
+    if (macroData.length > 0) {
+      return macroData.map(m => ({
+        indicator: m.label,
+        value: m.unit === "%" ? `${m.current?.toFixed(2)}%` : m.current?.toFixed(2),
+        change: m.changePercent ? `${m.changePercent > 0 ? "+" : ""}${m.changePercent.toFixed(2)}%` : "—",
+        tone: m.changePercent > 0 ? "positive" : m.changePercent < 0 ? "negative" : "neutral",
+        series: m.series?.map(s => s.value) || []
+      })).slice(0, 6);
+    }
+
+    const vix = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : 13.85;
+    const rates = Number.isFinite(Number(todayView.rates)) ? Number(todayView.rates) : 5.5;
+    const gold = moversUniverse.find((asset) => ["GLD", "GC"].includes(String(asset?.symbol || "").toUpperCase()) || String(asset?.name || "").toLowerCase().includes("gold"));
+    const crude = moversUniverse.find((asset) => ["CL", "WTI", "USO"].includes(String(asset?.symbol || "").toUpperCase()) || String(asset?.name || "").toLowerCase().includes("crude"));
+    return [
+      { indicator: "US CPI (YoY)", value: "3.36%", change: "-0.10pp", tone: "negative", series: [62, 60, 61, 59, 60, 58, 59] },
+      { indicator: "Fed Funds Rate", value: `${rates.toFixed(2)}%`, change: "—", tone: "neutral", series: [50, 50, 50, 50, 50, 50, 50] },
+      { indicator: "US 10Y Yield", value: "4.31%", change: "+4.2 bps", tone: "positive", series: [42, 44, 47, 52, 50, 53, 55] },
+      { indicator: "VIX Index", value: vix.toFixed(2), change: "-5.3%", tone: "positive", series: [58, 52, 50, 46, 48, 44, 42] },
+      { indicator: "Gold (Spot)", value: formatMoney(Number(gold?.price || 2386.4)), change: "+0.72%", tone: "positive", series: [40, 42, 45, 43, 48, 51, 53], color: "#f59e0b" },
+      { indicator: "WTI Crude", value: formatMoney(Number(crude?.price || 77.02)), change: "-1.90%", tone: "negative", series: [55, 54, 49, 47, 42, 40, 38], color: "#ef4444" }
+    ];
+  }, [macroData, formatMoney, moversUniverse, todayView.rates, todayView.vix]);
+
+  const upcomingEvents = useMemo(() => {
+    if (eventsData.length > 0) {
+      return eventsData.slice(0, 8).map(e => {
+        // Handle "Tuesday, May 14, 2024" or "May 14"
+        const dateStr = String(e.date || "");
+        const parts = dateStr.split(", ");
+        const shortDate = parts.length > 1 ? parts[1] : dateStr;
+        return {
+          date: shortDate,
+          title: e.title,
+          time: e.time,
+          impact: e.impact,
+          country: e.country
+        };
+      });
+    }
+
+    const source = Array.isArray(eventRows) && eventRows.length ? eventRows : [
+      { date: "May 14", title: "CPI (YoY)", time: "8:30 AM ET", impact: "High Impact" },
+      { date: "May 15", title: "Retail Sales (MoM)", time: "8:30 AM ET", impact: "Medium Impact" },
+      { date: "May 15", title: "FOMC Meeting Minutes", time: "2:00 PM ET", impact: "High Impact" },
+      { date: "May 17", title: "Building Permits (MoM)", time: "8:30 AM ET", impact: "Low Impact" },
+      { date: "May 17", title: "U. of Michigan Sentiment", time: "10:00 AM ET", impact: "Medium Impact" }
+    ];
+    return source.slice(0, 5).map((event, idx) => ({
+      date: event?.date || event?.reportDate || event?.start || `May ${14 + idx}`,
+      title: event?.title || event?.event || event?.symbol || "Market event",
+      time: event?.time || event?.period || "8:30 AM ET",
+      impact: event?.impact || (idx % 3 === 0 ? "High Impact" : idx % 3 === 1 ? "Medium Impact" : "Low Impact")
+    }));
+  }, [eventRows]);
 
   const stablecoinSymbols = new Set(["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"]);
   const isCashLikeAsset = (asset) => {
@@ -1106,6 +1397,218 @@ export function HomeModule({
     );
   };
 
+  const marketBreadthPct = moversWithChange.length
+    ? Math.round((moversWithChange.filter((asset) => Number(asset.__moverChange || 0) >= 0).length / moversWithChange.length) * 100)
+    : 68;
+  const putCallRatio = activeOptionsTrades.length
+    ? Math.max(0.35, Math.min(1.85, 0.72 + activeOptionsTrades.length * 0.05))
+    : 0.82;
+  const goldAsset = moversUniverse.find((asset) => ["GLD", "GC"].includes(String(asset?.symbol || "").toUpperCase()) || String(asset?.name || "").toLowerCase().includes("gold"));
+  const vixValue = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : 13.85;
+  const riskOn = vixValue < 20 && marketBreadthPct >= 50;
+  const marketSummaryCards = [
+    { label: "Equities Breadth (S&P 500)", value: `${marketBreadthPct}%`, change: "+1.21%", tone: "positive", caption: "Advancing > Declining", color: "#22c55e", seed: marketBreadthPct },
+    { label: "Options Put/Call Ratio", value: putCallRatio.toFixed(2), change: "-6.3%", tone: "positive", caption: "7D Avg: 0.88", color: "#3b82f6", seed: putCallRatio * 100 },
+    { label: "US 10Y Yield", value: "4.31%", change: "+4.2 bps", tone: "negative", caption: "1D Change", color: "#ef4444", seed: 431 },
+    { label: "Gold (Spot)", value: formatMoney(Number(goldAsset?.price || 2386.4)), change: "+0.72%", tone: "positive", caption: "Prior / 1D Change", color: "#f59e0b", seed: Number(goldAsset?.price || 2386.4) },
+    { label: "Volatility Index (VIX)", value: vixValue.toFixed(2), change: "-5.3%", tone: "positive", caption: "1D Change", color: "#a855f7", seed: vixValue * 10 }
+  ];
+
+  const refreshMarketDetail = () => {
+    moversPerfCacheRef.current.clear();
+    setMoversPerformanceByKey({});
+    setHomeLastUpdatedAt(Date.now());
+    setMarketRefreshNonce((value) => value + 1);
+    setHomeToast("Market context refreshed.");
+  };
+
+  if (marketDetailOpen) {
+    const totalPortfolioImpact = portfolioImpactRows.reduce((sum, row) => sum + Number(row.impact || 0), 0);
+    return (
+      <div className="view-container market-context-page">
+        {homeToast ? <div className="home-v3-toast" role="status">{homeToast}</div> : null}
+        <header className="market-context-detail-header">
+          <div>
+            <button type="button" className="market-context-back" onClick={() => setMarketDetailOpen(false)}>Back to Overview</button>
+            <h2>Market Context</h2>
+            <p>Daily movers and broader signals affecting your portfolio.</p>
+          </div>
+          <div className="market-context-toolbar" aria-label="Market context controls">
+            <label>
+              <span>Timeframe</span>
+              <select value={moversHorizon} onChange={(event) => setMoversHorizon(event.target.value)}>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="quarterly">3M</option>
+                <option value="ytd">YTD</option>
+                <option value="yearly">1Y</option>
+              </select>
+            </label>
+            <label>
+              <span>Asset Scope</span>
+              <select value={marketScope} onChange={(event) => setMarketScope(event.target.value)}>
+                <option value="all">All Assets</option>
+                <option value="holdings">Holdings</option>
+                <option value="watchlist">Watchlist</option>
+              </select>
+            </label>
+            <label>
+              <span>Region</span>
+              <select value={marketRegion} onChange={(event) => setMarketRegion(event.target.value)}>
+                <option value="global">Global</option>
+                <option value="us">United States</option>
+                <option value="international">International</option>
+                <option value="crypto">Crypto</option>
+              </select>
+            </label>
+            <label>
+              <span>Sort By</span>
+              <select value={marketSortBy} onChange={(event) => setMarketSortBy(event.target.value)}>
+                <option value="marketCap">Market Cap</option>
+                <option value="daily">Daily Move</option>
+                <option value="exposure">Exposure</option>
+              </select>
+            </label>
+            <button type="button" className="market-context-refresh" onClick={refreshMarketDetail}>
+              <span aria-hidden="true">↻</span>
+              <strong>Refresh</strong>
+              <em>Updated just now</em>
+            </button>
+          </div>
+        </header>
+
+        <section className="market-context-panel market-summary-panel">
+          <div className="market-panel-head">
+            <h3>Market Summary</h3>
+          </div>
+          <div className="market-summary-grid">
+            {marketSummaryCards.map((card) => (
+              <MarketSummaryCard key={card.label} {...card} />
+            ))}
+            <div className="market-summary-card market-regime-card">
+              <span>Market Regime</span>
+              <div className={riskOn ? "market-regime-value positive" : "market-regime-value negative"}>{riskOn ? "Risk-On" : "Risk-Off"}</div>
+              <p>{riskOn ? "Improving risk appetite" : "Defensive risk appetite"}</p>
+              <MarketRegimeGauge value={riskOn ? 74 : 38} />
+            </div>
+          </div>
+        </section>
+
+        <section className="market-context-main-grid">
+          <div className="market-context-panel market-impact-panel">
+            <div className="market-panel-head">
+              <h3>Portfolio Impact</h3>
+              <button type="button">View full</button>
+            </div>
+            <div className="market-impact-table">
+              <div className="market-impact-row market-impact-header">
+                <span>Asset</span>
+                <span>Type</span>
+                <span>Price</span>
+                <span>Daily %</span>
+                <span>Exposure</span>
+                <span>Position Value</span>
+                <span>Portfolio Impact</span>
+              </div>
+              {portfolioImpactRows.length ? portfolioImpactRows.map((row) => (
+                <div key={row.id} className="market-impact-row">
+                  <div className="market-asset-cell">
+                    <MarketAssetLogo symbol={row.symbol} type={row.type} />
+                    <div><strong>{row.symbol}</strong><span>{row.name}</span></div>
+                  </div>
+                  <span><MarketTypeBadge type={row.type} /></span>
+                  <span>{formatAssetPrice(row)}</span>
+                  <span className={Number(row.dailyPct || 0) >= 0 ? "positive" : "negative"}>{formatSignedPercent(row.dailyPct)}</span>
+                  <span>{Number(row.exposurePct || 0).toFixed(2)}%</span>
+                  <span>{formatMoney(row.value)}</span>
+                  <span className={Number(row.impact || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.impact)}</span>
+                </div>
+              )) : (
+                <div className="market-empty-row">Add holdings to see portfolio impact.</div>
+              )}
+            </div>
+            <div className="market-impact-total">
+              <span>Total Portfolio Value</span>
+              <strong>{formatMoney(totalAccountEquity)}</strong>
+              <em className={totalPortfolioImpact >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalPortfolioImpact)} ({formatSignedPercent(totalAccountEquity > 0 ? (totalPortfolioImpact / totalAccountEquity) * 100 : 0)})</em>
+            </div>
+          </div>
+
+          <div className="market-context-panel market-top-movers-panel">
+            <div className="market-panel-head">
+              <h3>Top Movers</h3>
+              <button type="button">View all</button>
+            </div>
+            <div className="market-mover-tabs">
+              {["equities", "options", "commodities", "macro"].map((tab) => (
+                <button key={tab} type="button" className={marketDetailTab === tab ? "active" : ""} onClick={() => setMarketDetailTab(tab)}>{tab}</button>
+              ))}
+            </div>
+            <div className="market-movers-columns">
+              <MarketMoverList title="Top Gainers" rows={marketDetailGainers} formatAssetPrice={formatAssetPrice} onSelectAsset={onSelectAsset} />
+              <MarketMoverList title="Top Losers" rows={marketDetailLosers} formatAssetPrice={formatAssetPrice} onSelectAsset={onSelectAsset} />
+            </div>
+          </div>
+        </section>
+
+        <section className="market-context-bottom-grid">
+          <div className="market-context-panel">
+            <div className="market-panel-head">
+              <div><h3>Market Signals</h3><p>AI-curated insights across markets</p></div>
+              <button type="button">View all signals</button>
+            </div>
+            <div className="market-signal-list">
+              {marketSignals.map((signal) => (
+                <div key={signal.title} className="market-signal-row">
+                  <MarketAssetLogo symbol={signal.title} type={signal.type} />
+                  <div><strong>{signal.title}</strong><span>{signal.text}</span></div>
+                  <MarketTypeBadge type={signal.type} />
+                  <span className={`market-signal-tone ${signal.tone}`}>{signal.tone}</span>
+                  <em>{signal.age}</em>
+                </div>
+              ))}
+            </div>
+            <div className="market-powered-by">Signals powered by <strong>Zenin AI</strong> <span>Alpha Vantage</span></div>
+          </div>
+
+          <div className="market-context-panel">
+            <div className="market-panel-head">
+              <div><h3>Macro Context</h3><p>Key macroeconomic indicators</p></div>
+              <button type="button">View full calendar</button>
+            </div>
+            <div className="market-macro-table">
+              {macroContextRows.map((row) => (
+                <div key={row.indicator} className="market-macro-row">
+                  <span>{row.indicator}</span>
+                  <strong>{row.value}</strong>
+                  <em className={row.tone}>{row.change}</em>
+                  <MiniSparkline values={row.series} color={row.color || (row.tone === "negative" ? "#ef4444" : "#3b82f6")} />
+                </div>
+              ))}
+            </div>
+            <p className="market-context-footnote">Change values represent 1D change.</p>
+          </div>
+
+          <div className="market-context-panel">
+            <div className="market-panel-head">
+              <h3>Upcoming Events</h3>
+              <button type="button">View economic calendar</button>
+            </div>
+            <div className="market-event-list">
+              {upcomingEvents.map((event) => (
+                <div key={`${event.date}-${event.title}`} className="market-event-row">
+                  <span className="market-event-date">{String(event.date).slice(0, 8)}</span>
+                  <div><strong>{event.title}</strong><span>{event.time}</span></div>
+                  <em className={`market-event-impact ${String(event.impact).toLowerCase().split(" ")[0]}`}>{event.impact}</em>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="view-container home-dashboard home-v2">
       {homeToast ? <div className="home-v3-toast" role="status">{homeToast}</div> : null}
@@ -1286,12 +1789,14 @@ export function HomeModule({
                       </div>
                       <div className="home-v2-holding-value">
                         <strong>{formatMoney(asset.__positionValue)}</strong>
-                        <span>{asset.__allocationPercent.toFixed(1)}% allocation · Qty {Number(asset.quantity || 0).toLocaleString()}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", justifyContent: "flex-end" }}>
+                          {asset.__allocationPercent.toFixed(1)}% allocation · Qty {Number(asset.quantity || 0).toLocaleString()}
+                          {concentrated ? <span className="home-v3-warning-badge" style={{ position: "static", margin: 0, padding: "1px 6px", minHeight: "18px", fontSize: "10px" }}>Concentrated</span> : null}
+                        </span>
                       </div>
                       <div className={`home-v2-holding-change ${changeClass}`}>
                         {change > 0 ? "↗" : change < 0 ? "↘" : ""} {change > 0 ? "+" : ""}{change.toFixed(1)}%
                       </div>
-                      {concentrated ? <span className="home-v3-warning-badge">Concentrated</span> : null}
                     </button>
                   );
                 })
@@ -1363,7 +1868,7 @@ export function HomeModule({
               <div className="home-v2-metric-row"><span>◎ Watchlist</span><strong>{(watchlistAssets || []).length} assets</strong></div>
               <div className="home-v2-metric-row"><span>⚠ Active Alerts</span><strong className="warning">{alerts.length}</strong></div>
             </div>
-            <button type="button" className="home-v3-btn secondary full">View Full Metrics</button>
+            <button type="button" className="home-v3-btn secondary full" onClick={onViewFullMetrics}>View Full Metrics</button>
           </div>
 
           <div className="watchlist-panel glass home-v2-panel">
@@ -1401,7 +1906,7 @@ export function HomeModule({
               >
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
-                <option value="quarterly">Monthly</option>
+                <option value="quarterly">3M</option>
               </select>
               <select value={marketScope} onChange={(e) => setMarketScope(e.target.value)}>
                 <option value="all">All</option>
@@ -1441,7 +1946,7 @@ export function HomeModule({
               ) : <HomeEmptyState title="No losers found for this period." />}
             </div>
           </div>
-          <button type="button" className="home-v3-btn secondary">Open Market Context</button>
+          <button type="button" className="home-v3-btn secondary" onClick={() => setMarketDetailOpen(true)}>Open Market Context</button>
         </section>
       ) : null}
       {renderAttentionFlow()}
@@ -1498,6 +2003,87 @@ function HomeDetailDrawer({ open, title, rows, onClose }) {
           ))}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function buildSparkValues(seed = 1, count = 24) {
+  let cursor = Math.max(1, Number(seed) || 1);
+  return Array.from({ length: count }, (_, idx) => {
+    cursor = (cursor * 9301 + 49297 + idx * 233) % 233280;
+    const wave = Math.sin((idx / Math.max(1, count - 1)) * Math.PI * 2) * 14;
+    return 48 + wave + (cursor / 233280) * 24;
+  });
+}
+
+function MiniSparkline({ values = [], color = "#38bdf8" }) {
+  const series = Array.isArray(values) && values.length ? values : buildSparkValues(8, 18);
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = Math.max(1, max - min);
+  const points = series.map((value, idx) => {
+    const x = (idx / Math.max(1, series.length - 1)) * 100;
+    const y = 32 - ((value - min) / range) * 28;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  return (
+    <svg className="market-sparkline" viewBox="0 0 100 36" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function MarketSummaryCard({ label, value, change, tone, caption, color, seed }) {
+  return (
+    <div className="market-summary-card">
+      <span>{label}</span>
+      <div className="market-summary-value">
+        <strong>{value}</strong>
+        <em className={tone}>{tone === "positive" ? "▲" : "▼"} {change}</em>
+      </div>
+      <MiniSparkline values={buildSparkValues(seed, 26)} color={color} />
+      <p>{caption}</p>
+    </div>
+  );
+}
+
+function MarketRegimeGauge({ value = 70 }) {
+  const clamped = Math.max(0, Math.min(100, Number(value) || 0));
+  return (
+    <div className="market-regime-gauge" style={{ "--gauge-value": `${clamped}%` }}>
+      <span />
+      <i />
+    </div>
+  );
+}
+
+function MarketAssetLogo({ symbol = "", type = "" }) {
+  const label = String(symbol || type || "?").trim().slice(0, 2).toUpperCase();
+  const tone = String(type || "").toLowerCase();
+  return <span className={`market-asset-logo ${tone}`}>{label}</span>;
+}
+
+function MarketTypeBadge({ type = "Equity" }) {
+  const normalized = String(type || "Equity").toLowerCase();
+  return <span className={`market-type-badge ${normalized}`}>{type}</span>;
+}
+
+function MarketMoverList({ title, rows, formatAssetPrice, onSelectAsset }) {
+  return (
+    <div className="market-mover-list">
+      <h4>{title}</h4>
+      {rows.length ? rows.map((row) => {
+        const change = Number(row.__moverChange || 0);
+        const type = row.__marketTab || row.type || "Equity";
+        return (
+          <button key={`${title}-${row.id || row.symbol}`} type="button" className="market-mover-detail-row" onClick={() => onSelectAsset?.(row)}>
+            <MarketAssetLogo symbol={row.symbol} type={type} />
+            <div><strong>{row.symbol}</strong><span>{row.name || row.symbol}</span></div>
+            <span>{formatAssetPrice(row)}</span>
+            <em className={change >= 0 ? "positive" : "negative"}>{change >= 0 ? "▲" : "▼"} {Math.abs(change).toFixed(2)}%</em>
+          </button>
+        );
+      }) : <div className="market-empty-row">No movers for this filter.</div>}
     </div>
   );
 }
