@@ -115,7 +115,7 @@ const EMPTY_COMMODITIES = {
   correlation: [],
 };
 
-const COMMODITY_GROUPS = ["all", "energy", "metals", "agriculture", "fertilizers", "industrial"];
+const COMMODITY_GROUPS = ["all", "energy", "metals", "agriculture", "fertilizers", "industrial", "battery", "soft", "livestock"];
 const COMMODITY_VIEWS = ["price", "flows", "seasonality", "curve", "compare"];
 
 const MACRO_CATEGORY_OPTIONS = [
@@ -739,7 +739,11 @@ export function AnalyticsModule({ backendUrl }) {
       const fallbackList = [
         { symbol: "GC", name: "Gold", group: "metals", region: "global", latestPrice: 2378.2, dailyChangePct: 0.41, ytdChangePct: 12.9, oneYearReturnPct: 19.4 },
         { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global", latestPrice: 82.1, dailyChangePct: -0.55, ytdChangePct: 6.8, oneYearReturnPct: 11.2 },
-        { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", latestPrice: 2.34, dailyChangePct: 1.1, ytdChangePct: -3.2, oneYearReturnPct: -8.6 },
+        { symbol: "HG", name: "Copper", group: "industrial", region: "global", latestPrice: 4.48, dailyChangePct: -0.2, ytdChangePct: 7.1, oneYearReturnPct: 9.9 },
+        { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global", latestPrice: 45.2, dailyChangePct: -1.4, ytdChangePct: -18.2, oneYearReturnPct: -24.5 },
+        { symbol: "ZC", name: "Corn", group: "agriculture", region: "global", latestPrice: 4.85, dailyChangePct: -0.63, ytdChangePct: 1.9, oneYearReturnPct: -2.4 },
+        { symbol: "KC", name: "Coffee", group: "soft", region: "global", latestPrice: 224.5, dailyChangePct: 1.2, ytdChangePct: 18.4, oneYearReturnPct: 24.2 },
+        { symbol: "LE=F", name: "Live Cattle", group: "livestock", region: "global", latestPrice: 182.4, dailyChangePct: 0.25, ytdChangePct: 8.4, oneYearReturnPct: 12.1 },
       ];
       const fallbackSeries = Array.from({ length: 20 }, (_, i) => ({ date: `T-${20 - i}`, value: 100 + i * 0.6 + Math.sin(i / 3) * 2.4 }));
       const fallbackFundamentals = [

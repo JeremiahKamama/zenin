@@ -5629,15 +5629,52 @@ app.get('/api/analytics/options', async (req, res) => {
 });
 
 const COMMODITY_UNIVERSE = [
+  // Energy
   { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global", latestPrice: 82.1, dailyChangePct: -0.55, ytdChangePct: 6.8, oneYearReturnPct: 11.2 },
   { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", latestPrice: 2.34, dailyChangePct: 1.1, ytdChangePct: -3.2, oneYearReturnPct: -8.6 },
   { symbol: "RB", name: "RBOB Gasoline", group: "energy", region: "usa", latestPrice: 2.61, dailyChangePct: 0.4, ytdChangePct: 3.7, oneYearReturnPct: 6.2 },
+  
+  // Metals (Precious)
   { symbol: "GC", name: "Gold", group: "metals", region: "global", latestPrice: 2378.2, dailyChangePct: 0.41, ytdChangePct: 12.9, oneYearReturnPct: 19.4 },
   { symbol: "SI", name: "Silver", group: "metals", region: "global", latestPrice: 29.4, dailyChangePct: 0.78, ytdChangePct: 10.2, oneYearReturnPct: 14.1 },
+  
+  // Industrial Metals
   { symbol: "HG", name: "Copper", group: "industrial", region: "global", latestPrice: 4.48, dailyChangePct: -0.2, ytdChangePct: 7.1, oneYearReturnPct: 9.9 },
+  { symbol: "ALI=F", name: "Aluminum", group: "industrial", region: "global", latestPrice: 2540.0, dailyChangePct: 0.15, ytdChangePct: 4.2, oneYearReturnPct: 8.5 },
+  { symbol: "ZNC=F", name: "Zinc", group: "industrial", region: "global", latestPrice: 2840.0, dailyChangePct: -0.42, ytdChangePct: 2.1, oneYearReturnPct: 5.4 },
+  { symbol: "LED=F", name: "Lead", group: "industrial", region: "global", latestPrice: 2150.0, dailyChangePct: 0.1, ytdChangePct: -1.2, oneYearReturnPct: 2.3 },
+  { symbol: "TIN=F", name: "Tin", group: "industrial", region: "global", latestPrice: 32400.0, dailyChangePct: 1.2, ytdChangePct: 15.4, oneYearReturnPct: 22.1 },
+  { symbol: "TIO=F", name: "Iron Ore", group: "industrial", region: "global", latestPrice: 112.5, dailyChangePct: -0.8, ytdChangePct: -8.4, oneYearReturnPct: -4.2 },
+  
+  // Battery Metals
+  { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global", latestPrice: 45.2, dailyChangePct: -1.4, ytdChangePct: -18.2, oneYearReturnPct: -24.5 },
+  { symbol: "NI=F", name: "Nickel", group: "battery", region: "global", latestPrice: 18450.0, dailyChangePct: 0.35, ytdChangePct: 5.1, oneYearReturnPct: 7.8 },
+  { symbol: "REMX", name: "Rare Earths (ETF)", group: "battery", region: "global", latestPrice: 52.8, dailyChangePct: -0.6, ytdChangePct: -12.4, oneYearReturnPct: -15.8 },
+  
+  // Agriculture
   { symbol: "ZC", name: "Corn", group: "agriculture", region: "global", latestPrice: 4.85, dailyChangePct: -0.63, ytdChangePct: 1.9, oneYearReturnPct: -2.4 },
   { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", latestPrice: 5.78, dailyChangePct: 0.33, ytdChangePct: 2.4, oneYearReturnPct: 1.1 },
   { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", latestPrice: 11.93, dailyChangePct: 0.12, ytdChangePct: 3.2, oneYearReturnPct: 4.8 },
+  { symbol: "ZO=F", name: "Oats", group: "agriculture", region: "global", latestPrice: 3.45, dailyChangePct: 0.25, ytdChangePct: 1.8, oneYearReturnPct: 3.2 },
+  { symbol: "ZR=F", name: "Rice", group: "agriculture", region: "global", latestPrice: 18.42, dailyChangePct: -0.15, ytdChangePct: 5.4, oneYearReturnPct: 9.1 },
+  { symbol: "ZL=F", name: "Soybean Oil", group: "agriculture", region: "global", latestPrice: 0.45, dailyChangePct: 0.1, ytdChangePct: -2.1, oneYearReturnPct: -4.5 },
+  { symbol: "ZM=F", name: "Soybean Meal", group: "agriculture", region: "global", latestPrice: 342.0, dailyChangePct: 0.45, ytdChangePct: 2.8, oneYearReturnPct: 5.2 },
+  
+  // Soft Commodities
+  { symbol: "KC", name: "Coffee", group: "soft", region: "global", latestPrice: 224.5, dailyChangePct: 1.2, ytdChangePct: 18.4, oneYearReturnPct: 24.2 },
+  { symbol: "CC", name: "Cocoa", group: "soft", region: "global", latestPrice: 9450.0, dailyChangePct: -2.4, ytdChangePct: 142.1, oneYearReturnPct: 215.0 },
+  { symbol: "SB", name: "Sugar", group: "soft", region: "global", latestPrice: 19.42, dailyChangePct: 0.35, ytdChangePct: -4.2, oneYearReturnPct: -2.1 },
+  { symbol: "CT", name: "Cotton", group: "soft", region: "global", latestPrice: 82.4, dailyChangePct: -0.1, ytdChangePct: -2.8, oneYearReturnPct: -5.4 },
+  { symbol: "OJ=F", name: "Orange Juice", group: "soft", region: "global", latestPrice: 382.0, dailyChangePct: 1.8, ytdChangePct: 24.5, oneYearReturnPct: 42.1 },
+  { symbol: "LBR=F", name: "Lumber", group: "soft", region: "global", latestPrice: 540.0, dailyChangePct: -0.8, ytdChangePct: -4.2, oneYearReturnPct: -1.8 },
+  
+  // Livestock
+  { symbol: "LE=F", name: "Live Cattle", group: "livestock", region: "global", latestPrice: 182.4, dailyChangePct: 0.25, ytdChangePct: 8.4, oneYearReturnPct: 12.1 },
+  { symbol: "GF=F", name: "Feeder Cattle", group: "livestock", region: "global", latestPrice: 248.0, dailyChangePct: 0.42, ytdChangePct: 9.1, oneYearReturnPct: 14.5 },
+  { symbol: "HE=F", name: "Lean Hogs", group: "livestock", region: "global", latestPrice: 92.4, dailyChangePct: -0.15, ytdChangePct: 12.4, oneYearReturnPct: 18.2 },
+  { symbol: "DC=F", name: "Milk", group: "livestock", region: "global", latestPrice: 18.42, dailyChangePct: 0.1, ytdChangePct: -2.4, oneYearReturnPct: -4.8 },
+  
+  // Fertilizers
   { symbol: "UAN", name: "Urea Ammonium Nitrate", group: "fertilizers", region: "global", latestPrice: 318.0, dailyChangePct: 0.28, ytdChangePct: 4.1, oneYearReturnPct: 8.0 },
 ];
 
