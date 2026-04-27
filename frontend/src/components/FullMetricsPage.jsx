@@ -217,18 +217,24 @@ export function FullMetricsPage({
 
 
   const optionsMetricsData = useMemo(() => {
-    const totalOptionsValue = activeOptionsTrades.reduce((acc, trade) => {
+    let totalOptionsValue = 0;
+    let totalDelta = 0;
+    let totalTheta = 0;
+
+    activeOptionsTrades.forEach((trade) => {
       const chain = multiChainCache[trade.asset];
       const spot = spotPrices[trade.asset];
       const metrics = calculateOptionPnL(trade, chain, spot);
-      return acc + (Number(metrics.pnl) || 0);
-    }, 0);
+      totalOptionsValue += (Number(metrics.pnl) || 0);
+      totalDelta += (Number(metrics.delta) || 0);
+      totalTheta += (Number(metrics.theta) || 0);
+    });
 
     return [
       ["Options P&L", `${totalOptionsValue >= 0 ? "+" : ""}$${totalOptionsValue.toFixed(2)}`, "Unrealized"],
       ["Open Strategies", activeOptionsTrades.length.toString(), "Active positions"],
-      ["Weighted Delta", "+0.42", "Mocked bias"], // Placeholder for complex calc
-      ["Theta / Day", "-$184", "Mocked decay"],    // Placeholder
+      ["Portfolio Delta", `${totalDelta >= 0 ? "+" : ""}${totalDelta.toFixed(3)}`, "Options Exposure"],
+      ["Theta Decay", `-$${Math.abs(totalTheta).toFixed(2)}`, "Daily Decay"],
     ];
   }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
@@ -244,12 +250,25 @@ export function FullMetricsPage({
   const macroCommoditiesData = useMemo(() => {
     const fedFunds = macroIndicators?.metrics?.find(m => m.key === "interest_rate")?.current;
     
+    const getVal = (sym, fallbackLabel = "—") => {
+      const p = macroPrices[sym];
+      if (!p || !p.price) return fallbackLabel;
+      return sym === "UST10Y" || sym === "FED" ? `${Number(p.price).toFixed(2)}%` : `$${Number(p.price).toLocaleString()}`;
+    };
+
+    const getChange = (sym) => {
+      const p = macroPrices[sym];
+      if (!p || !p.priceChangePercent) return "—";
+      const val = Number(p.priceChangePercent);
+      return `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`;
+    };
+
     return [
-      ["US 10Y Yield", macroPrices["UST10Y"]?.price ? `${Number(macroPrices["UST10Y"].price).toFixed(2)}%` : "4.31%", macroPrices["UST10Y"]?.priceChangePercent ? `${macroPrices["UST10Y"].priceChangePercent}%` : "+4.2 bps"],
-      ["DXY Index", macroPrices["DXY"]?.price ? `${Number(macroPrices["DXY"].price).toFixed(2)}` : "104.53", macroPrices["DXY"]?.priceChangePercent ? `${macroPrices["DXY"].priceChangePercent}%` : "-0.28%"],
-      ["Gold Spot", macroPrices["XAU"]?.price ? `$${Number(macroPrices["XAU"].price).toLocaleString()}` : "$2,386.40", macroPrices["XAU"]?.priceChangePercent ? `${macroPrices["XAU"].priceChangePercent}%` : "+0.72%"],
-      ["WTI Crude", macroPrices["WTI"]?.price ? `$${Number(macroPrices["WTI"].price).toLocaleString()}` : "$77.02", macroPrices["WTI"]?.priceChangePercent ? `${macroPrices["WTI"].priceChangePercent}%` : "-1.90%"],
-      ["Fed Funds Rate", fedFunds ? `${fedFunds}%` : "5.50%", "No change"],
+      ["US 10Y Yield", getVal("UST10Y", "Loading..."), getChange("UST10Y")],
+      ["DXY Index", macroPrices["DXY"]?.price ? Number(macroPrices["DXY"].price).toFixed(2) : "Loading...", getChange("DXY")],
+      ["Gold Spot", getVal("XAU", "Loading..."), getChange("XAU")],
+      ["WTI Crude", getVal("WTI", "Loading..."), getChange("WTI")],
+      ["Fed Funds Rate", fedFunds ? `${fedFunds}%` : "—", "Target Range"],
     ];
   }, [macroIndicators, macroPrices]);
 
@@ -257,20 +276,33 @@ export function FullMetricsPage({
     // Basic drawdown calc from timeline
     let peak = initialBalance;
     let maxDD = 0;
-    tradeTimeline.forEach(p => {
+    const returns = [];
+    
+    tradeTimeline.forEach((p, i) => {
       if (p.equity > peak) peak = p.equity;
       const dd = peak > 0 ? (peak - p.equity) / peak : 0;
       if (dd > maxDD) maxDD = dd;
+      
+      if (i > 0) {
+        const prev = tradeTimeline[i-1].equity;
+        if (prev > 0) returns.push((p.equity - prev) / prev);
+      }
     });
+
+    // Simple Volatility (Standard Deviation of daily returns)
+    const avgReturn = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+    const variance = returns.length > 1 ? returns.reduce((a, b) => a + Math.pow(b - avgReturn, 2), 0) / (returns.length - 1) : 0;
+    const stdDev = Math.sqrt(variance);
+    const annualizedVol = stdDev * Math.sqrt(252); // Approx trading days
 
     return [
       { label: "Max Drawdown", value: `-${(maxDD * 100).toFixed(2)}%`, tone: "negative" },
-      { label: "Volatility Annualized", value: "13.42%", tone: "neutral" },
-      { label: "Value at Risk 95%", value: "-2.18%", tone: "negative" },
-      { label: "Beta vs S&P 500", value: "0.92", tone: "neutral" },
-      { label: "Downside Capture", value: "84%", tone: "positive" },
+      { label: "Volatility Annualized", value: annualizedVol > 0 ? `${(annualizedVol * 100).toFixed(2)}%` : "—", tone: "neutral" },
+      { label: "Value at Risk 95%", value: annualizedVol > 0 ? `-${(stdDev * 1.645 * 100).toFixed(2)}%` : "—", tone: "negative" },
+      { label: "Beta vs S&P 500", value: "—", tone: "neutral" },
+      { label: "Portfolio Exposure", value: `${((filteredEquity / currentAccountEquity) * 100).toFixed(1)}%`, tone: "neutral" },
     ];
-  }, [tradeTimeline, initialBalance]);
+  }, [tradeTimeline, initialBalance, filteredEquity, currentAccountEquity]);
 
   const benchmarkData = useMemo(() => {
     const getReturn = (hist, days) => {
@@ -599,8 +631,10 @@ export function FullMetricsPage({
             <article className="panel">
               <h2>Exposure Notes</h2>
               <p className="insight-copy">
-                Equity exposure remains dominant, while options provide asymmetric upside. Commodities exposure is
-                primarily gold-linked with smaller oil sensitivity.
+                {assetClass === "All" ? "Your portfolio has its highest concentration in " + (holdingsData[0]?.name || "selected assets") + "." : "Analyzing " + assetClass + " segment."}
+                {filteredPortfolio.some(i => (i.category || "").toLowerCase() === "commodities") 
+                  ? " Commodities exposure provides a macro hedge, primarily driven by your metals positions."
+                  : " Currently no significant commodities hedge in this segment."}
               </p>
             </article>
           </section>
