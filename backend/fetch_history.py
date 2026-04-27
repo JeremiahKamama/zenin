@@ -82,10 +82,21 @@ def fetch_history(symbol, period="1mo", interval="1d"):
 
         rows = _format_history_rows(hist)
         if rows:
+            # Try to get currency from fast_info or info
+            currency = "USD"
+            try:
+                currency = ticker.fast_info.get("currency", "USD")
+            except Exception:
+                try:
+                    currency = ticker.info.get("currency", "USD")
+                except Exception:
+                    pass
+
             return {
                 "history": rows,
                 "source": "yahoo",
                 "error": None,
+                "currency": currency,
                 "meta": {
                     "requested": {"period": period, "interval": interval},
                     "used": {"period": attempt_period, "interval": attempt_interval},

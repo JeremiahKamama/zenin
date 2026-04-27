@@ -62,6 +62,22 @@ def normalise(symbol: str) -> str:
         return f"{int(symbol):04d}.HK"
     return symbol
 
+def infer_currency(symbol: str) -> str:
+    s = symbol.upper()
+    if s.endswith(".T"): return "JPY"
+    if s.endswith(".L"): return "GBP"
+    if any(s.endswith(ext) for ext in [".DE", ".F", ".PA", ".MI", ".VI", ".AS", ".BR", ".LI", ".MC"]): return "EUR"
+    if any(s.endswith(ext) for ext in [".TO", ".V"]): return "CAD"
+    if s.endswith(".AX"): return "AUD"
+    if s.endswith(".HK"): return "HKD"
+    if any(s.endswith(ext) for ext in [".KS", ".KQ"]): return "KRW"
+    if any(s.endswith(ext) for ext in [".SN", ".SS"]): return "CNY"
+    if any(s.endswith(ext) for ext in [".BO", ".NS"]): return "INR"
+    if s.endswith(".SW"): return "CHF"
+    if s.endswith(".MX"): return "MXN"
+    if s.endswith(".SA"): return "BRL"
+    return "USD"
+
 def _extract_close(data, yf_symbol: str):
     if data is None or data.empty:
         return None
@@ -150,7 +166,8 @@ def fetch_prices(requests: list) -> dict:
                     "price": price,
                     "priceChangePercent": change_pct,
                     "isMarketOpen": item["isOpen"],
-                    "marketStatus": item["status"]
+                    "marketStatus": item["status"],
+                    "currency": infer_currency(yf_sym)
                 }
 
     return results

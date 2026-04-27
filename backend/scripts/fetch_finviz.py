@@ -26,15 +26,32 @@ def _find_ratings_table(soup: BeautifulSoup):
 def fetch_finviz_data(symbol: str) -> dict:
     # Normalize symbol for Finviz (e.g. BRK.B -> BRK-B)
     normalized_symbol = symbol.replace('.', '-').upper()
-    url = f"https://finviz.com/quote.ashx?t={normalized_symbol}"
     
-    # Standard headers to avoid being blocked
+    # Detect if it's a crypto symbol (usually ends in USD or has a crypto look)
+    is_crypto = normalized_symbol.endswith("USD") and len(normalized_symbol) <= 7
+    
+    if is_crypto:
+        url = f"https://finviz.com/crypto_charts.ashx?t={normalized_symbol}"
+    else:
+        url = f"https://finviz.com/quote.ashx?t={normalized_symbol}"
+    
+    # Rotating user agents to avoid blocks
+    import random
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0"
+    ]
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(user_agents),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://finviz.com/",
-        "Connection": "keep-alive"
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
     
     data = {

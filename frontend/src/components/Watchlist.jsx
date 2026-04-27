@@ -679,7 +679,7 @@ useEffect(() => {
                     padding: "8px 10px",
                     borderRadius: "8px",
                     border: "1px solid rgba(148,163,184,0.15)",
-                    background: "var(--color-surface, rgba(15,23,42,0.35))"
+                    background: "var(--color-surface, rgba(5,5,5,0.35))"
                   }}
                 >
                   <strong style={{ fontSize: "13px", color: "var(--color-text-primary)" }}>{symbol}</strong>

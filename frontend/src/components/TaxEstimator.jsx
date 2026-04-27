@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD } from '../utils/currencyUtils';
 
 // ─── Global Tax Rules (flat CGT approximation for retail traders) ────────────
 const TAX_RULES = {
@@ -346,7 +347,7 @@ function deriveGainsFromTrades(trades = [], costBasisMethod = 'fifo') {
   return gains;
 }
 
-export function TaxEstimator({ trades = [] }) {
+export function TaxEstimator({ trades = [], spotPrices = {} }) {
   const [jurisdictions, setJurisdictions] = useState(['USA']);
   const [jurisdictionSearch, setJurisdictionSearch] = useState('');
   const [activeRegion, setActiveRegion] = useState('All');
@@ -441,23 +442,57 @@ export function TaxEstimator({ trades = [] }) {
     if (jurisdictions.length === 0) { alert('Select at least one jurisdiction.'); return; }
     const { adjustedGains, grossTotal, taxableGain, netAfterCosts, totalCosts } = buildAdjustedGains(gains, advanced);
     const newResults = jurisdictions.map(j => {
-      const { liability: baseLiability, details } = calcLiability(j, adjustedGains, { ordinaryIncomeTotal });
+      const targetCurrency = TAX_RULES[j].currency;
+      
+      // 1) Convert everything to USD first (if not already)
+      const inputCurrency = advanced.currency || "USD";
+      const toUSDRate = inputCurrency === "USD" ? 1 : convertToUSD(1, inputCurrency, spotPrices);
+      
+      // 2) Scale adjustedGains to Local Currency
+      // adjustedGains are in inputCurrency
+      const localGains = cloneGains(adjustedGains);
+      const conversionToLocal = (val) => {
+        const valUSD = val * toUSDRate;
+        return convertFromUSD(valUSD, targetCurrency, spotPrices);
+      };
+
+      ['Equities', 'Crypto', 'Bonds', 'Special Funds', 'MMFs'].forEach(bucket => {
+        Object.keys(localGains[bucket]).forEach(k => {
+          localGains[bucket][k] = conversionToLocal(localGains[bucket][k]);
+        });
+      });
+
+      const localOrdinaryIncome = conversionToLocal(ordinaryIncomeTotal);
+      const localTaxableGain = conversionToLocal(taxableGain);
+      const localGrossGain = conversionToLocal(grossTotal);
+      const localNetGain = conversionToLocal(netAfterCosts);
+      const localCosts = conversionToLocal(totalCosts);
+
+      const { liability: baseLiability, details } = calcLiability(j, localGains, { ordinaryIncomeTotal: localOrdinaryIncome });
       const taxCredits = Math.max(0, Number(advanced.foreignTaxPaid || 0)) + Math.max(0, Number(advanced.withholdingTax || 0));
-      const liability = Math.max(0, baseLiability - taxCredits);
-      const taxableBase = taxableGain + ordinaryIncomeTotal;
+      // Assume credits are entered in inputCurrency, so convert them to local too
+      const localTaxCredits = conversionToLocal(taxCredits);
+      
+      const liability = Math.max(0, baseLiability - localTaxCredits);
+      const taxableBase = localTaxableGain + localOrdinaryIncome;
       const effectiveRate = taxableBase > 0 ? (liability / taxableBase) * 100 : 0;
+      
+      // USD equivalent for summary
+      const liabilityUSD = convertToUSD(liability, targetCurrency, spotPrices);
+
       return {
         jurisdictionKey: j,
         jurisdiction: TAX_RULES[j].name,
-        currency: TAX_RULES[j].currency,
+        currency: targetCurrency,
         liability,
-        grossGain: grossTotal,
-        netGain: netAfterCosts,
-        taxableGain,
-        ordinaryIncomeTotal,
+        liabilityUSD,
+        grossGain: localGrossGain,
+        netGain: localNetGain,
+        taxableGain: localTaxableGain,
+        ordinaryIncomeTotal: localOrdinaryIncome,
         effectiveRate,
-        totalCosts,
-        taxCredits,
+        totalCosts: localCosts,
+        taxCredits: localTaxCredits,
         details,
         timestamp: new Date().toISOString()
       };
@@ -476,6 +511,10 @@ export function TaxEstimator({ trades = [] }) {
     setAuditTrail(nextTrail);
     localStorage.setItem('zenin_tax_audit_trail', JSON.stringify(nextTrail));
   };
+
+  const globalLiabilityUSD = useMemo(() => {
+    return results.reduce((sum, res) => sum + (res.liabilityUSD || 0), 0);
+  }, [results]);
 
   // ── Jurisdiction Recommendation ────────────────────────────────────────────
   const jurisdictionRecommendations = useMemo(() => {
@@ -552,10 +591,36 @@ export function TaxEstimator({ trades = [] }) {
   const summaryPreview = useMemo(() => {
     const { adjustedGains, grossTotal, taxableGain, netAfterCosts, totalCosts } = buildAdjustedGains(gains, advanced);
     const first = jurisdictions[0] || "USA";
-    const { liability } = calcLiability(first, adjustedGains, { ordinaryIncomeTotal });
-    const taxCredits = Math.max(0, Number(advanced.foreignTaxPaid || 0)) + Math.max(0, Number(advanced.withholdingTax || 0));
-    const estimatedTax = Math.max(0, liability - taxCredits);
-    const effectiveRate = taxableGain + ordinaryIncomeTotal > 0 ? (estimatedTax / (taxableGain + ordinaryIncomeTotal)) * 100 : 0;
+    const targetCurrency = TAX_RULES[first]?.currency || "USD";
+    const inputCurrency = advanced.currency || "USD";
+
+    // 1) Convert everything to USD first
+    const toUSDRate = inputCurrency === "USD" ? 1 : convertToUSD(1, inputCurrency, spotPrices);
+    
+    // 2) Scale adjustedGains to Jurisdiction Local Currency
+    const localGains = cloneGains(adjustedGains);
+    const conversionToLocal = (val) => {
+      const valUSD = val * toUSDRate;
+      return convertFromUSD(valUSD, targetCurrency, spotPrices);
+    };
+
+    ['Equities', 'Crypto', 'Bonds', 'Special Funds', 'MMFs'].forEach(bucket => {
+      Object.keys(localGains[bucket]).forEach(k => {
+        localGains[bucket][k] = conversionToLocal(localGains[bucket][k]);
+      });
+    });
+
+    const localOrdinaryIncome = conversionToLocal(ordinaryIncomeTotal);
+    const { liability: baseLiability } = calcLiability(first, localGains, { ordinaryIncomeTotal: localOrdinaryIncome });
+    
+    // Convert back to input currency for summary display
+    // liability is in targetCurrency
+    const fromLocalToUSD = targetCurrency === "USD" ? 1 : convertToUSD(1, targetCurrency, spotPrices);
+    const estimatedTax = (baseLiability * fromLocalToUSD) / toUSDRate;
+    
+    const taxableBase = taxableGain + ordinaryIncomeTotal;
+    const effectiveRate = taxableBase > 0 ? (estimatedTax / taxableBase) * 100 : 0;
+
     return {
       jurisdiction: TAX_RULES[first]?.name || "N/A",
       grossTotal,
@@ -566,7 +631,11 @@ export function TaxEstimator({ trades = [] }) {
       estimatedTax,
       effectiveRate
     };
-  }, [gains, advanced, jurisdictions, ordinaryIncomeTotal]);
+  }, [gains, advanced, jurisdictions, ordinaryIncomeTotal, spotPrices]);
+
+  const netAfterTax = useMemo(() => {
+    return Math.max(0, (summaryPreview.grossTotal || 0) - (summaryPreview.estimatedTax || 0));
+  }, [summaryPreview]);
 
   const inputWarnings = useMemo(() => {
     const warnings = [];
@@ -643,9 +712,9 @@ export function TaxEstimator({ trades = [] }) {
     specialFunds: Number(gains?.['Special Funds']?.standard || 0)
   }), [gains]);
 
-  const netAfterTax = Math.max(0, Number(summaryPreview.grossTotal || 0) - Number(summaryPreview.estimatedTax || 0));
-  const formatMoney = (value) =>
-    `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const formatMoney = (value, currency = "USD") => {
+    return formatCurrency(value, currency, { maximumFractionDigits: 0 });
+  };
   const currencyLabel = advanced.currency || "USD";
   const countryFlag = (jurisdictionKey) => {
     const key = String(jurisdictionKey || "").toUpperCase();
@@ -707,7 +776,7 @@ export function TaxEstimator({ trades = [] }) {
 
       <div className="tax-v2-kpis">
         <div className="tax-v2-kpi">
-          <div className="tax-v2-kpi-icon blue">$</div>
+          <div className="tax-v2-kpi-icon blue">{getCurrencySymbol(advanced.currency)}</div>
           <span>Estimated Tax</span>
           <strong>{formatMoney(summaryPreview.estimatedTax)}</strong>
           <em className="positive">↓ {Math.abs(taxSavingsVsUAE).toLocaleString(undefined, { maximumFractionDigits: 0 })} vs UAE</em>
@@ -949,10 +1018,17 @@ export function TaxEstimator({ trades = [] }) {
       {results.length > 0 ? (
         <section className="tax-v2-panel tax-v2-results">
           <div className="tax-v2-panel-head">
-            <h3>Detailed Breakdown</h3>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="pagination-button tax-v2-action-btn" onClick={handleSave}>Save All</button>
-              <button className="pagination-button tax-v2-action-btn" onClick={handleExportCsv}>Export CSV</button>
+            <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+              {results.length > 1 && (
+                <div className="tax-v2-global-total">
+                  <span>Total Global Liability:</span>
+                  <strong>{formatMoney(globalLiabilityUSD)}</strong>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="pagination-button tax-v2-action-btn" onClick={handleSave}>Save All</button>
+                <button className="pagination-button tax-v2-action-btn" onClick={handleExportCsv}>Export CSV</button>
+              </div>
             </div>
           </div>
           <div className="tax-v2-results-grid">
@@ -960,7 +1036,10 @@ export function TaxEstimator({ trades = [] }) {
               <article key={res.jurisdictionKey} className="tax-v2-result-card">
                 <div className="head">
                   <h4>{res.jurisdiction}</h4>
-                  <strong>{res.currency} {res.liability.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 700 }}>{res.currency} {res.liability.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: "0.75rem", opacity: 0.7 }}>≈ {formatMoney(res.liabilityUSD)}</div>
+                  </div>
                 </div>
                 <div className="rows">
                   {Object.entries(res.details).map(([k, v]) => (

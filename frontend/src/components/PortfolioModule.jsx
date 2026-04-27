@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import ReactApexChart from "react-apexcharts";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { formatCurrency, getCurrencySymbol } from "../utils/currencyUtils";
 
 export function PortfolioModule({
   portfolio,
@@ -174,8 +175,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity, optionTimelineAdjustments, initialBalance]);
   const yFormatter = (val) => {
     if (chartMode === "percentage") return `${val.toFixed(2)}%`;
-    if (chartMode === "pnl") return `$${val.toFixed(2)}`;
-    return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return formatCurrency(val, "USD", { sign: chartMode === "pnl" });
   };
 
   const chartOptions = {
@@ -457,10 +457,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
   const combinedHoldings = useMemo(() => {
     const spotRows = (Array.isArray(portfolio) ? portfolio : []).map((item) => {
-      const positionValue = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
+      const currency = item?.currency || item?.quotedCurrency || "USD";
+      const rawValue = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
+      const positionValue = convertToUSD(rawValue, currency, spotPrices);
+      
       const entryPrice = Number(item?.entryPrice);
       const basisPrice = Number.isFinite(entryPrice) ? entryPrice : Number(item?.price) || 0;
-      const positionGain = positionValue - (basisPrice * (Number(item?.quantity) || 0));
+      const rawGain = rawValue - (basisPrice * (Number(item?.quantity) || 0));
+      const positionGain = convertToUSD(rawGain, currency, spotPrices);
+
       return {
         kind: "spot",
         key: `spot-${item.id}`,
@@ -477,6 +482,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const currentMark = Number(metrics?.currentMark || 0);
       const qty = Number(trade?.qty || trade?.quantity || 1);
       const pnl = Number(metrics?.pnl || 0);
+      
+      // Options are usually quoted in the underlying's currency or USD.
+      // For now assuming USD for options unless they are crypto options where PnL might be in coins.
+      // But calculateOptionPnL already returns USD values usually.
+      
       return {
         kind: "options",
         key: `opt-${trade.id}`,
@@ -556,16 +566,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
   }, [rebalanceSuggestions]);
 
-  const formatMoney = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return "$0.00";
-    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatMoney = (value, currency = "USD") => {
+    return formatCurrency(value, currency);
   };
 
-  const formatSignedMoney = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return "$0.00";
-    return `${num >= 0 ? "+" : "-"}$${Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatSignedMoney = (value, currency = "USD") => {
+    return formatCurrency(value, currency, { sign: true });
   };
 
   const stablecoinSymbols = useMemo(
@@ -1621,7 +1627,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <div style={{ borderTop: "1px solid rgba(148,163,184,0.14)", paddingTop: "10px", marginTop: "10px" }}>
               <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>Tax Lot Optimizer</div>
               <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(15,23,42,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
+                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
                   <option value="fifo">FIFO</option>
                   <option value="lifo">LIFO</option>
                   <option value="hifo">HIFO</option>

@@ -1119,7 +1119,7 @@ useEffect(() => {
             <select
               value={strikeWindow}
               onChange={(e) => setStrikeWindow(e.target.value)}
-              style={{ background: "var(--color-surface-panel, rgba(15,23,42,0.7))", color: "var(--color-text-primary, #e2e8f0)", border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.25))", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
+              style={{ background: "var(--color-surface-panel, rgba(5,5,5,0.7))", color: "var(--color-text-primary, #e2e8f0)", border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.25))", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
             >
               <option value="all">All Strikes</option>
               <option value="medium">ATM ±20%</option>
@@ -1200,7 +1200,7 @@ useEffect(() => {
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                   <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit", fontWeight: activeExpiry === row.expiryTs ? "bold" : "normal" }}>{formatDate(row.expiryTs)}</span>
-                  <div style={{ height: "8px", background: "var(--color-surface-elevated, rgba(15,23,42,0.8))", borderRadius: "999px", overflow: "hidden" }}>
+                  <div style={{ height: "8px", background: "var(--color-surface-elevated, rgba(5,5,5,0.8))", borderRadius: "999px", overflow: "hidden" }}>
                     <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: activeExpiry === row.expiryTs ? "linear-gradient(90deg, #38bdf8, #60a5fa)" : "linear-gradient(90deg, #22c55e, #38bdf8)" }} />
                   </div>
                   <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit" }}>{(row.impliedVol * 100).toFixed(1)}%</span>
@@ -1223,7 +1223,7 @@ useEffect(() => {
               </div>
             ))}
             {assignmentReminders.map((item) => (
-              <div key={`assign-${item.id}`} style={{ border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.22))", borderRadius: "8px", padding: "8px 10px", color: "var(--color-text-secondary, #cbd5e1)", fontSize: "12px", background: "var(--color-surface-panel, rgba(15,23,42,0.5))" }}>
+              <div key={`assign-${item.id}`} style={{ border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.22))", borderRadius: "8px", padding: "8px 10px", color: "var(--color-text-secondary, #cbd5e1)", fontSize: "12px", background: "var(--color-surface-panel, rgba(5,5,5,0.5))" }}>
                 {item.label}: expires in {item.hoursToExpiry}h{item.inTheMoneyRisk ? " · Assignment risk elevated (ITM)." : ""}.
               </div>
             ))}

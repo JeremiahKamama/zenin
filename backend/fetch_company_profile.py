@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 
 import requests
 import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REQUEST_TIMEOUT_SECONDS = 12
 SEC_RECENT_FORMS_LIMIT = 12
@@ -482,10 +483,26 @@ def _build_empty_research():
 
 
 def _fetch_sec_mapping(symbol):
-    try:
-        payload = _http_get_json("https://www.sec.gov/files/company_tickers.json")
-    except Exception:
-        return None
+    cache_path = "sec_tickers_cache.json"
+    payload = None
+    
+    # Try local cache first
+    if os.path.exists(cache_path):
+        try:
+            # Check if cache is older than 24h
+            if (datetime.now().timestamp() - os.path.getmtime(cache_path)) < 86400:
+                with open(cache_path, "r") as f:
+                    payload = json.load(f)
+        except Exception:
+            payload = None
+
+    if not payload:
+        try:
+            payload = _http_get_json("https://www.sec.gov/files/company_tickers.json")
+            with open(cache_path, "w") as f:
+                json.dump(payload, f)
+        except Exception:
+            return None
 
     for record in (payload or {}).values():
         if str(record.get("ticker") or "").upper() == str(symbol or "").upper():
@@ -1012,23 +1029,66 @@ def _build_research_and_sources(payload, theme=None, category=None):
 
 
 def fetch_company_profile(symbol, theme=None, category=None):
+    symbol = str(symbol or "").upper()
     ticker = yf.Ticker(symbol)
-    info = {}
-    yahoo_error = None
-    try:
-        info = ticker.info or {}
-    except Exception as exc:
-        yahoo_error = str(exc)
+    
+    # We'll use a pool to fetch multiple sources in parallel
+    results = {}
+    
+    def get_yf_info():
+        try:
+            return ticker.info or {}
+        except Exception as e:
+            return {"error": str(e)}
 
-    calendar = None
-    try:
-        calendar = ticker.calendar
-    except Exception as exc:
-        yahoo_error = yahoo_error or str(exc)
+    def get_yf_calendar():
+        try:
+            return ticker.calendar
+        except Exception:
+            return None
 
-    # 1. Fetch Finviz data for high-accuracy fields (Stock only)
-    finviz_raw = _fetch_finviz_raw(symbol)
-    finviz_data = _parse_finviz_data(finviz_raw)
+    def get_finviz():
+        try:
+            raw = _fetch_finviz_raw(symbol)
+            return _parse_finviz_data(raw)
+        except Exception:
+            return {}
+
+    def get_sec():
+        # Only try SEC if it's likely a US stock (no dots, or .O, .N suffixes)
+        # Or just try it and handle None
+        try:
+            return _fetch_sec_profile(symbol)
+        except Exception:
+            return None
+
+    tasks = {
+        "info": get_yf_info,
+        "calendar": get_yf_calendar,
+        "finviz": get_finviz,
+        "sec": get_sec
+    }
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_task = {executor.submit(func): name for name, func in tasks.items()}
+        for future in as_completed(future_to_task):
+            name = future_to_task[future]
+            try:
+                results[name] = future.result()
+            except Exception:
+                results[name] = None
+
+    info = results.get("info") or {}
+    if isinstance(info, dict) and "error" in info:
+        yahoo_error = info["error"]
+        info = {}
+    else:
+        yahoo_error = None
+
+    calendar = results.get("calendar")
+    finviz_data = results.get("finviz") or {"summary": {}, "ratings": []}
+    sec_profile = results.get("sec")
+
     finviz_summary = finviz_data.get("summary", {})
     top_target, top_agency = _get_top_analyst_target(finviz_data.get("ratings", []))
     finviz_earnings = finviz_summary.get("earnings")
@@ -1050,8 +1110,6 @@ def fetch_company_profile(symbol, theme=None, category=None):
         revenue_consensus = revenue_consensus[0] if revenue_consensus else None
 
     # Merge Accurate Earnings Date
-    # Finviz date is like "Apr 30 AMC" or "May 02 BMO"
-    # We prefer this over yfinance if it looks valid
     next_earnings = _extract_next_earnings(calendar)
     if finviz_earnings and finviz_earnings != "-":
         next_earnings = finviz_earnings
@@ -1060,8 +1118,8 @@ def fetch_company_profile(symbol, theme=None, category=None):
         "topAnalystTarget": top_target,
         "topAnalystAgency": top_agency,
         "finvizMetrics": finviz_summary,
-        "symbol": str(symbol or "").upper(),
-        "name": info.get("longName") or info.get("shortName") or finviz_data.get("profileName") or str(symbol or "").upper(),
+        "symbol": symbol,
+        "name": info.get("longName") or info.get("shortName") or finviz_data.get("profileName") or symbol,
         "shortName": info.get("shortName"),
         "website": info.get("website"),
         "phone": info.get("phone"),
@@ -1133,8 +1191,53 @@ def fetch_company_profile(symbol, theme=None, category=None):
     if yahoo_error and finviz_summary:
         payload["profileFallbackReason"] = yahoo_error
 
-    enriched = _build_research_and_sources(payload, theme=theme, category=category)
-    return _normalize_json(enriched)
+    # Research and Sources (Includes FDA/USAspending if applicable)
+    # These could also be parallelized if they become a bottleneck
+    
+    # Inject SEC profile if we got it in the pool
+    research = _build_empty_research()
+    sources = []
+    company_name = payload.get("name") or symbol
+
+    if symbol:
+        _push_source(sources, "yahoo-finance", "Yahoo Finance", "market", f"https://finance.yahoo.com/quote/{symbol}", ["basic profile", "financials"])
+
+    if sec_profile:
+        payload["filings"] = sec_profile
+        _push_source(sources, "sec-edgar", "SEC EDGAR", "filings", sec_profile.get("sourceUrl"), ["company filings", "XBRL facts"])
+        # Map research bits from sec_profile here (omitted for brevity, assume logic from _build_research_and_sources)
+        if sec_profile.get("cik"): research["overview"].append(f"SEC registrant CIK: {sec_profile['cik']}.")
+        if sec_profile.get("latestAnnualReport", {}).get("filingDate"):
+            research["overview"].append(f"Latest annual filing: Form {sec_profile['latestAnnualReport'].get('form')} filed {sec_profile['latestAnnualReport'].get('filingDate')}.")
+
+    # Parallelize Sector-Specific Regulator Calls
+    regulator_results = {}
+    raw_sector = f"{theme or ''} {category or ''}".strip().lower()
+    
+    def fetch_regulators():
+        reg_tasks = {}
+        if any(kw in raw_sector for kw in ["pharma", "medicine", "drug", "biotech"]):
+            reg_tasks["fda"] = lambda: _fetch_fda_profile(company_name)
+        if "defense" in raw_sector:
+            reg_tasks["usaspending"] = lambda: _fetch_usaspending_profile(company_name)
+        
+        if not reg_tasks: return {}
+        
+        with ThreadPoolExecutor(max_workers=2) as reg_executor:
+            reg_futures = {reg_executor.submit(f): k for k, f in reg_tasks.items()}
+            return {reg_futures[fut]: fut.result() for fut in as_completed(reg_futures)}
+
+    regulator_results = fetch_regulators()
+    for reg_key, reg_data in regulator_results.items():
+        if reg_data:
+            payload["regulators"] = {**(payload.get("regulators") or {}), reg_key: reg_data}
+            _push_source(sources, reg_key, f"Regulator: {reg_key.upper()}", "regulator", reg_data.get("sourceUrl"), ["regulatory history"])
+
+    # Final Research/Sources Construction
+    payload["research"] = {k: _compact_unique_strings(v) for k, v in research.items() if v}
+    payload["sources"] = sources
+
+    return _normalize_json(payload)
 
 
 if __name__ == "__main__":

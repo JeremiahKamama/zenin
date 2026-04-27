@@ -13,6 +13,7 @@ import { TaxEstimator } from "./components/TaxEstimator";
 import { FullMetricsPage } from "./components/FullMetricsPage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
+import { updateFXRates } from "./utils/currencyUtils";
 import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
@@ -1476,9 +1477,15 @@ const handleOptionTradeClosed = async (tradeId) => {
     return prices;
   }, [assets, portfolio]);
 
+  useEffect(() => {
+    if (spotPrices && Object.keys(spotPrices).length > 0) {
+      updateFXRates(spotPrices);
+    }
+  }, [spotPrices]);
+
   const portfolioMarketValue = useMemo(
-    () => calculatePortfolioMarketValue(portfolioWithEntry),
-    [portfolioWithEntry]
+    () => calculatePortfolioMarketValue(portfolioWithEntry, spotPrices),
+    [portfolioWithEntry, spotPrices]
   );
 
   const totalOptionsPnL = useMemo(() => {
@@ -2538,7 +2545,6 @@ const handleOptionTradeClosed = async (tradeId) => {
             {isSidebarCollapsed ? "›" : "‹"}
           </button>
         </header>
-        <div className="sidebar-section-header">MAIN</div>
         <nav className="sidebar-nav">
           {accessibleSections.filter(s => s !== "Metrics").map((section) => (
             <button
@@ -2713,7 +2719,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                             <div className="search-result-info">
                               <div className="search-result-symbol">{asset.symbol}</div>
                               <div className="search-result-name">{asset.name}</div>
-                              <div className="search-result-type">{asset.type?.toUpperCase()}</div>
+                              <div className="search-result-type">
+                                {asset.type?.toUpperCase()} · {asset.currency || (asset.symbol?.endsWith(".T") ? "JPY" : "USD")}
+                              </div>
                             </div>
                             <button
                               className={`star-button ${inWatchlist ? "active" : ""}`}
@@ -2832,7 +2840,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
         {activeSection === "Tax Estimator" && (
-          <TaxEstimator trades={trades} />
+          <TaxEstimator trades={trades} spotPrices={spotPrices} />
         )}
           </>
         )}

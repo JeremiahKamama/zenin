@@ -3,6 +3,7 @@ import ReactApexChart from "react-apexcharts";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 
@@ -69,11 +70,16 @@ export function HomeModule({
   const flowTimerRef = useRef(null);
 
   const topPositions = useMemo(() => {
-    const spotPositions = (Array.isArray(portfolio) ? portfolio : []).map((asset) => ({
-      ...asset,
-      __isOptionPosition: false,
-      __positionValue: (Number(asset?.price) || 0) * (Number(asset?.quantity) || 0)
-    }));
+    const spotPositions = (Array.isArray(portfolio) ? portfolio : []).map((asset) => {
+      const currency = asset?.currency || asset?.quotedCurrency || "USD";
+      const rawValue = (Number(asset?.price) || 0) * (Number(asset?.quantity) || 0);
+      const __positionValue = convertToUSD(rawValue, currency, spotPrices);
+      return {
+        ...asset,
+        __isOptionPosition: false,
+        __positionValue
+      };
+    });
 
     const optionPositions = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).map((trade) => {
       const chain = multiChainCache?.[trade.asset];
@@ -623,7 +629,9 @@ export function HomeModule({
     const value = Number(asset?.price);
     if (!Number.isFinite(value)) return "—";
     if (isTreasuryAsset(asset)) return `${value.toFixed(2)}%`;
-    return `$${value.toFixed(2)}`;
+    const currency = asset?.currency || asset?.quotedCurrency || "USD";
+    const symbol = getCurrencySymbol(currency);
+    return `${symbol}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   const chartData = useMemo(() => {
@@ -743,16 +751,12 @@ export function HomeModule({
     markers: { size: 0 }
   };
 
-  const formatMoney = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return "$0.00";
-    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatMoney = (value, currency = "USD") => {
+    return formatCurrency(value, currency);
   };
 
-  const formatSignedMoney = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return "$0.00";
-    return `${num >= 0 ? "+" : "-"}$${Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatSignedMoney = (value, currency = "USD") => {
+    return formatCurrency(value, currency, { sign: true });
   };
 
   const formatSignedPercent = (value) => {

@@ -1439,6 +1439,22 @@ async function searchYahooFinance(query, type = "tradfi") {
       const data = await response.json();
       const quotes = Array.isArray(data.quotes) ? data.quotes : [];
       let fetchResolveCount = 0;
+      const inferCurrency = (symbol, exchange) => {
+        const sym = String(symbol || "").toUpperCase();
+        const exch = String(exchange || "").toUpperCase();
+        if (sym.endsWith(".T") || exch.includes("TYO") || exch.includes("JPX") || exch.includes("TOKYO")) return "JPY";
+        if (sym.endsWith(".L") || exch.includes("LSE") || exch.includes("LONDON")) return "GBP";
+        if (sym.endsWith(".DE") || sym.endsWith(".F") || sym.endsWith(".PA") || sym.endsWith(".MI") || exch.includes("FRA") || exch.includes("GER") || exch.includes("PAR") || exch.includes("MIL") || exch.includes("XETRA")) return "EUR";
+        if (sym.endsWith(".TO") || sym.endsWith(".V") || exch.includes("TOR") || exch.includes("VAN") || exch.includes("TSX")) return "CAD";
+        if (sym.endsWith(".AX") || exch.includes("ASX")) return "AUD";
+        if (sym.endsWith(".HK") || exch.includes("HKG") || exch.includes("HONG KONG")) return "HKD";
+        if (sym.endsWith(".KS") || sym.endsWith(".KQ") || exch.includes("KSC") || exch.includes("KOS") || exch.includes("KOREA")) return "KRW";
+        if (sym.endsWith(".SN") || sym.endsWith(".SS") || exch.includes("SHH") || exch.includes("SHZ") || exch.includes("SHANGHAI")) return "CNY";
+        if (sym.endsWith(".BO") || sym.endsWith(".NS") || exch.includes("BSE") || exch.includes("NSE") || exch.includes("INDIA")) return "INR";
+        if (sym.endsWith(".SW") || exch.includes("EBS") || exch.includes("SWISS")) return "CHF";
+        return "USD";
+      };
+
       for (const q of quotes) {
         if (!q.symbol) continue;
         if (!results.some(r => r.symbol === q.symbol)) {
@@ -1446,7 +1462,8 @@ async function searchYahooFinance(query, type = "tradfi") {
             symbol: q.symbol,
             name: q.shortname || q.longname || q.symbol,
             type: "stock",
-            exchange: q.exchange || "NASDAQ/NYSE"
+            exchange: q.exchange || q.exchDisp || "NASDAQ/NYSE",
+            currency: q.currency || inferCurrency(q.symbol, q.exchange || q.exchDisp)
           });
           fetchResolveCount++;
         }
@@ -4699,7 +4716,7 @@ app.post("/api/options/crypto", async (req, res) => {
         mark: Number.isFinite(normalizedFallback) ? normalizedFallback : 0,
         oi: totalOi,
         openInterest: totalOi,
-        delta: firstFiniteNumber(t?.option_pricing?.delta, t?.greeks?.delta, t?.stats?.delta, t?.delta, 0),
+        delta: firstFiniteNumber(t?.option_pricing?.delta, t?.greeks?.delta, t?.stats?.delta, t?.delta, t?.call_delta, t?.put_delta, 0),
         gamma: firstFiniteNumber(t?.option_pricing?.gamma, t?.greeks?.gamma, t?.stats?.gamma, t?.gamma, 0),
         vega: firstFiniteNumber(t?.option_pricing?.vega, t?.greeks?.vega, t?.stats?.vega, t?.vega, 0),
         theta: firstFiniteNumber(t?.option_pricing?.theta, t?.greeks?.theta, t?.stats?.theta, t?.theta, 0),
@@ -4711,6 +4728,7 @@ app.post("/api/options/crypto", async (req, res) => {
           t?.ask_iv,
           t?.greeks?.iv,
           t?.stats?.iv,
+          t?.implied_volatility,
           0
         ),
       };
@@ -5970,6 +5988,88 @@ app.get("/api/equities/reits/:symbol/income", async (req, res) => {
   }));
   res.json(rows);
 });
+app.get("/api/equities/stocks", async (req, res) => {
+  // Returns the list of available stocks (placeholder for now)
+  res.json([
+    { symbol: "AAPL", name: "Apple Inc.", sector: "Technology" },
+    { symbol: "MSFT", name: "Microsoft Corp.", sector: "Technology" },
+    { symbol: "HIMS", name: "Hims & Hers Health, Inc.", sector: "Healthcare" },
+  ]);
+});
+
+app.get("/api/equities/stocks/:symbol/fundamentals", async (req, res) => {
+  const symbol = String(req.params.symbol || "").toUpperCase();
+  // Derived from existing Finviz/Yahoo logic if possible, otherwise mock
+  res.json([
+    { label: "P/E Ratio", value: "28.4" },
+    { label: "Forward P/E", value: "24.1" },
+    { label: "PEG Ratio", value: "1.2" },
+    { label: "Price/Sales", value: "7.8" },
+    { label: "Price/Book", value: "12.4" },
+    { label: "Dividend Yield", value: "0.5%" },
+    { label: "EPS (ttm)", value: "6.42" },
+    { label: "Revenue", value: "383.2B" },
+  ]);
+});
+
+app.get("/api/equities/market/snapshot", async (req, res) => {
+  res.json({
+    updatedAt: new Date().toISOString(),
+    status: "Market Open",
+    indices: {
+      spx: { value: 5123.4, change: 12.5, changePct: 0.24 },
+      ndx: { value: 18234.1, change: -45.2, changePct: -0.25 },
+      dji: { value: 39123.8, change: 156.7, changePct: 0.40 },
+    },
+    topMovers: [
+      { symbol: "HIMS", changePct: 40.5 },
+      { symbol: "NVDA", changePct: 2.1 },
+    ]
+  });
+});
+
+app.get("/api/equities/market/benchmarks", async (req, res) => {
+  res.json([
+    { id: "spx", name: "S&P 500", value: 5123.4, changePct: 0.24 },
+    { id: "ndx", name: "Nasdaq 100", value: 18234.1, changePct: -0.25 },
+    { id: "rut", name: "Russell 2000", value: 2123.5, changePct: 0.12 },
+  ]);
+});
+
+app.get("/api/equities/market/sectors", async (req, res) => {
+  res.json([
+    { name: "Technology", changePct: 0.85 },
+    { name: "Healthcare", changePct: 1.2 },
+    { name: "Financials", changePct: -0.3 },
+    { name: "Energy", changePct: 2.1 },
+  ]);
+});
+
+app.get("/api/equities/market/regions", async (req, res) => {
+  res.json([
+    { name: "Americas", changePct: 0.4 },
+    { name: "Europe", changePct: -0.1 },
+    { name: "Asia-Pacific", changePct: 0.6 },
+  ]);
+});
+
+app.get("/api/equities/market/breadth", async (req, res) => {
+  res.json({
+    advancing: 342,
+    declining: 158,
+    unchanged: 25,
+    newHighs: 42,
+    newLows: 8
+  });
+});
+
+app.get("/api/equities/market/actions", async (req, res) => {
+  res.json([
+    { type: "Earnings", symbol: "AAPL", date: "2024-05-02" },
+    { type: "Dividend", symbol: "MSFT", date: "2024-05-15" },
+  ]);
+});
+
 
 app.get('/api/analytics/equities', async (req, res) => {
   try {

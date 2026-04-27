@@ -92,40 +92,30 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
   return (
     <div className="modal-overlay indicator-detail-overlay" onClick={onClose}>
       <div className="modal-content indicator-metric-modal" onClick={(event) => event.stopPropagation()}>
-        <header className="modal-header">
-          <div className="asset-info">
-            <h2>{metric?.label || "Indicator"}</h2>
-            <p>{countryName || "Macro indicators"}</p>
+        <header className="modal-header yahoo-header">
+          <div className="asset-info-yahoo">
+            <div className="asset-title-row">
+              <h2 className="yahoo-name">{metric?.label || "Indicator"} ({countryName || "Macro"})</h2>
+              <button className="close-btn" onClick={onClose}>&times;</button>
+            </div>
+            
+            <div className="yahoo-price-row">
+              <span className="yahoo-price">
+                {formatMetricValue(metric?.current, metric?.unit)}
+              </span>
+              <span className={`yahoo-change ${trend?.delta >= 0 ? "positive" : "negative"}`}>
+                {trend?.delta >= 0 ? "+" : ""}{formatMetricValue(trend?.delta, metric?.unit)}
+                ({trend?.percent >= 0 ? "+" : ""}{trend?.percent?.toFixed(2)}%)
+              </span>
+            </div>
+
+            <div className="yahoo-market-status">
+              Latest update as of {metric?.date || "Recently"}.
+            </div>
           </div>
-          <button className="close-btn" onClick={onClose}>&times;</button>
         </header>
 
         <div className="chart-section">
-          <div className="indicator-metric-summary">
-            <div className="indicator-metric-stat">
-              <span>Current</span>
-              <strong>{formatMetricValue(metric?.current, metric?.unit)}</strong>
-            </div>
-            <div className="indicator-metric-stat">
-              <span>Previous</span>
-              <strong>{formatMetricValue(metric?.previous, metric?.unit)}</strong>
-            </div>
-            <div className="indicator-metric-stat">
-              <span>Trend</span>
-              <strong className={trend?.delta >= 0 ? "positive" : "negative"}>
-                {trend
-                  ? `${trend.delta >= 0 ? "+" : ""}${formatMetricValue(trend.delta, metric?.unit)}`
-                  : "—"}
-              </strong>
-            </div>
-            <div className="indicator-metric-stat">
-              <span>Change</span>
-              <strong className={trend?.percent >= 0 ? "positive" : "negative"}>
-                {Number.isFinite(trend?.percent) ? `${trend.percent >= 0 ? "+" : ""}${trend.percent.toFixed(2)}%` : "—"}
-              </strong>
-            </div>
-          </div>
-
           <div className="indicator-metric-controls">
             <div className="interval-toggle">
               {HORIZONS.map((entry) => (

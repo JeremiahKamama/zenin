@@ -5,11 +5,15 @@ function toFiniteNumber(value, fallback = null) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-export function calculatePortfolioMarketValue(portfolio = []) {
+import { convertToUSD } from "./currencyUtils";
+
+export function calculatePortfolioMarketValue(portfolio = [], fxRates = {}) {
   return (Array.isArray(portfolio) ? portfolio : []).reduce((total, item) => {
     const price = toFiniteNumber(item?.price, 0);
     const quantity = toFiniteNumber(item?.quantity, 0);
-    return total + (price * quantity);
+    const currency = item?.currency || item?.quotedCurrency || "USD";
+    const valueInUSD = convertToUSD(price * quantity, currency, fxRates);
+    return total + valueInUSD;
   }, 0);
 }
 

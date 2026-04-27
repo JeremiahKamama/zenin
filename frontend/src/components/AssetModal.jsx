@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { getCurrencySymbol } from "../utils/currencyUtils";
 import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 const BACKEND_URL = ZENIN_API_BASE_URL;
 
@@ -20,6 +21,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [finvizData, setFinvizData] = useState(null);
   const [finvizLoading, setFinvizLoading] = useState(false);
   const [finvizError, setFinvizError] = useState("");
+  const [fetchedCurrency, setFetchedCurrency] = useState(null);
 
   const normalizeAssetKind = (value) => {
     const rawType = String(value?.type || "").trim().toLowerCase();
@@ -101,6 +103,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         if (cancelled) return;
         const nextHistory = Array.isArray(data?.history) ? data.history : [];
         const nextSource = String(data?.source || "");
+        if (data?.currency) setFetchedCurrency(data.currency);
         setHistory(nextHistory);
         setHistorySource(nextSource);
         setHistoryStale(Boolean(data?.stale || data?.unavailable));
@@ -151,6 +154,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         const row = data?.prices?.[assetSymbol] || data?.[assetSymbol] || null;
         const price = Number(row?.price);
         const priceChangePercent = Number(row?.priceChangePercent);
+        if (row?.currency) setFetchedCurrency(row.currency);
         setLiveQuote({
           price: Number.isFinite(price) ? price : null,
           priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
@@ -266,18 +270,21 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         })();
 
   // Resolve display currency symbol from asset metadata
-  const currencyPrefix = (() => {
-    const curr = String(asset?.currency || "").toUpperCase();
-    if (asset?.market === "Treasury") return "";
-    const map = { JPY: "¥", EUR: "€", GBP: "£", CHF: "CHF ", AUD: "A$", CAD: "C$", HKD: "HK$", KRW: "₩", INR: "₹", CNY: "¥", BTC: "₿" };
-    return map[curr] ?? "$";
-  })();
+  const activeCurrency = fetchedCurrency || asset?.currency || asset?.quotedCurrency || "USD";
+  const currencySymbol = getCurrencySymbol(activeCurrency);
 
   const displayedChangePercent = Number.isFinite(Number(asset?.priceChangePercent))
     ? Number(asset.priceChangePercent)
     : Number.isFinite(Number(liveQuote.priceChangePercent))
       ? Number(liveQuote.priceChangePercent)
       : 0;
+
+  const displayedChangeValue = (() => {
+    if (Number.isFinite(Number(asset?.priceChangeValue))) return Number(asset.priceChangeValue);
+    if (Number.isFinite(Number(liveQuote.priceChangeValue))) return Number(liveQuote.priceChangeValue);
+    // Rough estimate from percent if absolute value is missing
+    return (displayedPrice * (displayedChangePercent / 100)) / (1 + displayedChangePercent / 100);
+  })();
 
   useEffect(() => {
     if (!isTradFi || !assetSymbol) return;
@@ -299,6 +306,28 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
     fetchFinviz();
   }, [isTradFi, assetSymbol]);
+
+  const chartRange = useMemo(() => {
+    if (!history || history.length === 0) return null;
+    const start = history[0].time;
+    const end = history[history.length - 1].time;
+    
+    const formatDate = (t) => {
+      if (!t) return "";
+      const date = new Date(t);
+      if (isNaN(date.getTime())) {
+        const numeric = Number(t);
+        const d = new Date(numeric > 10000000000 ? numeric : numeric * 1000);
+        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+      }
+      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    };
+
+    return {
+      start: formatDate(start),
+      end: formatDate(end)
+    };
+  }, [history]);
 
   const totalValue = displayedPrice * (quantity || 0);
   const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
@@ -502,36 +531,44 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
             })}
           </div>
         )}
-        <header className="modal-header">
-          <div className="asset-info">
-            <h2>{asset.symbol}</h2>
-            <p>{asset.name}</p>
-          </div>
-          <div className="modal-header-actions">
-            <button
-              className="modal-remove-btn"
-              onClick={() => onToggleStar?.(asset)}
-              title={isInWatchlist?.(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
-            >
-              {isInWatchlist?.(asset, undefined, { strictStockMeta: true }) ? "Remove" : "Add"}
-            </button>
-            <button className="close-btn" onClick={onClose}>&times;</button>
+        <header className="modal-header yahoo-header">
+          <div className="asset-info-yahoo">
+            <div className="asset-title-row">
+              <h2 className="yahoo-name">{asset.name} ({asset.symbol})</h2>
+              <div className="modal-header-actions">
+                <button
+                  className={`star-button ${isInWatchlist?.(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
+                  onClick={() => onToggleStar?.(asset)}
+                  title={isInWatchlist?.(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
+                  style={{ fontSize: "1.2rem" }}
+                >
+                  ★
+                </button>
+                <button className="close-btn" onClick={onClose}>&times;</button>
+              </div>
+            </div>
+            
+            <div className="yahoo-price-row">
+              <span className="yahoo-price">
+                {displayedPrice > 0 ? displayedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+              </span>
+              <span className={`yahoo-change ${displayedChangePercent >= 0 ? "positive" : "negative"}`}>
+                {displayedChangeValue >= 0 ? "+" : ""}{Math.abs(displayedChangeValue).toFixed(2)} 
+                ({displayedChangePercent >= 0 ? "+" : ""}{displayedChangePercent.toFixed(2)}%)
+              </span>
+              <span className="yahoo-currency-label">{activeCurrency}</span>
+            </div>
+
+            <div className="yahoo-market-status">
+              As of {new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} {Intl.DateTimeFormat().resolvedOptions().timeZone}. 
+              {asset.isMarketOpen !== false ? " Market Open." : ` Market Closed (${asset.marketStatus || 'Weekend/Holiday'}).`}
+            </div>
           </div>
         </header>
 
         <div className="chart-section asset-modal-body">
           <div className="chart-header-controls">
-            <div className="asset-price-mini">
-              <span className="price" style={{ color: "var(--color-text-primary)" }}>{displayedPrice > 0 ? `${currencyPrefix}${displayedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</span>
-              {asset.isMarketOpen === false ? (
-                <span className="market-status-badge closed" style={{ color: "var(--color-text-secondary)", marginLeft: "8px", fontSize: "0.85rem" }}>
-                  — Market Closed ({asset.marketStatus || 'Weekend/Holiday'})
-                </span>
-              ) : (
-                <span className={`change ${displayedChangePercent >= 0 ? "positive" : "negative"}`}>
-                  {displayedChangePercent >= 0 ? "+" : ""}{displayedChangePercent.toFixed(2)}%
-                </span>
-              )}
+            <div className="asset-data-status">
               {assetType === "crypto" && historySource ? (
                 <span className="chart-source-chip">
                   Source: {historySource === "hyperliquid" ? "Hyperliquid" : historySource === "coingecko" ? "CoinGecko (fallback)" : historySource}
@@ -539,7 +576,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               ) : null}
               <span className={`data-health-badge ${loading ? "loading" : historyStale ? "hazard" : "ok"}`} title={loading ? "Refreshing chart data" : historyStale ? "Chart data may be delayed" : "Chart is up to date"}>
                 <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : historyStale ? "⚠" : "✓"}</span>
-                Chart
+                Data Health
               </span>
             </div>
             <div className="chart-type-toggle">
@@ -555,6 +592,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 options={chartOptions}
                 height={280}
                 width="100%"
+                priceLine={displayedPrice}
               />
             ) : loading ? (
               <div className="asset-modal-loader" aria-label="Loading chart data">
@@ -569,6 +607,13 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               </div>
             ) : null}
           </div>
+
+          {chartRange && !loading && (
+            <div className="chart-range-display">
+              <span className="range-label">Range</span>
+              <span className="range-dates">{chartRange.start} — {chartRange.end}</span>
+            </div>
+          )}
 
           <div className="interval-toggle-bottom">
             <div className="interval-toggle">
@@ -718,7 +763,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         {orderType === "buy" && (
           <div className={`asset-modal-position-note ${insufficientBalance ? "asset-modal-position-note-danger" : ""}`}>
             Available balance: <strong style={{ color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
-              ${availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {getCurrencySymbol(asset?.currency)}{availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </strong>
             {insufficientBalance ? (
               <span style={{ marginLeft: "8px" }}>
@@ -753,7 +798,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 />
             </div>
             <div className="total-value-display">
-              <label>Total Value ($)</label>
+              <label>Total Value ({currencySymbol})</label>
               <div className="value-field">
                 <input type="number" value={totalValue.toFixed(2)} onChange={(e) => {
                   const newVal = parseFloat(e.target.value) || 0;

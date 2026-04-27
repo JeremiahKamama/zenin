@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from "react";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { zeninFetch } from "../utils/zeninFetch";
+import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
 
 /**
  * Zenin Capital — Full Metrics Page
@@ -63,6 +64,7 @@ export function FullMetricsPage({
   const [macroIndicators, setMacroIndicators] = useState(null);
   const [macroPrices, setMacroPrices] = useState({});
   const [benchmarkHistory, setBenchmarkHistory] = useState([]);
+  const [benchmarkFinviz, setBenchmarkFinviz] = useState(null);
 
   useEffect(() => {
     const fetchMacro = async () => {
@@ -115,7 +117,27 @@ export function FullMetricsPage({
       } catch (e) { console.error("Benchmark History Fetch Error:", e); }
     };
 
+    const fetchBenchmarkFinviz = async () => {
+      const benchmarkMap = {
+        "S&P 500": "SPY",
+        "Bloomberg U.S. Aggregate Bond Index": "AGG",
+        "SOFR": "BIL",
+        "S&P GSCI": "GSG",
+        "MSCI U.S. REIT Index": "VNQ",
+        "Bitcoin": "BTCUSD"
+      };
+      const symbol = benchmarkMap[benchmark] || "SPY";
+      try {
+        const res = await zeninFetch(`/finviz?symbol=${symbol}`);
+        if (res.ok) {
+          const data = await res.json();
+          setBenchmarkFinviz(data);
+        }
+      } catch (e) { console.error("Benchmark Finviz Fetch Error:", e); }
+    };
+
     fetchBenchmarkHistory();
+    fetchBenchmarkFinviz();
   }, [benchmark]);
 
   // Filter portfolio and trades based on selected Asset Class
@@ -170,8 +192,8 @@ export function FullMetricsPage({
       },
       {
         label: `${assetClass === "All" ? "Account" : assetClass} Value`,
-        value: `$${filteredEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-        sub: assetClass === "All" ? `Initial: $${initialBalance.toLocaleString()}` : `Allocated Assets`,
+        value: formatCurrency(filteredEquity, "USD", { compact: true }),
+        sub: assetClass === "All" ? `Initial: ${formatCurrency(initialBalance, "USD", { compact: true })}` : `Allocated Assets`,
         tone: "neutral",
         data: tradeTimeline.slice(-12).map(p => p.equity) || [11, 10, 14, 13, 17, 22, 19, 24, 27, 31, 33, 37],
       },
@@ -193,10 +215,10 @@ export function FullMetricsPage({
   }, [initialBalance, filteredEquity, tradeTimeline, filteredTrades, filteredPortfolio, activeOptionsTrades, assetClass, benchmark]);
 
   const holdingsData = useMemo(() => {
-    const totalVal = filteredPortfolio.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    const totalVal = filteredPortfolio.reduce((sum, item) => sum + convertToUSD((Number(item.price) || 0) * (Number(item.quantity) || 0), item.currency || item.quotedCurrency || "USD", spotPrices), 0);
     return filteredPortfolio.map(item => ({
       name: item.name || item.symbol,
-      weight: totalVal > 0 ? `${(((Number(item.price) || 0) * (Number(item.quantity) || 0)) / totalVal * 100).toFixed(2)}%` : "0%"
+      weight: totalVal > 0 ? `${((convertToUSD((Number(item.price) || 0) * (Number(item.quantity) || 0), item.currency || item.quotedCurrency || "USD", spotPrices) / totalVal) * 100).toFixed(2)}%` : "0%"
     })).sort((a, b) => parseFloat(b.weight) - parseFloat(a.weight)).slice(0, 5);
   }, [filteredPortfolio]);
 
@@ -231,17 +253,17 @@ export function FullMetricsPage({
     });
 
     return [
-      ["Options P&L", `${totalOptionsValue >= 0 ? "+" : ""}$${totalOptionsValue.toFixed(2)}`, "Unrealized"],
+      ["Options P&L", formatCurrency(totalOptionsValue, "USD", { sign: true }), "Unrealized"],
       ["Open Strategies", activeOptionsTrades.length.toString(), "Active positions"],
       ["Portfolio Delta", `${totalDelta >= 0 ? "+" : ""}${totalDelta.toFixed(3)}`, "Options Exposure"],
-      ["Theta Decay", `-$${Math.abs(totalTheta).toFixed(2)}`, "Daily Decay"],
+      ["Theta Decay", `-${formatCurrency(Math.abs(totalTheta), "USD")}`, "Daily Decay"],
     ];
   }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
   const ratiosData = useMemo(() => {
     return [
       ["Positions", portfolio.length.toString()],
-      ["Cash Weight", `${((1 - (portfolio.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0) / currentAccountEquity)) * 100).toFixed(1)}%`],
+      ["Cash Weight", `${((1 - (portfolio.reduce((s, i) => s + convertToUSD((Number(i.price) || 0) * (Number(i.quantity) || 0), i.currency || i.quotedCurrency || "USD", spotPrices), 0) / currentAccountEquity)) * 100).toFixed(1)}%`],
       ["Beta", "0.92"], // Placeholder
       ["ROE", "16.24%"], // Placeholder
     ];
@@ -253,7 +275,9 @@ export function FullMetricsPage({
     const getVal = (sym, fallbackLabel = "—") => {
       const p = macroPrices[sym];
       if (!p || !p.price) return fallbackLabel;
-      return sym === "UST10Y" || sym === "FED" ? `${Number(p.price).toFixed(2)}%` : `$${Number(p.price).toLocaleString()}`;
+      const currency = p?.currency || p?.quotedCurrency || "USD";
+      const symIcon = getCurrencySymbol(currency);
+      return sym === "UST10Y" || sym === "FED" ? `${Number(p.price).toFixed(2)}%` : `${symIcon}${Number(p.price).toLocaleString()}`;
     };
 
     const getChange = (sym) => {
@@ -305,6 +329,8 @@ export function FullMetricsPage({
   }, [tradeTimeline, initialBalance, filteredEquity, currentAccountEquity]);
 
   const benchmarkData = useMemo(() => {
+    const benchmarkPerf = benchmarkFinviz?.summary || {};
+
     const getReturn = (hist, days) => {
       if (!hist || hist.length < 2) return 0;
       const latest = hist[hist.length - 1]?.close || hist[hist.length - 1]?.equity;
@@ -323,6 +349,14 @@ export function FullMetricsPage({
       return start > 0 ? ((latest - start) / start) * 100 : 0;
     };
 
+    const getFinvizOrCalc = (key, days) => {
+      const fvVal = benchmarkPerf[key];
+      if (fvVal) {
+        return parseFloat(String(fvVal).replace(/[^-0.9.]/g, ''));
+      }
+      return getReturn(benchmarkHistory, days);
+    };
+
     const timeframeDays = {
       "1M": 30,
       "3M": 90,
@@ -333,15 +367,26 @@ export function FullMetricsPage({
     }[timeframe] || "YTD";
 
     const portfolioReturn = getReturn(tradeTimeline, timeframeDays);
-    const benchmarkReturn = getReturn(benchmarkHistory, timeframeDays);
+    
+    // Map timeframes to Finviz keys
+    const fvKeyMap = {
+      "1M": "Perf Month",
+      "3M": "Perf Quarter",
+      "6M": "Perf Half Y",
+      "1Y": "Perf Year",
+      "YTD": "Perf YTD",
+      "All": "Perf Year"
+    };
+
+    const benchmarkReturn = getFinvizOrCalc(fvKeyMap[timeframe], timeframeDays);
 
     return [
       [timeframe, `${portfolioReturn.toFixed(2)}%`, `${benchmarkReturn.toFixed(2)}%`, `${(portfolioReturn - benchmarkReturn).toFixed(2)}%`],
-      ["1M", `${getReturn(tradeTimeline, 30).toFixed(2)}%`, `${getReturn(benchmarkHistory, 30).toFixed(2)}%`, `${(getReturn(tradeTimeline, 30) - getReturn(benchmarkHistory, 30)).toFixed(2)}%`],
-      ["3M", `${getReturn(tradeTimeline, 90).toFixed(2)}%`, `${getReturn(benchmarkHistory, 90).toFixed(2)}%`, `${(getReturn(tradeTimeline, 90) - getReturn(benchmarkHistory, 90)).toFixed(2)}%`],
-      ["YTD", `${getReturn(tradeTimeline, "YTD").toFixed(2)}%`, `${getReturn(benchmarkHistory, "YTD").toFixed(2)}%`, `${(getReturn(tradeTimeline, "YTD") - getReturn(benchmarkHistory, "YTD")).toFixed(2)}%`],
+      ["1M", `${getReturn(tradeTimeline, 30).toFixed(2)}%`, `${getFinvizOrCalc("Perf Month", 30).toFixed(2)}%`, `${(getReturn(tradeTimeline, 30) - getFinvizOrCalc("Perf Month", 30)).toFixed(2)}%`],
+      ["3M", `${getReturn(tradeTimeline, 90).toFixed(2)}%`, `${getFinvizOrCalc("Perf Quarter", 90).toFixed(2)}%`, `${(getReturn(tradeTimeline, 90) - getFinvizOrCalc("Perf Quarter", 90)).toFixed(2)}%`],
+      ["YTD", `${getReturn(tradeTimeline, "YTD").toFixed(2)}%`, `${getFinvizOrCalc("Perf YTD", "YTD").toFixed(2)}%`, `${(getReturn(tradeTimeline, "YTD") - getFinvizOrCalc("Perf YTD", "YTD")).toFixed(2)}%`],
     ];
-  }, [tradeTimeline, benchmarkHistory, timeframe]);
+  }, [tradeTimeline, benchmarkHistory, benchmarkFinviz, timeframe]);
 
 
   const tabs = [
@@ -466,8 +511,8 @@ export function FullMetricsPage({
                   <svg viewBox="0 0 700 260" className="line-chart" preserveAspectRatio="none">
                     <defs>
                       <linearGradient id="blueArea" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.35" />
-                        <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+                        <stop offset="0%" stopColor="var(--blue)" stopOpacity="0.35" />
+                        <stop offset="100%" stopColor="var(--blue)" stopOpacity="0" />
                       </linearGradient>
                     </defs>
 
@@ -500,8 +545,12 @@ export function FullMetricsPage({
                 </div>
 
                 <div className="range-row">
-                  {["1M", "3M", "6M", "YTD", "1Y", "3Y", "Max"].map((range) => (
-                    <button key={range} className={range === "YTD" ? "active" : ""}>
+                  {["1M", "3M", "6M", "YTD", "1Y", "All"].map((range) => (
+                    <button 
+                      key={range} 
+                      className={timeframe === range ? "active" : ""}
+                      onClick={() => setTimeframe(range)}
+                    >
                       {range}
                     </button>
                   ))}
@@ -516,17 +565,70 @@ export function FullMetricsPage({
                   </div>
                 </div>
 
-                <p className="insight-copy">
-                  The portfolio is outperforming the S&P 500 TR on a YTD basis, driven by strong equity selection,
-                  disciplined options exposure, and well-contained drawdowns.
-                </p>
+                {(() => {
+                  const getReturn = (hist, days) => {
+                    if (!hist || hist.length < 2) return 0;
+                    const latest = hist[hist.length - 1]?.close || hist[hist.length - 1]?.equity;
+                    let startIdx = 0;
+                    if (days === "YTD") {
+                      const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
+                      startIdx = hist.findIndex(p => (p.t || p.date) >= yearStart);
+                    } else if (typeof days === "number") {
+                      const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+                      startIdx = hist.findIndex(p => (p.t || p.date) >= startTime);
+                    }
+                    if (startIdx === -1) startIdx = 0;
+                    const start = hist[startIdx]?.close || hist[startIdx]?.equity;
+                    return start > 0 ? ((latest - start) / start) * 100 : 0;
+                  };
 
-                <div className="insight-grid">
-                  <MetricSmall label="Outperformance" value="+4.24%" tone="positive" />
-                  <MetricSmall label="Risk-Adjusted Return" value="Strong" tone="positive" />
-                  <MetricSmall label="Drawdown Control" value="Better" tone="positive" />
-                  <MetricSmall label="Consistency" value="Above Avg" tone="positive" />
-                </div>
+                  const timeframeDays = {
+                    "1M": 30, "3M": 90, "6M": 180, "1Y": 365, "YTD": "YTD", "All": 9999
+                  }[timeframe] || "YTD";
+
+                  const fvKeyMap = {
+                    "1M": "Perf Month", "3M": "Perf Quarter", "6M": "Perf Half Y", "1Y": "Perf Year", "YTD": "Perf YTD", "All": "Perf Year"
+                  };
+
+                  const benchmarkPerf = benchmarkFinviz?.summary || {};
+                  const fvVal = benchmarkPerf[fvKeyMap[timeframe]];
+                  const benchmarkReturn = fvVal 
+                    ? parseFloat(String(fvVal).replace(/[^-0.9.]/g, '')) 
+                    : getReturn(benchmarkHistory, timeframeDays);
+                  
+                  const portfolioReturn = getReturn(tradeTimeline, timeframeDays);
+                  const diff = portfolioReturn - benchmarkReturn;
+                  const isOutperforming = diff > 0;
+
+                  const drivers = [];
+                  if (activeOptionsTrades.length > 0) drivers.push("active options hedging");
+                  if (filteredPortfolio.length > 0) drivers.push("strategic asset selection");
+                  
+                  const maxDDStr = riskMetricsData.find(m => m.label === "Max Drawdown")?.value || "0%";
+                  const maxDDVal = Math.abs(parseFloat(maxDDStr));
+                  if (maxDDVal < 12) drivers.push("effective risk containment");
+
+                  const annualizedVolStr = riskMetricsData.find(m => m.label === "Volatility Annualized")?.value || "0%";
+                  const annualizedVolVal = parseFloat(annualizedVolStr);
+                  const riskAdjusted = annualizedVolVal > 0 ? (portfolioReturn / annualizedVolVal) : 0;
+
+                  return (
+                    <>
+                      <p className="insight-copy">
+                        The portfolio is {isOutperforming ? "outperforming" : "trailing"} the {benchmark} on a {timeframe} basis by {Math.abs(diff).toFixed(2)}%, 
+                        primarily attributed to {drivers.length > 0 ? drivers.join(", ") : "current market positioning"} and 
+                        {riskAdjusted > 1.5 ? " superior risk-adjusted returns" : " disciplined exposure management"}.
+                      </p>
+
+                      <div className="insight-grid">
+                        <MetricSmall label="Outperformance" value={`${diff >= 0 ? "+" : ""}${diff.toFixed(2)}%`} tone={diff >= 0 ? "positive" : "negative"} />
+                        <MetricSmall label="Risk-Adjusted" value={riskAdjusted > 1.2 ? "Strong" : riskAdjusted > 0.6 ? "Moderate" : "Cautions"} tone={riskAdjusted > 1.2 ? "positive" : "neutral"} />
+                        <MetricSmall label="Drawdown Ctrl" value={maxDDVal < 10 ? "Tight" : "Standard"} tone={maxDDVal < 10 ? "positive" : "neutral"} />
+                        <MetricSmall label="Consistency" value={tradeTimeline.length > 30 ? "High" : "Developing"} tone="positive" />
+                      </div>
+                    </>
+                  );
+                })()}
               </article>
             </section>
 
@@ -780,20 +882,20 @@ const styles = `
 }
 
 body:not(.light-theme-active) .metrics-shell {
-  --bg: #020617;
-  --panel: #07111f;
-  --panel-2: #0b1628;
-  --border: rgba(148, 163, 184, 0.18);
+  --bg: #000000;
+  --panel: #050505;
+  --panel-2: #080808;
+  --border: rgba(255, 255, 255, 0.06);
   --text: #f8fafc;
-  --muted: #94a3b8;
-  --soft: #cbd5e1;
+  --muted: #64748b;
+  --soft: #94a3b8;
   --blue: #38bdf8;
-  --blue-2: #2563eb;
+  --blue-2: #0ea5e9;
   --green: #22c55e;
   --red: #ef4444;
   --yellow: #f59e0b;
-  --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-  background: transparent;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -811,7 +913,7 @@ body.light-theme-active .metrics-shell {
   --red: #dc2626;
   --yellow: #d97706;
   --shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
-  background: transparent;
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -926,7 +1028,7 @@ body.light-theme-active .metrics-shell {
 
 .tabs button.active {
   color: var(--text);
-  background: rgba(37, 99, 235, 0.18);
+  background: rgba(56, 189, 248, 0.18);
   border-color: rgba(56, 189, 248, 0.38);
 }
 
@@ -969,7 +1071,7 @@ body.light-theme-active .metrics-shell {
   padding: 6px 10px;
   border-radius: 999px;
   color: var(--blue);
-  background: rgba(37, 99, 235, 0.12);
+  background: rgba(56, 189, 248, 0.12);
   font-size: 12px;
   font-weight: 800;
 }
@@ -1007,7 +1109,7 @@ body.light-theme-active .metrics-shell {
   cursor: pointer;
   font-size: 12px;
 }
-.range-row button.active { color: var(--text); background: rgba(37, 99, 235, 0.18); }
+.range-row button.active { color: var(--text); background: rgba(56, 189, 248, 0.18); }
 
 .insight-copy { color: var(--soft) !important; font-size: 14px !important; line-height: 1.6; margin-bottom: 18px !important; }
 .insight-grid, .ratio-grid, .comparison-grid { display: grid; gap: 12px; }
