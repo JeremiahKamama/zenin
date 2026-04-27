@@ -47,6 +47,8 @@ export function Watchlist({
   isInWatchlist,
   onToggleStar,
   onPageChange,
+  liveStatus = "idle",
+  lastLivePriceAt = null,
 }) {
   const addCategoryText = (() => {
     const raw = String(activeCategory || "asset").trim();
@@ -461,21 +463,30 @@ useEffect(() => {
 
         {/* View Mode Toggle */}
         {activeCategory !== "indicators" ? (
-          <div className="view-mode-toggle">
-            <button
-              className={viewMode === "grid" ? "active" : ""}
-              onClick={() => setViewMode("grid")}
-              title="Grid View"
+          <div className="watchlist-header-actions">
+            <span
+              className={`data-health-badge ${liveStatus === "connected" ? "ok" : liveStatus === "degraded" ? "hazard" : "loading"}`}
+              title={lastLivePriceAt ? `Last live price tick ${new Date(lastLivePriceAt).toLocaleTimeString()}` : "Live prices start when tracked assets are available"}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-            </button>
-            <button
-              className={viewMode === "list" ? "active" : ""}
-              onClick={() => setViewMode("list")}
-              title="List View"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-            </button>
+              <span className={`status-icon ${liveStatus === "idle" ? "spinner" : ""}`}>{liveStatus === "connected" ? "✓" : liveStatus === "degraded" ? "⚠" : "⟳"}</span>
+              {liveStatus === "connected" ? "Live" : liveStatus === "degraded" ? "Polling" : "Connecting"}
+            </span>
+            <div className="view-mode-toggle">
+              <button
+                className={viewMode === "grid" ? "active" : ""}
+                onClick={() => setViewMode("grid")}
+                title="Grid View"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+              </button>
+              <button
+                className={viewMode === "list" ? "active" : ""}
+                onClick={() => setViewMode("list")}
+                title="List View"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+              </button>
+            </div>
           </div>
         ) : null}
       </header>
@@ -566,8 +577,9 @@ useEffect(() => {
               pagedAssets.map((asset) => (
                 <article
                   key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
-                  className="asset-card clickable"
+                  className={`asset-card clickable ${asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}`}
                   onClick={() => onAdd(asset)}
+                  title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
                 >
                   <div className="asset-card-main">
                     <div className="asset-identity">

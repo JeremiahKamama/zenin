@@ -225,6 +225,10 @@ app.use(helmet.contentSecurityPolicy({
     defaultSrc: ["'self'"],
     connectSrc: [
       "'self'",
+      "ws:",
+      "wss:",
+      "https://zenin-mx6w.onrender.com",
+      "https://zenin-mx6w.onrender.com/api",
       "https://api.binance.com",
       "https://api.coingecko.com",
       "https://api.derive.xyz",
@@ -255,8 +259,10 @@ const configuredOrigins = String(process.env.FRONTEND_URLS || process.env.FRONTE
 const allowedOrigins = Array.from(new Set([
   "http://localhost:5173",
   "http://localhost:5174",
+  "http://localhost:5175",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
+  "http://127.0.0.1:5175",
   "http://localhost:3000",
   "https://zenin.capital",
   "https://www.zenin.capital",
@@ -293,7 +299,8 @@ async function fetchDuneLatestResults(queryId) {
 app.use(cors({
   origin: (origin, callback) => {
     const normalizedOrigin = normalizeOrigin(origin);
-    if (!origin || allowedOrigins.includes(normalizedOrigin)) {
+    const isVercelPreview = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalizedOrigin);
+    if (!origin || allowedOrigins.includes(normalizedOrigin) || isVercelPreview) {
       callback(null, true);
     } else {
       callback(new Error("Not allowed by CORS"));
@@ -6490,8 +6497,86 @@ const WebSocket = require("ws");
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-let subscribers = new Map(); 
-// key: socket -> { currency, expiry }
+let subscribers = new Map();
+// key: socket -> { kind, currency, expiry, symbols, quoteType }
+
+function sendWsJson(ws, payload) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(JSON.stringify(payload));
+  } catch {
+    subscribers.delete(ws);
+  }
+}
+
+function sanitizePriceSymbols(symbols = []) {
+  return [...new Set(
+    (Array.isArray(symbols) ? symbols : [])
+      .flatMap((value) => String(value || "").split(","))
+      .map((symbol) => sanitizeSymbol(String(symbol || "").trim().toUpperCase()))
+      .filter(Boolean)
+  )].slice(0, 80);
+}
+
+async function fetchLivePriceSnapshot({ quoteType = "tradfi", symbols = [] } = {}) {
+  const safeSymbols = sanitizePriceSymbols(symbols);
+  if (!safeSymbols.length) return {};
+  const normalizedType = String(quoteType || "tradfi").toLowerCase() === "crypto" ? "crypto" : "tradfi";
+  return normalizedType === "crypto"
+    ? fetchCryptoQuotesBySymbols(safeSymbols)
+    : fetchYFinancePrices(safeSymbols);
+}
+
+async function pushPriceSnapshot(ws, subscription) {
+  const symbols = sanitizePriceSymbols(subscription?.symbols || []);
+  if (!symbols.length) {
+    sendWsJson(ws, {
+      type: "price_error",
+      message: "No symbols subscribed",
+      updatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  try {
+    const prices = await fetchLivePriceSnapshot({
+      quoteType: subscription.quoteType,
+      symbols
+    });
+    sendWsJson(ws, {
+      type: "price_update",
+      quoteType: subscription.quoteType || "tradfi",
+      symbols,
+      prices,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    sendWsJson(ws, {
+      type: "price_error",
+      message: error?.message || "price_stream_unavailable",
+      updatedAt: new Date().toISOString()
+    });
+  }
+}
+
+async function pushGreeksSnapshot(ws, subscription) {
+  try {
+    const greeks = await fetchGreeks(subscription.currency || "BTC", subscription.expiry || null);
+    sendWsJson(ws, {
+      type: "greeks_update",
+      currency: subscription.currency || "BTC",
+      expiry: subscription.expiry || null,
+      greeks,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    sendWsJson(ws, {
+      type: "greeks_error",
+      message: error?.message || "greeks_stream_unavailable",
+      updatedAt: new Date().toISOString()
+    });
+  }
+}
 
 wss.on("connection", (ws) => {
   console.log("WS client connected");
@@ -6508,13 +6593,31 @@ wss.on("connection", (ws) => {
       const data = JSON.parse(msg);
       ws.lastSeen = Date.now();
 
-      // subscribe format:
+      // Price stream format:
+      // { type: "subscribePrices", quoteType: "tradfi" | "crypto", symbols: ["AAPL"] }
+      if (data.type === "subscribePrices") {
+        const subscription = {
+          kind: "prices",
+          quoteType: String(data.quoteType || data.marketType || "tradfi").toLowerCase() === "crypto" ? "crypto" : "tradfi",
+          symbols: sanitizePriceSymbols(data.symbols || data.symbol || [])
+        };
+        subscribers.set(ws, subscription);
+        sendWsJson(ws, { type: "subscribed", channel: "prices", ...subscription });
+        pushPriceSnapshot(ws, subscription);
+        return;
+      }
+
+      // Existing greeks subscribe format:
       // { type: "subscribe", currency: "BTC", expiry: 123456789 }
       if (data.type === "subscribe") {
-        subscribers.set(ws, {
+        const subscription = {
+          kind: "greeks",
           currency: data.currency || "BTC",
           expiry: data.expiry || null
-        });
+        };
+        subscribers.set(ws, subscription);
+        sendWsJson(ws, { type: "subscribed", channel: "greeks", ...subscription });
+        pushGreeksSnapshot(ws, subscription);
       }
     } catch (e) {
       console.error("WS message error:", e.message);
@@ -6532,6 +6635,7 @@ wss.on("connection", (ws) => {
 
 const WS_PING_INTERVAL_MS = 30000;
 const WS_IDLE_TIMEOUT_MS = 90000;
+const WS_PRICE_PUSH_INTERVAL_MS = Math.max(5000, Number(process.env.WS_PRICE_PUSH_INTERVAL_MS || 15000));
 const wsHeartbeatTimer = setInterval(() => {
   const now = Date.now();
   wss.clients.forEach((ws) => {
@@ -6549,6 +6653,23 @@ if (typeof wsHeartbeatTimer.unref === "function") {
   wsHeartbeatTimer.unref();
 }
 
+const wsPushTimer = setInterval(() => {
+  subscribers.forEach((subscription, ws) => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      subscribers.delete(ws);
+      return;
+    }
+    if (subscription.kind === "prices") {
+      pushPriceSnapshot(ws, subscription);
+    } else if (subscription.kind === "greeks") {
+      pushGreeksSnapshot(ws, subscription);
+    }
+  });
+}, WS_PRICE_PUSH_INTERVAL_MS);
+if (typeof wsPushTimer.unref === "function") {
+  wsPushTimer.unref();
+}
+
 async function startServer() {
   await initializeDatabase();
   await new Promise((resolve, reject) => {
@@ -6563,6 +6684,7 @@ async function startServer() {
 
 async function stopServer() {
   clearInterval(wsHeartbeatTimer);
+  clearInterval(wsPushTimer);
   try {
     wss.clients.forEach((ws) => {
       try { ws.terminate(); } catch {}

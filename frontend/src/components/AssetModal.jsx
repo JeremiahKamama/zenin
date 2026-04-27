@@ -8,7 +8,7 @@ const BACKEND_URL = ZENIN_API_BASE_URL;
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, onViewCompanyProfile, portfolio = [], balance = 0 }) {
+export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, onViewCompanyProfile, portfolio = [], balance = 0, trades = [] }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyStale, setHistoryStale] = useState(false);
@@ -433,6 +433,33 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     }];
   }, [history, chartType]);
 
+  const tradeMarkers = useMemo(() => {
+    const markerSymbol = String(assetSymbol || "").trim().toUpperCase();
+    if (!markerSymbol || !Array.isArray(trades) || trades.length === 0) return [];
+
+    return trades
+      .filter((trade) => String(trade?.asset || trade?.symbol || "").trim().toUpperCase() === markerSymbol)
+      .map((trade) => {
+        const timestamp = trade?.executedAt || trade?.executed_at || trade?.date || trade?.createdAt || trade?.timestamp;
+        const parsed = timestamp ? new Date(timestamp).getTime() : NaN;
+        if (!Number.isFinite(parsed)) return null;
+        const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+        const price = Number(trade?.price);
+        const priceText = Number.isFinite(price)
+          ? `${activeCurrency === "USD" ? "$" : ""}${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : "";
+        const label = `${side === "sell" ? "SELL" : "BUY"}${priceText ? ` ${priceText}` : ""}`;
+        return {
+          time: Math.floor(parsed / 1000),
+          position: side === "sell" ? "aboveBar" : "belowBar",
+          shape: side === "sell" ? "arrowDown" : "arrowUp",
+          color: side === "sell" ? "#ef4444" : "#22c55e",
+          text: label,
+        };
+      })
+      .filter(Boolean);
+  }, [activeCurrency, assetSymbol, trades]);
+
   // Stable empty options — TradingViewChart uses LightweightCharts internally,
   // not ApexCharts. Passing a stable ref prevents unnecessary chart recreation
   // when chartType changes (which was causing the Line-mode blank bug).
@@ -593,6 +620,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 height={280}
                 width="100%"
                 priceLine={displayedPrice}
+                tradeMarkers={tradeMarkers}
               />
             ) : loading ? (
               <div className="asset-modal-loader" aria-label="Loading chart data">

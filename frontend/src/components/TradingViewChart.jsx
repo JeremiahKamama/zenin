@@ -3,6 +3,7 @@ import {
   AreaSeries,
   CandlestickSeries,
   createChart,
+  createSeriesMarkers,
   CrosshairMode,
   LineSeries,
   LineStyle,
@@ -78,11 +79,13 @@ export function TradingViewChart({
   options = {},
   height = 400,
   width = '100%',
-  priceLine = null // Optional: value for a dashed horizontal price line
+  priceLine = null, // Optional: value for a dashed horizontal price line
+  tradeMarkers = []
 }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef({});
+  const markerRef = useRef(null);
   const [hoverReadout, setHoverReadout] = useState(null);
   const priceLineRef = useRef(null);
   const latestReadout = useMemo(() => getLatestReadout(series), [series]);
@@ -168,6 +171,10 @@ export function TradingViewChart({
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       // Clear stale series refs before destroying the chart so the
       // data-setting effect doesn't attempt to call setData on dead instances.
+      if (markerRef.current?.setMarkers) {
+        markerRef.current.setMarkers([]);
+      }
+      markerRef.current = null;
       seriesRef.current = {};
       chart.remove();
     };
@@ -175,6 +182,18 @@ export function TradingViewChart({
 
   useEffect(() => {
     if (!chartRef.current) return;
+    const primarySeriesName = series[0]?.name;
+    const normalizedTradeMarkers = (Array.isArray(tradeMarkers) ? tradeMarkers : [])
+      .map((marker) => {
+        const time = normalizeChartTime(marker?.time);
+        if (time == null) return null;
+        return {
+          ...marker,
+          time,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
 
     // Clean up existing series map if replacing all data
     const currentSeriesNames = series.map(s => s.name);
@@ -231,6 +250,10 @@ export function TradingViewChart({
 
       if (activeSeries && seriesRef.current[name]?.type !== type && chart.removeSeries) {
         try {
+          if (name === primarySeriesName && markerRef.current?.setMarkers) {
+            markerRef.current.setMarkers([]);
+            markerRef.current = null;
+          }
           chart.removeSeries(activeSeries);
         } catch (e) {
           console.warn("TradingViewChart: Error replacing series", e);
@@ -268,6 +291,18 @@ export function TradingViewChart({
       try {
         activeSeries.setData(uniqueData);
 
+        if (name === primarySeriesName) {
+          try {
+            if (!markerRef.current && typeof createSeriesMarkers === 'function') {
+              markerRef.current = createSeriesMarkers(activeSeries, normalizedTradeMarkers);
+            } else if (markerRef.current?.setMarkers) {
+              markerRef.current.setMarkers(normalizedTradeMarkers);
+            }
+          } catch (markerError) {
+            console.warn("TradingViewChart: Error setting trade markers", markerError);
+          }
+        }
+
         // Manage Price Line
         if (priceLine != null && Number.isFinite(Number(priceLine)) && activeSeries.createPriceLine) {
           if (priceLineRef.current) {
@@ -293,13 +328,17 @@ export function TradingViewChart({
         console.warn(`TradingViewChart: Error setting data for series ${name}`, err);
       }
     });
+
+    if (!series.length && markerRef.current?.setMarkers) {
+      markerRef.current.setMarkers([]);
+    }
     
     if (chartRef.current?.timeScale) {
       try {
         chartRef.current.timeScale().fitContent();
       } catch (e) {}
     }
-  }, [series, priceLine]);
+  }, [series, priceLine, tradeMarkers]);
 
   return (
     <div

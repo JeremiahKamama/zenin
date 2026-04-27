@@ -1,16 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Watchlist } from "./components/Watchlist";
 import { PortfolioModule } from "./components/PortfolioModule";
 import { AssetModal } from "./components/AssetModal";
 import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
-import { OptionsModule } from "./components/OptionsModule";
-import { JournalModule } from "./components/JournalModule";
 import { HomeModule } from "./components/HomeModule";
-import { AnalyticsModule } from './components/AnalyticsModule';
-import { PredictionMarketModule } from "./components/PredictionMarketModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
-import { TaxEstimator } from "./components/TaxEstimator";
-import { FullMetricsPage } from "./components/FullMetricsPage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
 import { updateFXRates } from "./utils/currencyUtils";
@@ -18,8 +12,16 @@ import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch, ZENIN_API_BASE_URL } from "./utils/zeninFetch";
+import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
+
+const OptionsModule = lazy(() => import("./components/OptionsModule").then((mod) => ({ default: mod.OptionsModule })));
+const JournalModule = lazy(() => import("./components/JournalModule").then((mod) => ({ default: mod.JournalModule })));
+const AnalyticsModule = lazy(() => import("./components/AnalyticsModule").then((mod) => ({ default: mod.AnalyticsModule })));
+const PredictionMarketModule = lazy(() => import("./components/PredictionMarketModule").then((mod) => ({ default: mod.PredictionMarketModule })));
+const TaxEstimator = lazy(() => import("./components/TaxEstimator").then((mod) => ({ default: mod.TaxEstimator })));
+const FullMetricsPage = lazy(() => import("./components/FullMetricsPage").then((mod) => ({ default: mod.FullMetricsPage })));
 
 
 
@@ -1001,6 +1003,17 @@ useEffect(() => {
   useEffect(() => {
     portfolioRef.current = portfolio;
   }, [portfolio]);
+
+  const { liveStreamStatus, lastLivePriceAt } = useLivePriceStream({
+    watchlistAssets,
+    portfolio: portfolioWithEntry,
+    selectedAsset,
+    priceCacheRef,
+    setAssets,
+    setWatchlistAssets,
+    setPortfolio,
+    setSelectedAsset,
+  });
 
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const normalizedQuantity = Math.max(0, quantity);
@@ -2566,6 +2579,20 @@ const handleOptionTradeClosed = async (tradeId) => {
           ))}
         </nav>
 
+        <div
+          className={`sidebar-live-status ${liveStreamStatus}`}
+          title={lastLivePriceAt ? `Last price tick ${new Date(lastLivePriceAt).toLocaleTimeString()}` : "Live prices connect when assets are tracked"}
+        >
+          <span className="sidebar-live-dot" aria-hidden="true" />
+          <span className="sidebar-live-label">
+            {liveStreamStatus === "connected"
+              ? "Live prices"
+              : liveStreamStatus === "degraded"
+                ? "Polling fallback"
+                : "Live idle"}
+          </span>
+        </div>
+
         <div className="sidebar-section-header">ACCOUNT</div>
         <div className="sidebar-bottom">
           <button
@@ -2617,7 +2644,7 @@ const handleOptionTradeClosed = async (tradeId) => {
             />
           </div>
         ) : (
-          <>
+          <Suspense fallback={<div className="loading-state module-loading-state">Loading workspace...</div>}>
         {activeSection === "Home" && (
           <HomeModule
             portfolio={portfolioWithEntry}
@@ -2764,6 +2791,8 @@ const handleOptionTradeClosed = async (tradeId) => {
               isInWatchlist={isInWatchlist}
               onToggleStar={toggleWatchlistStar}
               onPageChange={handlePageChange}
+              liveStatus={liveStreamStatus}
+              lastLivePriceAt={lastLivePriceAt}
             />
           </div>
         )}
@@ -2840,9 +2869,9 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
         {activeSection === "Tax Estimator" && (
-          <TaxEstimator trades={trades} spotPrices={spotPrices} />
+          <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} />
         )}
-          </>
+          </Suspense>
         )}
       </main>
 
@@ -2864,6 +2893,7 @@ const handleOptionTradeClosed = async (tradeId) => {
             onViewCompanyProfile={openCompanyProfile}
             portfolio={portfolioWithEntry}
             balance={balance}
+            trades={trades}
           />
         )
       )}

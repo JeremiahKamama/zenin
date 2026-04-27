@@ -347,7 +347,7 @@ function deriveGainsFromTrades(trades = [], costBasisMethod = 'fifo') {
   return gains;
 }
 
-export function TaxEstimator({ trades = [], spotPrices = {} }) {
+export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const [jurisdictions, setJurisdictions] = useState(['USA']);
   const [jurisdictionSearch, setJurisdictionSearch] = useState('');
   const [activeRegion, setActiveRegion] = useState('All');
@@ -637,6 +637,49 @@ export function TaxEstimator({ trades = [], spotPrices = {} }) {
     return Math.max(0, (summaryPreview.grossTotal || 0) - (summaryPreview.estimatedTax || 0));
   }, [summaryPreview]);
 
+  const taxLossSuggestions = useMemo(() => {
+    const taxableGain = Math.max(0, Number(summaryPreview.taxableGain || 0));
+    const estimatedTax = Math.max(0, Number(summaryPreview.estimatedTax || 0));
+    const marginalRate = taxableGain > 0 ? Math.min(0.5, estimatedTax / taxableGain) : 0;
+    if (!Array.isArray(portfolio) || portfolio.length === 0) return [];
+
+    return portfolio
+      .map((holding) => {
+        const symbol = String(holding?.symbol || "").trim().toUpperCase();
+        const quantity = Math.max(0, Number(holding?.quantity || 0));
+        const currentPrice = Number(
+          spotPrices?.[symbol] ??
+          holding?.price ??
+          holding?.markPrice ??
+          holding?.currentPrice
+        );
+        const costBasis = Number(
+          holding?.entryPrice ??
+          holding?.averageCost ??
+          holding?.avgPrice ??
+          holding?.costBasis
+        );
+        if (!symbol || quantity <= 0 || !Number.isFinite(currentPrice) || !Number.isFinite(costBasis)) return null;
+        const unrealizedLoss = Math.max(0, (costBasis - currentPrice) * quantity);
+        if (unrealizedLoss <= 1) return null;
+        const offsetAmount = taxableGain > 0 ? Math.min(taxableGain, unrealizedLoss) : unrealizedLoss;
+        const estimatedSaving = taxableGain > 0 ? offsetAmount * marginalRate : 0;
+        return {
+          symbol,
+          name: holding?.name || symbol,
+          quantity,
+          currentPrice,
+          costBasis,
+          unrealizedLoss,
+          offsetAmount,
+          estimatedSaving,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.estimatedSaving - a.estimatedSaving || b.unrealizedLoss - a.unrealizedLoss)
+      .slice(0, 4);
+  }, [portfolio, spotPrices, summaryPreview.estimatedTax, summaryPreview.taxableGain]);
+
   const inputWarnings = useMemo(() => {
     const warnings = [];
     if (!jurisdictions.length) warnings.push("Select at least one jurisdiction.");
@@ -800,6 +843,38 @@ export function TaxEstimator({ trades = [], spotPrices = {} }) {
           <em>Total Gain: {formatMoney(summaryPreview.grossTotal)}</em>
         </div>
       </div>
+
+      <section className="tax-v2-panel tax-loss-panel">
+        <div className="tax-v2-panel-head">
+          <div>
+            <h3>Tax-Loss Harvesting Ideas</h3>
+            <p>Potential offsets from underwater positions in your portfolio.</p>
+          </div>
+          <span className="tax-loss-pill">{taxLossSuggestions.length ? `${taxLossSuggestions.length} found` : "No losses"}</span>
+        </div>
+        {taxLossSuggestions.length > 0 ? (
+          <div className="tax-loss-grid">
+            {taxLossSuggestions.map((idea) => (
+              <article className="tax-loss-card" key={idea.symbol}>
+                <div>
+                  <strong>{idea.symbol}</strong>
+                  <span>{idea.name}</span>
+                </div>
+                <dl>
+                  <div><dt>Unrealized loss</dt><dd>{formatMoney(idea.unrealizedLoss)}</dd></div>
+                  <div><dt>Offset available</dt><dd>{formatMoney(idea.offsetAmount)}</dd></div>
+                  <div><dt>Est. tax saved</dt><dd className="positive">{formatMoney(idea.estimatedSaving)}</dd></div>
+                </dl>
+                <p>
+                  Selling near {formatMoney(idea.currentPrice)} could harvest losses against gains from a {formatMoney(idea.costBasis)} cost basis.
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="tax-loss-empty">No harvestable losses detected from current portfolio prices.</p>
+        )}
+      </section>
 
       <div className="tax-v2-grid-main">
         <section className="tax-v2-panel">
