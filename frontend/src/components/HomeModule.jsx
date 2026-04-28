@@ -1582,7 +1582,7 @@ export function HomeModule({
                 </div>
               ))}
             </div>
-            <div className="market-powered-by">Signals powered by <strong>Zenin AI</strong> <span>Alpha Vantage</span></div>
+            <div className="market-powered-by">Signals powered by <strong>Zenin AI</strong></div>
           </div>
 
           <div className="market-context-panel">

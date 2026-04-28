@@ -775,6 +775,43 @@ function validateOptionsCalculation(req, res, next) {
 // and the Python script always receives valid YF tickers.
 // ---------------------------------------------------------------------------
 const SYMBOL_MAP = {
+  "EURUSD":     "EURUSD=X",
+  "USDJPY":     "JPY=X",
+  "GBPUSD":     "GBPUSD=X",
+  "USDCAD":     "CAD=X",
+  "USDCHF":     "CHF=X",
+  "AUDUSD":     "AUDUSD=X",
+  "NZDUSD":     "NZDUSD=X",
+  "EURGBP":     "EURGBP=X",
+  "EURJPY":     "EURJPY=X",
+  "GBPJPY":     "GBPJPY=X",
+  "EUR/USD":    "EURUSD=X",
+  "USD/JPY":    "JPY=X",
+  "GBP/USD":    "GBPUSD=X",
+  "USD/CAD":    "CAD=X",
+  "USD/CHF":    "CHF=X",
+  "AUD/USD":    "AUDUSD=X",
+  "NZD/USD":    "NZDUSD=X",
+  "EUR/GBP":    "EURGBP=X",
+  "EUR/JPY":    "EURJPY=X",
+  "GBP/JPY":    "GBPJPY=X",
+  "VIX":        "^VIX",
+  "MOVE":       "^MOVE",
+  "US10Y":      "^TNX",
+  "DXY":        "DX-Y.NYB",
+  "CL":         "CL=F",
+  "NG":         "NG=F",
+  "RB":         "RB=F",
+  "GC":         "GC=F",
+  "SI":         "SI=F",
+  "HG":         "HG=F",
+  "ZC":         "ZC=F",
+  "ZW":         "ZW=F",
+  "ZS":         "ZS=F",
+  "KC":         "KC=F",
+  "CC":         "CC=F",
+  "SB":         "SB=F",
+  "CT":         "CT=F",
   "SLX.AXS":    "SLX.AX",
   "034020.KS":  "034020.KS",
   "000660.KS":  "000660.KS",
@@ -797,7 +834,7 @@ const SYMBOL_MAP = {
   "6754":       "6754.T",
   "9432":       "9432.T",
   "AW1(ASX)":   "AW1.AX",
-  "Salik":      "SALIK.AE",
+  "SALIK":      "SALIK.AE",
   "LYSDY":      "LYSDY",
   "ILU":        "ILU.AX",
   "ARU":        "ARU.AX",
@@ -953,14 +990,15 @@ function buildManufacturingNotes(profile = {}, stockMeta = null) {
 }
 
 function normaliseSymbol(symbol) {
+  const normalized = String(symbol || "").trim().toUpperCase();
+  if (SYMBOL_MAP[normalized]) return SYMBOL_MAP[normalized];
   // Safety fallback: if BTC/ETH ever reach here, they need the -USD suffix for Yahoo
   const fallbacks = { "BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD" };
-  if (fallbacks[symbol]) return fallbacks[symbol];
+  if (fallbacks[normalized]) return fallbacks[normalized];
 
-  if (SYMBOL_MAP[symbol]) return SYMBOL_MAP[symbol];
-  if (symbol.includes(".")) return symbol;          // already has suffix
-  if (/^\d+$/.test(symbol)) return `${String(parseInt(symbol, 10)).padStart(4, "0")}.HK`; // bare number → HK
-  return symbol;                                    // US ticker — pass through
+  if (normalized.includes(".") || normalized.includes("=") || normalized.startsWith("^")) return normalized;
+  if (/^\d+$/.test(normalized)) return `${String(parseInt(normalized, 10)).padStart(4, "0")}.HK`; // bare number → HK
+  return normalized;                                    // US ticker — pass through
 }
 
 // Build a map from original symbol → YF symbol and back
@@ -1436,6 +1474,195 @@ function fetchYFinancePrices(originalSymbols) {
     }, 180000);
 
     child.on("close", () => clearTimeout(timer));
+  });
+}
+
+const FX_PAIRS = [
+  "EUR/USD",
+  "USD/JPY",
+  "GBP/USD",
+  "USD/CAD",
+  "USD/CHF",
+  "AUD/USD",
+  "NZD/USD",
+  "EUR/GBP",
+  "EUR/JPY",
+  "GBP/JPY"
+];
+
+function decodeHtmlEntity(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x2F;/g, "/")
+    .replace(/&#47;/g, "/")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function stripHtml(value) {
+  return decodeHtmlEntity(String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+function parsePercentValue(value) {
+  const parsed = Number(String(value || "").replace(/[,%+]/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeFxPair(value) {
+  const compact = String(value || "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (compact.length !== 6 || compact.startsWith("BTC")) return "";
+  return `${compact.slice(0, 3)}/${compact.slice(3)}`;
+}
+
+async function fetchFinvizForexPerformance() {
+  const fetch = await resolveFetch();
+  const response = await fetch("https://finviz.com/forex_performance.ashx?v=1", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+  });
+  if (!response.ok) throw new Error(`finviz_fx_http_${response.status}`);
+  const html = await response.text();
+  const rows = [];
+  const rowMatches = html.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  for (const rowHtml of rowMatches) {
+    const cells = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((match) => stripHtml(match[1]));
+    if (cells.length < 7) continue;
+    const pair = normalizeFxPair(cells[1]);
+    if (!pair) continue;
+    const price = Number(String(cells[2]).replace(/,/g, ""));
+    rows.push({
+      pair,
+      symbol: pair.replace("/", ""),
+      rate: Number.isFinite(price) ? price : null,
+      perf5Min: parsePercentValue(cells[3]),
+      hourly: parsePercentValue(cells[4]),
+      daily: parsePercentValue(cells[5]),
+      weekly: parsePercentValue(cells[6]),
+      monthly: parsePercentValue(cells[7]),
+      quarterly: parsePercentValue(cells[8]),
+      ytd: parsePercentValue(cells[10]),
+      yearly: parsePercentValue(cells[11]),
+      source: "Finviz",
+      updatedAt: new Date().toISOString()
+    });
+  }
+  if (!rows.length) throw new Error("finviz_fx_empty");
+  const byPair = new Map(rows.map((row) => [row.pair, row]));
+  return FX_PAIRS.map((pair) => byPair.get(pair)).filter(Boolean);
+}
+
+async function fetchYahooFxRates() {
+  const symbols = FX_PAIRS.map((pair) => pair.replace("/", ""));
+  const quotes = await fetchYFinancePrices(symbols);
+  return FX_PAIRS.map((pair) => {
+    const symbol = pair.replace("/", "");
+    const quote = quotes[symbol] || {};
+    const rate = Number(quote.price);
+    const daily = Number(quote.priceChangePercent);
+    return {
+      pair,
+      symbol,
+      rate: Number.isFinite(rate) ? rate : null,
+      daily: Number.isFinite(daily) ? daily : null,
+      weekly: null,
+      source: "Yahoo Finance",
+      updatedAt: new Date().toISOString(),
+      stale: !Number.isFinite(rate)
+    };
+  });
+}
+
+async function fetchForexRates() {
+  try {
+    const finvizRows = await fetchFinvizForexPerformance();
+    return {
+      updatedAt: new Date().toISOString(),
+      source: "Finviz",
+      rates: finvizRows,
+      gainers: [...finvizRows].filter((row) => Number.isFinite(Number(row.daily))).sort((a, b) => Number(b.daily) - Number(a.daily)).slice(0, 5),
+      losers: [...finvizRows].filter((row) => Number.isFinite(Number(row.daily))).sort((a, b) => Number(a.daily) - Number(b.daily)).slice(0, 5)
+    };
+  } catch (error) {
+    const yahooRows = await fetchYahooFxRates();
+    return {
+      updatedAt: new Date().toISOString(),
+      source: "Yahoo Finance",
+      stale: true,
+      stale_reason: error?.message || "finviz_fx_fetch_failed",
+      rates: yahooRows,
+      gainers: [...yahooRows].filter((row) => Number.isFinite(Number(row.daily))).sort((a, b) => Number(b.daily) - Number(a.daily)).slice(0, 5),
+      losers: [...yahooRows].filter((row) => Number.isFinite(Number(row.daily))).sort((a, b) => Number(a.daily) - Number(b.daily)).slice(0, 5)
+    };
+  }
+}
+
+function computeTrend(value, previous) {
+  const currentValue = Number(value);
+  const previousValue = Number(previous);
+  if (!Number.isFinite(currentValue) || !Number.isFinite(previousValue)) return "Flat";
+  if (currentValue > previousValue) return "Up";
+  if (currentValue < previousValue) return "Down";
+  return "Flat";
+}
+
+async function fetchAnalyticsMacroRows(country = "USA") {
+  const metrics = sanitizeMacroMetrics(await fetchWorldBankMacroMetrics(country));
+  return metrics
+    .filter((metric) => Number.isFinite(Number(metric.current)))
+    .map((metric) => ({
+      indicator: metric.label,
+      indicatorCode: metric.key,
+      value: Number(metric.current),
+      unit: metric.unit,
+      country,
+      trend: computeTrend(metric.current, metric.previous),
+      previous: metric.previous,
+      asOf: metric.asOf,
+      source: "World Bank"
+    }));
+}
+
+function riskStatus(indicator, value, changePct) {
+  const val = Number(value);
+  const change = Number(changePct);
+  if (!Number.isFinite(val)) return "Unavailable";
+  if (indicator === "VIX") return val >= 25 ? "Elevated" : val >= 18 ? "Watch" : "Normal";
+  if (indicator === "MOVE Index") return val >= 125 ? "Elevated" : val >= 100 ? "Watch" : "Normal";
+  if (indicator === "US 10Y Treasury") return val >= 4.75 ? "Elevated" : val >= 4.25 ? "Watch" : "Normal";
+  if (indicator === "DXY") return Math.abs(change) >= 0.7 ? "Watch" : "Normal";
+  if (indicator === "HYG Credit Proxy") return change <= -0.8 ? "Elevated" : change <= -0.35 ? "Watch" : "Contained";
+  return "Normal";
+}
+
+async function fetchAnalyticsRiskIndicators() {
+  const symbols = ["VIX", "MOVE", "US10Y", "DXY", "HYG"];
+  const prices = await fetchYFinancePrices(symbols);
+  const rows = [
+    { key: "VIX", indicator: "VIX", unit: "index", transform: (v) => v },
+    { key: "MOVE", indicator: "MOVE Index", unit: "index", transform: (v) => v },
+    { key: "US10Y", indicator: "US 10Y Treasury", unit: "%", transform: (v) => v / 10 },
+    { key: "DXY", indicator: "DXY", unit: "index", transform: (v) => v },
+    { key: "HYG", indicator: "HYG Credit Proxy", unit: "price", transform: (v) => v }
+  ];
+  return rows.map((row) => {
+    const quote = prices[row.key] || {};
+    const raw = Number(quote.price);
+    const value = Number.isFinite(raw) ? Number(row.transform(raw).toFixed(row.unit === "%" ? 3 : 2)) : null;
+    const changePct = Number(quote.priceChangePercent);
+    return {
+      indicator: row.indicator,
+      value,
+      unit: row.unit,
+      daily: Number.isFinite(changePct) ? Number(changePct.toFixed(2)) : null,
+      status: riskStatus(row.indicator, value, changePct),
+      source: "Yahoo Finance",
+      updatedAt: new Date().toISOString()
+    };
   });
 }
 
@@ -1948,6 +2175,7 @@ function fetchHistoryFromYahoo(symbol, interval) {
       "4H": { period: "1d", interval: "15m" },
       "1D": { period: "1d", interval: "5m" },
       "1W": { period: "7d", interval: "60m" },
+      "1M": { period: "1mo", interval: "1d" },
       "3M": { period: "3mo", interval: "1d" },
       "1Y": { period: "1y", interval: "1d" },
       "YTD": { period: "ytd", interval: "1d" },
@@ -2012,6 +2240,23 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/categories", (_req, res) => {
   res.json({ categories: Object.keys(watchlistData) });
+});
+
+app.get("/api/forex/rates", async (_req, res) => {
+  try {
+    res.json(await fetchForexRates());
+  } catch (error) {
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: "unavailable",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "forex_rates_fetch_failed",
+      rates: [],
+      gainers: [],
+      losers: []
+    });
+  }
 });
 
 app.get("/api/history", async (req, res) => {
@@ -5445,6 +5690,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=ETHUSDT`).then(r => r.json()).catch(() => null),
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=SOLUSDT`).then(r => r.json()).catch(() => null),
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=BNBUSDT`).then(r => r.json()).catch(() => null),
+      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=HYPEUSDT`).then(r => r.json()).catch(() => null),
     ]);
 
     const perpMetrics = [];
@@ -5501,7 +5747,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
           ) || 0;
           perpMetrics.push({
             symbol,
-            openInterestUsd: oiUsd,
+            openInterestUsd: oiUsd || (firstFiniteNumber(item?.openInterest, 0) * lastPx),
             fundingRate: funding,
             exchange: "Bybit"
           });
@@ -5518,10 +5764,11 @@ app.get('/api/analytics/crypto', async (req, res) => {
         binanceOIPromises[0]?.value, // BTC
         binanceOIPromises[1]?.value, // ETH
         binanceOIPromises[2]?.value, // SOL
-        binanceOIPromises[3]?.value  // BNB
+        binanceOIPromises[3]?.value, // BNB
+        binanceOIPromises[4]?.value  // HYPE
       ];
 
-      const symbolsToMap = ["BTC", "ETH", "SOL", "BNB"];
+      const symbolsToMap = ["BTC", "ETH", "SOL", "BNB", "HYPE"];
       symbolsToMap.forEach((sym, i) => {
         const fundingItem = binanceFundingRes.value.find(f => f.symbol === `${sym}USDT`);
         const markItem = markRows.find(f => f.symbol === `${sym}USDT`);
@@ -5555,9 +5802,10 @@ app.get('/api/analytics/crypto', async (req, res) => {
       ETF_INFLOWS: "3834935"   // Example ID for ETF Flows
     };
 
-    const [duneMarketShareRows, duneOverviewRows] = await Promise.all([
+    const [duneMarketShareRows, duneOverviewRows, duneEtfFlowsRows] = await Promise.all([
       fetchDuneLatestResults(DUNE_QUERY_IDS.MARKET_SHARE),
-      fetchDuneLatestResults(DUNE_QUERY_IDS.OVERVIEW)
+      fetchDuneLatestResults(DUNE_QUERY_IDS.OVERVIEW),
+      fetchDuneLatestResults(DUNE_QUERY_IDS.ETF_INFLOWS)
     ]);
 
     // Map Dune data to our visual formats, falling back to static mocks if API fails
@@ -5587,7 +5835,15 @@ app.get('/api/analytics/crypto', async (req, res) => {
       { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
     ];
 
-    const etfInflows = [
+    const etfInflows = duneEtfFlowsRows ? duneEtfFlowsRows.map(row => ({
+      id: row.id || `etf-${row.ticker}-${row.date}`,
+      date: row.date || new Date().toISOString().split("T")[0],
+      ticker: row.ticker || "Unknown",
+      asset: row.asset || "BTC",
+      manager: row.manager || "Unknown",
+      netUsd: Number(row.net_usd || row.netUsd || 0),
+      period: row.period || "daily"
+    })) : [
       { id: "1", date: new Date().toISOString().split("T")[0], ticker: "IBIT", asset: "BTC", manager: "BlackRock", netUsd: 125000000, period: "daily" },
       { id: "2", date: new Date().toISOString().split("T")[0], ticker: "FBTC", asset: "BTC", manager: "Fidelity", netUsd: 45000000, period: "daily" },
       { id: "3", date: new Date().toISOString().split("T")[0], ticker: "ETHA", asset: "ETH", manager: "BlackRock", netUsd: 8200000, period: "daily" }
@@ -5602,13 +5858,20 @@ app.get('/api/analytics/crypto', async (req, res) => {
       perpsOverview,
       perpVolumeByProtocol: [
         { protocol: "Hyperliquid", volumeUsd: 1400000000 },
+        { protocol: "Jupiter", volumeUsd: 1100000000 },
         { protocol: "dYdX", volumeUsd: 850000000 },
-        { protocol: "Jupiter", volumeUsd: 1100000000 }
+        { protocol: "GMX", volumeUsd: 420000000 },
+        { protocol: "Synthetix", volumeUsd: 310000000 },
+        { protocol: "ApeX", volumeUsd: 980000000 },
+        { protocol: "Aster", volumeUsd: 780000000 }
       ],
       revenueByProtocol: [
         { protocol: "Hyperliquid", revenueUsd: 250000 },
+        { protocol: "Jupiter", revenueUsd: 200000 },
         { protocol: "dYdX", revenueUsd: 150000 },
-        { protocol: "Jupiter", revenueUsd: 200000 }
+        { protocol: "GMX", revenueUsd: 180000 },
+        { protocol: "Synthetix", revenueUsd: 95000 },
+        { protocol: "ApeX", revenueUsd: 120000 }
       ],
       optionsVolumeByAsset: [],
       optionsMaxPain: [],
@@ -5779,35 +6042,91 @@ function getCommodity(symbol) {
   return COMMODITY_UNIVERSE.find((row) => row.symbol === key) || COMMODITY_UNIVERSE[0];
 }
 
-function buildCommoditySeries(basePrice, range) {
-  const points = range === "1M" ? 20 : range === "3M" ? 45 : range === "5Y" ? 60 : range === "MAX" ? 84 : 36;
-  return Array.from({ length: points }, (_v, i) => {
-    const step = points - i;
-    const date = new Date(Date.now() - step * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const value = basePrice * (1 + Math.sin(i / 7) * 0.012 + i * 0.0009);
-    return { date, value: Number(value.toFixed(4)) };
-  });
+async function fetchLiveCommodityRows(group = "all") {
+  const livePrices = await fetchYFinancePrices(COMMODITY_UNIVERSE.map((row) => row.symbol));
+  return COMMODITY_UNIVERSE
+    .map((row) => {
+      const quote = livePrices[row.symbol] || {};
+      const latestPrice = Number(quote.price);
+      const dailyChangePct = Number(quote.priceChangePercent);
+      return {
+        ...row,
+        latestPrice: Number.isFinite(latestPrice) ? latestPrice : null,
+        dailyChangePct: Number.isFinite(dailyChangePct) ? dailyChangePct : null,
+        ytdChangePct: null,
+        oneYearReturnPct: null,
+        currency: quote.currency || "USD",
+        source: "Yahoo Finance",
+        stale: !Number.isFinite(latestPrice)
+      };
+    })
+    .filter((row) => group === "all" || row.group === group);
+}
+
+function historyRowsToSeries(history = []) {
+  return (Array.isArray(history) ? history : [])
+    .map((row) => {
+      const value = Number(row?.close ?? row?.price ?? row?.value);
+      const date = String(row?.time || row?.date || "").slice(0, 10);
+      if (!date || !Number.isFinite(value)) return null;
+      return { date, value, volume: Number(row?.volume) || null };
+    })
+    .filter(Boolean);
+}
+
+function computeReturnPct(from, to) {
+  const start = Number(from);
+  const end = Number(to);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === 0) return null;
+  return Number((((end - start) / start) * 100).toFixed(2));
+}
+
+function annualizedVolFromSeries(series = []) {
+  const returns = [];
+  for (let i = 1; i < series.length; i += 1) {
+    const prev = Number(series[i - 1]?.value);
+    const next = Number(series[i]?.value);
+    if (Number.isFinite(prev) && Number.isFinite(next) && prev > 0) returns.push((next - prev) / prev);
+  }
+  if (returns.length < 2) return null;
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance = returns.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (returns.length - 1);
+  return Number((Math.sqrt(variance) * Math.sqrt(252) * 100).toFixed(2));
 }
 
 app.get("/api/commodities/overview", async (_req, res) => {
-  const topMovers = [...COMMODITY_UNIVERSE]
-    .sort((a, b) => Math.abs(b.dailyChangePct) - Math.abs(a.dailyChangePct))
-    .slice(0, 5);
-  const byGroup = COMMODITY_UNIVERSE.reduce((acc, row) => {
-    const key = row.group;
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  res.json({
-    updatedAt: new Date().toISOString(),
-    overview: {
-      categoryCounts: byGroup,
-      topMovers,
-      favorites: ["GC", "CL", "NG"],
-      recentViews: ["GC", "HG", "CL"],
-      dataSources: COMMODITY_SOURCE_MAP,
-    },
-  });
+  try {
+    const rows = await fetchLiveCommodityRows("all");
+    const topMovers = [...rows]
+      .filter((row) => Number.isFinite(Number(row.dailyChangePct)))
+      .sort((a, b) => Math.abs(Number(b.dailyChangePct)) - Math.abs(Number(a.dailyChangePct)))
+      .slice(0, 5);
+    const byGroup = rows.reduce((acc, row) => {
+      const key = row.group;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: "Yahoo Finance",
+      overview: {
+        categoryCounts: byGroup,
+        topMovers,
+        favorites: topMovers.slice(0, 3).map((row) => row.symbol),
+        recentViews: [],
+        dataSources: COMMODITY_SOURCE_MAP,
+      },
+    });
+  } catch (error) {
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: "Yahoo Finance",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "commodities_overview_fetch_failed",
+      overview: { categoryCounts: {}, topMovers: [], favorites: [], recentViews: [], dataSources: COMMODITY_SOURCE_MAP }
+    });
+  }
 });
 
 app.get("/api/commodities/search", async (req, res) => {
@@ -5820,67 +6139,150 @@ app.get("/api/commodities/search", async (req, res) => {
 });
 
 app.get("/api/commodities/list", async (req, res) => {
-  const group = String(req.query.group || "all").toLowerCase();
-  const items = COMMODITY_UNIVERSE.filter((row) => group === "all" || row.group === group);
-  res.json({ updatedAt: new Date().toISOString(), items, list: items });
+  try {
+    const group = String(req.query.group || "all").toLowerCase();
+    const items = await fetchLiveCommodityRows(group);
+    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", items, list: items });
+  } catch (error) {
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: "Yahoo Finance",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "commodities_list_fetch_failed",
+      items: [],
+      list: []
+    });
+  }
 });
 
 app.get("/api/commodities/:symbol/price", async (req, res) => {
   const range = String(req.query.range || "1Y").toUpperCase();
   const item = getCommodity(req.params.symbol);
-  res.json({
-    updatedAt: new Date().toISOString(),
-    symbol: item.symbol,
-    series: buildCommoditySeries(item.latestPrice, range),
-  });
+  try {
+    const stockHistory = await fetchHistoryFromYahoo(item.symbol, range);
+    const series = historyRowsToSeries(stockHistory.history);
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: stockHistory.source || "yahoo", series });
+  } catch (error) {
+    res.json({
+      updatedAt: new Date().toISOString(),
+      symbol: item.symbol,
+      source: "Yahoo Finance",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "commodity_price_fetch_failed",
+      series: []
+    });
+  }
 });
 
 app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
   const item = getCommodity(req.params.symbol);
-  const src = COMMODITY_SOURCE_MAP.fundamentals;
-  const metrics = [
-    { metric: "Inventory Level", value: Number((320 + item.latestPrice * 0.8).toFixed(2)), unit: "Index", sourceType: src.sourceType, sourceWhy: src.why },
-    { metric: "Production Level", value: Number((95 + item.ytdChangePct * 0.4).toFixed(2)), unit: "Index", sourceType: src.sourceType, sourceWhy: src.why },
-    { metric: "Demand Level", value: Number((97 + item.oneYearReturnPct * 0.25).toFixed(2)), unit: "Index", sourceType: src.sourceType, sourceWhy: src.why },
-  ];
-  res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, metrics, items: metrics });
+  try {
+    const stockHistory = await fetchHistoryFromYahoo(item.symbol, "1Y");
+    const series = historyRowsToSeries(stockHistory.history);
+    const values = series.map((row) => Number(row.value)).filter(Number.isFinite);
+    const latest = values.at(-1);
+    const high = values.length ? Math.max(...values) : null;
+    const low = values.length ? Math.min(...values) : null;
+    const momentum30 = series.length > 30 ? computeReturnPct(series[series.length - 31]?.value, latest) : null;
+    const volume = [...series].reverse().find((row) => Number.isFinite(Number(row.volume)))?.volume ?? null;
+    const metrics = [
+      { metric: "Latest Price", value: latest, unit: "USD", sourceType: "Yahoo Finance futures quote", sourceWhy: "Live front-month market value" },
+      { metric: "52W High", value: high, unit: "USD", sourceType: "Yahoo Finance historical futures data", sourceWhy: "Observed range from source time series" },
+      { metric: "52W Low", value: low, unit: "USD", sourceType: "Yahoo Finance historical futures data", sourceWhy: "Observed range from source time series" },
+      { metric: "30D Momentum", value: momentum30, unit: "%", sourceType: "Yahoo Finance historical futures data", sourceWhy: "Computed from sourced close prices" },
+      { metric: "Annualized Volatility", value: annualizedVolFromSeries(series), unit: "%", sourceType: "Yahoo Finance historical futures data", sourceWhy: "Computed from sourced daily returns" },
+      { metric: "Latest Volume", value: volume, unit: "contracts", sourceType: "Yahoo Finance futures quote", sourceWhy: "Latest reported volume when available" }
+    ].filter((row) => Number.isFinite(Number(row.value)));
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", metrics, items: metrics });
+  } catch (error) {
+    res.json({
+      updatedAt: new Date().toISOString(),
+      symbol: item.symbol,
+      source: "Yahoo Finance",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "commodity_fundamentals_fetch_failed",
+      metrics: [],
+      items: []
+    });
+  }
 });
 
 app.get("/api/commodities/:symbol/flows", async (req, res) => {
   const mode = String(req.query.mode || "etf").toLowerCase();
   const item = getCommodity(req.params.symbol);
-  const src = COMMODITY_SOURCE_MAP.flows;
-  const sign = item.dailyChangePct >= 0 ? 1 : -1;
-  const items = [
-    { date: new Date().toISOString().slice(0, 10), type: mode === "futures" ? "Futures Positioning" : mode === "fund" ? "Fund Flow" : "ETF Flow", value: Math.round((180 + item.latestPrice * 2.1) * 1_000_000 * sign), trend: sign > 0 ? "Inflow" : "Outflow", sourceType: src.sourceType, sourceWhy: src.why },
-    { date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), type: "Cross-venue Aggregate", value: Math.round((110 + item.latestPrice * 1.4) * 1_000_000), trend: "Neutral", sourceType: src.sourceType, sourceWhy: src.why },
-  ];
-  res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, items, flows: items });
+  try {
+    const stockHistory = await fetchHistoryFromYahoo(item.symbol, "1M");
+    const series = historyRowsToSeries(stockHistory.history);
+    const items = series
+      .filter((row) => Number.isFinite(Number(row.volume)))
+      .slice(-10)
+      .map((row, idx, arr) => {
+        const previous = idx > 0 ? arr[idx - 1] : null;
+        const changePct = previous ? computeReturnPct(previous.value, row.value) : null;
+        return {
+          date: row.date,
+          type: mode === "futures" ? "Futures Volume" : "Price/Volume Proxy",
+          value: Number(row.volume),
+          trend: Number(changePct) > 0 ? "Up volume with price gain" : Number(changePct) < 0 ? "Up volume with price decline" : "Flat",
+          sourceType: "Yahoo Finance price and volume",
+          sourceWhy: "Uses sourced volume/price as a transparent proxy when fund-flow or COT data is unavailable"
+        };
+      });
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", items, flows: items });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_flows_fetch_failed", items: [], flows: [] });
+  }
 });
 
 app.get("/api/commodities/:symbol/seasonality", async (req, res) => {
-  const src = COMMODITY_SOURCE_MAP.seasonality;
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const items = months.map((month, idx) => ({
-    month,
-    avgReturnPct: Number((Math.sin((idx + 1) / 2.3) * 1.4).toFixed(2)),
-    seasonalityScore: Number((0.5 + Math.cos((idx + 1) / 3.7) * 0.2).toFixed(2)),
-    sourceType: src.sourceType,
-    sourceWhy: src.why,
-  }));
-  res.json({ updatedAt: new Date().toISOString(), items, seasonality: items });
+  const item = getCommodity(req.params.symbol);
+  try {
+    const stockHistory = await fetchHistoryFromYahoo(item.symbol, "MAX");
+    const series = historyRowsToSeries(stockHistory.history);
+    const byMonth = new Map();
+    for (let i = 1; i < series.length; i += 1) {
+      const monthIdx = new Date(series[i].date).getUTCMonth();
+      const month = new Date(Date.UTC(2020, monthIdx, 1)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+      const ret = computeReturnPct(series[i - 1].value, series[i].value);
+      if (!Number.isFinite(Number(ret))) continue;
+      if (!byMonth.has(month)) byMonth.set(month, []);
+      byMonth.get(month).push(Number(ret));
+    }
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const items = months.map((month) => {
+      const values = byMonth.get(month) || [];
+      const avg = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+      return {
+        month,
+        avgReturnPct: Number.isFinite(avg) ? Number(avg.toFixed(2)) : null,
+        seasonalityScore: Number.isFinite(avg) ? Number(Math.max(0, Math.min(1, 0.5 + avg / 10)).toFixed(2)) : null,
+        observations: values.length,
+        sourceType: "Yahoo Finance historical futures data",
+        sourceWhy: "Average monthly return computed from sourced closes"
+      };
+    }).filter((row) => Number.isFinite(Number(row.avgReturnPct)));
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", items, seasonality: items });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_seasonality_fetch_failed", items: [], seasonality: [] });
+  }
 });
 
 app.get("/api/commodities/:symbol/curve", async (req, res) => {
   const item = getCommodity(req.params.symbol);
-  const src = COMMODITY_SOURCE_MAP.curve;
-  const points = [
-    { contract: "Spot", price: Number((item.latestPrice * 0.998).toFixed(3)), spread: 0, curveStructure: "Flat", sourceType: src.sourceType, sourceWhy: src.why },
-    { contract: "Front Month", price: Number(item.latestPrice.toFixed(3)), spread: 0.22, curveStructure: item.dailyChangePct > 0 ? "Backwardation" : "Contango", sourceType: src.sourceType, sourceWhy: src.why },
-    { contract: "3M", price: Number((item.latestPrice * 1.012).toFixed(3)), spread: 0.84, curveStructure: "Contango", sourceType: src.sourceType, sourceWhy: src.why },
-    { contract: "6M", price: Number((item.latestPrice * 1.021).toFixed(3)), spread: 1.36, curveStructure: "Contango", sourceType: src.sourceType, sourceWhy: src.why },
-  ];
-  res.json({ updatedAt: new Date().toISOString(), points, curve: points });
+  try {
+    const prices = await fetchYFinancePrices([item.symbol]);
+    const quote = prices[item.symbol] || {};
+    const price = Number(quote.price);
+    const points = Number.isFinite(price)
+      ? [{ contract: "Front Month", price, spread: 0, curveStructure: "Front-month quote", sourceType: "Yahoo Finance front-month futures", sourceWhy: "Only sourced front-month contract is available through the current free feed" }]
+      : [];
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", points, curve: points });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_curve_fetch_failed", points: [], curve: [] });
+  }
 });
 
 app.get("/api/commodities/compare", async (req, res) => {
@@ -5888,48 +6290,95 @@ app.get("/api/commodities/compare", async (req, res) => {
     .split(",")
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
-  const rows = (symbols.length ? symbols : ["GC", "CL"]).map((symbol) => {
-    const item = getCommodity(symbol);
-    return {
-      symbol: item.symbol,
-      name: item.name,
-      dailyChangePct: item.dailyChangePct,
-      ytdChangePct: item.ytdChangePct,
-      volatility: Number((12 + Math.abs(item.dailyChangePct) * 8.5).toFixed(2)),
-    };
-  });
-  res.json({ updatedAt: new Date().toISOString(), rows, compare: rows });
+  try {
+    const liveRows = await fetchLiveCommodityRows("all");
+    const selected = symbols.length ? symbols : ["GC", "CL"];
+    const rows = selected
+      .map((symbol) => liveRows.find((row) => row.symbol === symbol) || null)
+      .filter(Boolean)
+      .map((row) => ({
+        symbol: row.symbol,
+        name: row.name,
+        dailyChangePct: row.dailyChangePct,
+        ytdChangePct: row.ytdChangePct,
+        volatility: null,
+        source: row.source
+      }));
+    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", rows, compare: rows });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_compare_fetch_failed", rows: [], compare: [] });
+  }
 });
 
 app.get("/api/commodities/calendar", async (req, res) => {
   const group = String(req.query.group || "all").toLowerCase();
-  const src = COMMODITY_SOURCE_MAP.calendar;
-  const events = [
-    { date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), event: "EIA Weekly Inventory", importance: "high", group: "energy", sourceType: src.sourceType, sourceWhy: src.why },
-    { date: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10), event: "COT Positioning Update", importance: "medium", group: "all", sourceType: src.sourceType, sourceWhy: src.why },
-    { date: new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10), event: "USDA Crop Progress", importance: "high", group: "agriculture", sourceType: src.sourceType, sourceWhy: src.why },
-  ].filter((row) => group === "all" || row.group === group);
-  res.json({ updatedAt: new Date().toISOString(), events, calendar: events });
+  try {
+    const events = (await fetchForexFactoryEvents())
+      .filter((event) => {
+        const text = `${event?.title || ""} ${event?.event || ""} ${event?.name || ""}`.toLowerCase();
+        const mappedGroup = /oil|crude|petroleum|gas|eia/.test(text)
+          ? "energy"
+          : /crop|grain|corn|wheat|soy|usda|wasde|cotton|sugar|coffee|cocoa/.test(text)
+          ? "agriculture"
+          : /gold|silver|copper|metal/.test(text)
+          ? "metals"
+          : "all";
+        return mappedGroup !== "all" && (group === "all" || mappedGroup === group);
+      })
+      .map((event, idx) => ({
+        id: event.id || `cmd-cal-${idx}`,
+        date: event.date || event.asOf || event.time || null,
+        event: event.title || event.event || event.name || "Commodity event",
+        importance: event.impact || event.importance || "medium",
+        group,
+        sourceType: "ForexFactory economic calendar",
+        sourceWhy: "Release timing sourced from the live calendar feed"
+      }));
+    res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", events, calendar: events });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", stale: true, unavailable: true, stale_reason: error?.message || "commodity_calendar_fetch_failed", events: [], calendar: [] });
+  }
 });
 
 app.get("/api/commodities/alerts", async (_req, res) => {
-  const src = COMMODITY_SOURCE_MAP.alerts;
-  const items = [
-    { id: "cmd-alert-1", symbol: "GC", rule: "Price crosses 2400", status: "active", sourceType: src.sourceType, sourceWhy: src.why },
-    { id: "cmd-alert-2", symbol: "CL", rule: "Inventory surprise > 2σ", status: "active", sourceType: src.sourceType, sourceWhy: src.why },
-  ];
-  res.json({ updatedAt: new Date().toISOString(), items, alerts: items });
+  res.json({
+    updatedAt: new Date().toISOString(),
+    source: "User alert rules",
+    items: [],
+    alerts: []
+  });
 });
 
 app.get("/api/commodities/correlation", async (req, res) => {
   const symbol = String(req.query.symbol || "GC").toUpperCase();
   const asset = String(req.query.asset || "SPY").toUpperCase();
-  const rows = [
-    { pair: `${symbol} vs ${asset}`, coefficient: 0.32, window: "180d" },
-    { pair: `${symbol} vs DXY`, coefficient: -0.44, window: "180d" },
-    { pair: `${symbol} vs US10Y`, coefficient: -0.16, window: "180d" },
-  ];
-  res.json({ updatedAt: new Date().toISOString(), rows, correlation: rows });
+  try {
+    const [commodityHistory, assetHistory] = await Promise.all([
+      fetchHistoryFromYahoo(symbol, "1Y"),
+      fetchHistoryFromYahoo(asset, "1Y")
+    ]);
+    const a = historyRowsToSeries(commodityHistory.history);
+    const b = historyRowsToSeries(assetHistory.history);
+    const bByDate = new Map(b.map((row) => [row.date, row.value]));
+    const pairs = a
+      .map((row) => [row.value, bByDate.get(row.date)])
+      .filter(([x, y]) => Number.isFinite(Number(x)) && Number.isFinite(Number(y)));
+    let coefficient = null;
+    if (pairs.length > 2) {
+      const xs = pairs.map(([x]) => Number(x));
+      const ys = pairs.map(([, y]) => Number(y));
+      const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
+      const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+      const cov = xs.reduce((sum, value, idx) => sum + ((value - meanX) * (ys[idx] - meanY)), 0);
+      const stdX = Math.sqrt(xs.reduce((sum, value) => sum + ((value - meanX) ** 2), 0));
+      const stdY = Math.sqrt(ys.reduce((sum, value) => sum + ((value - meanY) ** 2), 0));
+      coefficient = stdX && stdY ? Number((cov / (stdX * stdY)).toFixed(2)) : null;
+    }
+    const rows = [{ pair: `${symbol} vs ${asset}`, coefficient, window: "1y", observations: pairs.length, source: "Yahoo Finance" }];
+    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", rows, correlation: rows });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_correlation_fetch_failed", rows: [], correlation: [] });
+  }
 });
 
 const AFRICA_COUNTRY_SET = new Set(["KE", "NG", "ZA"]);
@@ -6403,13 +6852,11 @@ app.get('/api/analytics/equities', async (req, res) => {
       { scope: "Emerging (MSCI EM)", pe: 12.9, pb: 1.6, evEbitda: 8.8, dividendYield: 2.7, fcfYield: 6.8 }
     ];
 
-    const macroData = [
-      { indicator: "Fed Funds Rate", value: 4.75, unit: "%", country: "USA", trend: "Flat" },
-      { indicator: "CPI YoY", value: 2.9, unit: "%", country: "USA", trend: "Down" },
-      { indicator: "Unemployment", value: 4.1, unit: "%", country: "USA", trend: "Flat" },
-      { indicator: "Manufacturing PMI", value: 51.2, unit: "index", country: "USA", trend: "Up" },
-      { indicator: "US 10Y - 2Y", value: -0.22, unit: "%", country: "USA", trend: "Steepening" }
-    ];
+    const [macroData, fxPayload, riskIndicators] = await Promise.all([
+      fetchAnalyticsMacroRows("USA"),
+      fetchForexRates(),
+      fetchAnalyticsRiskIndicators()
+    ]);
 
     const fundFlows = [
       { segment: "US Tech ETFs", assetClass: "Equities", region: "USA", sector: "Technology", period: "1W", netFlowUsdBn: 4.2 },
@@ -6418,12 +6865,14 @@ app.get('/api/analytics/equities', async (req, res) => {
       { segment: "Energy Sector ETFs", assetClass: "Equities", region: "Global", sector: "Energy", period: "1W", netFlowUsdBn: -0.4 }
     ];
 
-    const fxRates = [
-      { pair: "EUR/USD", rate: 1.08, daily: 0.14, weekly: 0.32 },
-      { pair: "USD/JPY", rate: 150.32, daily: -0.21, weekly: -0.58 },
-      { pair: "GBP/USD", rate: 1.27, daily: 0.19, weekly: 0.44 },
-      { pair: "USD/CNH", rate: 7.14, daily: 0.06, weekly: 0.11 }
-    ];
+    const fxRates = Array.isArray(fxPayload?.rates) ? fxPayload.rates : [];
+    const forexMovers = {
+      gainers: Array.isArray(fxPayload?.gainers) ? fxPayload.gainers : [],
+      losers: Array.isArray(fxPayload?.losers) ? fxPayload.losers : [],
+      source: fxPayload?.source || "Finviz",
+      stale: Boolean(fxPayload?.stale),
+      stale_reason: fxPayload?.stale_reason || null
+    };
 
     const marketBreadth = {
       adLine: 12850,
@@ -6432,14 +6881,6 @@ app.get('/api/analytics/equities', async (req, res) => {
       above50dmaPct: 62.3,
       above200dmaPct: 58.7
     };
-
-    const riskIndicators = [
-      { indicator: "VIX", value: 15.4, unit: "index", status: "Normal" },
-      { indicator: "US HY OAS", value: 3.62, unit: "%", status: "Contained" },
-      { indicator: "US 10Y Treasury", value: 4.18, unit: "%", status: "Watch" },
-      { indicator: "MOVE Index", value: 103.2, unit: "index", status: "Elevated" },
-      { indicator: "USD Liquidity Proxy", value: -0.8, unit: "z-score", status: "Tightening" }
-    ];
 
     const corporateActions = [
       { date: "2026-04-18", symbol: "TSLA", action: "Split Proposal", detail: "Board authorized review for 3-for-1 split." },
@@ -6508,6 +6949,7 @@ app.get('/api/analytics/equities', async (req, res) => {
       macroData,
       fundFlows,
       fxRates,
+      forexMovers,
       marketBreadth,
       riskIndicators,
       corporateActions,

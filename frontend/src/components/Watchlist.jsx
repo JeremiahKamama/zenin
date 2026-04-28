@@ -597,7 +597,12 @@ useEffect(() => {
                     {asset.price != null && (
                       <div className="asset-price">
                         <span className="price-val">
-                          {asset.market === "Treasury" ? "" : getCurrencySymbol(asset.currency || "USD")}
+                          {(() => {
+                            if (asset.market === "Treasury") return "";
+                            const assetSymbol = String(asset?.symbol || "").toUpperCase();
+                            const activeCurrency = (asset?.currency || asset?.quotedCurrency || (assetSymbol.endsWith(".T") ? "JPY" : assetSymbol.endsWith(".L") ? "GBP" : assetSymbol.endsWith(".PA") ? "EUR" : assetSymbol.endsWith(".DE") ? "EUR" : "USD")).toUpperCase();
+                            return getCurrencySymbol(activeCurrency);
+                          })()}
                           {asset.price.toLocaleString(undefined, {
                             minimumFractionDigits: (asset.currency === "JPY" || asset.marketType === "spot") ? 0 : 2,
                             maximumFractionDigits: (asset.currency === "JPY" || asset.marketType === "spot") ? 0 : 2

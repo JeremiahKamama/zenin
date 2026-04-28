@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+import { getCurrencySymbol } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -32,15 +33,16 @@ function hasUsableCompanyProfile(profile) {
   );
 }
 
-function formatMoney(value) {
+function formatMoney(value, currency = "USD") {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "Not available";
   const abs = Math.abs(numeric);
-  if (abs >= 1e12) return `$${(numeric / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `$${(numeric / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `$${(numeric / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `$${(numeric / 1e3).toFixed(2)}K`;
-  return `$${numeric.toFixed(2)}`;
+  const symbol = getCurrencySymbol(currency);
+  if (abs >= 1e12) return `${symbol}${(numeric / 1e12).toFixed(2)}T`;
+  if (abs >= 1e9) return `${symbol}${(numeric / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${symbol}${(numeric / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${symbol}${(numeric / 1e3).toFixed(2)}K`;
+  return `${symbol}${numeric.toFixed(2)}`;
 }
 
 function formatPercent(value) {
@@ -246,10 +248,10 @@ function buildFrameworkContext(profile, displayMeta) {
       profile?.currency ? `Reporting currency: ${profile.currency}` : null
     ], "Product-line detail is inferred from the public company summary and the stock catalog."),
     financialGrowthBullets: mergeBullets([
-      `Revenue: ${finvizSummary["Sales"] || formatMoney(profile?.totalRevenue)}`,
+      `Revenue: ${finvizSummary["Sales"] || formatMoney(profile?.totalRevenue, profile?.currency)}`,
       `Revenue growth: ${finvizSummary["Sales Q/Q"] || formatPercent(profile?.revenueGrowth)}`,
       `Earnings growth: ${finvizSummary["EPS Q/Q"] || formatPercent(profile?.earningsGrowth)}`,
-      `Market cap: ${finvizSummary["Market Cap"] || formatMoney(profile?.marketCap)}`
+      `Market cap: ${finvizSummary["Market Cap"] || formatMoney(profile?.marketCap, profile?.currency)}`
     ], "Top-line financial growth data is limited in the current public snapshot."),
     profitabilityBullets: compactBullets([
       `Gross margin: ${formatPercent(profile?.grossMargins)}`,
@@ -258,13 +260,13 @@ function buildFrameworkContext(profile, displayMeta) {
       `Profit margin: ${formatPercent(profile?.profitMargins)}`
     ], "Margin disclosures are limited in the current public snapshot."),
     cashflowBullets: mergeBullets([
-      `Operating cash flow: ${formatMoney(profile?.operatingCashflow)}`,
-      `Free cash flow: ${formatMoney(profile?.freeCashflow)}`,
-      `Enterprise value: ${formatMoney(profile?.enterpriseValue)}`
+      `Operating cash flow: ${formatMoney(profile?.operatingCashflow, profile?.currency)}`,
+      `Free cash flow: ${formatMoney(profile?.freeCashflow, profile?.currency)}`,
+      `Enterprise value: ${formatMoney(profile?.enterpriseValue, profile?.currency)}`
     ], "Cash-flow quality fields are limited in the current public snapshot."),
     balanceSheetBullets: mergeBullets([
-      `Total cash: ${formatMoney(profile?.totalCash)}`,
-      `Total debt: ${formatMoney(profile?.totalDebt)}`,
+      `Total cash: ${formatMoney(profile?.totalCash, profile?.currency)}`,
+      `Total debt: ${formatMoney(profile?.totalDebt, profile?.currency)}`,
       `Debt to equity: ${formatDecimal(profile?.debtToEquity, 1)}`,
       `Current ratio: ${formatDecimal(profile?.currentRatio, 2)}`
     ], "Balance-sheet and leverage fields are limited in the current public snapshot."),
@@ -272,13 +274,13 @@ function buildFrameworkContext(profile, displayMeta) {
       `Trailing P/E: ${finvizSummary["P/E"] || formatDecimal(profile?.trailingPE, 2)}`,
       `Forward P/E: ${finvizSummary["Forward P/E"] || formatDecimal(profile?.forwardPE, 2)}`,
       `Price to sales: ${finvizSummary["P/S"] || formatDecimal(profile?.priceToSales, 2)}`,
-      `Analyst target: ${finvizSummary["Target Price"] || formatMoney(profile?.targetMeanPrice)}`
+      `Analyst target: ${finvizSummary["Target Price"] || formatMoney(profile?.targetMeanPrice, profile?.currency)}`
     ], "Valuation fields are limited in the current public snapshot."),
     returnsBullets: compactBullets([
       `Return on assets: ${formatPercent(profile?.returnOnAssets)}`,
       `Return on equity: ${formatPercent(profile?.returnOnEquity)}`,
       `Beta: ${formatDecimal(profile?.beta, 2)}`,
-      `52-week range: ${formatMoney(profile?.fiftyTwoWeekLow)} to ${formatMoney(profile?.fiftyTwoWeekHigh)}`
+      `52-week range: ${formatMoney(profile?.fiftyTwoWeekLow, profile?.currency)} to ${formatMoney(profile?.fiftyTwoWeekHigh, profile?.currency)}`
     ], "Return and market-sensitivity fields are limited in the current public snapshot."),
     governanceBullets: mergeBullets([
       research?.governance,
@@ -297,13 +299,13 @@ function buildFrameworkContext(profile, displayMeta) {
     catalystBullets: mergeBullets([
       research?.catalysts,
       profile?.earnings?.nextEarnings ? `Next earnings date: ${formatDate(profile.earnings.nextEarnings)}` : null,
-      profile?.targetMeanPrice ? `Consensus target price: ${formatMoney(profile.targetMeanPrice)}` : null,
+      profile?.targetMeanPrice ? `Consensus target price: ${formatMoney(profile.targetMeanPrice, profile?.currency)}` : null,
       displayMeta?.theme ? `Theme tailwind: ${displayMeta.theme}` : null,
       displayMeta?.edge ? `Execution edge: ${displayMeta.edge}` : null
     ], "Forward catalyst disclosures are limited in the current public snapshot."),
     riskBullets: mergeBullets([
       research?.risks,
-      `Debt load: ${formatMoney(profile?.totalDebt)}`,
+      `Debt load: ${formatMoney(profile?.totalDebt, profile?.currency)}`,
       `Debt to equity: ${formatDecimal(profile?.debtToEquity, 1)}`,
       profile?.risk?.overallRisk != null ? `Overall governance risk score: ${profile.risk.overallRisk}` : null,
       profile?.stale ? "This page is currently showing a cached snapshot because the latest upstream refresh was unavailable." : null
@@ -1001,12 +1003,12 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
   }, [framework]);
 
   const statCards = [
-    { label: "Market cap", value: formatMoney(profile?.marketCap) },
-    { label: "Revenue", value: formatMoney(profile?.totalRevenue) },
+    { label: "Market cap", value: formatMoney(profile?.marketCap, profile?.currency) },
+    { label: "Revenue", value: formatMoney(profile?.totalRevenue, profile?.currency) },
     { label: "Next earnings", value: formatDate(profile?.earnings?.nextEarnings) },
     { 
       label: "Analyst target", 
-      value: formatMoney(profile?.topAnalystTarget || profile?.targetMeanPrice),
+      value: formatMoney(profile?.topAnalystTarget || profile?.targetMeanPrice, profile?.currency),
       subtext: profile?.topAnalystAgency || (profile?.topAnalystTarget ? "Top Analyst" : "Consensus")
     }
   ];

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getCurrencySymbol, formatCurrency, convertToUSD } from "../utils/currencyUtils";
@@ -43,6 +43,7 @@ export function AssetModal({
     if (["stock", "stocks", "equity"].includes(rawType)) return "stock";
     if (["etf", "etfs"].includes(rawType)) return "etf";
     if (rawType === "crypto" || marketType === "spot" || marketType === "perp") return "crypto";
+    if (rawType === "forex" || rawType === "fx" || marketType === "forex" || rawCategory === "fx") return "forex";
     if (rawType === "indicator" || rawCategory === "indicators" || marketType === "macro") return "indicator";
     if (rawType === "bond" || rawCategory === "bonds") return "bond";
     if (["commodity", "commodities", "metal", "metals"].includes(rawType) || ["commodities", "metals"].includes(rawCategory)) return "commodity";
@@ -55,6 +56,7 @@ export function AssetModal({
   const normalizedAssetKind = normalizeAssetKind(asset);
   const isCryptoAsset = normalizedAssetKind === "crypto";
   const isTradFi = Boolean(asset) && !isCryptoAsset;
+  const isForexAsset = normalizedAssetKind === "forex";
   const assetSymbol = String(asset?.symbol || "").toUpperCase();
   const assetType = normalizedAssetKind === "stock" || normalizedAssetKind === "etf"
     ? "stock"
@@ -62,6 +64,7 @@ export function AssetModal({
       ? "crypto"
       : asset?.type || normalizedAssetKind;
   const isStockResearchEligible = normalizedAssetKind === "stock";
+  const isTradeEligible = !isForexAsset && normalizedAssetKind !== "indicator";
 
   const [chartType, setChartType] = useState("line");
   const [visibleIndicators, setVisibleIndicators] = useState({
@@ -223,7 +226,7 @@ export function AssetModal({
   }, [assetSymbol, assetType]);
 
   useEffect(() => {
-    if (!isTradFi || !assetSymbol) {
+    if (!isTradFi || !assetSymbol || isForexAsset) {
       setEarnings(null);
       setEarningsLoading(false);
       setEarningsStale(false);
@@ -280,7 +283,7 @@ export function AssetModal({
 
     fetchEarnings();
     return () => controller.abort();
-  }, [isTradFi, assetSymbol]);
+  }, [isTradFi, assetSymbol, isForexAsset]);
 
   const displayedPrice = Number.isFinite(Number(asset?.price))
     ? Number(asset.price)
@@ -305,15 +308,15 @@ export function AssetModal({
   const marketStatus = useMemo(() => getMarketStatus(asset), [asset]);
   const isMarketOpen = marketStatus.isOpen;
 
-  const displayedChangeValue = (() => {
+  const displayedChangeValue = useMemo(() => {
     if (Number.isFinite(Number(asset?.priceChangeValue))) return Number(asset.priceChangeValue);
     if (Number.isFinite(Number(liveQuote.priceChangeValue))) return Number(liveQuote.priceChangeValue);
     // Rough estimate from percent if absolute value is missing
     return (displayedPrice * (displayedChangePercent / 100)) / (1 + displayedChangePercent / 100);
-  })();
+  }, [asset?.priceChangeValue, liveQuote.priceChangeValue, displayedPrice, displayedChangePercent]);
 
   useEffect(() => {
-    if (!isTradFi || !assetSymbol) return;
+    if (!isTradFi || !assetSymbol || isForexAsset) return;
 
     const fetchFinviz = async () => {
       setFinvizLoading(true);
@@ -331,7 +334,7 @@ export function AssetModal({
     };
 
     fetchFinviz();
-  }, [isTradFi, assetSymbol]);
+  }, [isTradFi, assetSymbol, isForexAsset]);
 
   const chartRange = useMemo(() => {
     if (!history || history.length === 0) return null;
@@ -404,7 +407,7 @@ export function AssetModal({
     }
   };
 
-  const handleConfirmOrder = async () => {
+  const handleConfirmOrder = useCallback(async () => {
     if (isSubmitting || quantity <= 0) return;
     setIsSubmitting(true);
     const result = await onConfirm?.(cleanAsset, quantity, orderType, {
@@ -436,7 +439,7 @@ export function AssetModal({
     }
 
     onClose?.();
-  };
+  }, [isSubmitting, quantity, onConfirm, cleanAsset, orderType, buyCurrency, totalValueInUSD, totalValue, triggerInsufficientFeedback, playKaching, onClose]);
 
   const chartData = useMemo(() => {
     const normalizeTime = (row) => {
@@ -630,24 +633,27 @@ export function AssetModal({
   const toggleIndicator = (id) => {
     setVisibleIndicators((prev) => ({ ...prev, [id]: !prev[id] }));
   };
-  const formatChartPrice = (value) => {
+  const formatChartPrice = useCallback((value) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return "Price unavailable";
     return `${currencySymbol}${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
-  const formatChartVolume = (value) => {
+  }, [currencySymbol]);
+
+  const formatChartVolume = useCallback((value) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric <= 0) return "Vol -";
     return `Vol ${formatCompactNumber(numeric, numeric >= 1000000 ? 1 : 0)}`;
-  };
-  const formatChartTime = (time) => new Date(Number(time) * 1000).toLocaleString('en-US', {
+  }, []);
+
+  const formatChartTime = useCallback((time) => new Date(Number(time) * 1000).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
     hour12: true
-  });
-  const formatChartReadout = ({ mode, point, defaultReadout }) => {
+  }), []);
+
+  const formatChartReadout = useCallback(({ mode, point, defaultReadout }) => {
     if (!point) return defaultReadout;
     const open = Number(point.open);
     const high = Number(point.high);
@@ -665,7 +671,7 @@ export function AssetModal({
       ...defaultReadout,
       detail: Number.isFinite(volume) && volume > 0 ? formatChartVolume(volume) : defaultReadout.detail
     };
-  };
+  }, [formatChartPrice, formatChartVolume]);
 
   const formatCompactNumber = (value, digits = 2) => {
     const numeric = Number(value);
@@ -991,12 +997,14 @@ export function AssetModal({
             </div>
           )}
 
-          <div className="order-type-toggle">
-            <button className={`buy-selector ${orderType === 'buy' ? 'active' : ''}`} onClick={() => setOrderType('buy')}>Buy</button>
-            <button className={`sell-selector ${orderType === 'sell' ? 'active' : ''}`} onClick={() => setOrderType('sell')}>Sell</button>
-          </div>
+          {isTradeEligible ? (
+            <div className="order-type-toggle">
+              <button className={`buy-selector ${orderType === 'buy' ? 'active' : ''}`} onClick={() => setOrderType('buy')}>Buy</button>
+              <button className={`sell-selector ${orderType === 'sell' ? 'active' : ''}`} onClick={() => setOrderType('sell')}>Sell</button>
+            </div>
+          ) : null}
         </div>
-        {orderType === "sell" && (() => {
+        {isTradeEligible && orderType === "sell" && (() => {
             const holding = portfolio.find(
               p => p.symbol === asset.symbol &&
               (p.marketType || "spot") === (asset.marketType || "spot")
@@ -1004,7 +1012,14 @@ export function AssetModal({
             const holdingQty = holding?.quantity || 0;
             const holdingValue = holdingQty * displayedPrice;
             return holdingQty > 0 ? (
-              <div className="asset-modal-position-note">
+              <div 
+                className="asset-modal-position-note" 
+                style={{ cursor: "pointer" }}
+                onClick={() => {
+                  setQuantity(holdingQty);
+                }}
+                title="Click to fill max quantity"
+              >
                 Your position: <strong style={{ color: "var(--color-text-primary)" }}>
                   {holdingQty} {asset.symbol}
                 </strong> <span>({formatCurrency(holdingValue, activeCurrency)})</span>
@@ -1015,7 +1030,7 @@ export function AssetModal({
               </div>
             );
           })()}
-        {orderType === "buy" && (
+        {isTradeEligible && orderType === "buy" && (
           <div className={`asset-modal-position-note ${insufficientBalance ? "asset-modal-position-note-danger" : ""}`}>
             Available balance: <strong style={{ color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
               {formatCurrency(buyCurrency === "USD" ? balance : (cashBalances[buyCurrency] || 0), buyCurrency)}
@@ -1032,6 +1047,7 @@ export function AssetModal({
             )}
           </div>
         )}
+        {isTradeEligible ? (
         <footer className="modal-footer">
           <div className="footer-left">
             <div className="quantity-input">
@@ -1080,6 +1096,7 @@ export function AssetModal({
 	            {isSubmitting ? "Submitting..." : "Confirm Order"}
 	          </button>
 	        </footer>
+        ) : null}
       </div>
       <style>{`
         .currency-pill-toggle {

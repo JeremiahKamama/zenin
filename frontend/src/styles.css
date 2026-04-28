@@ -1354,6 +1354,15 @@ body.dark-theme .sidebar-footer {
   background: rgba(59,130,246,0.06);
 }
 
+.analytics-data-table tbody tr.analytics-clickable-row {
+  cursor: pointer;
+}
+
+.analytics-data-table tbody tr.analytics-clickable-row:focus-within,
+.analytics-data-table tbody tr.analytics-clickable-row:hover {
+  background: rgba(34,211,238,0.08);
+}
+
 .analytics-data-table td {
   padding: 12px 0;
   font-size: 13px;

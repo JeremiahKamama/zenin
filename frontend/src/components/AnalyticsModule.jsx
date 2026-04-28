@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
+import { AssetModal } from "./AssetModal";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
@@ -97,6 +98,7 @@ const EMPTY_MACRO = {
   updatedAt: null,
   macroData: [],
   fxRates: [],
+  forexMovers: { gainers: [], losers: [] },
   riskIndicators: [],
 };
 
@@ -276,6 +278,7 @@ function normalizeEquitiesPayload(payload) {
     macroData: Array.isArray(payload?.macroData) ? payload.macroData : [],
     fundFlows: Array.isArray(payload?.fundFlows) ? payload.fundFlows : [],
     fxRates: Array.isArray(payload?.fxRates) ? payload.fxRates : [],
+    forexMovers: payload?.forexMovers || { gainers: [], losers: [] },
     marketBreadth: payload?.marketBreadth || null,
     riskIndicators: Array.isArray(payload?.riskIndicators) ? payload.riskIndicators : [],
     corporateActions: Array.isArray(payload?.corporateActions) ? payload.corporateActions : [],
@@ -291,6 +294,7 @@ function normalizeMacroPayload(payload) {
     updatedAt: payload?.updatedAt || null,
     macroData: Array.isArray(payload?.macroData) ? payload.macroData : [],
     fxRates: Array.isArray(payload?.fxRates) ? payload.fxRates : [],
+    forexMovers: payload?.forexMovers || { gainers: [], losers: [] },
     riskIndicators: Array.isArray(payload?.riskIndicators) ? payload.riskIndicators : [],
   };
 }
@@ -433,6 +437,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [correlationWindow, setCorrelationWindow] = useState("180d");
   const [macroCorrelationRows, setMacroCorrelationRows] = useState([]);
   const [macroSourceInfo, setMacroSourceInfo] = useState(null);
+  const [selectedFxAsset, setSelectedFxAsset] = useState(null);
   const [sourceDrawerOpen, setSourceDrawerOpen] = useState(false);
   const [macroSourceDataExpanded, setMacroSourceDataExpanded] = useState(false);
   const [macroTimeseriesPageIndex, setMacroTimeseriesPageIndex] = useState(0);
@@ -552,16 +557,6 @@ export function AnalyticsModule({ backendUrl }) {
       }
     };
 
-    const rangePoints = chartRange === "1Y" ? 12 : chartRange === "5Y" ? 24 : chartRange === "10Y" ? 40 : 60;
-    const buildFallbackSeries = () => {
-      const now = Date.now();
-      return Array.from({ length: rangePoints }, (_, i) => {
-        const ts = now - ((rangePoints - i) * 30 * 24 * 60 * 60 * 1000);
-        const level = 100 + (i * 0.65) + Math.sin(i / 2) * 2.2;
-        return { date: new Date(ts).toISOString().slice(0, 10), value: Number(level.toFixed(2)) };
-      });
-    };
-
     const loadMacroData = async () => {
       setOverviewLoading(true);
       const overviewPath = selectedGeoType === "Global"
@@ -588,44 +583,27 @@ export function AnalyticsModule({ backendUrl }) {
       setMacroOverview(overviewRows.length ? overviewRows : (macroData.macroData || []).map((row, idx) => ({ id: `ov-${idx}`, ...row })));
 
       const tsRows = Array.isArray(tsRes?.series) ? tsRes.series : Array.isArray(tsRes) ? tsRes : [];
-      setMacroTimeseries(tsRows.length ? tsRows : buildFallbackSeries());
+      setMacroTimeseries(tsRows);
 
       const compareRows = Array.isArray(compareRes?.rows) ? compareRes.rows : Array.isArray(compareRes) ? compareRes : [];
-      setMacroCompareRows(compareRows.length ? compareRows : (compareGeos || []).map((code, idx) => ({ id: `cmp-${idx}`, geo: code, value: 95 + idx * 1.8, delta: (idx - 1) * 0.5 })));
+      setMacroCompareRows(compareRows);
 
       const calendarRows = Array.isArray(calendarRes?.events) ? calendarRes.events : Array.isArray(calendarRes) ? calendarRes : [];
-      setMacroCalendarRows(calendarRows.length ? calendarRows : [
-        { id: "cal-1", date: calendarFilters.from, geo: selectedGeoCode, indicator: selectedIndicator, importance: "high", event: "Data release window opens" },
-        { id: "cal-2", date: calendarFilters.to, geo: selectedGeoCode, indicator: selectedIndicator, importance: "medium", event: "Consensus update due" },
-      ]);
+      setMacroCalendarRows(calendarRows);
 
       const mapRows = Array.isArray(mapRes?.rows) ? mapRes.rows : Array.isArray(mapRes) ? mapRes : [];
-      setMacroMapRows(mapRows.length ? mapRows : [
-        { id: "map-usa", geo: "USA", value: 102.4 },
-        { id: "map-eur", geo: "EUR", value: 98.7 },
-        { id: "map-asi", geo: "ASI", value: 105.2 },
-      ]);
+      setMacroMapRows(mapRows);
 
       const rankingRows = Array.isArray(rankingsRes?.rows) ? rankingsRes.rows : Array.isArray(rankingsRes) ? rankingsRes : [];
-      setMacroRankingRows(rankingRows.length ? rankingRows : [
-        { id: "rk-1", rank: 1, geo: "USA", value: 104.2 },
-        { id: "rk-2", rank: 2, geo: "DEU", value: 101.1 },
-        { id: "rk-3", rank: 3, geo: "JPN", value: 99.6 },
-      ]);
+      setMacroRankingRows(rankingRows);
 
       const forecastRows = Array.isArray(forecastRes?.points) ? forecastRes.points : Array.isArray(forecastRes) ? forecastRes : [];
-      setMacroForecastRows(forecastRows.length ? forecastRows : [
-        { id: "f-1", horizon: "3M", base: 101.2, bull: 103.5, bear: 98.4 },
-        { id: "f-2", horizon: "6M", base: 102.1, bull: 105.1, bear: 97.2 },
-        { id: "f-3", horizon: "12M", base: 104.4, bull: 108.8, bear: 95.5 },
-      ]);
+      setMacroForecastRows(forecastRows);
 
-      setMacroSourceInfo(sourceRes || { source: "Fallback synthetic blend", updatedAt: new Date().toISOString(), methodology: "Demo mode with available analytics macro dataset." });
+      setMacroSourceInfo(sourceRes || null);
 
       const corrRows = Array.isArray(corrRes?.rows) ? corrRes.rows : Array.isArray(corrRes) ? corrRes : [];
-      setMacroCorrelationRows(corrRows.length ? corrRows : [
-        { id: "corr-1", pair: `${selectedIndicator} vs ${selectedMacroAsset}`, coefficient: 0.42, window: correlationWindow },
-      ]);
+      setMacroCorrelationRows(corrRows);
 
       const regimeFromApi = regimeRes?.label || regimeRes?.regime || null;
       const regimeScoreVal = Number(regimeRes?.score);
@@ -736,43 +714,6 @@ export function AnalyticsModule({ backendUrl }) {
 
       if (cancelled) return;
 
-      const fallbackList = [
-        { symbol: "GC", name: "Gold", group: "metals", region: "global", latestPrice: 2378.2, dailyChangePct: 0.41, ytdChangePct: 12.9, oneYearReturnPct: 19.4 },
-        { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global", latestPrice: 82.1, dailyChangePct: -0.55, ytdChangePct: 6.8, oneYearReturnPct: 11.2 },
-        { symbol: "HG", name: "Copper", group: "industrial", region: "global", latestPrice: 4.48, dailyChangePct: -0.2, ytdChangePct: 7.1, oneYearReturnPct: 9.9 },
-        { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global", latestPrice: 45.2, dailyChangePct: -1.4, ytdChangePct: -18.2, oneYearReturnPct: -24.5 },
-        { symbol: "ZC", name: "Corn", group: "agriculture", region: "global", latestPrice: 4.85, dailyChangePct: -0.63, ytdChangePct: 1.9, oneYearReturnPct: -2.4 },
-        { symbol: "KC", name: "Coffee", group: "soft", region: "global", latestPrice: 224.5, dailyChangePct: 1.2, ytdChangePct: 18.4, oneYearReturnPct: 24.2 },
-        { symbol: "LE=F", name: "Live Cattle", group: "livestock", region: "global", latestPrice: 182.4, dailyChangePct: 0.25, ytdChangePct: 8.4, oneYearReturnPct: 12.1 },
-      ];
-      const fallbackSeries = Array.from({ length: 20 }, (_, i) => ({ date: `T-${20 - i}`, value: 100 + i * 0.6 + Math.sin(i / 3) * 2.4 }));
-      const fallbackFundamentals = [
-        { metric: "Inventory Level", value: 412.4, unit: "M bbl", sourceType: "Inventory, production, supply-demand datasets", sourceWhy: "Core commodity drivers" },
-        { metric: "Production Level", value: 99.8, unit: "M bpd", sourceType: "Inventory, production, supply-demand datasets", sourceWhy: "Core commodity drivers" },
-        { metric: "Demand Level", value: 101.2, unit: "M bpd", sourceType: "Inventory, production, supply-demand datasets", sourceWhy: "Core commodity drivers" },
-      ];
-      const fallbackFlows = [
-        { date: new Date().toISOString().slice(0, 10), type: "ETF Flow", value: 230000000, trend: "Inflow", sourceType: "ETF/fund flow data + futures positioning", sourceWhy: "Captures both capital and sentiment" },
-        { date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), type: "Futures Positioning", value: -180000000, trend: "Reduce longs", sourceType: "ETF/fund flow data + futures positioning", sourceWhy: "Captures both capital and sentiment" },
-      ];
-      const fallbackSeasonality = [
-        { month: "Jan", avgReturnPct: 1.1, seasonalityScore: 0.62, sourceType: "Historical futures settlement data", sourceWhy: "Best for custom seasonal charts" },
-        { month: "Feb", avgReturnPct: 0.4, seasonalityScore: 0.54, sourceType: "Historical futures settlement data", sourceWhy: "Best for custom seasonal charts" },
-        { month: "Mar", avgReturnPct: -0.3, seasonalityScore: 0.47, sourceType: "Historical futures settlement data", sourceWhy: "Best for custom seasonal charts" },
-      ];
-      const fallbackCurve = [
-        { contract: "Front Month", price: 82.1, spread: 0, curveStructure: "Contango", sourceType: "Futures chain / contract data", sourceWhy: "Needed for contango/backwardation/spreads" },
-        { contract: "3M", price: 83.0, spread: 1.1, curveStructure: "Contango", sourceType: "Futures chain / contract data", sourceWhy: "Needed for contango/backwardation/spreads" },
-        { contract: "6M", price: 83.8, spread: 2.0, curveStructure: "Contango", sourceType: "Futures chain / contract data", sourceWhy: "Needed for contango/backwardation/spreads" },
-      ];
-      const fallbackCalendar = [
-        { date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), event: "EIA Weekly Petroleum Status Report", importance: "high", sourceType: "Economic calendar API", sourceWhy: "Release timing and actual vs forecast" },
-        { date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), event: "USDA WASDE Update", importance: "high", sourceType: "Economic calendar API", sourceWhy: "Release timing and actual vs forecast" },
-      ];
-      const fallbackAlerts = [
-        { id: "cmd-default-alert", symbol: selectedCommoditySymbol, rule: `Alert when ${selectedCommoditySymbol} moves > 2%`, status: "active", sourceType: "Your own rule engine", sourceWhy: "Flexible user-defined triggers" },
-      ];
-
       const rowsFrom = (payload, key) =>
         Array.isArray(payload?.[key]) ? payload[key] : Array.isArray(payload) ? payload : [];
 
@@ -784,23 +725,25 @@ export function AnalyticsModule({ backendUrl }) {
           prev.updatedAt ||
           new Date().toISOString(),
         overview: overviewRes?.overview || overviewRes || prev.overview,
-        list: rowsFrom(listRes, "items").length ? rowsFrom(listRes, "items") : rowsFrom(listRes, "list").length ? rowsFrom(listRes, "list") : fallbackList,
-        priceSeries: rowsFrom(priceRes, "series").length ? rowsFrom(priceRes, "series") : fallbackSeries,
-        fundamentals: rowsFrom(fundamentalsRes, "items").length ? rowsFrom(fundamentalsRes, "items") : rowsFrom(fundamentalsRes, "metrics").length ? rowsFrom(fundamentalsRes, "metrics") : fallbackFundamentals,
-        flows: rowsFrom(flowsRes, "items").length ? rowsFrom(flowsRes, "items") : rowsFrom(flowsRes, "flows").length ? rowsFrom(flowsRes, "flows") : fallbackFlows,
-        seasonality: rowsFrom(seasonalityRes, "items").length ? rowsFrom(seasonalityRes, "items") : rowsFrom(seasonalityRes, "seasonality").length ? rowsFrom(seasonalityRes, "seasonality") : fallbackSeasonality,
-        curve: rowsFrom(curveRes, "points").length ? rowsFrom(curveRes, "points") : rowsFrom(curveRes, "curve").length ? rowsFrom(curveRes, "curve") : fallbackCurve,
+        list: rowsFrom(listRes, "items").length ? rowsFrom(listRes, "items") : rowsFrom(listRes, "list"),
+        priceSeries: rowsFrom(priceRes, "series"),
+        fundamentals: rowsFrom(fundamentalsRes, "items").length ? rowsFrom(fundamentalsRes, "items") : rowsFrom(fundamentalsRes, "metrics"),
+        flows: rowsFrom(flowsRes, "items").length ? rowsFrom(flowsRes, "items") : rowsFrom(flowsRes, "flows"),
+        seasonality: rowsFrom(seasonalityRes, "items").length ? rowsFrom(seasonalityRes, "items") : rowsFrom(seasonalityRes, "seasonality"),
+        curve: rowsFrom(curveRes, "points").length ? rowsFrom(curveRes, "points") : rowsFrom(curveRes, "curve"),
         compare: rowsFrom(compareRes, "rows").length ? rowsFrom(compareRes, "rows") : rowsFrom(compareRes, "compare"),
-        calendar: rowsFrom(calendarRes, "events").length ? rowsFrom(calendarRes, "events") : rowsFrom(calendarRes, "calendar").length ? rowsFrom(calendarRes, "calendar") : fallbackCalendar,
-        alerts: rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : rowsFrom(alertsRes, "alerts").length ? rowsFrom(alertsRes, "alerts") : fallbackAlerts,
+        calendar: rowsFrom(calendarRes, "events").length ? rowsFrom(calendarRes, "events") : rowsFrom(calendarRes, "calendar"),
+        alerts: rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : rowsFrom(alertsRes, "alerts"),
         correlation: rowsFrom(correlationRes, "rows").length ? rowsFrom(correlationRes, "rows") : rowsFrom(correlationRes, "correlation"),
       }));
-      setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : fallbackAlerts));
+      setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items")));
     };
 
     loadCommodities();
+    const timer = window.setInterval(loadCommodities, 120_000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
       controller.abort();
     };
   }, [
@@ -900,8 +843,11 @@ export function AnalyticsModule({ backendUrl }) {
     }
 
     load();
+    const refreshMs = activeTab === "macro" ? 60_000 : activeTab === "crypto" || activeTab === "options" ? 45_000 : 120_000;
+    const timer = window.setInterval(load, refreshMs);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
       controller.abort();
     };
   }, [activeTab, backendUrl]);
@@ -1195,6 +1141,32 @@ export function AnalyticsModule({ backendUrl }) {
     const movers = [...rows].sort((a, b) => Math.abs(Number(b?.dailyChangePct) || 0) - Math.abs(Number(a?.dailyChangePct) || 0)).slice(0, 5);
     return { rows, movers };
   }, [commoditiesData.list, commoditySearchQuery, selectedCommodityGroup]);
+
+  const forexMoverRows = useMemo(() => {
+    const gainers = Array.isArray(macroData.forexMovers?.gainers) ? macroData.forexMovers.gainers : [];
+    const losers = Array.isArray(macroData.forexMovers?.losers) ? macroData.forexMovers.losers : [];
+    return [
+      ...gainers.map((row) => ({ ...row, moveType: "Gainer" })),
+      ...losers.map((row) => ({ ...row, moveType: "Loser" })),
+    ];
+  }, [macroData.forexMovers]);
+
+  const openFxAsset = (row) => {
+    const pair = String(row?.pair || "").trim();
+    const symbol = String(row?.symbol || pair.replace("/", "") || "").toUpperCase();
+    if (!symbol) return;
+    setSelectedFxAsset({
+      symbol,
+      name: pair || symbol,
+      type: "forex",
+      marketType: "forex",
+      category: "FX",
+      price: Number.isFinite(Number(row?.rate)) ? Number(row.rate) : undefined,
+      priceChangePercent: Number.isFinite(Number(row?.daily)) ? Number(row.daily) : undefined,
+      currency: String(pair).startsWith("USD/") ? String(pair).slice(4, 7) : "USD",
+      quotedCurrency: String(pair).slice(4, 7) || "USD",
+    });
+  };
 
   useEffect(() => {
     setCommodityAssetsPageIndex(0);
@@ -2912,7 +2884,7 @@ export function AnalyticsModule({ backendUrl }) {
                 />
                 <AnalyticsTableCard
                   title="FX Rates"
-                  subtitle="FX context: Cross-currency moves may affect regional return comparisons."
+                  subtitle="Live FX rates. Click a pair to inspect price movement and intervals."
                   emptyText="No FX rows."
                   columns={[
                     { key: "pair", label: "Pair" },
@@ -2937,12 +2909,45 @@ export function AnalyticsModule({ backendUrl }) {
                     },
                   ]}
                   rows={(macroData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
+                  onRowClick={openFxAsset}
                 />
               </div>
 
               <AnalyticsTableCard
+                title="Forex Movers"
+                subtitle="Top FX gainers and losers from Finviz performance data."
+                emptyText="No forex mover rows."
+                columns={[
+                  { key: "moveType", label: "Side", render: (v) => <StatusPill tone={v === "Gainer" ? "positive" : "negative"}>{v}</StatusPill> },
+                  { key: "pair", label: "Pair" },
+                  { key: "rate", label: "Rate", align: "right", render: (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(4) : "—" },
+                  {
+                    key: "daily",
+                    label: "Day",
+                    align: "right",
+                    render: (v) => {
+                      const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
+                      return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
+                    },
+                  },
+                  {
+                    key: "weekly",
+                    label: "Week",
+                    align: "right",
+                    render: (v) => {
+                      const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
+                      return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
+                    },
+                  },
+                  { key: "source", label: "Source", align: "right" },
+                ]}
+                rows={forexMoverRows.map((row, idx) => ({ id: `fx-mover-${idx}`, ...row }))}
+                onRowClick={openFxAsset}
+              />
+
+              <AnalyticsTableCard
                 title="Risk Indicators"
-                subtitle="Liquidity is tightening while rate volatility remains elevated."
+                subtitle="Live risk proxy readings from market data."
                 emptyText="No risk indicator rows."
                 headerExtra={
                   <button
@@ -3505,7 +3510,6 @@ export function AnalyticsModule({ backendUrl }) {
                     { key: "metric", label: "Metric" },
                     { key: "value", label: "Value", align: "right", render: (v) => Number(v).toLocaleString() },
                     { key: "unit", label: "Unit", align: "right" },
-                    { key: "sourceType", label: "Source Type", align: "right" },
                   ]}
                   rows={(commoditiesData.fundamentals || []).map((row, idx) => ({ id: row.id || `cmd-fn-${idx}`, ...row }))}
                 />
@@ -3549,6 +3553,18 @@ export function AnalyticsModule({ backendUrl }) {
           ) : null}
         </>
       )}
+      {selectedFxAsset ? (
+        <AssetModal
+          asset={selectedFxAsset}
+          onClose={() => setSelectedFxAsset(null)}
+          onConfirm={() => setSelectedFxAsset(null)}
+          portfolio={[]}
+          balance={0}
+          cashBalances={{}}
+          trades={[]}
+          spotPrices={{}}
+        />
+      ) : null}
     </AnalyticsLayout>
   );
 }
@@ -3848,7 +3864,7 @@ function TimeframeSelector({ options, value, onChange }) {
   );
 }
 
-function DataTable({ columns, rows = [], emptyText, loading = false, filters, pagination, exportLabel }) {
+function DataTable({ columns, rows = [], emptyText, loading = false, filters, pagination, exportLabel, onRowClick }) {
   if (loading) return <LoadingSkeleton label="Loading table rows..." />;
   const actions = (filters || pagination || exportLabel) ? (
     <div className="analytics-table-actions">
@@ -3888,7 +3904,19 @@ function DataTable({ columns, rows = [], emptyText, loading = false, filters, pa
           </thead>
           <tbody>
             {rows.map((row, idx) => (
-              <tr key={row.id || `row-${idx}`}>
+              <tr
+                key={row.id || `row-${idx}`}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onKeyDown={onRowClick ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onRowClick(row);
+                  }
+                } : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                role={onRowClick ? "button" : undefined}
+                className={onRowClick ? "analytics-clickable-row" : ""}
+              >
                 {columns.map((column) => {
                   const cellValue = row[column.key];
                   return (
@@ -3910,7 +3938,7 @@ function DataTable({ columns, rows = [], emptyText, loading = false, filters, pa
   );
 }
 
-function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra, filters, pagination, loading, exportLabel }) {
+function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra, filters, pagination, loading, exportLabel, onRowClick }) {
   return (
     <div className="analytics-card analytics-table-card">
       {(title || subtitle || headerExtra) ? (
@@ -3930,6 +3958,7 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, he
         filters={filters}
         pagination={pagination}
         exportLabel={exportLabel}
+        onRowClick={onRowClick}
       />
     </div>
   );
