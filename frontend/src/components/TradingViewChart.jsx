@@ -5,6 +5,7 @@ import {
   createChart,
   createSeriesMarkers,
   CrosshairMode,
+  HistogramSeries,
   LineSeries,
   LineStyle,
 } from 'lightweight-charts';
@@ -59,36 +60,94 @@ const formatReadoutPrice = (value) => {
   })}`;
 };
 
-const getLatestReadout = (series) => {
+const normalizePriceLines = (priceLine, priceLines) => {
+  const explicitLines = Array.isArray(priceLines) ? priceLines : [];
+  const legacyLine = priceLine != null ? [{ price: priceLine }] : [];
+  return [...legacyLine, ...explicitLines]
+    .map((line, index) => {
+      const price = Number(typeof line === 'object' ? line.price ?? line.value : line);
+      if (!Number.isFinite(price)) return null;
+      return {
+        id: typeof line === 'object' && line.id ? String(line.id) : `line-${index}`,
+        price,
+        title: typeof line === 'object' ? line.title || '' : '',
+        color: typeof line === 'object' ? line.color : undefined,
+        lineStyle: typeof line === 'object' && line.lineStyle != null ? line.lineStyle : LineStyle.Dashed,
+        lineWidth: typeof line === 'object' && line.lineWidth ? line.lineWidth : 1,
+        axisLabelVisible: typeof line === 'object' && line.axisLabelVisible != null ? line.axisLabelVisible : true,
+      };
+    })
+    .filter(Boolean);
+};
+
+const buildReadout = ({ mode, time, point, seriesEntry, valueFormatter, timeFormatter, readoutFormatter }) => {
+  const value = resolvePointPrice(point);
+  const baseReadout = {
+    mode,
+    time: timeFormatter(time, point),
+    price: valueFormatter(value, point),
+    detail: '',
+  };
+  if (typeof readoutFormatter !== 'function') return baseReadout;
+  const custom = readoutFormatter({
+    mode,
+    time,
+    point,
+    series: seriesEntry,
+    value,
+    defaultReadout: baseReadout,
+  });
+  if (!custom) return baseReadout;
+  if (typeof custom === 'string') return { ...baseReadout, price: custom };
+  return { ...baseReadout, ...custom };
+};
+
+const getLatestReadout = (series, valueFormatter = formatReadoutPrice, timeFormatter = formatReadoutTime, readoutFormatter = null) => {
   const points = (Array.isArray(series) ? series : [])
-    .flatMap((entry) => Array.isArray(entry?.data) ? entry.data : [])
-    .map((point) => ({ ...point, time: normalizeChartTime(point?.time) }))
+    .filter((entry) => entry?.includeInReadout !== false)
+    .flatMap((entry) => Array.isArray(entry?.data)
+      ? entry.data.map((point) => ({ point, seriesEntry: entry }))
+      : [])
+    .map(({ point, seriesEntry }) => ({ ...point, seriesEntry, time: normalizeChartTime(point?.time) }))
     .filter((point) => point.time != null && resolvePointPrice(point) != null)
     .sort((a, b) => a.time - b.time);
   const latest = points[points.length - 1];
   if (!latest) return null;
-  return {
+  return buildReadout({
     mode: 'Latest',
-    time: formatReadoutTime(latest.time),
-    price: formatReadoutPrice(resolvePointPrice(latest)),
-  };
+    time: latest.time,
+    point: latest,
+    seriesEntry: latest.seriesEntry,
+    valueFormatter,
+    timeFormatter,
+    readoutFormatter,
+  });
 };
 
 export function TradingViewChart({
-  series = [], // Array of { name, data: [{time, value}], type: 'area' | 'line' | 'candlestick', color }
+  series = [], // Array of { name, data, type: 'area' | 'line' | 'candlestick' | 'histogram', color, options }
   options = {},
   height = 400,
   width = '100%',
   priceLine = null, // Optional: value for a dashed horizontal price line
-  tradeMarkers = []
+  priceLines = [],
+  tradeMarkers = [],
+  valueFormatter = formatReadoutPrice,
+  timeFormatter = formatReadoutTime,
+  readoutFormatter = null,
+  crosshairEnabled = true,
+  resetSignal = 0,
 }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef({});
   const markerRef = useRef(null);
   const [hoverReadout, setHoverReadout] = useState(null);
-  const priceLineRef = useRef(null);
-  const latestReadout = useMemo(() => getLatestReadout(series), [series]);
+  const priceLineRefs = useRef({});
+  const latestReadout = useMemo(
+    () => getLatestReadout(series, valueFormatter, timeFormatter, readoutFormatter),
+    [series, valueFormatter, timeFormatter, readoutFormatter]
+  );
 
   const defaultChartOptions = useMemo(() => ({
     layout: {
@@ -101,7 +160,7 @@ export function TradingViewChart({
       horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
     },
     crosshair: {
-      mode: CrosshairMode.Normal,
+      mode: crosshairEnabled ? CrosshairMode.Normal : CrosshairMode.Hidden,
     },
     rightPriceScale: {
       borderVisible: false,
@@ -111,6 +170,9 @@ export function TradingViewChart({
       timeVisible: true,
       secondsVisible: false,
       tickMarkFormatter: (time) => {
+        if (typeof options.tickMarkFormatter === 'function') {
+          return options.tickMarkFormatter(time);
+        }
         const date = new Date(time * 1000 || time);
         const hours = date.getHours();
         const minutes = date.getMinutes();
@@ -125,7 +187,7 @@ export function TradingViewChart({
       }
     },
     ...options
-  }), [options]);
+  }), [options, crosshairEnabled]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -152,17 +214,20 @@ export function TradingViewChart({
         return;
       }
 
-      const activeSeries = Object.values(seriesRef.current).find((entry) => entry?.api);
+      const activeSeries = Object.values(seriesRef.current).find((entry) => entry?.api && entry?.includeInReadout !== false);
       const point = activeSeries?.api && param.seriesData?.get
         ? param.seriesData.get(activeSeries.api)
         : null;
-      const price = resolvePointPrice(point);
 
-      setHoverReadout({
+      setHoverReadout(buildReadout({
         mode: 'Hovered',
-        time: formatReadoutTime(param.time),
-        price: formatReadoutPrice(price),
-      });
+        time: normalizeChartTime(param.time) ?? param.time,
+        point,
+        seriesEntry: activeSeries,
+        valueFormatter,
+        timeFormatter,
+        readoutFormatter,
+      }));
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
@@ -175,14 +240,23 @@ export function TradingViewChart({
         markerRef.current.setMarkers([]);
       }
       markerRef.current = null;
+      priceLineRefs.current = {};
       seriesRef.current = {};
       chart.remove();
     };
-  }, [defaultChartOptions, height]);
+  }, [defaultChartOptions, height, valueFormatter, timeFormatter, readoutFormatter]);
+
+  useEffect(() => {
+    if (!chartRef.current?.timeScale) return;
+    try {
+      chartRef.current.timeScale().fitContent();
+    } catch (e) {}
+  }, [resetSignal]);
 
   useEffect(() => {
     if (!chartRef.current) return;
     const primarySeriesName = series[0]?.name;
+    const normalizedPriceLines = normalizePriceLines(priceLine, priceLines);
     const normalizedTradeMarkers = (Array.isArray(tradeMarkers) ? tradeMarkers : [])
       .map((marker) => {
         const time = normalizeChartTime(marker?.time);
@@ -204,12 +278,13 @@ export function TradingViewChart({
         } catch (e) {
           console.warn("TradingViewChart: Error removing series", e);
         }
+        delete priceLineRefs.current[name];
         delete seriesRef.current[name];
       }
     });
 
     // Add or update series
-    series.forEach(({ name, data, type = 'area', color = '#38bdf8' }) => {
+    series.forEach(({ name, data, type = 'area', color = '#38bdf8', options: seriesSpecificOptions = {} }) => {
       let activeSeries = seriesRef.current[name]?.api;
       const chart = chartRef.current;
       if (!chart) return;
@@ -217,10 +292,13 @@ export function TradingViewChart({
       const addSeries = () => {
         if (type === 'area') {
           const seriesOptions = {
-            lineColor: options.textColor || '#38bdf8',
+            lineColor: color,
             topColor: `${color}88`,
             bottomColor: `${color}00`,
             lineWidth: 2,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            ...seriesSpecificOptions,
           };
           return typeof chart.addSeries === 'function'
             ? chart.addSeries(AreaSeries, seriesOptions)
@@ -233,15 +311,35 @@ export function TradingViewChart({
             downColor: '#ef4444',
             borderVisible: false,
             wickVisible: true,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            ...seriesSpecificOptions,
           };
           return typeof chart.addSeries === 'function'
             ? chart.addSeries(CandlestickSeries, seriesOptions)
             : chart.addCandlestickSeries?.(seriesOptions);
         }
 
+        if (type === 'histogram') {
+          const seriesOptions = {
+            color,
+            priceFormat: { type: 'volume' },
+            priceScaleId: '',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            ...seriesSpecificOptions,
+          };
+          return typeof chart.addSeries === 'function'
+            ? chart.addSeries(HistogramSeries, seriesOptions)
+            : chart.addHistogramSeries?.(seriesOptions);
+        }
+
         const seriesOptions = {
           color: color,
           lineWidth: 2,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          ...seriesSpecificOptions,
         };
         return typeof chart.addSeries === 'function'
           ? chart.addSeries(LineSeries, seriesOptions)
@@ -259,13 +357,21 @@ export function TradingViewChart({
           console.warn("TradingViewChart: Error replacing series", e);
         }
         activeSeries = null;
+        delete priceLineRefs.current[name];
         delete seriesRef.current[name];
       }
 
       if (!activeSeries) {
         activeSeries = addSeries();
         if (!activeSeries) return;
-        seriesRef.current[name] = { api: activeSeries, type };
+        seriesRef.current[name] = { api: activeSeries, type, name, includeInReadout: series.find((item) => item.name === name)?.includeInReadout };
+        if (seriesSpecificOptions.priceScaleOptions && chart.priceScale) {
+          try {
+            chart.priceScale(seriesSpecificOptions.priceScaleId ?? '').applyOptions(seriesSpecificOptions.priceScaleOptions);
+          } catch (e) {}
+        }
+      } else if (seriesRef.current[name]) {
+        seriesRef.current[name].includeInReadout = series.find((item) => item.name === name)?.includeInReadout;
       }
 
       // Ensure data is sorted by time and time is standard unix timestamp
@@ -303,26 +409,24 @@ export function TradingViewChart({
           }
         }
 
-        // Manage Price Line
-        if (priceLine != null && Number.isFinite(Number(priceLine)) && activeSeries.createPriceLine) {
-          if (priceLineRef.current) {
+        if (name === primarySeriesName && activeSeries.createPriceLine) {
+          const refsForSeries = priceLineRefs.current[name] || {};
+          Object.values(refsForSeries).forEach((lineRef) => {
             try {
-              activeSeries.removePriceLine(priceLineRef.current);
+              activeSeries.removePriceLine(lineRef);
             } catch (e) {}
-          }
-          priceLineRef.current = activeSeries.createPriceLine({
-            price: Number(priceLine),
-            color: options.textColor || '#94a3b8',
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: '',
           });
-        } else if (priceLineRef.current) {
-          try {
-            activeSeries.removePriceLine(priceLineRef.current);
-          } catch (e) {}
-          priceLineRef.current = null;
+          priceLineRefs.current[name] = {};
+          normalizedPriceLines.forEach((line) => {
+            priceLineRefs.current[name][line.id] = activeSeries.createPriceLine({
+              price: line.price,
+              color: line.color || options.textColor || '#94a3b8',
+              lineWidth: line.lineWidth,
+              lineStyle: line.lineStyle,
+              axisLabelVisible: line.axisLabelVisible,
+              title: line.title,
+            });
+          });
         }
       } catch (err) {
         console.warn(`TradingViewChart: Error setting data for series ${name}`, err);
@@ -338,7 +442,7 @@ export function TradingViewChart({
         chartRef.current.timeScale().fitContent();
       } catch (e) {}
     }
-  }, [series, priceLine, tradeMarkers]);
+  }, [series, priceLine, priceLines, tradeMarkers, options.textColor]);
 
   return (
     <div
@@ -351,6 +455,9 @@ export function TradingViewChart({
           <span>{(hoverReadout || latestReadout).mode}</span>
           <strong>{(hoverReadout || latestReadout).price}</strong>
           <em>{(hoverReadout || latestReadout).time}</em>
+          {(hoverReadout || latestReadout).detail ? (
+            <small>{(hoverReadout || latestReadout).detail}</small>
+          ) : null}
         </div>
       ) : null}
     </div>

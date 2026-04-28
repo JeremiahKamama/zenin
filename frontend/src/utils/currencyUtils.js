@@ -139,8 +139,8 @@ export function formatCurrency(value, currency = "USD", options = {}) {
   const symbol = getCurrencySymbol(currency);
   
   let formatted = absNum.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: (currency === "JPY" || currency === "KRW" || currency === "CLP" || currency === "VND") ? 0 : 2,
+    maximumFractionDigits: (currency === "JPY" || currency === "KRW" || currency === "CLP" || currency === "VND") ? 0 : 2,
   });
   
   if (compact) {

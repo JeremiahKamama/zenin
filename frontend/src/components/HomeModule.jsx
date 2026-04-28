@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
+import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
@@ -719,37 +720,46 @@ export function HomeModule({
     return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const chartOptions = {
-    chart: { type: "area", toolbar: { show: false }, background: "transparent", animations: { enabled: true }, sparkline: { enabled: false } },
-    theme: { mode: "dark" },
-    stroke: { curve: "smooth", width: 2, colors: [chartColor] },
-    fill: {
-      type: "gradient",
-      gradient: {
-        shadeIntensity: 1,
-        opacityFrom: 0.3,
-        opacityTo: 0.0,
-        stops: [0, 100],
-        colorStops: [{ offset: 0, color: chartColor, opacity: 0.3 }, { offset: 100, color: chartColor, opacity: 0 }]
+  const performanceChartSeries = useMemo(() => [{
+    name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve",
+    type: "area",
+    color: chartColor,
+    data: chartData
+      .map(([time, value]) => ({
+        time: Math.floor(Number(time) / 1000),
+        value: Number(value)
+      }))
+      .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value)),
+    options: {
+      priceFormat: {
+        type: "custom",
+        minMove: 0.01,
+        formatter: yFormatter
       }
-    },
-    xaxis: { type: "datetime", labels: { style: { colors: "#64748b", fontSize: "10px" } }, axisBorder: { show: false }, axisTicks: { show: false } },
-    yaxis: { labels: { style: { colors: "#94a3b8", fontSize: "11px" }, formatter: yFormatter }, opposite: false },
-    grid: { borderColor: "rgba(255,255,255,0.035)", strokeDashArray: 4, xaxis: { lines: { show: false } } },
-    tooltip: {
-      theme: "dark",
-      x: { format: "dd MMM yyyy HH:mm" },
-      y: {
-        formatter: (value) => {
-          const pnl = chartMode === "equity" ? Number(value) - initialBalance : Number(value);
-          const pct = initialBalance > 0 ? (pnl / initialBalance) * 100 : 0;
-          return `${yFormatter(value)} · P&L ${formatSignedMoney(pnl)} · ${formatSignedPercent(pct)}`;
-        }
-      }
-    },
-    dataLabels: { enabled: false },
-    markers: { size: 0 }
-  };
+    }
+  }], [chartColor, chartData, chartMode]);
+
+  const performancePriceLines = useMemo(() => [{
+    id: "performance-baseline",
+    price: chartMode === "equity" ? initialBalance : 0,
+    title: chartMode === "equity" ? "Start" : "Break-even",
+    color: "rgba(148,163,184,0.72)"
+  }], [chartMode, initialBalance]);
+
+  const performanceChartOptions = useMemo(() => ({
+    rightPriceScale: {
+      borderVisible: false,
+      scaleMargins: { top: 0.12, bottom: 0.12 }
+    }
+  }), []);
+
+  const formatPerformanceTime = (time) => new Date(Number(time) * 1000).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
 
   const formatMoney = (value, currency = "USD") => {
     return formatCurrency(value, currency);
@@ -1648,11 +1658,13 @@ export function HomeModule({
           </div>
           <div className="home-v2-hero-main">
             <span className="home-v2-hero-value">{formatMoney(totalAccountEquity)}</span>
-            <span className={`home-v2-hero-change ${dailyChange >= 0 ? "positive" : "negative"}`}>
-              {dailyChange >= 0 ? "↗ Gain" : "↘ Loss"} {formatSignedMoney(dailyChange)} ({formatSignedPercent(dailyChangePct)})
-            </span>
+            <div className="home-v2-hero-pnl-row">
+              <span className="home-v2-subtle">Today's P&amp;L</span>
+              <span className={`home-v2-hero-change ${dailyChange >= 0 ? "positive" : "negative"}`}>
+                {formatSignedMoney(dailyChange)} ({formatSignedPercent(dailyChangePct)})
+              </span>
+            </div>
           </div>
-          <div className="home-v2-subtle">Today's P&amp;L</div>
         </div>
         <div className="home-v2-hero-stats">
           <div className="home-v2-hero-stat">
@@ -1729,13 +1741,12 @@ export function HomeModule({
                 ))}
               </div>
             </div>
-            <ReactApexChart
-              options={chartOptions}
-              series={[{
-                name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve",
-                data: chartData
-              }]}
-              type="area"
+            <TradingViewChart
+              options={performanceChartOptions}
+              series={performanceChartSeries}
+              priceLines={performancePriceLines}
+              valueFormatter={(value) => yFormatter(Number(value))}
+              timeFormatter={formatPerformanceTime}
               height={360}
               width="100%"
             />

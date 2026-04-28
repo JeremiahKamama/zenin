@@ -1,14 +1,27 @@
 import { useState, useEffect, useMemo } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-import { getCurrencySymbol } from "../utils/currencyUtils";
+import { getCurrencySymbol, formatCurrency, convertToUSD } from "../utils/currencyUtils";
 import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+import { getMarketStatus } from "../utils/marketHours";
 const BACKEND_URL = ZENIN_API_BASE_URL;
 
 const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleStar, onViewCompanyProfile, portfolio = [], balance = 0, trades = [] }) {
+export function AssetModal({
+  asset,
+  onClose,
+  onConfirm,
+  isInWatchlist,
+  onToggleStar,
+  onViewCompanyProfile,
+  portfolio = [],
+  balance = 0,
+  cashBalances = {},
+  trades = [],
+  spotPrices = {}
+}) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyStale, setHistoryStale] = useState(false);
@@ -51,6 +64,15 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const isStockResearchEligible = normalizedAssetKind === "stock";
 
   const [chartType, setChartType] = useState("line");
+  const [visibleIndicators, setVisibleIndicators] = useState({
+    volume: true,
+    sma20: true,
+    ema20: true,
+    vwap: true
+  });
+  const [crosshairEnabled, setCrosshairEnabled] = useState(true);
+  const [chartExpanded, setChartExpanded] = useState(false);
+  const [chartResetSignal, setChartResetSignal] = useState(0);
 
   const [quantity, setQuantity] = useState(() =>  {
     if (!asset?._forceSell) return 1;
@@ -67,6 +89,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const [shake, setShake] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [showFireworks, setShowFireworks] = useState(false);
+  const [buyCurrency, setBuyCurrency] = useState("USD");
   const isCacheFresh = (cacheEntry, ttlMs) => {
     if (!cacheEntry?.updatedAt) return false;
     const updatedAtMs = new Date(cacheEntry.updatedAt).getTime();
@@ -270,7 +293,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         })();
 
   // Resolve display currency symbol from asset metadata
-  const activeCurrency = fetchedCurrency || asset?.currency || asset?.quotedCurrency || "USD";
+  const activeCurrency = (fetchedCurrency || asset?.currency || asset?.quotedCurrency || (assetSymbol.endsWith(".T") ? "JPY" : assetSymbol.endsWith(".L") ? "GBP" : assetSymbol.endsWith(".PA") ? "EUR" : assetSymbol.endsWith(".DE") ? "EUR" : "USD")).toUpperCase();
   const currencySymbol = getCurrencySymbol(activeCurrency);
 
   const displayedChangePercent = Number.isFinite(Number(asset?.priceChangePercent))
@@ -278,6 +301,9 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
     : Number.isFinite(Number(liveQuote.priceChangePercent))
       ? Number(liveQuote.priceChangePercent)
       : 0;
+
+  const marketStatus = useMemo(() => getMarketStatus(asset), [asset]);
+  const isMarketOpen = marketStatus.isOpen;
 
   const displayedChangeValue = (() => {
     if (Number.isFinite(Number(asset?.priceChangeValue))) return Number(asset.priceChangeValue);
@@ -288,7 +314,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
   useEffect(() => {
     if (!isTradFi || !assetSymbol) return;
-    
+
     const fetchFinviz = async () => {
       setFinvizLoading(true);
       try {
@@ -309,29 +335,38 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
   const chartRange = useMemo(() => {
     if (!history || history.length === 0) return null;
-    const start = history[0].time;
-    const end = history[history.length - 1].time;
-    
-    const formatDate = (t) => {
-      if (!t) return "";
-      const date = new Date(t);
-      if (isNaN(date.getTime())) {
-        const numeric = Number(t);
-        const d = new Date(numeric > 10000000000 ? numeric : numeric * 1000);
-        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-      }
-      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    const normalizeTime = (value) => {
+      if (value == null) return null;
+      if (typeof value === "number") return value > 10000000000 ? value : value * 1000;
+      const parsed = new Date(value).getTime();
+      return Number.isFinite(parsed) ? parsed : null;
     };
+    const start = normalizeTime(history[0].time ?? history[0].date ?? history[0].datetime);
+    const end = normalizeTime(history[history.length - 1].time ?? history[history.length - 1].date ?? history[history.length - 1].datetime);
 
+    const formatDate = (ms) => new Date(ms).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    const formatTime = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    const sameDay = startDate.toDateString() === endDate.toDateString();
+    if (sameDay && ["4H", "1D"].includes(activeInterval)) {
+      return {
+        label: "Session",
+        start: formatDate(start),
+        end: `${formatTime(start)} - ${formatTime(end)}`
+      };
+    }
     return {
+      label: "Range",
       start: formatDate(start),
       end: formatDate(end)
     };
-  }, [history]);
+  }, [activeInterval, history]);
 
   const totalValue = displayedPrice * (quantity || 0);
-  const availableBalance = Number.isFinite(Number(balance)) ? Number(balance) : 0;
-  const insufficientBalance = orderType === "buy" && totalValue > availableBalance;
+  const totalValueInUSD = convertToUSD(totalValue, activeCurrency, spotPrices);
+  const insufficientBalance = orderType === "buy" && (buyCurrency === "USD" ? totalValueInUSD > balance : totalValue > (cashBalances[buyCurrency] || 0));
   const confettiPieces = useMemo(() => Array.from({ length: 26 }, (_, i) => i), []);
   const fireworkBursts = useMemo(() => Array.from({ length: 18 }, (_, i) => i), []);
 
@@ -372,7 +407,10 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
   const handleConfirmOrder = async () => {
     if (isSubmitting || quantity <= 0) return;
     setIsSubmitting(true);
-    const result = await onConfirm?.(cleanAsset, quantity, orderType);
+    const result = await onConfirm?.(cleanAsset, quantity, orderType, {
+      buyCurrency,
+      notionalInBuyCurrency: buyCurrency === "USD" ? totalValueInUSD : totalValue
+    });
     setIsSubmitting(false);
 
     if (!result?.ok) {
@@ -408,30 +446,115 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       if (!Number.isFinite(parsed)) return null;
       return parsed > 10000000000 ? Math.floor(parsed / 1000) : Math.floor(parsed);
     };
+    const priceRows = history
+      .map((h) => ({
+        time: normalizeTime(h),
+        open: Number(h.open),
+        high: Number(h.high),
+        low: Number(h.low),
+        close: Number(h.close || h.price),
+        volume: Number(h.volume ?? h.Volume ?? h.v ?? 0)
+      }))
+      .filter((row) => row.time != null && Number.isFinite(row.close));
+    const movingAverage = (period) => priceRows
+      .map((row, idx) => {
+        if (idx + 1 < period) return null;
+        const windowRows = priceRows.slice(idx + 1 - period, idx + 1);
+        const sum = windowRows.reduce((total, item) => total + Number(item.close || 0), 0);
+        return { time: row.time, value: Number((sum / period).toFixed(4)) };
+      })
+      .filter(Boolean);
+    const ema = (period) => {
+      const multiplier = 2 / (period + 1);
+      let previous = null;
+      return priceRows
+        .map((row) => {
+          previous = previous == null ? row.close : (row.close - previous) * multiplier + previous;
+          return { time: row.time, value: Number(previous.toFixed(4)) };
+        })
+        .filter((row, idx) => idx >= period - 1);
+    };
+    const vwap = (() => {
+      let cumulativeVolume = 0;
+      let cumulativePriceVolume = 0;
+      return priceRows
+        .map((row) => {
+          if (!Number.isFinite(row.volume) || row.volume <= 0) return null;
+          const typical = Number.isFinite(row.high) && Number.isFinite(row.low)
+            ? (row.high + row.low + row.close) / 3
+            : row.close;
+          cumulativeVolume += row.volume;
+          cumulativePriceVolume += typical * row.volume;
+          return {
+            time: row.time,
+            value: Number((cumulativePriceVolume / cumulativeVolume).toFixed(4))
+          };
+        })
+        .filter(Boolean);
+    })();
+    const indicatorOptions = {
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      lastValueVisible: false,
+      priceLineVisible: false
+    };
 
     if (chartType === "candlestick") {
-      return [{
-        name: "Price",
-        type: "candlestick",
-        data: history.map(h => ({
-          time: normalizeTime(h),
-          open: Number(h.open),
-          high: Number(h.high),
-          low: Number(h.low),
-          close: Number(h.close)
-        })).filter((row) => row.time != null && [row.open, row.high, row.low, row.close].every(Number.isFinite))
-      }];
+      const candleRows = priceRows.filter((row) => [row.open, row.high, row.low, row.close].every(Number.isFinite));
+      const volumeRows = candleRows
+        .filter((row) => Number.isFinite(row.volume) && row.volume > 0)
+        .map((row) => ({
+          time: row.time,
+          value: row.volume,
+          color: row.close >= row.open ? "rgba(34,197,94,0.28)" : "rgba(239,68,68,0.28)"
+        }));
+      return [
+        {
+          name: "Price",
+          type: "candlestick",
+          data: candleRows,
+          options: {
+            lastValueVisible: false,
+            priceLineVisible: false
+          }
+        },
+        visibleIndicators.volume && volumeRows.length ? {
+          name: "Volume",
+          type: "histogram",
+          color: "rgba(148,163,184,0.24)",
+          data: volumeRows,
+          includeInReadout: false,
+          options: {
+            priceScaleId: "",
+            priceScaleOptions: { scaleMargins: { top: 0.74, bottom: 0 } },
+            priceFormat: { type: "volume" },
+            lastValueVisible: false,
+            priceLineVisible: false
+          }
+        } : null,
+        visibleIndicators.sma20 ? { name: "SMA 20", type: "line", color: "#f59e0b", data: movingAverage(20), includeInReadout: false, options: indicatorOptions } : null,
+        visibleIndicators.ema20 ? { name: "EMA 20", type: "line", color: "#a78bfa", data: ema(20), includeInReadout: false, options: indicatorOptions } : null,
+        visibleIndicators.vwap && vwap.length ? { name: "VWAP", type: "line", color: "#22d3ee", data: vwap, includeInReadout: false, options: indicatorOptions } : null
+      ].filter(Boolean);
     }
-    return [{
-      name: "Price",
-      type: "area",
-      color: "#38bdf8",
-      data: history.map(h => ({
-        time: normalizeTime(h),
-        value: Number(h.close || h.price)
-      })).filter((row) => row.time != null && Number.isFinite(row.value))
-    }];
-  }, [history, chartType]);
+    return [
+      {
+        name: "Price",
+        type: "area",
+        color: "#38bdf8",
+        data: priceRows.map((row) => ({
+          time: row.time,
+          value: row.close
+        })),
+        options: {
+          lastValueVisible: false,
+          priceLineVisible: false
+        }
+      },
+      visibleIndicators.sma20 ? { name: "SMA 20", type: "line", color: "#f59e0b", data: movingAverage(20), includeInReadout: false, options: indicatorOptions } : null,
+      visibleIndicators.ema20 ? { name: "EMA 20", type: "line", color: "#a78bfa", data: ema(20), includeInReadout: false, options: indicatorOptions } : null,
+      visibleIndicators.vwap && vwap.length ? { name: "VWAP", type: "line", color: "#22d3ee", data: vwap, includeInReadout: false, options: indicatorOptions } : null
+    ].filter(Boolean);
+  }, [history, chartType, visibleIndicators]);
 
   const tradeMarkers = useMemo(() => {
     const markerSymbol = String(assetSymbol || "").trim().toUpperCase();
@@ -445,10 +568,14 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         if (!Number.isFinite(parsed)) return null;
         const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
         const price = Number(trade?.price);
+        const qty = Number(trade?.quantity || trade?.qty || 0);
+        const pnl = Number(trade?.pnl ?? trade?.realizedPnl);
         const priceText = Number.isFinite(price)
-          ? `${activeCurrency === "USD" ? "$" : ""}${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          ? `${formatCurrency(price, activeCurrency)}`
           : "";
-        const label = `${side === "sell" ? "SELL" : "BUY"}${priceText ? ` ${priceText}` : ""}`;
+        const qtyText = Number.isFinite(qty) && qty > 0 ? `${qty.toLocaleString(undefined, { maximumFractionDigits: 4 })} @ ` : "";
+        const pnlText = Number.isFinite(pnl) ? ` ${pnl >= 0 ? "+" : ""}${formatCurrency(pnl, activeCurrency)}` : "";
+        const label = `${side === "sell" ? "SELL" : "BUY"} ${qtyText}${priceText}${pnlText}`.trim();
         return {
           time: Math.floor(parsed / 1000),
           position: side === "sell" ? "aboveBar" : "belowBar",
@@ -460,11 +587,85 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
       .filter(Boolean);
   }, [activeCurrency, assetSymbol, trades]);
 
+  const averageEntryPrice = useMemo(() => {
+    const markerSymbol = String(assetSymbol || "").trim().toUpperCase();
+    if (!markerSymbol || !Array.isArray(trades)) return null;
+    const buys = trades
+      .filter((trade) => String(trade?.asset || trade?.symbol || "").trim().toUpperCase() === markerSymbol)
+      .filter((trade) => String(trade?.side || trade?.type || "").toLowerCase() !== "sell")
+      .map((trade) => ({
+        qty: Number(trade?.quantity || trade?.qty || 0),
+        price: Number(trade?.price)
+      }))
+      .filter((trade) => Number.isFinite(trade.qty) && trade.qty > 0 && Number.isFinite(trade.price));
+    const totalQty = buys.reduce((sum, trade) => sum + trade.qty, 0);
+    if (totalQty <= 0) return null;
+    return buys.reduce((sum, trade) => sum + trade.qty * trade.price, 0) / totalQty;
+  }, [assetSymbol, trades]);
+
+  const assetPriceLines = useMemo(() => {
+    const high52 = Number(earnings?.profile?.fiftyTwoWeekHigh ?? asset?.fiftyTwoWeekHigh ?? asset?.high52);
+    const low52 = Number(earnings?.profile?.fiftyTwoWeekLow ?? asset?.fiftyTwoWeekLow ?? asset?.low52);
+    return [
+      Number.isFinite(displayedPrice) && displayedPrice > 0 ? { id: "order", price: displayedPrice, title: orderType === "sell" ? "Sell" : "Buy", color: "#94a3b8" } : null,
+      Number.isFinite(averageEntryPrice) ? { id: "avg-entry", price: averageEntryPrice, title: "Avg entry", color: "#f59e0b" } : null,
+      Number.isFinite(high52) && high52 > 0 ? { id: "52w-high", price: high52, title: "52W high", color: "rgba(34,197,94,0.72)" } : null,
+      Number.isFinite(low52) && low52 > 0 ? { id: "52w-low", price: low52, title: "52W low", color: "rgba(239,68,68,0.72)" } : null
+    ].filter(Boolean);
+  }, [asset, averageEntryPrice, displayedPrice, earnings, orderType]);
+
   // Stable empty options — TradingViewChart uses LightweightCharts internally,
   // not ApexCharts. Passing a stable ref prevents unnecessary chart recreation
   // when chartType changes (which was causing the Line-mode blank bug).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const chartOptions = useMemo(() => ({}), []);
+  const chartOptions = useMemo(() => ({
+    rightPriceScale: {
+      borderVisible: false,
+      scaleMargins: { top: 0.08, bottom: 0.2 }
+    }
+  }), []);
+
+  const chartHeight = chartExpanded ? 520 : 380;
+  const chartIndicatorControls = [];
+  const toggleIndicator = (id) => {
+    setVisibleIndicators((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+  const formatChartPrice = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "Price unavailable";
+    return `${currencySymbol}${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+  const formatChartVolume = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "Vol -";
+    return `Vol ${formatCompactNumber(numeric, numeric >= 1000000 ? 1 : 0)}`;
+  };
+  const formatChartTime = (time) => new Date(Number(time) * 1000).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+  const formatChartReadout = ({ mode, point, defaultReadout }) => {
+    if (!point) return defaultReadout;
+    const open = Number(point.open);
+    const high = Number(point.high);
+    const low = Number(point.low);
+    const close = Number(point.close ?? point.value);
+    const volume = Number(point.volume);
+    if ([open, high, low, close].every(Number.isFinite)) {
+      return {
+        mode,
+        price: `C ${formatChartPrice(close)}`,
+        detail: `O ${formatChartPrice(open)}  H ${formatChartPrice(high)}  L ${formatChartPrice(low)}  ${formatChartVolume(volume)}`
+      };
+    }
+    return {
+      ...defaultReadout,
+      detail: Number.isFinite(volume) && volume > 0 ? formatChartVolume(volume) : defaultReadout.detail
+    };
+  };
 
   const formatCompactNumber = (value, digits = 2) => {
     const numeric = Number(value);
@@ -515,7 +716,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className={`modal-content asset-modal-window ${shake ? "modal-shake" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`modal-content asset-modal-window ${chartExpanded ? "asset-modal-window-expanded" : ""} ${shake ? "modal-shake" : ""}`} onClick={(e) => e.stopPropagation()}>
         {showConfetti && (
           <div className="trade-effect-layer confetti-layer">
             {confettiPieces.map((idx) => {
@@ -523,14 +724,14 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               const delayValue = (idx % 7) * 0.03;
               const hue = (idx * 27) % 360;
               return (
-                <span 
-                  key={`confetti-${idx}`} 
-                  className="confetti-piece" 
-                  style={{ 
+                <span
+                  key={`confetti-${idx}`}
+                  className="confetti-piece"
+                  style={{
                     "--x": `${xValue}%`,
                     "--delay": `${delayValue}s`,
                     "--bg": `hsl(${hue}, 90%, 60%)`
-                  }} 
+                  }}
                 />
               );
             })}
@@ -544,15 +745,15 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               const delayValue = (idx % 5) * 0.04;
               const hue = (idx * 32) % 360;
               return (
-                <span 
-                  key={`fire-${idx}`} 
-                  className="firework-burst" 
-                  style={{ 
-                    "--x": `${xValue}%`, 
+                <span
+                  key={`fire-${idx}`}
+                  className="firework-burst"
+                  style={{
+                    "--x": `${xValue}%`,
                     "--y": `${yValue}%`,
                     "--delay": `${delayValue}s`,
                     "--bg": `hsl(${hue}, 95%, 62%)`
-                  }} 
+                  }}
                 />
               );
             })}
@@ -574,21 +775,36 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 <button className="close-btn" onClick={onClose}>&times;</button>
               </div>
             </div>
-            
+
             <div className="yahoo-price-row">
               <span className="yahoo-price">
                 {displayedPrice > 0 ? displayedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
               </span>
               <span className={`yahoo-change ${displayedChangePercent >= 0 ? "positive" : "negative"}`}>
-                {displayedChangeValue >= 0 ? "+" : ""}{Math.abs(displayedChangeValue).toFixed(2)} 
+                {displayedChangeValue >= 0 ? "+" : ""}{Math.abs(displayedChangeValue).toFixed(2)}
                 ({displayedChangePercent >= 0 ? "+" : ""}{displayedChangePercent.toFixed(2)}%)
               </span>
               <span className="yahoo-currency-label">{activeCurrency}</span>
+              {isMarketOpen && (
+                <span className="yahoo-live-badge">● LIVE</span>
+              )}
             </div>
 
             <div className="yahoo-market-status">
-              As of {new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} {Intl.DateTimeFormat().resolvedOptions().timeZone}. 
-              {asset.isMarketOpen !== false ? " Market Open." : ` Market Closed (${asset.marketStatus || 'Weekend/Holiday'}).`}
+              As of {new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} {Intl.DateTimeFormat().resolvedOptions().timeZone}.
+              <span className={isMarketOpen ? "status-open" : "status-closed"}>
+                {isMarketOpen ? "Market Open" : "Market Closed"}
+                {(() => {
+                  if (isMarketOpen) return "";
+                  const reason = String(marketStatus.status || "").toLowerCase();
+                  if (reason.includes("lunch") || reason.includes("holiday")) {
+                    // Extract just the part inside brackets if available, or use the status
+                    const match = marketStatus.status.match(/\(([^)]+)\)/);
+                    return ` (${match ? match[1] : marketStatus.status})`;
+                  }
+                  return "";
+                })()}
+              </span>
             </div>
           </div>
         </header>
@@ -606,21 +822,32 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 Data Health
               </span>
             </div>
-            <div className="chart-type-toggle">
-              <button className={chartType === 'line' ? 'active' : ''} onClick={() => setChartType('line')}>Line</button>
-              <button className={chartType === 'candlestick' ? 'active' : ''} onClick={() => setChartType('candlestick')}>Candle</button>
+            <div className="asset-chart-toolbar" aria-label="Chart controls">
+              <div className="chart-type-toggle">
+                <button className={chartType === 'line' ? 'active' : ''} onClick={() => setChartType('line')}>Line</button>
+                <button className={chartType === 'candlestick' ? 'active' : ''} onClick={() => setChartType('candlestick')}>Candle</button>
+              </div>
             </div>
           </div>
 
-          <div className="chart-container">
+
+          <div
+            className={`chart-container asset-chart-container ${chartExpanded ? "expanded" : ""}`}
+            style={{ height: `${chartHeight}px`, minHeight: `${chartHeight}px` }}
+          >
             {history.length > 0 ? (
-              <TradingViewChart 
+              <TradingViewChart
                 series={chartData}
                 options={chartOptions}
-                height={280}
+                height={chartHeight}
                 width="100%"
-                priceLine={displayedPrice}
+                priceLines={assetPriceLines}
                 tradeMarkers={tradeMarkers}
+                valueFormatter={formatChartPrice}
+                timeFormatter={formatChartTime}
+                readoutFormatter={formatChartReadout}
+                crosshairEnabled={crosshairEnabled}
+                resetSignal={chartResetSignal}
               />
             ) : loading ? (
               <div className="asset-modal-loader" aria-label="Loading chart data">
@@ -638,7 +865,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 
           {chartRange && !loading && (
             <div className="chart-range-display">
-              <span className="range-label">Range</span>
+              <span className="range-label">{chartRange.label || "Range"}</span>
               <span className="range-dates">{chartRange.start} — {chartRange.end}</span>
             </div>
           )}
@@ -755,7 +982,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                   <p style={{ margin: 0 }}>Detailed fundamentals unavailable for this ticker.</p>
                   {asset.symbol.includes(".") && (
                     <p style={{ margin: "8px 0 0", fontSize: "11px", opacity: 0.8 }}>
-                      Hint: Coverage for international listings ( Milan, etc.) is limited. 
+                      Hint: Coverage for international listings ( Milan, etc.) is limited.
                       Try searching for US-listed alternatives (e.g. ONDS) for full metrics.
                     </p>
                   )}
@@ -780,7 +1007,7 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
               <div className="asset-modal-position-note">
                 Your position: <strong style={{ color: "var(--color-text-primary)" }}>
                   {holdingQty} {asset.symbol}
-                </strong> <span>(${holdingValue.toFixed(2)})</span>
+                </strong> <span>({formatCurrency(holdingValue, activeCurrency)})</span>
               </div>
             ) : (
               <div className="asset-modal-position-note asset-modal-position-note-danger">
@@ -791,13 +1018,18 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
         {orderType === "buy" && (
           <div className={`asset-modal-position-note ${insufficientBalance ? "asset-modal-position-note-danger" : ""}`}>
             Available balance: <strong style={{ color: insufficientBalance ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
-              {getCurrencySymbol(asset?.currency)}{availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {formatCurrency(buyCurrency === "USD" ? balance : (cashBalances[buyCurrency] || 0), buyCurrency)}
             </strong>
             {insufficientBalance ? (
               <span style={{ marginLeft: "8px" }}>
-                · Need ${(totalValue - availableBalance).toFixed(2)} more
+                · Need {formatCurrency(Math.max(0, (buyCurrency === "USD" ? totalValueInUSD : totalValue) - (buyCurrency === "USD" ? balance : (cashBalances[buyCurrency] || 0))), buyCurrency)} more
               </span>
             ) : null}
+            {activeCurrency !== "USD" && (
+              <div style={{ marginTop: "4px", fontSize: "10px", opacity: 0.7 }}>
+                Rate: 1 USD ≈ {formatCurrency(1 / convertToUSD(1, activeCurrency, spotPrices), activeCurrency)}
+              </div>
+            )}
           </div>
         )}
         <footer className="modal-footer">
@@ -826,11 +1058,20 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
                 />
             </div>
             <div className="total-value-display">
-              <label>Total Value ({currencySymbol})</label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <label>Total Value</label>
+                {activeCurrency !== "USD" && (
+                   <div className="currency-pill-toggle">
+                     <button className={buyCurrency === "USD" ? "active" : ""} onClick={() => setBuyCurrency("USD")}>USD</button>
+                     <button className={buyCurrency === activeCurrency ? "active" : ""} onClick={() => setBuyCurrency(activeCurrency)}>{activeCurrency}</button>
+                   </div>
+                )}
+              </div>
               <div className="value-field">
-                <input type="number" value={totalValue.toFixed(2)} onChange={(e) => {
+                <input type="number" value={(buyCurrency === "USD" ? totalValueInUSD : totalValue).toFixed(2)} onChange={(e) => {
                   const newVal = parseFloat(e.target.value) || 0;
-                  if (displayedPrice > 0) setQuantity(newVal / displayedPrice);
+                  const priceInBuyCurrency = buyCurrency === "USD" ? convertToUSD(displayedPrice, activeCurrency, spotPrices) : displayedPrice;
+                  if (priceInBuyCurrency > 0) setQuantity(newVal / priceInBuyCurrency);
                 }} step="0.01" />
               </div>
             </div>
@@ -840,6 +1081,32 @@ export function AssetModal({ asset, onClose, onConfirm, isInWatchlist, onToggleS
 	          </button>
 	        </footer>
       </div>
+      <style>{`
+        .currency-pill-toggle {
+          display: flex;
+          gap: 2px;
+          background: rgba(255, 255, 255, 0.05);
+          padding: 2px;
+          border-radius: 6px;
+        }
+        .currency-pill-toggle button {
+          background: transparent;
+          border: none;
+          color: var(--color-text-secondary);
+          padding: 2px 6px;
+          font-size: 10px;
+          cursor: pointer;
+          border-radius: 4px;
+          transition: all 0.2s ease;
+        }
+        .currency-pill-toggle button.active {
+          background: var(--color-accent-primary);
+          color: #fff;
+        }
+        .currency-pill-toggle button:hover:not(.active) {
+          background: rgba(255, 255, 255, 0.1);
+        }
+      `}</style>
     </div>
   );
 }

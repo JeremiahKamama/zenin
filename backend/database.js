@@ -417,7 +417,7 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE portfolio_holdings
-      ADD CONSTRAINT portfolio_holdings_symbol_market_type_strategy_name_key 
+      ADD CONSTRAINT portfolio_holdings_symbol_market_type_strategy_name_key
       UNIQUE (symbol, market_type, strategy_name);
     `);
 
@@ -602,6 +602,23 @@ async function initializeDatabase() {
         balance DOUBLE PRECISION NOT NULL DEFAULT 10000,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_cash (
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        currency TEXT NOT NULL,
+        balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, currency)
+      );
+    `);
+
+    // Migrate existing balance to USD cash if not already there
+    await client.query(`
+      INSERT INTO user_workspace_cash (user_id, currency, balance)
+      SELECT user_id, 'USD', balance FROM user_workspace_balance
+      ON CONFLICT (user_id, currency) DO NOTHING;
     `);
 
     await client.query(`
@@ -2084,7 +2101,7 @@ const userWorkspace = {
     add: async (userId, holding) => {
       const resolvedUserId = toUserId(userId);
       const symbol = String(holding.symbol || "").trim().toUpperCase();
-      const type = String(holding.type || "").trim().toLowerCase();
+      const type = String(holding.type || "stock").trim().toLowerCase();
       const marketType = normalizeMarketType(type, holding.marketType);
       const orderType = String(holding.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
       const quantity = Math.abs(toNumber(holding.quantity));
@@ -2254,6 +2271,65 @@ const userWorkspace = {
         ORDER BY date_added DESC;
       `, [resolvedUserId, cleanSymbol, cleanMarketType]);
       return result.rows.map(mapPortfolioRow);
+    }
+  },
+
+  cash: {
+    getAll: async (userId) => {
+      const resolvedUserId = toUserId(userId);
+      const result = await pool.query(`
+        SELECT currency, balance, updated_at AS "updatedAt"
+        FROM user_workspace_cash
+        WHERE user_id = $1
+        ORDER BY currency ASC;
+      `, [resolvedUserId]);
+      return result.rows.map(row => ({
+        currency: row.currency,
+        balance: toNumber(row.balance),
+        updatedAt: toIsoString(row.updatedAt)
+      }));
+    },
+
+    applyChange: async (userId, currency, amount, type = "deposit") => {
+      const resolvedUserId = toUserId(userId);
+      const cur = String(currency || "USD").toUpperCase();
+      const val = Math.abs(toNumber(amount));
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const row = await client.query(`
+          SELECT balance FROM user_workspace_cash
+          WHERE user_id = $1 AND currency = $2
+          FOR UPDATE;
+        `, [resolvedUserId, cur]);
+
+        let current = row.rows[0] ? toNumber(row.rows[0].balance) : 0;
+        const next = type === "deposit" ? current + val : current - val;
+        if (next < 0) {
+          const err = new Error(`Insufficient ${cur} balance`);
+          err.code = "INSUFFICIENT_BALANCE";
+          throw err;
+        }
+
+        await client.query(`
+          INSERT INTO user_workspace_cash (user_id, currency, balance)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (user_id, currency) DO UPDATE
+          SET balance = EXCLUDED.balance, updated_at = NOW();
+        `, [resolvedUserId, cur, next]);
+
+        if (cur === "USD") {
+          await client.query(`UPDATE user_workspace_balance SET balance = $2 WHERE user_id = $1`, [resolvedUserId, next]);
+        }
+
+        await client.query("COMMIT");
+        return next;
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
     }
   },
 
@@ -2677,25 +2753,47 @@ const userWorkspace = {
           };
         }
 
-        const balanceRow = await client.query(`
+        const buyCurrency = String(payload.buyCurrency || "USD").toUpperCase();
+        const cashRow = await client.query(`
           SELECT balance
-          FROM user_workspace_balance
-          WHERE user_id = $1
+          FROM user_workspace_cash
+          WHERE user_id = $1 AND currency = $2
           FOR UPDATE;
-        `, [resolvedUserId]);
-        let currentBalance = balanceRow.rows[0]?.balance;
-        if (currentBalance == null) {
-          currentBalance = DEFAULT_BALANCE;
-          await client.query(`
-            INSERT INTO user_workspace_balance (user_id, balance)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO NOTHING;
-          `, [resolvedUserId, DEFAULT_BALANCE]);
+        `, [resolvedUserId, buyCurrency]);
+
+        let currentCashBalance = cashRow.rows[0]?.balance;
+        if (currentCashBalance == null) {
+          // If no balance and it's USD, use the legacy balance or default
+          if (buyCurrency === "USD") {
+             const legacyRow = await client.query(`SELECT balance FROM user_workspace_balance WHERE user_id = $1`, [resolvedUserId]);
+             currentCashBalance = legacyRow.rows[0]?.balance ?? DEFAULT_BALANCE;
+             await client.query(`INSERT INTO user_workspace_cash (user_id, currency, balance) VALUES ($1, 'USD', $2) ON CONFLICT DO NOTHING`, [resolvedUserId, currentCashBalance]);
+          } else {
+             currentCashBalance = 0;
+             await client.query(`INSERT INTO user_workspace_cash (user_id, currency, balance) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING`, [resolvedUserId, buyCurrency]);
+          }
         }
-        const current = toNumber(currentBalance, DEFAULT_BALANCE);
-        const nextBalance = orderType === "buy" ? current - notional : current + notional;
-        if (nextBalance < 0) {
-          const err = new Error("Insufficient balance");
+
+        const current = toNumber(currentCashBalance, 0);
+        // If buying in a currency that is NOT the asset currency, we need to convert notional.
+        // But usually buyCurrency will match price currency if user wants "native" buy.
+        // For now, assume price is in asset currency.
+        // We need the rate from buyCurrency to asset price currency.
+        // This is getting complex. Let's simplify:
+        // 1. Calculate notional in Buy Currency.
+        const assetCurrency = String(payload.currency || "USD").toUpperCase();
+        let notionalInBuyCurrency = notional;
+        if (buyCurrency !== assetCurrency) {
+           // We need FX rates here. Backend usually doesn't have live FX in this JS file.
+           // For now, let's assume if they select a currency, we use that directly.
+           // Actually, the Frontend should send the notional in the Buy Currency.
+           notionalInBuyCurrency = toNumber(payload.notionalInBuyCurrency, notional);
+        }
+
+        const nextCashBalance = orderType === "buy" ? current - notionalInBuyCurrency : current + notionalInBuyCurrency;
+
+        if (nextCashBalance < 0) {
+          const err = new Error(`Insufficient ${buyCurrency} balance`);
           err.code = "INSUFFICIENT_BALANCE";
           throw err;
         }
@@ -2769,10 +2867,15 @@ const userWorkspace = {
         }
 
         await client.query(`
-          UPDATE user_workspace_balance
-          SET balance = $2, updated_at = NOW()
-          WHERE user_id = $1;
-        `, [resolvedUserId, nextBalance]);
+          UPDATE user_workspace_cash
+          SET balance = $3, updated_at = NOW()
+          WHERE user_id = $1 AND currency = $2;
+        `, [resolvedUserId, buyCurrency, nextCashBalance]);
+
+        // Also update legacy balance for compatibility (USD total equivalent maybe? No, just keep it synced for now if USD)
+        if (buyCurrency === "USD") {
+           await client.query(`UPDATE user_workspace_balance SET balance = $2, updated_at = NOW() WHERE user_id = $1`, [resolvedUserId, nextCashBalance]);
+        }
 
         const holdingsResult = await client.query(`
           SELECT
@@ -2837,9 +2940,9 @@ const userWorkspace = {
           quantity,
           price,
           Math.abs(notional),
-          nextBalance,
+          nextCashBalance,
           portfolioValueAfter,
-          nextBalance + portfolioValueAfter,
+          nextCashBalance + portfolioValueAfter,
           positionAfter,
           strategyName,
           JSON.stringify(legsJson)
@@ -2847,7 +2950,7 @@ const userWorkspace = {
 
         await client.query("COMMIT");
         return {
-          balance: nextBalance,
+          balance: nextCashBalance,
           holdings,
           trade: mapTradeRow(tradeResult.rows[0])
         };

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
-import ReactApexChart from "react-apexcharts";
+import { useState, useEffect, useMemo, useRef } from "react";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
+import { TradingViewChart } from "./TradingViewChart";
 import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
@@ -335,32 +335,59 @@ export function OptionsCalculator({   spotPrice = 0,
 
   const isProfitColor = (val) => val >= 0 ? "#22c55e" : "#ef4444";
 
-  const chartOptions = {
-    chart: { type: "area", toolbar: { show: false }, background: "transparent", animations: { enabled: false } },
-    theme: { mode: "dark" },
-    stroke: { curve: "smooth", width: 2 },
-    colors: ["#38bdf8"],
-    fill: {
-      type: "gradient",
-      gradient: {
-        colorStops: [
-          { offset: 0, color: "#22c55e", opacity: 0.3 },
-          { offset: 50, color: "#38bdf8", opacity: 0.1 },
-          { offset: 100, color: "#ef4444", opacity: 0.3 }
-        ]
+  const payoffTimeScale = 100;
+  const payoffChartOptions = useMemo(() => ({
+    tickMarkFormatter: (time) => `$${(Number(time) / payoffTimeScale).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+    rightPriceScale: {
+      borderVisible: false,
+      scaleMargins: { top: 0.14, bottom: 0.14 }
+    }
+  }), []);
+  const payoffSeriesData = pnlData.map(([price, pnl]) => ({
+    time: Math.max(1, Math.round(Number(price) * payoffTimeScale)),
+    value: Number(pnl),
+    price: Number(price)
+  }));
+  const payoffChartSeries = [{
+    name: "P&L",
+    type: "area",
+    color: "#38bdf8",
+    data: payoffSeriesData,
+    options: {
+      priceFormat: {
+        type: "custom",
+        minMove: 0.01,
+        formatter: (value) => `$${Number(value).toFixed(2)}`
       }
-    },
-    xaxis: { type: "numeric", title: { text: "Underlying Price ($)", style: { color: "#64748b" } }, labels: { style: { colors: "#64748b", fontSize: "10px" }, formatter: v => `$${parseFloat(v).toLocaleString()}` } },
-    yaxis: { title: { text: "P&L ($)", style: { color: "#64748b" } }, labels: { style: { colors: "#94a3b8", fontSize: "11px" }, formatter: v => `$${v.toFixed(2)}` } },
-    grid: { borderColor: "rgba(255,255,255,0.05)", strokeDashArray: 4 },
-    tooltip: { theme: "dark", x: { formatter: v => `Price: $${parseFloat(v).toLocaleString()}` }, y: { formatter: v => `P&L: $${v.toFixed(2)}` } },
-    annotations: {
-      xaxis: [{ x: S, borderColor: "#f59e0b", label: { text: "Spot", style: { color: "#f59e0b", background: "transparent" } } }],
-      yaxis: [{ y: 0, borderColor: "rgba(255,255,255,0.2)", strokeDashArray: 4 }]
-    },
-    dataLabels: { enabled: false },
-    markers: { size: 0 }
-  };
+    }
+  }];
+  const spotPayoffPoint = payoffSeriesData.reduce((closest, point) => {
+    if (!closest) return point;
+    return Math.abs(point.price - S) < Math.abs(closest.price - S) ? point : closest;
+  }, null);
+  const payoffMarkers = [
+    spotPayoffPoint ? {
+      time: spotPayoffPoint.time,
+      position: "atPriceMiddle",
+      price: spotPayoffPoint.value,
+      shape: "circle",
+      color: "#f59e0b",
+      text: "Spot"
+    } : null,
+    ...breakevenPoints.map((point) => ({
+      time: Math.max(1, Math.round(Number(point) * payoffTimeScale)),
+      position: "atPriceMiddle",
+      price: 0,
+      shape: "circle",
+      color: "#22d3ee",
+      text: "BE"
+    }))
+  ].filter(Boolean);
+  const payoffPriceLines = [
+    { id: "zero", price: 0, title: "Break-even", color: "rgba(148,163,184,0.7)" },
+    Number.isFinite(maxProfit) && maxProfit > 0 && maxProfit < 9999 ? { id: "max-profit", price: maxProfit, title: "Max profit", color: "rgba(34,197,94,0.7)" } : null,
+    Number.isFinite(maxLoss) && maxLoss < 0 && maxLoss > -9999 ? { id: "max-loss", price: maxLoss, title: "Max loss", color: "rgba(239,68,68,0.7)" } : null
+  ].filter(Boolean);
 
   useEffect(() => {
     if (savedCalculationsPage > totalSavedCalculationsPages) {
@@ -786,10 +813,13 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
         </div>
         {hasCalculatorMarketData ? (
-          <ReactApexChart
-            options={chartOptions}
-            series={[{ name: "P&L", data: pnlData }]}
-            type="area"
+          <TradingViewChart
+            options={payoffChartOptions}
+            series={payoffChartSeries}
+            priceLines={payoffPriceLines}
+            tradeMarkers={payoffMarkers}
+            valueFormatter={(value) => `$${Number(value).toFixed(2)}`}
+            timeFormatter={(time) => `Price $${(Number(time) / payoffTimeScale).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             height={280}
             width="100%"
           />

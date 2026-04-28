@@ -3,7 +3,8 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+import { zeninFetch, ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+import { getCurrencySymbol } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -404,7 +405,7 @@ useEffect(() => {
           symbols: earningsSymbols.join(","),
           limit: String(Math.max(1, earningsSymbols.length))
         });
-        const res = await fetch(`${BACKEND_URL}/earnings-calendar?${params.toString()}`, {
+        const res = await zeninFetch(`/earnings-calendar?${params.toString()}`, {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -596,10 +597,10 @@ useEffect(() => {
                     {asset.price != null && (
                       <div className="asset-price">
                         <span className="price-val">
-                          {asset.market === "Treasury" ? "" : "$"}
+                          {asset.market === "Treasury" ? "" : getCurrencySymbol(asset.currency || "USD")}
                           {asset.price.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
+                            minimumFractionDigits: (asset.currency === "JPY" || asset.marketType === "spot") ? 0 : 2,
+                            maximumFractionDigits: (asset.currency === "JPY" || asset.marketType === "spot") ? 0 : 2
                           })}
                           {asset.market === "Treasury" ? "%" : ""}
                         </span>

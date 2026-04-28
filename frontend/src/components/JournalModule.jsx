@@ -945,12 +945,13 @@ export function JournalModule({
     if (!Array.isArray(executionRows) || executionRows.length === 0) return [];
     const grouped = [];
     let current = null;
-    executionRows.forEach((row) => {
+    executionRows.forEach((row, index) => {
       const asset = String(row?.asset || "").trim().toUpperCase();
       if (!current || current.asset !== asset) {
         if (current) grouped.push(current);
+        const fallbackKey = `${asset || "UNKNOWN"}::${row?.executedAt || row?.date || index}`;
         current = {
-          key: `${asset}::${row?.id || row?.clientId || Math.random()}`,
+          key: `${asset}::${row?.id || row?.clientId || fallbackKey}`,
           asset,
           header: row,
           items: [row]
@@ -1672,7 +1673,6 @@ function JournalStatsGrid({ stats }) {
       {stats.map((stat) => (
         <article key={stat.label} className={`journal-stat-card-v3 ${stat.tone}`}>
           <div className="journal-stat-top">
-            <span className="journal-stat-icon">{stat.icon}</span>
             <span className="journal-stat-spark" aria-hidden="true" />
           </div>
           <span className="journal-card-label">{stat.label}</span>
@@ -1969,7 +1969,7 @@ function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendar
           <h3>{selectedDay?.key || "Selected Day"}</h3>
           <strong className={Number(selectedDay?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatValue(selectedDay?.pnl || 0, true)}</strong>
           <p>{selectedDayTrades.length} trades · {selectedDayTrades.filter((row) => Number(row.pnl) > 0).length} winners / {selectedDayTrades.filter((row) => Number(row.pnl) < 0).length} losers</p>
-          <button type="button" className="journal-btn primary">View trades from this day</button>
+          <button type="button" className="journal-btn primary journal-btn-small">View trades</button>
         </aside>
       </div>
       <div className="journal-month-summary">

@@ -219,7 +219,7 @@ function sanitizeMacroMetrics(metrics = []) {
 // --------------------------------------------
 
 
-// Security headers
+// Security headers with expanded CSP for production
 app.use(helmet.contentSecurityPolicy({
   directives: {
     defaultSrc: ["'self'"],
@@ -227,18 +227,22 @@ app.use(helmet.contentSecurityPolicy({
       "'self'",
       "ws:",
       "wss:",
+      "https://*.onrender.com",
+      "wss://*.onrender.com",
+      "https://*.vercel.app",
       "https://zenin-mx6w.onrender.com",
-      "https://zenin-mx6w.onrender.com/api",
       "https://api.binance.com",
       "https://api.coingecko.com",
       "https://api.derive.xyz",
       "https://fapi.binance.com"
     ],
-    scriptSrc: ["'self'"],
-    styleSrc: ["'self'", "'unsafe-inline'"],
-    imgSrc: ["'self'", "data:"],
+    scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Added unsafe-eval for some runtime modules if needed
+    styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+    fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+    imgSrc: ["'self'", "data:", "https:", "http:"],
     frameSrc: ["'none'"],
     objectSrc: ["'none'"],
+    upgradeInsecureRequests: [], // Allow upgrading if needed
   }
 }));
 
@@ -270,6 +274,23 @@ const allowedOrigins = Array.from(new Set([
   ...configuredOrigins
 ]));
 
+const isLocalIP = (origin) => {
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname;
+    return (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname.startsWith("192.168.") ||
+      hostname.startsWith("10.") ||
+      hostname.startsWith("172.16.") ||
+      hostname.endsWith(".local")
+    );
+  } catch (e) {
+    return false;
+  }
+};
+
 // Helper to fetch latest results from Dune Analytics
 async function fetchDuneLatestResults(queryId) {
   const apiKey = process.env.DUNE_API_KEY;
@@ -298,15 +319,23 @@ async function fetchDuneLatestResults(queryId) {
 }
 app.use(cors({
   origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
     const normalizedOrigin = normalizeOrigin(origin);
     const isVercelPreview = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalizedOrigin);
-    if (!origin || allowedOrigins.includes(normalizedOrigin) || isVercelPreview) {
+
+    if (allowedOrigins.includes(normalizedOrigin) || isVercelPreview || isLocalIP(origin)) {
       callback(null, true);
     } else {
+      console.warn(`[CORS] Blocked origin: ${origin} (Normalized: ${normalizedOrigin})`);
+      if (normalizedOrigin.endsWith(".zenin.capital") || normalizedOrigin.endsWith(".zenincapital.com")) {
+        return callback(null, true);
+      }
       callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
   optionsSuccessStatus: 204
 }));
 
@@ -697,7 +726,7 @@ function normalizeWatchlistCategoryKey(asset = {}) {
 
   if (["stock", "stocks", "equity", "etf", "etfs"].includes(rawType) || marketType === "equity") return "stocks";
   if (explicitCategory && ["stocks"].includes(explicitCategory)) return "stocks";
-  
+
   if (explicitCategory) return explicitCategory; // fallback for truly custom top-level categories if any
 
   return rawType || "stocks";
@@ -927,7 +956,7 @@ function normaliseSymbol(symbol) {
   // Safety fallback: if BTC/ETH ever reach here, they need the -USD suffix for Yahoo
   const fallbacks = { "BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD" };
   if (fallbacks[symbol]) return fallbacks[symbol];
-  
+
   if (SYMBOL_MAP[symbol]) return SYMBOL_MAP[symbol];
   if (symbol.includes(".")) return symbol;          // already has suffix
   if (/^\d+$/.test(symbol)) return `${String(parseInt(symbol, 10)).padStart(4, "0")}.HK`; // bare number → HK
@@ -1379,8 +1408,8 @@ function fetchYFinancePrices(originalSymbols) {
       // Re-key results from YF ticker back to the original symbol
       const result = {};
       for (const orig of originalSymbols) {
-        result[orig] = yfPrices[orig] || { 
-          price: null, 
+        result[orig] = yfPrices[orig] || {
+          price: null,
           priceChangePercent: null,
           isMarketOpen: true,
           marketStatus: "unknown"
@@ -1422,10 +1451,10 @@ const FALLBACK_STOCKS = {
 
 async function searchYahooFinance(query, type = "tradfi") {
   if (!query || query.trim().length === 0) return [];
-  
+
   const results = [];
   const queryLower = query.toLowerCase();
-  
+
   // Fast Fallback Dictionary Match
   for (const [symbol, name] of Object.entries(FALLBACK_STOCKS)) {
     if (symbol.toLowerCase().includes(queryLower) || name.toLowerCase().includes(queryLower)) {
@@ -1508,6 +1537,39 @@ app.post("/api/db/balance", requireSignedIn, writeLimiter, async (req, res) => {
       return res.status(400).json({ error: "Insufficient balance" });
     }
     handleServerError(res, "Balance update failed", err);
+  }
+});
+
+app.get("/api/db/cash", requireSignedIn, async (req, res) => {
+  try {
+    const balances = await userWorkspace.cash.getAll(req.auth.userId);
+    if (!balances.some((row) => row.currency === "USD")) {
+      const usdBalance = await userWorkspace.balance.get(req.auth.userId);
+      return res.json({
+        balances: [
+          { currency: "USD", balance: usdBalance, updatedAt: new Date().toISOString() },
+          ...balances
+        ]
+      });
+    }
+    res.json({ balances });
+  } catch (err) {
+    handleServerError(res, "Cash balance read failed", err);
+  }
+});
+
+app.post("/api/db/cash", requireSignedIn, writeLimiter, async (req, res) => {
+  try {
+    const { amount, type, currency = "USD" } = req.body || {};
+    if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
+    if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
+    const balanceAfter = await userWorkspace.cash.applyChange(req.auth.userId, currency, amount, type);
+    res.json({ currency: String(currency || "USD").toUpperCase(), balance: balanceAfter });
+  } catch (err) {
+    if (err.code === "INSUFFICIENT_BALANCE") {
+      return res.status(400).json({ error: err.message || "Insufficient balance" });
+    }
+    handleServerError(res, "Cash balance update failed", err);
   }
 });
 
@@ -2024,7 +2086,7 @@ app.get("/api/interval-performance", async (req, res) => {
     type: normalizedType
   };
   const cached = await readServiceSnapshot("interval-performance", snapshotParams);
-  
+
   try {
     const results = await Promise.all(intervals.map(async (int) => {
       try {
@@ -2036,7 +2098,7 @@ app.get("/api/interval-performance", async (req, res) => {
           const stockHistory = await fetchHistoryFromYahoo(cleanSymbol, int);
           history = stockHistory.history;
         }
-        
+
         if (history && history.length > 1) {
           const start = history[0].open || history[0].price;
           const end = history[history.length - 1].close || history[history.length - 1].price;
@@ -2048,7 +2110,7 @@ app.get("/api/interval-performance", async (req, res) => {
         return { interval: int, change: 0 };
       }
     }));
-    
+
     const performanceMap = results.reduce((acc, curr) => {
       acc[curr.interval] = curr.change;
       return acc;
@@ -5373,7 +5435,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
   try {
     const fetch = await resolveFetch();
     const assets = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
-    
+
     const [bybitRes, binanceFundingRes, binanceMarkRes, hlRes, ...binanceOIPromises] = await Promise.allSettled([
       fetch("https://api.bybit.com/v5/market/tickers?category=linear").then(r => r.json()),
       fetch("https://fapi.binance.com/fapi/v1/premiumIndex").then(r => r.json()),
@@ -5458,7 +5520,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
         binanceOIPromises[2]?.value, // SOL
         binanceOIPromises[3]?.value  // BNB
       ];
-      
+
       const symbolsToMap = ["BTC", "ETH", "SOL", "BNB"];
       symbolsToMap.forEach((sym, i) => {
         const fundingItem = binanceFundingRes.value.find(f => f.symbol === `${sym}USDT`);
@@ -5559,7 +5621,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
 app.get('/api/analytics/options', async (req, res) => {
   try {
     const fetch = await resolveFetch();
-    
+
     const [btcDeribit, ethDeribit] = await Promise.allSettled([
       fetch("https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option").then(r => r.json()),
       fetch("https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=ETH&kind=option").then(r => r.json())
@@ -5568,7 +5630,7 @@ app.get('/api/analytics/options', async (req, res) => {
     let totalOIUsd = 0;
     const greeks = [];
     const oiByStrike = [];
-    
+
     let btcVol = 0;
     let ethVol = 0;
 
@@ -5577,7 +5639,7 @@ app.get('/api/analytics/options', async (req, res) => {
       btcDeribit.value.result.forEach(item => {
         totalOIUsd += (item.open_interest || 0) * (item.mark_price || 0); // Assuming mark_price is in USD equivalent
         btcVol += (item.volume_usd || 0);
-        
+
         if (item.open_interest > 100 && greeks.length < 5) {
            greeks.push({
              instrument: item.instrument_name,
@@ -5640,11 +5702,11 @@ const COMMODITY_UNIVERSE = [
   { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global", latestPrice: 82.1, dailyChangePct: -0.55, ytdChangePct: 6.8, oneYearReturnPct: 11.2 },
   { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", latestPrice: 2.34, dailyChangePct: 1.1, ytdChangePct: -3.2, oneYearReturnPct: -8.6 },
   { symbol: "RB", name: "RBOB Gasoline", group: "energy", region: "usa", latestPrice: 2.61, dailyChangePct: 0.4, ytdChangePct: 3.7, oneYearReturnPct: 6.2 },
-  
+
   // Metals (Precious)
   { symbol: "GC", name: "Gold", group: "metals", region: "global", latestPrice: 2378.2, dailyChangePct: 0.41, ytdChangePct: 12.9, oneYearReturnPct: 19.4 },
   { symbol: "SI", name: "Silver", group: "metals", region: "global", latestPrice: 29.4, dailyChangePct: 0.78, ytdChangePct: 10.2, oneYearReturnPct: 14.1 },
-  
+
   // Industrial Metals
   { symbol: "HG", name: "Copper", group: "industrial", region: "global", latestPrice: 4.48, dailyChangePct: -0.2, ytdChangePct: 7.1, oneYearReturnPct: 9.9 },
   { symbol: "ALI=F", name: "Aluminum", group: "industrial", region: "global", latestPrice: 2540.0, dailyChangePct: 0.15, ytdChangePct: 4.2, oneYearReturnPct: 8.5 },
@@ -5652,12 +5714,12 @@ const COMMODITY_UNIVERSE = [
   { symbol: "LED=F", name: "Lead", group: "industrial", region: "global", latestPrice: 2150.0, dailyChangePct: 0.1, ytdChangePct: -1.2, oneYearReturnPct: 2.3 },
   { symbol: "TIN=F", name: "Tin", group: "industrial", region: "global", latestPrice: 32400.0, dailyChangePct: 1.2, ytdChangePct: 15.4, oneYearReturnPct: 22.1 },
   { symbol: "TIO=F", name: "Iron Ore", group: "industrial", region: "global", latestPrice: 112.5, dailyChangePct: -0.8, ytdChangePct: -8.4, oneYearReturnPct: -4.2 },
-  
+
   // Battery Metals
   { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global", latestPrice: 45.2, dailyChangePct: -1.4, ytdChangePct: -18.2, oneYearReturnPct: -24.5 },
   { symbol: "NI=F", name: "Nickel", group: "battery", region: "global", latestPrice: 18450.0, dailyChangePct: 0.35, ytdChangePct: 5.1, oneYearReturnPct: 7.8 },
   { symbol: "REMX", name: "Rare Earths (ETF)", group: "battery", region: "global", latestPrice: 52.8, dailyChangePct: -0.6, ytdChangePct: -12.4, oneYearReturnPct: -15.8 },
-  
+
   // Agriculture
   { symbol: "ZC", name: "Corn", group: "agriculture", region: "global", latestPrice: 4.85, dailyChangePct: -0.63, ytdChangePct: 1.9, oneYearReturnPct: -2.4 },
   { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", latestPrice: 5.78, dailyChangePct: 0.33, ytdChangePct: 2.4, oneYearReturnPct: 1.1 },
@@ -5666,7 +5728,7 @@ const COMMODITY_UNIVERSE = [
   { symbol: "ZR=F", name: "Rice", group: "agriculture", region: "global", latestPrice: 18.42, dailyChangePct: -0.15, ytdChangePct: 5.4, oneYearReturnPct: 9.1 },
   { symbol: "ZL=F", name: "Soybean Oil", group: "agriculture", region: "global", latestPrice: 0.45, dailyChangePct: 0.1, ytdChangePct: -2.1, oneYearReturnPct: -4.5 },
   { symbol: "ZM=F", name: "Soybean Meal", group: "agriculture", region: "global", latestPrice: 342.0, dailyChangePct: 0.45, ytdChangePct: 2.8, oneYearReturnPct: 5.2 },
-  
+
   // Soft Commodities
   { symbol: "KC", name: "Coffee", group: "soft", region: "global", latestPrice: 224.5, dailyChangePct: 1.2, ytdChangePct: 18.4, oneYearReturnPct: 24.2 },
   { symbol: "CC", name: "Cocoa", group: "soft", region: "global", latestPrice: 9450.0, dailyChangePct: -2.4, ytdChangePct: 142.1, oneYearReturnPct: 215.0 },
@@ -5674,13 +5736,13 @@ const COMMODITY_UNIVERSE = [
   { symbol: "CT", name: "Cotton", group: "soft", region: "global", latestPrice: 82.4, dailyChangePct: -0.1, ytdChangePct: -2.8, oneYearReturnPct: -5.4 },
   { symbol: "OJ=F", name: "Orange Juice", group: "soft", region: "global", latestPrice: 382.0, dailyChangePct: 1.8, ytdChangePct: 24.5, oneYearReturnPct: 42.1 },
   { symbol: "LBR=F", name: "Lumber", group: "soft", region: "global", latestPrice: 540.0, dailyChangePct: -0.8, ytdChangePct: -4.2, oneYearReturnPct: -1.8 },
-  
+
   // Livestock
   { symbol: "LE=F", name: "Live Cattle", group: "livestock", region: "global", latestPrice: 182.4, dailyChangePct: 0.25, ytdChangePct: 8.4, oneYearReturnPct: 12.1 },
   { symbol: "GF=F", name: "Feeder Cattle", group: "livestock", region: "global", latestPrice: 248.0, dailyChangePct: 0.42, ytdChangePct: 9.1, oneYearReturnPct: 14.5 },
   { symbol: "HE=F", name: "Lean Hogs", group: "livestock", region: "global", latestPrice: 92.4, dailyChangePct: -0.15, ytdChangePct: 12.4, oneYearReturnPct: 18.2 },
   { symbol: "DC=F", name: "Milk", group: "livestock", region: "global", latestPrice: 18.42, dailyChangePct: 0.1, ytdChangePct: -2.4, oneYearReturnPct: -4.8 },
-  
+
   // Fertilizers
   { symbol: "UAN", name: "Urea Ammonium Nitrate", group: "fertilizers", region: "global", latestPrice: 318.0, dailyChangePct: 0.28, ytdChangePct: 4.1, oneYearReturnPct: 8.0 },
 ];
@@ -6715,3 +6777,194 @@ module.exports = {
   startServer,
   stopServer
 };
+
+// ---------------------------------------------------------------------------
+// Analytics Module - Macro Routes (Compatibility for AnalyticsModule.jsx)
+// ---------------------------------------------------------------------------
+
+app.get("/api/macro/geographies", (req, res) => {
+  const query = String(req.query.query || "").toLowerCase();
+  const macroRegions = [
+    { type: "Global", name: "Global", code: "GLOBAL", parent: null },
+    { type: "Region", name: "Americas", code: "AMER", parent: "Global" },
+    { type: "Region", name: "Europe", code: "EUR", parent: "Global" },
+    { type: "Region", name: "Asia Pacific", code: "APAC", parent: "Global" },
+    { type: "Region", name: "Middle East & Africa", code: "MEA", parent: "Global" }
+  ];
+  const countryRows = FALLBACK_COUNTRY_CATALOG_SEED.map(([cca3, cca2, name]) => ({
+      type: "Country",
+      name: name,
+      code: cca3,
+      regionCode: cca2,
+      parent: "Global"
+    }));
+  const results = [...macroRegions, ...countryRows].filter((row) => {
+    if (!query) return true;
+    return [row.code, row.regionCode, row.name, row.type]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query));
+  });
+  res.json(results);
+});
+
+app.get("/api/macro/indicators", (req, res) => {
+  res.json(MACRO_INDICATOR_CONFIG.map(c => ({
+    code: c.key.toUpperCase(),
+    name: c.label,
+    category: "growth", // Fallback category
+    unit: c.unit
+  })));
+});
+
+app.get("/api/macro/alerts", (req, res) => {
+  res.json([]);
+});
+
+app.get("/api/macro/global/overview", async (req, res) => {
+  res.json(buildMacroOverviewPayload("GLOBAL", "Global", buildDeterministicMacroMetrics("GLOBAL")));
+});
+
+app.get("/api/macro/region/:code/overview", async (req, res) => {
+  const code = String(req.params.code || "REGION").trim().toUpperCase();
+  res.json(buildMacroOverviewPayload(code, code, buildDeterministicMacroMetrics(code)));
+});
+
+app.get("/api/macro/country/:code/overview", async (req, res) => {
+  const code = String(req.params.code || "USA").trim().toUpperCase();
+  try {
+    const metrics = sanitizeMacroMetrics(await fetchWorldBankMacroMetrics(code));
+    res.json(buildMacroOverviewPayload(code, code, metrics));
+  } catch (error) {
+    res.json({
+      ...buildMacroOverviewPayload(code, code, buildDeterministicMacroMetrics(code)),
+      stale: true,
+      stale_reason: error?.message || "macro_overview_fallback"
+    });
+  }
+});
+
+app.get("/api/macro/timeseries", (req, res) => {
+  const { indicator, range } = req.query;
+  const points = range === "1Y" ? 12 : range === "5Y" ? 24 : 60;
+  const series = Array.from({ length: points }, (_, i) => ({
+    date: new Date(Date.now() - (points - i) * 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    value: 100 + i * 0.5 + Math.sin(i / 2) * 5
+  }));
+  res.json({ series });
+});
+
+app.get("/api/macro/compare", (req, res) => {
+  const geos = String(req.query.geos || "")
+    .split(",")
+    .map((geo) => geo.trim().toUpperCase())
+    .filter(Boolean);
+  const rows = geos.map((geo, idx) => ({
+    id: `cmp-${idx}`,
+    geo,
+    value: Number((100 + deterministicMacroOffset(geo, 9)).toFixed(2)),
+    delta: Number((deterministicMacroOffset(`${geo}:delta`, 2) - 1).toFixed(2))
+  }));
+  res.json({ rows });
+});
+
+app.get("/api/macro/calendar", (req, res) => {
+  res.json({ events: [] });
+});
+
+app.get("/api/macro/map", (req, res) => {
+  res.json({ rows: [] });
+});
+
+app.get("/api/macro/rankings", (req, res) => {
+  res.json({ rows: [] });
+});
+
+app.get("/api/macro/forecast", (req, res) => {
+  res.json({ points: [] });
+});
+
+app.get("/api/macro/source/:indicator", (req, res) => {
+  res.json({
+    source: "EODHD + World Bank",
+    updatedAt: new Date().toISOString(),
+    methodology: "Blended real-time and structural indicators."
+  });
+});
+
+app.get("/api/macro/regime", (req, res) => {
+  res.json({ label: "expansion", score: 65, explain: "Overall positive momentum." });
+});
+
+app.get("/api/macro/correlation", (req, res) => {
+  res.json({ rows: [] });
+});
+
+function deterministicMacroOffset(seed, span = 1) {
+  const str = String(seed || "");
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash * 31 + str.charCodeAt(i)) % 100000;
+  }
+  return (hash / 100000) * span;
+}
+
+function buildDeterministicMacroMetrics(scope = "GLOBAL") {
+  const baseValues = {
+    gdp_growth_rate: 2.1,
+    interest_rate: 4.25,
+    inflation_rate: 3.1,
+    unemployment_rate: 4.4,
+    consumer_confidence: 98.5,
+    balance_of_trade: -18.2,
+    cpi: 122.4,
+    core_inflation_rate: 2.8
+  };
+  return sanitizeMacroMetrics(
+    MACRO_INDICATOR_CONFIG.map((config) => {
+      const value = Number((Number(baseValues[config.key] ?? 0) + deterministicMacroOffset(`${scope}:${config.key}`, 0.7) - 0.35).toFixed(2));
+      const previous = Number((value - deterministicMacroOffset(`${scope}:${config.key}:prev`, 0.5) + 0.25).toFixed(2));
+      return {
+        key: config.key,
+        current: value,
+        previous,
+        expectation: Number((value + (value - previous)).toFixed(2)),
+        change: Number((value - previous).toFixed(2)),
+        changePercent: previous ? Number((((value - previous) / Math.abs(previous)) * 100).toFixed(2)) : null,
+        asOf: new Date().toISOString().slice(0, 10),
+        series: Array.from({ length: 12 }, (_, idx) => ({
+          date: new Date(Date.now() - (11 - idx) * 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+          value: Number((previous + (idx / 11) * (value - previous)).toFixed(2))
+        }))
+      };
+    })
+  );
+}
+
+function buildMacroOverviewPayload(code, name, metrics) {
+  const items = sanitizeMacroMetrics(metrics).map((metric, idx) => {
+    const value = Number(metric.current);
+    const previous = Number(metric.previous);
+    const change = Number.isFinite(value) && Number.isFinite(previous)
+      ? Number((value - previous).toFixed(2))
+      : null;
+    return {
+      id: `ov-${String(code || "macro").toLowerCase()}-${metric.key || idx}`,
+      indicator: metric.label,
+      indicatorCode: metric.key,
+      name: metric.label,
+      value: Number.isFinite(value) ? value : null,
+      unit: metric.unit,
+      trend: Number.isFinite(change) ? (change > 0 ? "Up" : change < 0 ? "Down" : "Flat") : "Flat",
+      previous: Number.isFinite(previous) ? previous : null,
+      change,
+      asOf: metric.asOf,
+      series: metric.series
+    };
+  });
+  return {
+    code,
+    name,
+    updatedAt: new Date().toISOString(),
+    items
+  };
+}

@@ -1,8 +1,9 @@
 import { useState, useMemo } from "react";
 import ReactApexChart from "react-apexcharts";
+import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { formatCurrency, getCurrencySymbol } from "../utils/currencyUtils";
+import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD } from "../utils/currencyUtils";
 
 export function PortfolioModule({
   portfolio,
@@ -30,20 +31,53 @@ export function PortfolioModule({
   const [flowSelection, setFlowSelection] = useState(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [flowActionLabel, setFlowActionLabel] = useState("");
-  const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
+  const [displayCurrency, setDisplayCurrency] = useState("USD");
+  const [assetClassFilter, setAssetClassFilter] = useState("all");
+  const G7_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
+  const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
 
-// ✅ 1) compute portfolioValue first
-const portfolioValue = calculatePortfolioValue();
+  const filteredTrades = useMemo(() => {
+    if (assetClassFilter === "all") return trades;
+    return (trades || []).filter(t => {
+      const type = String(t.type || t.marketType || "").toLowerCase();
+      if (assetClassFilter === "equities") return ["stock", "equity", "etf"].includes(type);
+      if (assetClassFilter === "options") return false;
+      if (assetClassFilter === "commodities") return ["commodity", "commodities", "future", "futures"].includes(type);
+      if (assetClassFilter === "crypto") return type === "crypto";
+      return false;
+    });
+  }, [trades, assetClassFilter]);
+
+  const filteredPortfolio = useMemo(() => {
+    if (assetClassFilter === "all") return portfolio;
+    return (portfolio || []).filter(p => {
+      const type = String(p.type || p.marketType || "").toLowerCase();
+      if (assetClassFilter === "equities") return ["stock", "equity", "etf"].includes(type);
+      if (assetClassFilter === "commodities") return ["commodity", "commodities", "future", "futures"].includes(type);
+      if (assetClassFilter === "crypto") return type === "crypto";
+      return false;
+    });
+  }, [portfolio, assetClassFilter]);
+
+  const filteredOptionsTrades = useMemo(() => {
+    if (assetClassFilter === "all" || assetClassFilter === "options") return activeOptionsTrades;
+    return [];
+  }, [activeOptionsTrades, assetClassFilter]);
+
+  // ✅ 1) compute portfolioValue first
+  const portfolioValue = useMemo(() => {
+    return (filteredPortfolio || []).reduce((sum, item) => sum + ((Number(item?.price) || 0) * (Number(item?.quantity) || 0)), 0);
+  }, [filteredPortfolio]);
 
 // ✅ 2) compute metrics next
 const derivedAccountMetrics = useMemo(
   () =>
     calculateAccountSnapshot({
-      trades,
+      trades: filteredTrades,
       portfolioValue,
-      balance,
+      balance: assetClassFilter === "all" ? balance : 0, // Only use cash balance for 'all' view
     }),
-  [trades, portfolioValue, balance]
+  [filteredTrades, portfolioValue, balance, assetClassFilter]
 );
 
 const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
@@ -62,8 +96,8 @@ const liveAvailableBalance = Number.isFinite(
   : initialBalance;
 
 // ✅ 4) compute totalOptionsValue safely (NO undefined helpers)
-const totalOptionsValue = (Array.isArray(activeOptionsTrades)
-  ? activeOptionsTrades
+const totalOptionsValue = (Array.isArray(filteredOptionsTrades)
+  ? filteredOptionsTrades
   : []
 ).reduce((acc, trade) => {
   const chain = multiChainCache[trade.asset];
@@ -74,7 +108,7 @@ const totalOptionsValue = (Array.isArray(activeOptionsTrades)
 }, 0);
 
 const optionTimelineAdjustments = useMemo(() => {
-  return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : [])
+  return (Array.isArray(filteredOptionsTrades) ? filteredOptionsTrades : [])
     .map((trade) => {
       const openedAtRaw = trade?.executedAt || trade?.openedAt || trade?.createdAt || trade?.date;
       const openedAt = new Date(openedAtRaw || 0).getTime();
@@ -155,9 +189,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
 
     const toSeriesValue = (equity) => {
-      if (chartMode === "equity") return equity;
+      // Convert equity from USD to displayCurrency
+      const convertedEquity = displayCurrency === "USD" ? equity : convertFromUSD(equity, displayCurrency, spotPrices);
+      const convertedInitial = displayCurrency === "USD" ? initialBalance : convertFromUSD(initialBalance, displayCurrency, spotPrices);
+
       if (chartMode === "percentage") return ((equity - initialBalance) / initialBalance) * 100;
-      return equity - initialBalance;
+      if (chartMode === "equity") return convertedEquity;
+      return convertedEquity - convertedInitial;
     };
 
     return Array.from({ length: points }, (_, i) => {
@@ -168,32 +206,29 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const baseEquity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
       const equity = baseEquity + getOptionAdjustmentAt(t);
       return [
-        t, // timestamp in ms for ApexCharts datetime axis
+        t,
         Number(toSeriesValue(equity).toFixed(2))
       ];
     });
-  }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity, optionTimelineAdjustments, initialBalance]);
+  }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity, optionTimelineAdjustments, initialBalance, displayCurrency, spotPrices]);
+  const cashBalances = useMemo(() => {
+    const balances = { USD: liveAvailableBalance };
+    (Array.isArray(trades) ? trades : []).forEach(t => {
+      const curr = t.currency || t.quotedCurrency || "USD";
+      if (curr === "USD") return;
+      const amount = (Number(t.price) || 0) * (Number(t.quantity) || 0);
+      if (String(t.orderType || t.side).toLowerCase() === "sell") {
+        balances[curr] = (balances[curr] || 0) + amount;
+      } else {
+        balances[curr] = (balances[curr] || 0) - amount;
+      }
+    });
+    return balances;
+  }, [trades, liveAvailableBalance]);
+
   const yFormatter = (val) => {
     if (chartMode === "percentage") return `${val.toFixed(2)}%`;
-    return formatCurrency(val, "USD", { sign: chartMode === "pnl" });
-  };
-
-  const chartOptions = {
-    chart: { type: "area", toolbar: { show: false }, background: "transparent", animations: { enabled: false } },
-    theme: { mode: "dark" },
-    stroke: { curve: "smooth", width: 2, colors: [chartColor] },
-    fill: {
-      type: "gradient",
-      gradient: {
-        colorStops: [{ offset: 0, color: chartColor, opacity: 0.3 }, { offset: 100, color: chartColor, opacity: 0 }]
-      }
-    },
-    xaxis: { type: "datetime", labels: { style: { colors: "#64748b", fontSize: "10px" } }, axisBorder: { show: false }, axisTicks: { show: false } },
-    yaxis: { labels: { style: { colors: "#94a3b8", fontSize: "11px" }, formatter: yFormatter } },
-    grid: { borderColor: "rgba(255,255,255,0.05)", strokeDashArray: 4, xaxis: { lines: { show: false } } },
-    tooltip: { theme: "dark", x: { format: "dd MMM yyyy HH:mm" }, y: { formatter: yFormatter } },
-    dataLabels: { enabled: false },
-    markers: { size: 0 }
+    return formatCurrency(val, displayCurrency, { sign: chartMode === "pnl" });
   };
 
   const diversificationRows = useMemo(() => {
@@ -236,7 +271,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const bySector = new Map();
     const byRegion = new Map();
     const byFactor = new Map();
-    (Array.isArray(portfolio) ? portfolio : []).forEach((item) => {
+    (Array.isArray(filteredPortfolio) ? filteredPortfolio : []).forEach((item) => {
       const qty = Number(item?.quantity || 0);
       const px = Number(item?.price || 0);
       const value = qty * px;
@@ -456,11 +491,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, [trades]);
 
   const combinedHoldings = useMemo(() => {
-    const spotRows = (Array.isArray(portfolio) ? portfolio : []).map((item) => {
+    const spotRows = (Array.isArray(filteredPortfolio) ? filteredPortfolio : []).map((item, index) => {
       const currency = item?.currency || item?.quotedCurrency || "USD";
       const rawValue = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
       const positionValue = convertToUSD(rawValue, currency, spotPrices);
-      
+      const symbolKey = String(item?.symbol || item?.name || "unknown").trim().toUpperCase();
+      const marketKey = String(item?.marketType || item?.type || "spot").trim().toLowerCase();
+      const fallbackKey = `${symbolKey}-${marketKey}-${Number(item?.quantity) || 0}-${index}`;
+
       const entryPrice = Number(item?.entryPrice);
       const basisPrice = Number.isFinite(entryPrice) ? entryPrice : Number(item?.price) || 0;
       const rawGain = rawValue - (basisPrice * (Number(item?.quantity) || 0));
@@ -468,25 +506,27 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
       return {
         kind: "spot",
-        key: `spot-${item.id}`,
+        key: `spot-${item?.id ?? item?.clientId ?? fallbackKey}`,
         positionValue,
         positionGain,
+        rawValue,
+        currency,
         row: item
       };
     });
 
-    const optionRows = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).map((trade) => {
+    const optionRows = (Array.isArray(filteredOptionsTrades) ? filteredOptionsTrades : []).map((trade) => {
       const chain = multiChainCache[trade.asset];
       const spot = spotPrices[trade.asset];
       const metrics = calculateOptionPnL(trade, chain, spot);
       const currentMark = Number(metrics?.currentMark || 0);
       const qty = Number(trade?.qty || trade?.quantity || 1);
       const pnl = Number(metrics?.pnl || 0);
-      
+
       // Options are usually quoted in the underlying's currency or USD.
       // For now assuming USD for options unless they are crypto options where PnL might be in coins.
       // But calculateOptionPnL already returns USD values usually.
-      
+
       return {
         kind: "options",
         key: `opt-${trade.id}`,
@@ -498,7 +538,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     });
 
     return [...spotRows, ...optionRows].sort((a, b) => (b.positionValue || 0) - (a.positionValue || 0));
-  }, [portfolio, activeOptionsTrades, multiChainCache, spotPrices]);
+  }, [filteredPortfolio, filteredOptionsTrades, multiChainCache, spotPrices]);
 
   const sortedHoldings = useMemo(() => {
     const score = (row) => {
@@ -519,28 +559,93 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const benchmarkSeries = useMemo(() => {
     const drift = benchmarkSymbol === "SPY" ? 0.0008 : benchmarkSymbol === "ACWI" ? 0.0006 : 0.0005;
     if (!Array.isArray(chartData) || chartData.length === 0) return [];
-    const first = Number(chartData[0]?.[1] || 0);
+
     return chartData.map((point, idx) => {
       const t = point[0];
-      const base = first * (1 + drift * idx);
-      return [t, Number(base.toFixed(2))];
+      const multiplier = Math.pow(1 + drift, idx);
+      let value = 0;
+
+      if (chartMode === "equity") {
+        const startValue = displayCurrency === "USD" ? initialBalance : convertFromUSD(initialBalance, displayCurrency, spotPrices);
+        value = startValue * multiplier;
+      } else if (chartMode === "percentage") {
+        value = (multiplier - 1) * 100;
+      } else {
+        // Cash PnL mode
+        const benchmarkPnL = initialBalance * (multiplier - 1);
+        value = displayCurrency === "USD" ? benchmarkPnL : convertFromUSD(benchmarkPnL, displayCurrency, spotPrices);
+      }
+      return [t, Number(value.toFixed(2))];
     });
-  }, [chartData, benchmarkSymbol]);
+  }, [chartData, benchmarkSymbol, chartMode, displayCurrency, initialBalance, spotPrices]);
+
+  const portfolioPerformanceSeries = useMemo(() => {
+    const toData = (points) => points
+      .map(([time, value]) => ({
+        time: Math.floor(Number(time) / 1000),
+        value: Number(value)
+      }))
+      .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value));
+    const priceFormat = {
+      type: "custom",
+      minMove: 0.01,
+      formatter: yFormatter
+    };
+    return [
+      {
+        name: chartMode === "percentage" ? "% Gain" : chartMode === "pnl" ? "Cash PnL" : "Equity Curve",
+        type: "area",
+        color: chartColor,
+        data: toData(chartData),
+        options: { priceFormat }
+      },
+      {
+        name: benchmarkSymbol,
+        type: "line",
+        color: "#f59e0b",
+        data: toData(benchmarkSeries),
+        includeInReadout: false,
+        options: { lineWidth: 1, priceFormat }
+      }
+    ];
+  }, [benchmarkSeries, benchmarkSymbol, chartColor, chartData, chartMode]);
+
+  const portfolioPerformanceLines = useMemo(() => [{
+    id: "portfolio-baseline",
+    price: chartMode === "equity" ? initialBalance : 0,
+    title: chartMode === "equity" ? "Start" : "Break-even",
+    color: "rgba(148,163,184,0.72)"
+  }], [chartMode, initialBalance]);
+
+  const portfolioChartOptions = useMemo(() => ({
+    rightPriceScale: {
+      borderVisible: false,
+      scaleMargins: { top: 0.12, bottom: 0.12 }
+    }
+  }), []);
+
+  const formatPortfolioChartTime = (time) => new Date(Number(time) * 1000).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
 
   const rebalanceSuggestions = useMemo(() => {
     const holdings = sortedHoldings.filter((row) => row.kind === "spot");
     const total = holdings.reduce((sum, row) => sum + Number(row.positionValue || 0), 0);
     if (!holdings.length || total <= 0) return [];
-    
+
     // Equal weight target for simplicity in this example
     const targetBase = 100 / holdings.length;
-    
+
     return holdings.map((row) => {
       const current = (Number(row.positionValue || 0) / total) * 100;
       const drift = current - targetBase;
       const action = drift > 2 ? "Trim" : drift < -2 ? "Add" : "Hold";
       const tradeValue = Math.abs(drift / 100) * total;
-      
+
       return {
         symbol: row.row?.symbol || row.row?.asset || "—",
         current,
@@ -557,7 +662,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const totalDrift = rebalanceSuggestions.reduce((sum, s) => sum + Math.abs(s.drift), 0) / 2;
     const estFees = trades.length * 9.99; // Mock fee
     const tradeVolume = trades.reduce((sum, s) => sum + s.tradeValue, 0);
-    
+
     return {
       tradesRequired: trades.length,
       totalDrift,
@@ -589,10 +694,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, [exposureRows]);
 
   const bestPerformer = useMemo(() => {
-    const rows = Array.isArray(portfolio) ? portfolio : [];
+    const rows = Array.isArray(filteredPortfolio) ? filteredPortfolio : [];
     if (!rows.length) return null;
     return [...rows].sort((a, b) => Number(b?.priceChangePercent || 0) - Number(a?.priceChangePercent || 0))[0];
-  }, [portfolio]);
+  }, [filteredPortfolio]);
 
   const holdingsTableRows = useMemo(() => {
     const total = sortedHoldings.reduce((sum, row) => sum + Number(row?.positionValue || 0), 0);
@@ -610,7 +715,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           symbol,
           name: item?.name || symbol,
           allocation,
-          markValueMain: formatMoney(holding.positionValue),
+          markValueMain: holding.kind === "spot" ? formatCurrency(holding.rawValue, holding.currency) : formatCurrency(holding.positionValue, "USD"),
           markValueSub: `${quantity.toFixed(4)} ${symbol}`,
           pnlMain: formatSignedMoney(holding.positionGain),
           pnlSub: `${Number(item?.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(item?.priceChangePercent || 0).toFixed(2)}%`,
@@ -688,7 +793,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
   const openInsightFlow = (flow, selection = null) => {
     setActiveInsightFlow(flow);
-    setInsightFlowStep(1);
+    setInsightFlowStep(selection ? 2 : 1);
     setFlowSelection(selection);
     setFlowBusy(false);
     setFlowActionLabel("");
@@ -735,7 +840,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
     let body = null;
     if (activeInsightFlow === "attribution") {
-      const contributionRows = attributionRows?.sector || [];
+      const activeGroup = flowSelection?.group?.toLowerCase() || "sector";
+      const contributionRows = attributionRows?.[activeGroup] || attributionRows?.sector || [];
       const maxAbs = Math.max(1, ...contributionRows.map((row) => Math.abs(Number(row?.pnl || 0))));
       if (insightFlowStep === 1) {
         body = (
@@ -911,19 +1017,20 @@ const isProfitable = currentAccountEquity >= initialBalance;
         );
       }
     } else if (activeInsightFlow === "exposure") {
-      const sectors = exposureFlowData.sectors;
-      const activeSector = pickExposure || sectors[0];
+      const activeBucket = flowSelection?.bucket || "Sector";
+      const bucketRows = exposureRows.filter(r => r.bucket === activeBucket);
+      const activeSector = flowSelection || bucketRows[0];
       const concentrationScore = Math.min(100, Math.max(0, Number(activeSector?.weight || 0) * 1.8));
       if (insightFlowStep === 1) {
         body = (
           <div className="portfolio-v2-flow-card">
             <div className="portfolio-v2-flow-headline">
               <h3>Exposure Heatmap</h3>
-              <span>{sectors.length} sectors</span>
+              <span>{bucketRows.length} {activeBucket.toLowerCase()}s</span>
             </div>
-            <p>Entry point from dashboard with top sector exposure snapshots.</p>
+            <p>Entry point from dashboard with top {activeBucket.toLowerCase()} exposure snapshots.</p>
             <div className="portfolio-v2-flow-mini-grid">
-              {sectors.slice(0, 3).map((row) => (
+              {bucketRows.slice(0, 3).map((row) => (
                 <button
                   key={`exp-top-${row.name}`}
                   type="button"
@@ -946,10 +1053,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <div className="portfolio-v2-flow-card">
             <div className="portfolio-v2-flow-headline">
               <h3>Heatmap Overview</h3>
-              <span>Sector map</span>
+              <span>{activeBucket} map</span>
             </div>
             <div className="portfolio-v2-flow-table">
-              {sectors.slice(0, 6).map((row) => (
+              {bucketRows.slice(0, 6).map((row) => (
                 <button
                   key={`heat-${row.name}`}
                   type="button"
@@ -989,12 +1096,20 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
             </div>
             <ul className="portfolio-v2-flow-list">
-              {holdingsTableRows.slice(0, 5).map((row) => (
-                <li key={`exp-holding-${row.key}`}>
-                  <span>{row.symbol}</span>
-                  <strong>{row.allocation.toFixed(2)}%</strong>
-                </li>
-              ))}
+              {holdingsTableRows
+                .filter(row => {
+                  if (!flowSelection) return true;
+                  const bucket = flowSelection.bucket || "Sector";
+                  const val = String(row[bucket.toLowerCase()] || row.sector || "").toLowerCase();
+                  return val === String(flowSelection.name || "").toLowerCase();
+                })
+                .slice(0, 5)
+                .map((row) => (
+                  <li key={`exp-holding-${row.key}`}>
+                    <span>{row.symbol}</span>
+                    <strong>{row.allocation.toFixed(2)}%</strong>
+                  </li>
+                ))}
             </ul>
             <div className="portfolio-v2-flow-actions">
               <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(4)}>View Insights</button>
@@ -1109,13 +1224,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <h3>Rebalance Overview</h3>
               <span>Analyze portfolio drift and trade impact</span>
             </div>
-            
+
             <div className="portfolio-v2-flow-two-col" style={{ alignItems: 'center' }}>
               <div style={{ pointerEvents: 'none' }}>
-                <ReactApexChart 
-                  options={donutOptions} 
-                  series={[100 - totalDrift, totalDrift]} 
-                  type="donut" 
+                <ReactApexChart
+                  options={donutOptions}
+                  series={[100 - totalDrift, totalDrift]}
+                  type="donut"
                   width={200}
                 />
               </div>
@@ -1156,9 +1271,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
               {rebalanceSuggestions.filter(s => s.action !== "Hold").map((s) => (
                 <div key={s.symbol} className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <div className="portfolio-v2-activity-dot" style={{ 
-                        color: s.action === "Trim" ? '#f59e0b' : '#22c55e', 
-                        background: s.action === "Trim" ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)' 
+                      <div className="portfolio-v2-activity-dot" style={{
+                        color: s.action === "Trim" ? '#f59e0b' : '#22c55e',
+                        background: s.action === "Trim" ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)'
                       }}>
                         {s.action === "Trim" ? "↘" : "↗"}
                       </div>
@@ -1228,7 +1343,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <p style={{ color: '#94a3b8', fontSize: '14px' }}>Your trades have been submitted successfully.</p>
               </div>
             </div>
-            
+
             <div className="portfolio-v2-flow-list stacked" style={{ width: '100%', marginTop: '16px' }}>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
                   <span>Projected Drift</span><strong className="positive">0.0%</strong>
@@ -1249,10 +1364,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
       }
     }
 
-    const flowTitle = activeInsightFlow === "attribution" 
-      ? "Performance Attribution Flow" 
-      : activeInsightFlow === "exposure" 
-        ? "Exposure Heatmap Flow" 
+    const flowTitle = activeInsightFlow === "attribution"
+      ? "Performance Attribution Flow"
+      : activeInsightFlow === "exposure"
+        ? "Exposure Heatmap Flow"
         : "Rebalancing Suggestions Flow";
 
     return (
@@ -1276,8 +1391,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <h2>Portfolio</h2>
         </div>
         <div className="portfolio-v2-toolbar">
-          <select className="portfolio-v2-select" defaultValue="all">
+          <select
+            className="portfolio-v2-select"
+            value={assetClassFilter}
+            onChange={(e) => setAssetClassFilter(e.target.value)}
+          >
             <option value="all">All Accounts</option>
+            <option value="equities">Equities</option>
+            <option value="options">Options</option>
+            <option value="commodities">Commodities</option>
+            <option value="crypto">Crypto</option>
           </select>
           <div className="portfolio-v2-range">
             {INTERVALS.map((int) => (
@@ -1303,9 +1426,18 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </span>
         </article>
         <article className="portfolio-v2-stat-card">
-          <span className="label">Cash</span>
-          <strong>{formatMoney(liveAvailableBalance)}</strong>
-          <span className="sub">{cashWeight.toFixed(1)}% of portfolio</span>
+          <span className="label">Cash &amp; Liquidity</span>
+          <div className="portfolio-v2-mini-grid" style={{ marginTop: '8px' }}>
+            {Object.entries(cashBalances)
+              .filter(([_, val]) => Math.abs(val) > 0.01)
+              .map(([curr, val]) => (
+                <div key={curr}>
+                  <span>{curr}</span>
+                  <strong>{formatCurrency(val, curr)}</strong>
+                </div>
+              ))}
+          </div>
+          <span className="sub" style={{ marginTop: '8px', display: 'block' }}>{cashWeight.toFixed(1)}% of portfolio</span>
         </article>
         <article className="portfolio-v2-stat-card">
           <span className="label">Best Performing</span>
@@ -1323,6 +1455,63 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         </article>
       </div>
+
+      <section className="watchlist-panel glass portfolio-v2-panel" style={{ marginBottom: "16px" }}>
+        <div className="section-header">
+          <div>
+            <h2>Portfolio Performance</h2>
+            <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
+              Account curve with benchmark overlay
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {[
+              ["equity", "Equity"],
+              ["percentage", "% Gain"],
+              ["pnl", "Cash PnL"]
+            ].map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                className={`portfolio-v2-range-btn ${chartMode === mode ? "active" : ""}`}
+                onClick={() => setChartMode(mode)}
+              >
+                {label}
+              </button>
+            ))}
+            <select
+              value={displayCurrency}
+              onChange={(e) => setDisplayCurrency(e.target.value)}
+              className="portfolio-v2-select"
+              aria-label="Currency"
+            >
+              {G7_CURRENCIES.map(curr => (
+                <option key={curr} value={curr}>{curr}</option>
+              ))}
+            </select>
+
+            <select
+              value={benchmarkSymbol}
+              onChange={(event) => setBenchmarkSymbol(event.target.value)}
+              className="portfolio-v2-select"
+              aria-label="Benchmark"
+            >
+              <option value="SPY">SPY</option>
+              <option value="QQQ">QQQ</option>
+              <option value="ACWI">ACWI</option>
+            </select>
+          </div>
+        </div>
+        <TradingViewChart
+          options={portfolioChartOptions}
+          series={portfolioPerformanceSeries}
+          priceLines={portfolioPerformanceLines}
+          valueFormatter={(value) => yFormatter(Number(value))}
+          timeFormatter={formatPortfolioChartTime}
+          height={320}
+          width="100%"
+        />
+      </section>
 
       <div className="portfolio-v2-main-grid">
         <div className="portfolio-v2-left">
@@ -1355,35 +1544,47 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   </tr>
                 </thead>
                 <tbody>
-                  {holdingsTableRows.map((row) => (
-                    <tr key={row.key} onClick={() => row.kind === "spot" ? onSelectAsset?.(row.raw) : null}>
-                      <td>
-                        <div className="portfolio-v2-symbol-cell">
-                          <div className="portfolio-v2-symbol-avatar">{row.symbol.slice(0, 1)}</div>
-                          <div>
-                            <strong>{row.symbol}</strong>
-                            <span>{row.name}</span>
-                          </div>
+                  {holdingsTableRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5}>
+                        <div className="portfolio-v2-empty" style={{ padding: '40px 20px', textAlign: 'center' }}>
+                          <div className="portfolio-v2-empty-icon" style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.5 }}>📊</div>
+                          <h3 style={{ margin: '0 0 8px', color: '#f8fafc' }}>No positions found</h3>
+                          <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px' }}>Your portfolio is currently empty. Add assets from the watchlist or search to start tracking.</p>
                         </div>
-                      </td>
-                      <td>{row.allocation.toFixed(2)}%</td>
-                      <td>
-                        <div className="portfolio-v2-stack">
-                          <strong>{row.markValueMain}</strong>
-                          <span>{row.markValueSub}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className={`portfolio-v2-stack ${row.pnlPositive ? "positive" : "negative"}`}>
-                          <strong>{row.pnlMain}</strong>
-                          <span>{row.pnlSub}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`portfolio-v2-status ${row.statusClass}`}>{row.status}</span>
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    holdingsTableRows.map((row) => (
+                      <tr key={row.key} onClick={() => row.kind === "spot" ? onSelectAsset?.(row.raw) : null}>
+                        <td>
+                          <div className="portfolio-v2-symbol-cell">
+                            <div className="portfolio-v2-symbol-avatar">{row.symbol?.slice(0, 1) || "?"}</div>
+                            <div>
+                              <strong>{row.symbol || "Unknown"}</strong>
+                              <span>{row.name || ""}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{(row.allocation || 0).toFixed(2)}%</td>
+                        <td>
+                          <div className="portfolio-v2-stack">
+                            <strong>{row.markValueMain || "$0.00"}</strong>
+                            <span>{row.markValueSub || "0.00"}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <div className={`portfolio-v2-stack ${row.pnlPositive ? "positive" : "negative"}`}>
+                            <strong>{row.pnlMain || "$0.00"}</strong>
+                            <span>{row.pnlSub || "0.00%"}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <span className={`portfolio-v2-status ${row.statusClass || ""}`}>{row.status || "Open"}</span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
                 <tfoot>
                   <tr>
@@ -1403,7 +1604,17 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
               <div className="portfolio-v2-guided-strip" aria-label="Performance attribution workflow">
                 {["Overview", "Drill down", "Top contributors", "Save insight", "Export"].map((step, idx) => (
-                  <span key={`attrib-step-${step}`} className={idx === 0 ? "active" : ""}>{step}</span>
+                  <button
+                    key={`attrib-step-${step}`}
+                    type="button"
+                    className={insightFlowStep === idx + 1 && activeInsightFlow === "attribution" ? "active" : ""}
+                    onClick={() => {
+                      setActiveInsightFlow("attribution");
+                      setInsightFlowStep(idx + 1);
+                    }}
+                  >
+                    {step}
+                  </button>
                 ))}
               </div>
               <div className="portfolio-v2-attrib-grid">
@@ -1434,7 +1645,17 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
               <div className="portfolio-v2-guided-strip" aria-label="Exposure heatmap workflow">
                 {["Sector", "Cell detail", "Holdings", "Risk", "Alert"].map((step, idx) => (
-                  <span key={`exposure-step-${step}`} className={idx === 0 ? "active" : ""}>{step}</span>
+                  <button
+                    key={`exposure-step-${step}`}
+                    type="button"
+                    className={insightFlowStep === idx + 1 && activeInsightFlow === "exposure" ? "active" : ""}
+                    onClick={() => {
+                      setActiveInsightFlow("exposure");
+                      setInsightFlowStep(idx + 1);
+                    }}
+                  >
+                    {step}
+                  </button>
                 ))}
               </div>
               <div className="portfolio-v2-heatmap">
@@ -1481,8 +1702,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       <td>{row.target.toFixed(2)}%</td>
                       <td className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</td>
                       <td>
-                        <button 
-                          type="button" 
+                        <button
+                          type="button"
                           className={`portfolio-v2-status ${row.action.toLowerCase()}`}
                           style={{ border: 'none', cursor: row.action === 'Hold' ? 'default' : 'pointer', width: '100%', textAlign: 'center' }}
                           onClick={() => row.action !== "Hold" && openInsightFlow("rebalancing", row)}

@@ -13,6 +13,7 @@ import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch, ZENIN_API_BASE_URL } from "./utils/zeninFetch";
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
+import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
 
@@ -182,7 +183,7 @@ const readStoredArray = (key) => {
   try {
     const raw = localStorage.getItem(key);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.filter(i => i && typeof i === 'object') : [];
   } catch {
     return [];
   }
@@ -196,31 +197,56 @@ const hasAuthToken = () => {
   }
 };
 
-const mapOptionHoldingToTrade = (holding) => ({
-  ...holding,
-  id: `opt-${holding.id}`,
-  dbId: holding.id,
-  strategy: holding.strategyName || holding.name || "Strategy",
-  asset: holding.symbol,
-  legs: holding.legsJson || [],
-  qty: Number(holding.quantity) || 1,
-  quantity: Number(holding.quantity) || 1,
-  notional: Number(holding.quantity) || 1,
-  netPremiumAtEntry: Number.isFinite(Number(holding.entryPrice)) ? Number(holding.entryPrice) : (Number(holding.price) || 0),
-  initialDelta: 0,
-  initialTheta: 0,
-  executedAt: holding.openedAt || holding.date_added || new Date().toISOString(),
-  status: "OPEN",
-  pnl: 0
-});
+const mapOptionHoldingToTrade = (holding) => {
+  if (!holding) return null;
+  return {
+    ...holding,
+    id: `opt-${holding.id}`,
+    dbId: holding.id,
+    strategy: holding.strategyName || holding.name || "Strategy",
+    asset: holding.symbol,
+    legs: holding.legsJson || [],
+    qty: Number(holding.quantity) || 1,
+    quantity: Number(holding.quantity) || 1,
+    notional: Number(holding.quantity) || 1,
+    netPremiumAtEntry: Number.isFinite(Number(holding.entryPrice)) ? Number(holding.entryPrice) : (Number(holding.price) || 0),
+    initialDelta: 0,
+    initialTheta: 0,
+    executedAt: holding.openedAt || holding.date_added || new Date().toISOString(),
+    status: "OPEN",
+    pnl: 0
+  };
+};
 
 function App() {
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
   const [activeCategory, setActiveCategory] = useState("");
   const [activeTheme, setActiveTheme] = useState("");
-  const [portfolio, setPortfolio] = useState(() => readStoredArray("zenin_portfolio"));
-  const [watchlistAssets, setWatchlistAssets] = useState(() => readStoredArray("zenin_watchlist_assets"));
+  const [portfolio, setPortfolio] = useState(() => {
+    const stored = readStoredArray("zenin_portfolio");
+    if (stored.length > 0) return stored;
+    // Initial demo data for new guests to show app capability
+    if (!hasAuthToken()) {
+      return [
+        { symbol: "AAPL", name: "Apple Inc.", type: "stock", marketType: "equity", quantity: 10, entryPrice: 170.0, price: 189.5, currency: "USD" },
+        { symbol: "BTC", name: "Bitcoin", type: "crypto", marketType: "spot", quantity: 0.05, entryPrice: 65000, price: 94250, currency: "USD" }
+      ];
+    }
+    return [];
+  });
+  const [watchlistAssets, setWatchlistAssets] = useState(() => {
+    const stored = readStoredArray("zenin_watchlist_assets");
+    if (stored.length > 0) return stored;
+    if (!hasAuthToken()) {
+      return [
+        { symbol: "NVDA", name: "NVIDIA", type: "stock", marketType: "equity", theme: "AI Infrastructure", category: "stocks" },
+        { symbol: "SOL", name: "Solana", type: "crypto", marketType: "spot", category: "crypto" },
+        { symbol: "ETH", name: "Ethereum", type: "crypto", marketType: "spot", category: "crypto" }
+      ];
+    }
+    return [];
+  });
   const [trades, setTrades] = useState(() => {
     const saved = localStorage.getItem("zenin_trades");
     if (!saved) return [];
@@ -267,8 +293,9 @@ function App() {
     const storedTrades = readStoredArray("zenin_active_options_trades");
     if (storedTrades.length > 0) return storedTrades;
     return readStoredArray("zenin_portfolio")
-      .filter((holding) => String(holding.marketType || "").toLowerCase() === "options")
-      .map(mapOptionHoldingToTrade);
+      .filter((holding) => holding && String(holding.marketType || "").toLowerCase() === "options")
+      .map(mapOptionHoldingToTrade)
+      .filter(Boolean);
   });
   const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
 
@@ -296,21 +323,27 @@ const [balance, setBalance] = useState(() => {
   const stored = rawStoredBalance == null ? NaN : Number(rawStoredBalance);
   return Number.isFinite(stored) && stored >= 0 ? stored : 10000;
 });
+const [cashBalances, setCashBalances] = useState({});
+
+const fetchCashBalances = async () => {
+  if (!hasAuthToken()) return;
+  try {
+    const res = await zeninFetch("/db/cash");
+    if (!res.ok) return;
+    const data = await res.json();
+    const map = {};
+    if (Array.isArray(data?.balances)) {
+       data.balances.forEach(b => { map[b.currency] = b.balance; });
+       setCashBalances(map);
+       if (map["USD"] != null) setBalance(map["USD"]);
+    }
+  } catch (err) {
+    console.warn("Cash balances unavailable", err);
+  }
+};
 
 useEffect(() => {
-  if (!hasAuthToken()) return;
-  zeninFetch(`/db/balance`)
-    .then((res) => {
-      if (!res.ok) throw new Error(`Failed to load balance: ${res.status}`);
-      return res.json();
-    })
-    .then((data) => {
-      const loaded = Number(data?.balance);
-      setBalance(Number.isFinite(loaded) ? loaded : 10000);
-    })
-    .catch((err) => {
-      console.warn("Balance unavailable; using local guest balance.", err);
-    });
+  fetchCashBalances();
 }, []);
 
   useEffect(() => {
@@ -349,8 +382,9 @@ useEffect(() => {
         
         // Hydrate activeOptionsTrades from portfolio
         const optionTrades = holdings
-          .filter(h => String(h.marketType || "").toLowerCase() === "options")
-          .map(mapOptionHoldingToTrade);
+          .filter(h => h && String(h.marketType || "").toLowerCase() === "options")
+          .map(mapOptionHoldingToTrade)
+          .filter(Boolean);
         if (optionTrades.length > 0 || holdings.length > 0 || hasAuthToken()) {
           setActiveOptionsTrades(optionTrades);
         }
@@ -485,7 +519,7 @@ useEffect(() => {
     setSearchLoading(true);
     setSearchHasSettled(false);
 
-    fetch(`${BACKEND_URL}/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`, {
+    zeninFetch(`/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`, {
       signal: controller.signal
     })
       .then(async (res) => {
@@ -1015,7 +1049,8 @@ useEffect(() => {
     setSelectedAsset,
   });
 
-const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
+const addToPortfolio = async (asset, quantity = 1, orderType = "buy", options = {}) => {
+  const { buyCurrency = "USD", notionalInBuyCurrency = null } = options;
   const normalizedQuantity = Math.max(0, quantity);
   if (normalizedQuantity <= 0) return;
   const normalizedSymbol = normalizeSymbolKey(asset.symbol);
@@ -1026,8 +1061,10 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
   const notional = tradePrice * normalizedQuantity;
 
   if (orderType === "buy") {
-    if (notional > balance) {
-      const msg = `Insufficient balance. You need $${(notional - balance).toFixed(2)} more.`;
+    const activeBalance = buyCurrency === "USD" ? balance : (cashBalances[buyCurrency] || 0);
+    const cost = notionalInBuyCurrency != null ? notionalInBuyCurrency : notional;
+    if (cost > activeBalance) {
+      const msg = `Insufficient ${buyCurrency} balance. You need ${buyCurrency} ${(cost - activeBalance).toFixed(2)} more.`;
       showTradeToast(msg, "error");
       return { ok: false, reason: "insufficient_balance", message: msg };
     }
@@ -1061,6 +1098,8 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
       type: normalizeAssetType(normalizedAsset),
       quantity: normalizedQuantity,
       orderType,
+      buyCurrency,
+      notionalInBuyCurrency,
       date_added: new Date().toISOString(),
       executedAt: executionTimestamp,
       date: executionDate,
@@ -1088,6 +1127,7 @@ const addToPortfolio = async (asset, quantity = 1, orderType = "buy") => {
     if (savedTrade) {
       setTrades((prev) => [savedTrade, ...prev]);
     }
+    fetchCashBalances();
 
   } catch (err) {
     console.warn(`Backend ${orderType} unavailable; recording local simulated trade.`, err);
@@ -2644,7 +2684,8 @@ const handleOptionTradeClosed = async (tradeId) => {
             />
           </div>
         ) : (
-          <Suspense fallback={<div className="loading-state module-loading-state">Loading workspace...</div>}>
+          <GenericErrorBoundary>
+            <Suspense fallback={<div className="loading-state module-loading-state">Loading workspace...</div>}>
         {activeSection === "Home" && (
           <HomeModule
             portfolio={portfolioWithEntry}
@@ -2871,7 +2912,8 @@ const handleOptionTradeClosed = async (tradeId) => {
         {activeSection === "Tax Estimator" && (
           <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} />
         )}
-          </Suspense>
+            </Suspense>
+          </GenericErrorBoundary>
         )}
       </main>
 
@@ -2893,7 +2935,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             onViewCompanyProfile={openCompanyProfile}
             portfolio={portfolioWithEntry}
             balance={balance}
+            cashBalances={cashBalances}
             trades={trades}
+            spotPrices={spotPrices}
           />
         )
       )}
