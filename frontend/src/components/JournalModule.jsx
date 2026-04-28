@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours

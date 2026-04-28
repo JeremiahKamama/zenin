@@ -1,3 +1,11 @@
+/**
+ * Shared account metric calculators for Zenin.
+ * 
+ * NOTE: This module is decoupled from currencyUtils to prevent 
+ * Temporal Dead Zone (TDZ) initialization cycles. 
+ * Pass conversion functions as arguments where needed.
+ */
+
 export const INITIAL_ACCOUNT_BALANCE = 10000;
 
 function toFiniteNumber(value, fallback = null) {
@@ -5,14 +13,23 @@ function toFiniteNumber(value, fallback = null) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-import { convertToUSD } from "./currencyUtils";
-
-export function calculatePortfolioMarketValue(portfolio = [], fxRates = {}) {
+/**
+ * Calculates the total market value of a portfolio.
+ * @param {Array} portfolio 
+ * @param {Object} fxRates 
+ * @param {Function} converter - The convertToUSD function from currencyUtils.
+ */
+export function calculatePortfolioMarketValue(portfolio = [], fxRates = {}, converter) {
   return (Array.isArray(portfolio) ? portfolio : []).reduce((total, item) => {
     const price = toFiniteNumber(item?.price, 0);
     const quantity = toFiniteNumber(item?.quantity, 0);
     const currency = item?.currency || item?.quotedCurrency || "USD";
-    const valueInUSD = convertToUSD(price * quantity, currency, fxRates);
+    
+    // If no converter is provided, assume USD (identity)
+    const valueInUSD = typeof converter === "function" 
+      ? converter(price * quantity, currency, fxRates)
+      : (price * quantity);
+      
     return total + valueInUSD;
   }, 0);
 }

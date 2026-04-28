@@ -1,4 +1,5 @@
-import { ZENIN_API_BASE_URL } from "./zeninFetch";
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+
 
 export function canUseWebSocket() {
   return typeof window !== "undefined" && "WebSocket" in window;

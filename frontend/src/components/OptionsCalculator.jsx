@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { TradingViewChart } from "./TradingViewChart";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 

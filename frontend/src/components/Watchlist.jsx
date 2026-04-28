@@ -3,7 +3,8 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
-import { zeninFetch, ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+import { zeninFetch } from "../utils/zeninFetch";
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { getCurrencySymbol } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;

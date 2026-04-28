@@ -7,11 +7,13 @@ import { HomeModule } from "./components/HomeModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
-import { updateFXRates } from "./utils/currencyUtils";
+import { updateFXRates, convertToUSD } from "./utils/currencyUtils";
 import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
-import { zeninFetch, ZENIN_API_BASE_URL } from "./utils/zeninFetch";
+import { zeninFetch } from "./utils/zeninFetch";
+import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
+
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { SpeedInsights } from "@vercel/speed-insights/react"
@@ -1537,9 +1539,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [spotPrices]);
 
   const portfolioMarketValue = useMemo(
-    () => calculatePortfolioMarketValue(portfolioWithEntry, spotPrices),
+    () => calculatePortfolioMarketValue(portfolioWithEntry, spotPrices, convertToUSD),
     [portfolioWithEntry, spotPrices]
   );
+
 
   const totalOptionsPnL = useMemo(() => {
     return activeOptionsTrades.reduce((total, trade) => {

@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getCurrencySymbol, formatCurrency, convertToUSD } from "../utils/currencyUtils";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { getMarketStatus } from "../utils/marketHours";
 const BACKEND_URL = ZENIN_API_BASE_URL;
 

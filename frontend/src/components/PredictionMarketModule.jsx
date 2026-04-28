@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const PREDICTION_REFRESH_MS = 21600000; // 6 hours

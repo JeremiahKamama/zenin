@@ -4,7 +4,8 @@ import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;

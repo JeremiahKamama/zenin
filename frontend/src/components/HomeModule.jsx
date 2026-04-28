@@ -3,7 +3,8 @@ import ReactApexChart from "react-apexcharts";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;

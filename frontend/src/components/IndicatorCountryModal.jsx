@@ -3,7 +3,8 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
-import { ZENIN_API_BASE_URL } from "../utils/zeninFetch";
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
