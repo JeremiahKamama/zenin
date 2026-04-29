@@ -109,15 +109,14 @@ export function HomeModule({
   const resolveMoverType = (asset) => {
     const type = String(asset?.type || "").toLowerCase();
     const marketType = String(asset?.marketType || "").toLowerCase();
-    if (
-      type === "crypto" ||
-      type === "stablecoin" ||
-      type === "exchange token" ||
-      marketType === "spot"
-    ) {
-      return "crypto";
-    }
-    return "tradfi";
+    const symbol = String(asset?.symbol || "").toUpperCase();
+    
+    if (type.includes("crypto") || type === "stablecoin" || type === "exchange token" || marketType === "spot") return "Crypto";
+    if (type.includes("forex") || type.includes("fx") || symbol.includes("/") || asset?.pair) return "Forex";
+    if (type.includes("commodity") || ["GLD", "GC", "CL", "NG"].includes(symbol)) return "Commodity";
+    if (type.includes("option")) return "Option";
+    
+    return "Equity";
   };
 
   const moversUniverse = useMemo(() => {
@@ -791,8 +790,20 @@ export function HomeModule({
     const type = String(asset?.type || asset?.marketType || "").toLowerCase();
     const symbol = String(asset?.symbol || "").toUpperCase();
     const name = String(asset?.name || "").toLowerCase();
+    
     if (type.includes("option") || asset?.__marketType === "options") return "options";
-    if (type.includes("crypto") || ["BTC", "ETH", "SOL", "HYPE"].includes(symbol)) return "macro";
+    if (
+      type.includes("crypto") || 
+      ["BTC", "ETH", "SOL", "HYPE"].includes(symbol)
+    ) return "crypto";
+    
+    if (
+      type.includes("forex") || 
+      type.includes("fx") || 
+      symbol.includes("/") || 
+      ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"].includes(symbol)
+    ) return "macro";
+    
     if (
       type.includes("commodity") ||
       ["GLD", "GC", "CL", "WTI", "USO", "SLV", "NG"].includes(symbol) ||
@@ -800,6 +811,7 @@ export function HomeModule({
       name.includes("crude") ||
       name.includes("oil")
     ) return "commodities";
+    
     return "equities";
   };
 
@@ -875,7 +887,13 @@ export function HomeModule({
         id: `impact-${asset.id || symbol}`,
         symbol,
         name: asset?.name || symbol,
-        type: classifyMarketAsset(asset) === "commodities" ? "Commodity" : classifyMarketAsset(asset) === "macro" ? "Macro" : "Equity",
+        type: (() => {
+          const cat = classifyMarketAsset(asset);
+          if (cat === "crypto") return "Crypto";
+          if (cat === "commodities") return "Commodity";
+          if (cat === "macro") return "Macro";
+          return "Equity";
+        })(),
         price,
         dailyPct,
         exposurePct: totalAccountEquity > 0 ? (value / totalAccountEquity) * 100 : 0,
@@ -955,26 +973,50 @@ export function HomeModule({
 
   const macroContextRows = useMemo(() => {
     if (macroData.length > 0) {
-      return macroData.map(m => ({
-        indicator: m.label,
-        value: m.unit === "%" ? `${m.current?.toFixed(2)}%` : m.current?.toFixed(2),
-        change: m.changePercent ? `${m.changePercent > 0 ? "+" : ""}${m.changePercent.toFixed(2)}%` : "—",
-        tone: m.changePercent > 0 ? "positive" : m.changePercent < 0 ? "negative" : "neutral",
-        series: m.series?.map(s => s.value) || []
-      })).slice(0, 6);
+      return macroData.map(m => {
+        const val = Number(m.current);
+        let displayValue = m.unit === "%" ? `${val.toFixed(2)}%` : val.toFixed(2);
+        
+        // Truncate large values like Balance of Trade
+        if (m.label.toLowerCase().includes("balance of trade") || m.indicatorCode === "balance_of_trade") {
+          const absVal = Math.abs(val);
+          if (absVal >= 1e9) displayValue = `$${(val / 1e9).toFixed(2)}B`;
+          else if (absVal >= 1e6) displayValue = `$${(val / 1e6).toFixed(2)}M`;
+          else displayValue = `$${val.toLocaleString()}`;
+        }
+
+        return {
+          indicator: m.label,
+          value: displayValue,
+          change: m.changePercent ? `${m.changePercent > 0 ? "+" : ""}${m.changePercent.toFixed(2)}%` : "—",
+          tone: m.changePercent > 0 ? "positive" : m.changePercent < 0 ? "negative" : "neutral",
+          series: m.series?.map(s => s.value) || []
+        };
+      }).slice(0, 6);
     }
 
     const vix = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : 13.85;
     const rates = Number.isFinite(Number(todayView.rates)) ? Number(todayView.rates) : 5.5;
-    const gold = moversUniverse.find((asset) => ["GLD", "GC"].includes(String(asset?.symbol || "").toUpperCase()) || String(asset?.name || "").toLowerCase().includes("gold"));
-    const crude = moversUniverse.find((asset) => ["CL", "WTI", "USO"].includes(String(asset?.symbol || "").toUpperCase()) || String(asset?.name || "").toLowerCase().includes("crude"));
+    
+    // Improved gold/crude selection to prioritize futures and handle zero/null prices
+    const getMacroPrice = (symbols, keywords, fallback) => {
+      const asset = moversUniverse.find((a) => 
+        symbols.includes(String(a?.symbol || "").toUpperCase()) || 
+        keywords.some(k => String(a?.name || "").toLowerCase().includes(k))
+      );
+      return (asset && Number(asset.price) > 0) ? Number(asset.price) : fallback;
+    };
+
+    const goldPrice = getMacroPrice(["GC", "GLD", "XAUUSD=X"], ["gold spot", "gold futures"], 2386.4);
+    const crudePrice = getMacroPrice(["CL", "WTI", "USO"], ["wti crude", "crude oil"], 77.02);
+
     return [
       { indicator: "US CPI (YoY)", value: "3.36%", change: "-0.10pp", tone: "negative", series: [62, 60, 61, 59, 60, 58, 59] },
       { indicator: "Fed Funds Rate", value: `${rates.toFixed(2)}%`, change: "—", tone: "neutral", series: [50, 50, 50, 50, 50, 50, 50] },
       { indicator: "US 10Y Yield", value: "4.31%", change: "+4.2 bps", tone: "positive", series: [42, 44, 47, 52, 50, 53, 55] },
       { indicator: "VIX Index", value: vix.toFixed(2), change: "-5.3%", tone: "positive", series: [58, 52, 50, 46, 48, 44, 42] },
-      { indicator: "Gold (Spot)", value: formatMoney(Number(gold?.price || 2386.4)), change: "+0.72%", tone: "positive", series: [40, 42, 45, 43, 48, 51, 53], color: "#f59e0b" },
-      { indicator: "WTI Crude", value: formatMoney(Number(crude?.price || 77.02)), change: "-1.90%", tone: "negative", series: [55, 54, 49, 47, 42, 40, 38], color: "#ef4444" }
+      { indicator: "Gold (Spot)", value: formatMoney(goldPrice), change: "+0.72%", tone: "positive", series: [40, 42, 45, 43, 48, 51, 53], color: "#f59e0b" },
+      { indicator: "WTI Crude", value: formatMoney(crudePrice), change: "-1.90%", tone: "negative", series: [55, 54, 49, 47, 42, 40, 38], color: "#ef4444" }
     ];
   }, [macroData, formatMoney, moversUniverse, todayView.rates, todayView.vix]);
 
@@ -1555,8 +1597,8 @@ export function HomeModule({
               <button type="button">View all</button>
             </div>
             <div className="market-mover-tabs">
-              {["equities", "options", "commodities", "macro"].map((tab) => (
-                <button key={tab} type="button" className={marketDetailTab === tab ? "active" : ""} onClick={() => setMarketDetailTab(tab)}>{tab}</button>
+              {["equities", "crypto", "options", "commodities", "macro"].map((tab) => (
+                <button key={tab} type="button" className={marketDetailTab === tab ? "active" : ""} onClick={() => setMarketDetailTab(tab)} style={{ textTransform: "capitalize" }}>{tab}</button>
               ))}
             </div>
             <div className="market-movers-columns">
@@ -2094,7 +2136,7 @@ function MarketMoverList({ title, rows, formatAssetPrice, onSelectAsset }) {
         return (
           <button key={`${title}-${row.id || row.symbol}`} type="button" className="market-mover-detail-row" onClick={() => onSelectAsset?.(row)}>
             <MarketAssetLogo symbol={row.symbol} type={type} />
-            <div><strong>{row.symbol}</strong><span>{row.name || row.symbol}</span></div>
+            <div><strong>{row.symbol}</strong></div>
             <span>{formatAssetPrice(row)}</span>
             <em className={change >= 0 ? "positive" : "negative"}>{change >= 0 ? "▲" : "▼"} {Math.abs(change).toFixed(2)}%</em>
           </button>

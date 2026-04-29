@@ -3,7 +3,7 @@ const formatMacroValue = (value, key = "") => {
   if (!Number.isFinite(n)) return "—";
 
   // Truncate large values for Balance of Trade
-  if (key === "balance_of_trade") {
+  if (key === "balance_of_trade" || String(key).toLowerCase().includes("balance of trade")) {
     const abs = Math.abs(n);
     if (abs >= 1e9) {
       return (n / 1e9).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "B";

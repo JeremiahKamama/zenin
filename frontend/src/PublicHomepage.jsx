@@ -754,8 +754,8 @@ export default function PublicHomepage() {
       <footer className="footer">
         <div className="container footer-line">
           <span>© 2026 Zenin Capital. All rights reserved.</span>
-          <span>Responsive homepage concept built for all screen sizes.</span>
         </div>
+
       </footer>
       <SpeedInsights />
     </div>

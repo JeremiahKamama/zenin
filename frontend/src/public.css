@@ -99,11 +99,14 @@ body.page-dark-theme #root {
 .zc-home .site-header {
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 2000;
   backdrop-filter: blur(16px);
-  background: rgba(4, 9, 21, 0.92);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  -webkit-backdrop-filter: blur(16px);
+  background: rgba(4, 9, 21, 0.88);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  transition: background 0.3s ease, border-color 0.3s ease;
 }
+
 
 .zc-home .nav {
   display: grid;
@@ -216,7 +219,20 @@ body.page-dark-theme #root {
   border: 1px solid var(--border-strong);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+  cursor: pointer;
+  z-index: 2100;
+  transition: all 0.2s ease;
 }
+
+.zc-home .menu-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: scale(1.05);
+}
+
+.zc-home .menu-toggle:active {
+  transform: scale(0.95);
+}
+
 
 .zc-home .hero {
   padding: 46px 0 28px;
@@ -255,11 +271,12 @@ body.page-dark-theme #root {
 
 .zc-home h1 {
   margin: 20px 0 18px;
-  font-size: clamp(2.7rem, 7vw, 5.4rem);
-  line-height: 0.98;
-  letter-spacing: -0.06em;
-  max-width: 10ch;
+  font-size: clamp(2.4rem, 8vw, 5.2rem);
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+  max-width: 12ch;
 }
+
 
 .zc-home .gradient-text {
   background: linear-gradient(180deg, #8eb6ff, #2f6eff 75%);
@@ -462,7 +479,15 @@ body.page-dark-theme #root {
   background: linear-gradient(180deg, rgba(11, 22, 42, 0.86), rgba(7, 15, 29, 0.94));
   border: 1px solid var(--border);
   border-radius: 18px;
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
+
+.zc-home .feature-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--primary-2);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
 
 .zc-home .stat-card {
   padding: 14px;
@@ -1320,7 +1345,11 @@ body.page-dark-theme #root {
 
 .zc-home .pricing-table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(to right, #000 92%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, #000 92%, transparent 100%);
 }
+
 
 .zc-home .pricing-table {
   width: 100%;
@@ -1717,15 +1746,32 @@ body.page-dark-theme #root {
   .zc-home .nav-actions.open {
     display: flex;
     flex-direction: column;
-    align-items: stretch;
-    padding-bottom: 14px;
-    margin-top: 6px;
+    align-items: center;
+    text-align: center;
+    padding: 30px 20px;
+    gap: 24px;
+    background: rgba(4, 9, 21, 0.98);
+    backdrop-filter: blur(20px);
+    position: fixed;
+    top: 80px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    animation: fadeInSlideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  .zc-home .nav-links.open {
-    gap: 16px;
-    padding-top: 8px;
+  @keyframes fadeInSlideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
   }
+
+  .zc-home .nav-links.open a {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
 
   .zc-home .hero-features,
   .zc-home .stats-grid {
@@ -1761,7 +1807,9 @@ body.page-dark-theme #root {
   .zc-home .cta-actions {
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
   }
+
 
   .zc-home .hero-actions .btn,
   .zc-home .cta-actions .btn,

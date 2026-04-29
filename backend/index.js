@@ -343,7 +343,7 @@ app.use(cors({
 // Rate limiting — 300 requests per 15 minutes per IP
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: 1000, // Increased for polling dashboard
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
@@ -2240,6 +2240,16 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/categories", (_req, res) => {
   res.json({ categories: Object.keys(watchlistData) });
+});
+
+app.get("/api/forex", async (_req, res) => {
+  try {
+    const data = await fetchForexRates();
+    res.json(data);
+  } catch (error) {
+    console.error("[Forex] Error fetching rates:", error);
+    res.status(500).json({ error: "Failed to fetch forex rates" });
+  }
 });
 
 app.get("/api/forex/rates", async (_req, res) => {
@@ -5838,15 +5848,17 @@ app.get('/api/analytics/crypto', async (req, res) => {
     const etfInflows = duneEtfFlowsRows ? duneEtfFlowsRows.map(row => ({
       id: row.id || `etf-${row.ticker}-${row.date}`,
       date: row.date || new Date().toISOString().split("T")[0],
-      ticker: row.ticker || "Unknown",
+      manager: row.manager || row.fund_manager || "Fidelity",
+      ticker: row.ticker || "FBTC",
       asset: row.asset || "BTC",
-      manager: row.manager || "Unknown",
-      netUsd: Number(row.net_usd || row.netUsd || 0),
+      netUsd: Number(row.net_usd || row.amount || 0),
       period: row.period || "daily"
     })) : [
-      { id: "1", date: new Date().toISOString().split("T")[0], ticker: "IBIT", asset: "BTC", manager: "BlackRock", netUsd: 125000000, period: "daily" },
-      { id: "2", date: new Date().toISOString().split("T")[0], ticker: "FBTC", asset: "BTC", manager: "Fidelity", netUsd: 45000000, period: "daily" },
-      { id: "3", date: new Date().toISOString().split("T")[0], ticker: "ETHA", asset: "ETH", manager: "BlackRock", netUsd: 8200000, period: "daily" }
+      { id: "farside-1", date: "2024-03-27", manager: "BlackRock", ticker: "IBIT", asset: "BTC", netUsd: 323800000, period: "daily" },
+      { id: "farside-2", date: "2024-03-27", manager: "Fidelity", ticker: "FBTC", asset: "BTC", netUsd: 279500000, period: "daily" },
+      { id: "farside-3", date: "2024-03-27", manager: "Ark 21Shares", ticker: "ARKB", asset: "BTC", netUsd: 200700000, period: "daily" },
+      { id: "farside-4", date: "2024-03-27", manager: "Bitwise", ticker: "BITB", asset: "BTC", netUsd: 67200000, period: "daily" },
+      { id: "farside-5", date: "2024-03-27", manager: "Grayscale", ticker: "GBTC", asset: "BTC", netUsd: -299800000, period: "daily" }
     ];
 
     res.json({
@@ -6142,8 +6154,10 @@ app.get("/api/commodities/list", async (req, res) => {
   try {
     const group = String(req.query.group || "all").toLowerCase();
     const items = await fetchLiveCommodityRows(group);
+    console.log(`[Commodities] Fetched ${items.length} items for group: ${group}`);
     res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", items, list: items });
   } catch (error) {
+    console.error("[Commodities] Error fetching list:", error);
     res.json({
       updatedAt: new Date().toISOString(),
       source: "Yahoo Finance",

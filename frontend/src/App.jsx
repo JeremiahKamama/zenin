@@ -261,6 +261,7 @@ function App() {
     }
   });
   const [homeMarketMovers, setHomeMarketMovers] = useState([]);
+  const [homeMacroData, setHomeMacroData] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [watchlistStale, setWatchlistStale] = useState(false);
@@ -463,27 +464,70 @@ useEffect(() => {
 
     const fetchHomeMovers = async () => {
       try {
-        const baseRes = await zeninFetch(`/watchlist?category=stocks`);
-        if (!baseRes.ok) return;
-        const baseData = await baseRes.json();
-        const snapshotAssets = Array.isArray(baseData?.assets) ? baseData.assets : [];
+        const [stocksRes, forexRes, commoditiesRes, macroRes] = await Promise.all([
+          zeninFetch(`/watchlist?category=stocks`),
+          zeninFetch(`/forex`),
+          zeninFetch(`/commodities/list`),
+          zeninFetch(`/analytics/equities`)
+        ]);
 
-        const merged = snapshotAssets
+        let snapshotAssets = [];
+        if (stocksRes.ok) {
+          const stocksData = await stocksRes.json();
+          snapshotAssets = Array.isArray(stocksData?.assets) ? stocksData.assets : [];
+        }
+
+        let forexAssets = [];
+        if (forexRes.ok) {
+          const forexData = await forexRes.json();
+          const gainers = Array.isArray(forexData?.gainers) ? forexData.gainers : [];
+          const losers = Array.isArray(forexData?.losers) ? forexData.losers : [];
+          forexAssets = [...gainers, ...losers].map(fx => ({
+            ...fx,
+            symbol: fx.pair || fx.symbol,
+            price: Number(fx.rate),
+            priceChangePercent: Number(fx.daily),
+            type: "forex"
+          }));
+        }
+
+        let commodityAssets = [];
+        if (commoditiesRes.ok) {
+          const commData = await commoditiesRes.json();
+          commodityAssets = (Array.isArray(commData?.list) ? commData.list : []).map(c => ({
+            ...c,
+            price: Number(c.price),
+            priceChangePercent: Number(c.dailyChangePct),
+            type: "commodity"
+          }));
+        }
+
+        if (macroRes.ok) {
+          const macroPayload = await macroRes.json();
+          if (isMounted && Array.isArray(macroPayload?.macroData)) {
+            setHomeMacroData(macroPayload.macroData);
+          }
+        }
+
+        const merged = [...snapshotAssets, ...forexAssets, ...commodityAssets]
           .map((asset) => {
             const price = Number(asset?.price);
             const priceChangePercent = Number(asset?.priceChangePercent);
+            
+            // Clean up symbol to be ticker only
+            let cleanSymbol = String(asset?.symbol || "").split(" (")[0].split(" - ")[0].trim();
+            if (asset.type === "forex" && cleanSymbol.includes("/")) {
+              cleanSymbol = cleanSymbol.split("/")[0]; // Just show the base currency or pair
+            }
+
             return {
               ...asset,
+              symbol: cleanSymbol,
               price: Number.isFinite(price) ? price : null,
               priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
             };
           })
           .filter((asset) => Number.isFinite(asset.price) && Number.isFinite(asset.priceChangePercent));
-
-        if (!merged.length) {
-          if (isMounted) setHomeMarketMovers([]);
-          return;
-        }
 
         if (isMounted) setHomeMarketMovers(merged);
       } catch (error) {
@@ -2695,6 +2739,7 @@ const handleOptionTradeClosed = async (tradeId) => {
             trades={trades}
             assets={assets}
             marketMovers={homeMarketMovers}
+            macroData={homeMacroData}
             watchlistAssets={watchlistAssets}
             activeOptionsTrades={activeOptionsTrades}
             multiChainCache={multiChainCache}

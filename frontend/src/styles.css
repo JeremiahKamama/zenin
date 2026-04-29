@@ -15585,13 +15585,17 @@ body.light-theme-active .home-v2-attention-card .home-v3-btn.secondary {
 }
 
 .market-context-toolbar {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .market-context-toolbar label,
 .market-context-refresh {
+  flex: 1;
+  min-width: 140px;
+  max-width: 200px;
   min-height: 52px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 8px;
@@ -15642,8 +15646,11 @@ body.light-theme-active .home-v2-attention-card .home-v3-btn.secondary {
 
 .market-context-refresh em {
   color: #94a3b8;
-  font-size: 11px;
+  font-size: 10px;
   font-style: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .market-context-panel {

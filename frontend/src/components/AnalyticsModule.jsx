@@ -387,6 +387,8 @@ export function AnalyticsModule({ backendUrl }) {
   const [timeRange, setTimeRange] = useState("1Y");
   const [equitiesSavedViews, setEquitiesSavedViews] = useState([]);
   const [equitiesAlerts, setEquitiesAlerts] = useState([]);
+  const [etfPageIndex, setEtfPageIndex] = useState(0);
+  const ETF_PAGE_SIZE = 5;
   const [selectedGeoType, setSelectedGeoType] = useState("Country");
   const [selectedGeoCode, setSelectedGeoCode] = useState("USA");
   const [selectedCategory, setSelectedCategory] = useState("growth");
@@ -717,6 +719,9 @@ export function AnalyticsModule({ backendUrl }) {
       const rowsFrom = (payload, key) =>
         Array.isArray(payload?.[key]) ? payload[key] : Array.isArray(payload) ? payload : [];
 
+      const newList = rowsFrom(listRes, "items").length ? rowsFrom(listRes, "items") : rowsFrom(listRes, "list");
+      console.log("[Analytics] Commodities List Update:", { count: newList.length, group: selectedCommodityGroup });
+
       setCommoditiesData((prev) => ({
         ...prev,
         updatedAt:
@@ -725,7 +730,7 @@ export function AnalyticsModule({ backendUrl }) {
           prev.updatedAt ||
           new Date().toISOString(),
         overview: overviewRes?.overview || overviewRes || prev.overview,
-        list: rowsFrom(listRes, "items").length ? rowsFrom(listRes, "items") : rowsFrom(listRes, "list"),
+        list: newList,
         priceSeries: rowsFrom(priceRes, "series"),
         fundamentals: rowsFrom(fundamentalsRes, "items").length ? rowsFrom(fundamentalsRes, "items") : rowsFrom(fundamentalsRes, "metrics"),
         flows: rowsFrom(flowsRes, "items").length ? rowsFrom(flowsRes, "items") : rowsFrom(flowsRes, "flows"),
@@ -788,6 +793,10 @@ export function AnalyticsModule({ backendUrl }) {
   useEffect(() => {
     setCommodityPriceSeriesPageIndex(0);
   }, [selectedCommoditySymbol, selectedCommodityTimeRange, selectedCommodityRegion]);
+
+  useEffect(() => {
+    setCommodityAssetsPageIndex(0);
+  }, [selectedCommodityGroup, commoditySearchQuery, selectedCommodityRegion]);
 
   useEffect(() => {
     setCommoditySeasonalityPageIndex(0);
@@ -1135,12 +1144,14 @@ export function AnalyticsModule({ backendUrl }) {
     const rows = (commoditiesData.list || []).filter((row) => {
       const inGroup = selectedCommodityGroup === "all" || String(row?.group || "").toLowerCase() === selectedCommodityGroup;
       if (!inGroup) return false;
+      const inRegion = selectedCommodityRegion === "global" || String(row?.region || "").toLowerCase() === selectedCommodityRegion;
+      if (!inRegion) return false;
       if (!q) return true;
       return `${row?.symbol || ""} ${row?.name || ""} ${row?.group || ""} ${row?.region || ""}`.toLowerCase().includes(q);
     });
     const movers = [...rows].sort((a, b) => Math.abs(Number(b?.dailyChangePct) || 0) - Math.abs(Number(a?.dailyChangePct) || 0)).slice(0, 5);
     return { rows, movers };
-  }, [commoditiesData.list, commoditySearchQuery, selectedCommodityGroup]);
+  }, [commoditiesData.list, commoditySearchQuery, selectedCommodityGroup, selectedCommodityRegion]);
 
   const forexMoverRows = useMemo(() => {
     const gainers = Array.isArray(macroData.forexMovers?.gainers) ? macroData.forexMovers.gainers : [];
@@ -1332,6 +1343,15 @@ export function AnalyticsModule({ backendUrl }) {
                         <option value="quarterly">Quarterly</option>
                       </select>
                     </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        Page {etfPageIndex + 1}
+                      </span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button type="button" className="analytics-btn ghost" onClick={() => setEtfPageIndex(p => Math.max(0, p - 1))} disabled={etfPageIndex === 0}>Prev</button>
+                        <button type="button" className="analytics-btn ghost" onClick={() => setEtfPageIndex(p => p + 1)} disabled={((cryptoData.etfInflows || []).filter(r => (etfAssetToggle === "All" || r.asset === etfAssetToggle) && r.period === etfPeriodToggle).length <= (etfPageIndex + 1) * ETF_PAGE_SIZE)}>Next</button>
+                      </div>
+                    </div>
                   </div>
                   <AnalyticsTableCard
                     title=""
@@ -1350,6 +1370,7 @@ export function AnalyticsModule({ backendUrl }) {
                     ]}
                     rows={(cryptoData.etfInflows || [])
                       .filter(r => (etfAssetToggle === "All" || r.asset === etfAssetToggle) && r.period === etfPeriodToggle)
+                      .slice(etfPageIndex * ETF_PAGE_SIZE, (etfPageIndex + 1) * ETF_PAGE_SIZE)
                       .map((row, idx) => ({
                         id: row.id || `etf-${idx}`,
                         manager: row.manager,
@@ -2617,8 +2638,16 @@ export function AnalyticsModule({ backendUrl }) {
                       >
                         <div className="analytics-card-label">{label}</div>
                         <div className="analytics-metric-value" style={{ marginTop: 8 }}>
-                          {Number.isFinite(Number(row?.value)) ? Number(row.value).toFixed(2) : "—"}
-                          {row?.unit ? <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 4 }}>{row.unit}</span> : null}
+                          {(() => {
+                            const val = Number(row?.value);
+                            if (!Number.isFinite(val)) return "—";
+                            const absVal = Math.abs(val);
+                            if (absVal >= 1e12) return (val / 1e12).toFixed(2) + " T";
+                            if (absVal >= 1e9) return (val / 1e9).toFixed(2) + " B";
+                            if (absVal >= 1e6) return (val / 1e6).toFixed(2) + " M";
+                            return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                          })()}
+                          {row?.unit && !["B", "M", "T"].includes(row.unit) ? <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 4 }}>{row.unit}</span> : null}
                         </div>
                         <div style={{ marginTop: 8 }}><StatusPill tone={getTrendTone(trend)}>{trend}</StatusPill></div>
                         <div className="analytics-card-subtitle">{interpretation}</div>

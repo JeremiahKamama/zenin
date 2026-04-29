@@ -591,13 +591,12 @@ export function FullMetricsPage({
                   };
 
                   const benchmarkPerf = benchmarkFinviz?.summary || {};
-                  const fvVal = benchmarkPerf[fvKeyMap[timeframe]];
-                  const benchmarkReturn = fvVal 
+                  const benchmarkReturn = Number.isFinite(parseFloat(String(fvVal).replace(/[^-0.9.]/g, ''))) 
                     ? parseFloat(String(fvVal).replace(/[^-0.9.]/g, '')) 
-                    : getReturn(benchmarkHistory, timeframeDays);
+                    : (Number.isFinite(getReturn(benchmarkHistory, timeframeDays)) ? getReturn(benchmarkHistory, timeframeDays) : 0);
                   
-                  const portfolioReturn = getReturn(tradeTimeline, timeframeDays);
-                  const diff = portfolioReturn - benchmarkReturn;
+                  const portfolioReturn = getReturn(tradeTimeline, timeframeDays) || 0;
+                  const diff = Number.isFinite(benchmarkReturn) ? (portfolioReturn - benchmarkReturn) : 0;
                   const isOutperforming = diff > 0;
 
                   const drivers = [];

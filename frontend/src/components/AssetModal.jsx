@@ -67,6 +67,13 @@ export function AssetModal({
   const isStockResearchEligible = normalizedAssetKind === "stock";
   const isTradeEligible = !isForexAsset && normalizedAssetKind !== "indicator";
 
+  const cleanAsset = useMemo(() => {
+    if (!asset) return null;
+    const cloned = { ...asset };
+    delete cloned._forceSell;
+    return cloned;
+  }, [asset]);
+
   const [chartType, setChartType] = useState("line");
   const [visibleIndicators, setVisibleIndicators] = useState({
     volume: true,
@@ -718,8 +725,6 @@ export function AssetModal({
   const hasDetailedFundamentals = fundamentalsDetails.some((item) => item.value !== "—");
 
   if (!asset) return null;
-    const cleanAsset = { ...asset };
-    delete cleanAsset._forceSell;
 
   return (
     <div className="modal-overlay" onClick={onClose}>

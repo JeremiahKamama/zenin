@@ -32,6 +32,16 @@ const watchlistData = {
     {"symbol":"DOGE","name":"Dogecoin","market":"Spot"},
     {"symbol":"DOT","name":"Polkadot","market":"Spot"}
   ],
+  "forex": [
+    {"symbol":"EURUSD","name":"EUR/USD","market":"Forex", "type":"forex"},
+    {"symbol":"GBPUSD","name":"GBP/USD","market":"Forex", "type":"forex"},
+    {"symbol":"USDJPY","name":"USD/JPY","market":"Forex", "type":"forex"},
+    {"symbol":"AUDUSD","name":"AUD/USD","market":"Forex", "type":"forex"},
+    {"symbol":"USDCAD","name":"USD/CAD","market":"Forex", "type":"forex"},
+    {"symbol":"USDCHF","name":"USD/CHF","market":"Forex", "type":"forex"},
+    {"symbol":"EURGBP","name":"EUR/GBP","market":"Forex", "type":"forex"},
+    {"symbol":"EURJPY","name":"EUR/JPY","market":"Forex", "type":"forex"}
+  ],
   "stocks": [
     {"symbol":"ENR","name":"Siemens Energy","market":"EUR","theme":"Energy","category":"Gas"},
     {"symbol":"8058.T","name":"Mitsubishi Corporation","market":"TSE","theme":"AI","category":"Industrial Diodes","role":"Industrial/Telecom High-Power Laser Diodes (EML/DML)","edge":"The company has accumulated industrial-grade reliability references such as wavelength stability even under high-temp conditions"},
@@ -161,7 +171,6 @@ const watchlistData = {
     {"symbol":"GE","name":"GE Aerospace","market":null,"theme":"Defense","category":"Defense"},
     {"symbol":"LMT","name":"Lockheed Martin","market":null,"theme":"Defense","category":"Defense"},
     {"symbol":"RTX","name":"RTX","market":null,"theme":"Defense","category":"Defense"},
-    {"symbol":"KTOS","name":"Kratos Defense & Security Solutions","market":null,"theme":"Defense","category":"Defense"},
     {"symbol":"KRMN","name":"Karman Holdings","market":null,"theme":"Defense","category":"Defense"},
     {"symbol":"EMBJ","name":"Embraer S.A.","market":null,"theme":"Defense","category":"Defense"},
     {"symbol":"FTAI","name":"FTAI Aviation Ltd","market":null,"theme":"Defense","category":"Defense"},
