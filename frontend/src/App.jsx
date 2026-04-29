@@ -404,9 +404,29 @@ useEffect(() => {
         return res.json();
       })
       .then((data) => {
-        const assets = Array.isArray(data?.assets) ? data.assets : [];
-        if (assets.length > 0 || hasAuthToken()) {
-          setWatchlistAssets(assets);
+        const backendAssets = Array.isArray(data?.assets) ? data.assets : [];
+        const localAssets = readStoredArray("zenin_watchlist_assets");
+        const mergedAssets = mergeWatchlistEntries(localAssets, backendAssets);
+        setWatchlistAssets((prev) => mergeAssetPrices(mergedAssets, prev));
+
+        const backendKeys = new Set(backendAssets.map((asset) => getAssetCatalogKey(asset)));
+        const missingLocalAssets = localAssets.filter((asset) => !backendKeys.has(getAssetCatalogKey(asset)));
+        if (missingLocalAssets.length > 0) {
+          zeninFetch(`/db/watchlist/bulk`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ assets: missingLocalAssets })
+          })
+            .then((res) => {
+              if (!res.ok) throw new Error(`Failed to sync watchlist: ${res.status}`);
+              return res.json();
+            })
+            .then((syncData) => {
+              const savedAssets = Array.isArray(syncData?.assets) ? syncData.assets : [];
+              if (!savedAssets.length) return;
+              setWatchlistAssets((prev) => mergeAssetPrices(mergeWatchlistEntries(prev, savedAssets), prev));
+            })
+            .catch((err) => console.warn("Watchlist bulk sync skipped.", err));
         }
       })
       .catch((err) => console.warn("Watchlist backend unavailable; using local watchlist.", err));
@@ -726,6 +746,29 @@ useEffect(() => {
       }
       return merged;
     });
+  };
+
+  const mergeWatchlistEntries = (primaryAssets = [], secondaryAssets = []) => {
+    const merged = new Map();
+    [...(Array.isArray(primaryAssets) ? primaryAssets : []), ...(Array.isArray(secondaryAssets) ? secondaryAssets : [])]
+      .forEach((asset) => {
+        if (!asset || typeof asset !== "object") return;
+        const symbol = normalizeSymbolKey(asset?.symbol);
+        if (!symbol) return;
+        const key = getAssetCatalogKey(asset);
+        const previous = merged.get(key) || {};
+        merged.set(key, {
+          ...previous,
+          ...asset,
+          symbol,
+          name: asset?.name || previous?.name || symbol,
+          type: asset?.type || previous?.type || inferWatchlistAssetKind(asset),
+          category: asset?.category ?? previous?.category ?? null,
+          theme: asset?.theme ?? previous?.theme ?? null,
+          marketType: String(asset?.marketType || previous?.marketType || "").trim().toLowerCase() || inferWatchlistMarketType(asset)
+        });
+      });
+    return Array.from(merged.values());
   };
 
   const prunePriceCache = () => {

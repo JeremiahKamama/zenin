@@ -694,23 +694,58 @@ function validatePortfolioUpdate(req, res, next) {
 }
 
 function validateWatchlistAsset(req, res, next) {
-  const { symbol, name, type, marketType, category, theme } = req.body;
-  if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
-    return res.status(400).json({ error: "Invalid symbol" });
+  const { asset, error } = sanitizeWatchlistAssetInput(req.body);
+  if (error) {
+    return res.status(400).json({ error });
   }
-  if (!name || typeof name !== "string" || name.length > 100) {
-    return res.status(400).json({ error: "Invalid name" });
-  }
-  if (!type || typeof type !== "string" || type.length > 50) {
-    return res.status(400).json({ error: "Invalid type" });
-  }
-  if (category != null && (typeof category !== "string" || category.length > 100)) {
-    return res.status(400).json({ error: "Invalid category" });
-  }
-  if (theme != null && (typeof theme !== "string" || theme.length > 100)) {
-    return res.status(400).json({ error: "Invalid theme" });
-  }
+  req.body = asset;
   next();
+}
+
+function sanitizeWatchlistAssetInput(input = {}) {
+  const symbol = String(input?.symbol || "").trim().toUpperCase();
+  if (!symbol || symbol.length > 20) {
+    return { error: "Invalid symbol" };
+  }
+
+  const name = String(input?.name || "").trim();
+  if (!name || name.length > 100) {
+    return { error: "Invalid name" };
+  }
+
+  const type = String(input?.type || "").trim().toLowerCase();
+  if (!type || type.length > 50) {
+    return { error: "Invalid type" };
+  }
+
+  const marketTypeRaw = input?.marketType == null ? "" : String(input.marketType).trim().toLowerCase();
+  if (marketTypeRaw && marketTypeRaw.length > 50) {
+    return { error: "Invalid marketType" };
+  }
+
+  const categoryRaw = input?.category == null ? "" : String(input.category).trim().toLowerCase();
+  if (categoryRaw.length > 100) {
+    return { error: "Invalid category" };
+  }
+
+  const themeRaw = input?.theme == null ? "" : String(input.theme).trim();
+  if (themeRaw.length > 100) {
+    return { error: "Invalid theme" };
+  }
+
+  const dateAdded = input?.date_added || input?.dateAdded || null;
+  return {
+    asset: {
+      symbol,
+      name,
+      type,
+      marketType: marketTypeRaw || null,
+      category: categoryRaw || null,
+      theme: themeRaw || null,
+      date_added: dateAdded
+    },
+    error: null
+  };
 }
 
 function normalizeWatchlistCategoryKey(asset = {}) {
@@ -5653,6 +5688,36 @@ app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validateWatchlistAs
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Watchlist write failed", error);
+  }
+});
+
+app.post("/api/db/watchlist/bulk", requireSignedIn, writeLimiter, async (req, res) => {
+  try {
+    const rawAssets = Array.isArray(req.body?.assets) ? req.body.assets : [];
+    if (!rawAssets.length) {
+      return res.status(400).json({ error: "assets array required" });
+    }
+    if (rawAssets.length > 1000) {
+      return res.status(400).json({ error: "Too many assets" });
+    }
+
+    const sanitizedAssets = [];
+    for (const rawAsset of rawAssets) {
+      const { asset, error } = sanitizeWatchlistAssetInput(rawAsset);
+      if (error) {
+        return res.status(400).json({ error });
+      }
+      sanitizedAssets.push(asset);
+    }
+
+    const savedAssets = [];
+    for (const asset of sanitizedAssets) {
+      savedAssets.push(await userWorkspace.watchlist.add(req.auth.userId, asset));
+    }
+
+    res.status(201).json({ assets: savedAssets });
+  } catch (error) {
+    handleServerError(res, "Watchlist bulk write failed", error);
   }
 });
 
