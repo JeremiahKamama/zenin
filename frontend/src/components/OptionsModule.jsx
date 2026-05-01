@@ -4,9 +4,7 @@ import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-
-import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
-const BACKEND_URL = ZENIN_API_BASE_URL;
+import { zeninFetch } from "../utils/zeninFetch";
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
 const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
@@ -316,7 +314,7 @@ useEffect(() => {
   let cancelled = false;
   const loadEarnings = async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/earnings-calendar`);
+      const res = await zeninFetch(`/earnings-calendar`);
       if (!res.ok) return;
       const payload = await res.json();
       if (cancelled) return;
@@ -363,7 +361,7 @@ useEffect(() => {
         }
         fetchState.chainInFlight.add(symbol);
         fetchState.lastChainFetchAt[symbol] = now;
-        fetch(`${BACKEND_URL}/options/crypto`, {
+        zeninFetch(`/options/crypto`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ currency: symbol })
@@ -399,7 +397,7 @@ useEffect(() => {
       if (fetchState.spotInFlight.has(symbol) || now - lastFetchAt < 120000) return;
       fetchState.spotInFlight.add(symbol);
       fetchState.lastSpotFetchAt[symbol] = now;
-      fetch(`${BACKEND_URL}/prices?type=crypto&symbols=${symbol}`)
+      zeninFetch(`/prices?type=crypto&symbols=${symbol}`)
           .then(res => res.json())
           .then(data => {
              const price = Number(data?.prices?.[symbol]?.price);
@@ -450,7 +448,7 @@ useEffect(() => {
 
   const getHyperliquidFallbackSpot = async (assetSymbol) => {
     try {
-      const res = await fetch(`${BACKEND_URL}/crypto-market`, { signal: controller.signal });
+      const res = await zeninFetch(`/crypto-market`, { signal: controller.signal });
       if (!res.ok) return null;
       const data = await res.json();
       if (controller.signal.aborted) return null;
@@ -494,7 +492,7 @@ useEffect(() => {
       setLoading(true);
       try {
         setOptionsError("");
-        const res = await fetch(`${BACKEND_URL}/options/crypto`, {
+        const res = await zeninFetch(`/options/crypto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
@@ -643,7 +641,7 @@ useEffect(() => {
         minNotional: String(whaleMinNotional),
         source: whaleSource
       });
-      const res = await fetch(`${BACKEND_URL}/options/whale-trades?${params.toString()}`);
+      const res = await zeninFetch(`/options/whale-trades?${params.toString()}`);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`HTTP ${res.status}: ${text}`);
@@ -921,7 +919,7 @@ useEffect(() => {
         state.inFlight.add(cacheKey);
         state.lastFetchedAt[cacheKey] = Date.now();
         try {
-          const res = await fetch(`${BACKEND_URL}/options/crypto`, {
+          const res = await zeninFetch(`/options/crypto`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ currency: activeAsset, expiry: expiryTs })

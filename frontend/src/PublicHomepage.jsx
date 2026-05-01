@@ -108,11 +108,7 @@ export default function PublicHomepage() {
     () => normalizeBillingCycle(authUser?.currentBillingCycle || "monthly"),
     [authUser?.currentBillingCycle]
   );
-  const hasAuthToken = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    return Boolean(String(localStorage.getItem("zenin_auth_token") || "").trim());
-  }, []);
-  const hasAuthenticatedPlanContext = hasAuthToken && Boolean(authUser?.id);
+  const hasAuthenticatedPlanContext = Boolean(authUser?.id);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -137,8 +133,6 @@ export default function PublicHomepage() {
 
   useEffect(() => {
     let mounted = true;
-    const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
-    if (!token) return;
     zeninFetch("/auth/me")
       .then((res) => res.json().catch(() => ({})))
       .then((data) => {
@@ -147,7 +141,11 @@ export default function PublicHomepage() {
           setAuthUser(data.user);
           saveAuthUser(data.user);
           setBillingCycle(normalizeBillingCycle(data.user.currentBillingCycle || "monthly"));
+          return;
         }
+        setAuthUser(null);
+        localStorage.removeItem("zenin_auth_user");
+        localStorage.removeItem("zenin_auth_expires_at");
       })
       .catch(() => {
         // best-effort sync
@@ -166,8 +164,7 @@ export default function PublicHomepage() {
     const normalizedBillingCycle = normalizeBillingCycle(billingCycle);
     setPricingError("");
 
-    const token = String(localStorage.getItem("zenin_auth_token") || "").trim();
-    if (!token) {
+    if (!authUser?.id) {
       // Allow guest to "select" a plan which will be reflected in the dashboard session
       window.location.href = postPlanTarget;
       return;

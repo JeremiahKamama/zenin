@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { canUseWebSocket, resolveZeninWsUrl } from "../utils/livePriceStream";
 
 const normalizeSymbol = (symbol) => String(symbol || "").trim().toUpperCase();
@@ -114,11 +114,13 @@ export function useLivePriceStream({
         };
       };
 
-      setAssets?.((prev) => prev.map(enrichRow));
-      setWatchlistAssets?.((prev) => prev.map(enrichRow));
-      setPortfolio?.((prev) => prev.map(enrichRow));
-      setSelectedAsset?.((prev) => (prev ? enrichRow(prev) : prev));
-      setLastUpdatedAt(updatedAt || new Date().toISOString());
+      startTransition(() => {
+        setAssets?.((prev) => prev.map(enrichRow));
+        setWatchlistAssets?.((prev) => prev.map(enrichRow));
+        setPortfolio?.((prev) => prev.map(enrichRow));
+        setSelectedAsset?.((prev) => (prev ? enrichRow(prev) : prev));
+        setLastUpdatedAt(updatedAt || new Date().toISOString());
+      });
     };
 
     subscriptions.forEach(({ quoteType, symbols }) => {

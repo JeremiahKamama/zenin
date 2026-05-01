@@ -1,9 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, startTransition, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Watchlist } from "./components/Watchlist";
-import { PortfolioModule } from "./components/PortfolioModule";
 import { AssetModal } from "./components/AssetModal";
 import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
-import { HomeModule } from "./components/HomeModule";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
@@ -15,10 +13,13 @@ import { zeninFetch } from "./utils/zeninFetch";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
+import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
 
+const HomeModule = lazy(() => import("./components/HomeModule").then((mod) => ({ default: mod.HomeModule })));
+const PortfolioModule = lazy(() => import("./components/PortfolioModule").then((mod) => ({ default: mod.PortfolioModule })));
 const OptionsModule = lazy(() => import("./components/OptionsModule").then((mod) => ({ default: mod.OptionsModule })));
 const JournalModule = lazy(() => import("./components/JournalModule").then((mod) => ({ default: mod.JournalModule })));
 const AnalyticsModule = lazy(() => import("./components/AnalyticsModule").then((mod) => ({ default: mod.AnalyticsModule })));
@@ -135,9 +136,8 @@ function hasSectionAccessForUser(plan, isAdmin, section) {
 
 function hasStoredAuthSession() {
   try {
-    const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
     const rawUser = localStorage.getItem("zenin_auth_user");
-    return Boolean(token || rawUser);
+    return Boolean(rawUser);
   } catch {
     return false;
   }
@@ -193,7 +193,7 @@ const readStoredArray = (key) => {
 
 const hasAuthToken = () => {
   try {
-    return Boolean(String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim());
+    return Boolean(localStorage.getItem("zenin_auth_user"));
   } catch {
     return false;
   }
@@ -320,34 +320,12 @@ function App() {
       });
   }, [assets, watchlistAssets, customStockThemes]);
 
-  // Replace the localStorage balance useState with:
-const [balance, setBalance] = useState(() => {
-  const rawStoredBalance = localStorage.getItem("zenin_balance");
-  const stored = rawStoredBalance == null ? NaN : Number(rawStoredBalance);
-  return Number.isFinite(stored) && stored >= 0 ? stored : 10000;
-});
-const [cashBalances, setCashBalances] = useState({});
-
-const fetchCashBalances = async () => {
-  if (!hasAuthToken()) return;
-  try {
-    const res = await zeninFetch("/db/cash");
-    if (!res.ok) return;
-    const data = await res.json();
-    const map = {};
-    if (Array.isArray(data?.balances)) {
-       data.balances.forEach(b => { map[b.currency] = b.balance; });
-       setCashBalances(map);
-       if (map["USD"] != null) setBalance(map["USD"]);
-    }
-  } catch (err) {
-    console.warn("Cash balances unavailable", err);
-  }
-};
-
-useEffect(() => {
-  fetchCashBalances();
-}, []);
+  const [balance, setBalance] = useState(() => {
+    const rawStoredBalance = localStorage.getItem("zenin_balance");
+    const stored = rawStoredBalance == null ? NaN : Number(rawStoredBalance);
+    return Number.isFinite(stored) && stored >= 0 ? stored : 10000;
+  });
+  const [cashBalances, setCashBalances] = useState({});
 
   useEffect(() => {
     localStorage.setItem("zenin_balance", balance.toString());
@@ -368,93 +346,6 @@ useEffect(() => {
   useEffect(() => {
     localStorage.setItem("zenin_custom_stock_themes", JSON.stringify(customStockThemes));
   }, [customStockThemes]);
-
-  // Load portfolio from database on mount
-  useEffect(() => {
-    if (!hasAuthToken()) return;
-    zeninFetch(`/db/portfolio`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load portfolio: ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        const holdings = Array.isArray(data?.holdings) ? data.holdings : [];
-        if (holdings.length > 0 || hasAuthToken()) {
-          setPortfolio(holdings);
-        }
-        
-        // Hydrate activeOptionsTrades from portfolio
-        const optionTrades = holdings
-          .filter(h => h && String(h.marketType || "").toLowerCase() === "options")
-          .map(mapOptionHoldingToTrade)
-          .filter(Boolean);
-        if (optionTrades.length > 0 || holdings.length > 0 || hasAuthToken()) {
-          setActiveOptionsTrades(optionTrades);
-        }
-      })
-      .catch((err) => console.warn("Portfolio backend unavailable; using local portfolio.", err));
-  }, []);
-
-  // Load persisted watchlist from database on mount
-  useEffect(() => {
-    if (!hasAuthToken()) return;
-    zeninFetch(`/db/watchlist`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load watchlist: ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        const backendAssets = Array.isArray(data?.assets) ? data.assets : [];
-        const localAssets = readStoredArray("zenin_watchlist_assets");
-        const mergedAssets = mergeWatchlistEntries(localAssets, backendAssets);
-        setWatchlistAssets((prev) => mergeAssetPrices(mergedAssets, prev));
-
-        const backendKeys = new Set(backendAssets.map((asset) => getAssetCatalogKey(asset)));
-        const missingLocalAssets = localAssets.filter((asset) => !backendKeys.has(getAssetCatalogKey(asset)));
-        if (missingLocalAssets.length > 0) {
-          zeninFetch(`/db/watchlist/bulk`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ assets: missingLocalAssets })
-          })
-            .then((res) => {
-              if (!res.ok) throw new Error(`Failed to sync watchlist: ${res.status}`);
-              return res.json();
-            })
-            .then((syncData) => {
-              const savedAssets = Array.isArray(syncData?.assets) ? syncData.assets : [];
-              if (!savedAssets.length) return;
-              setWatchlistAssets((prev) => mergeAssetPrices(mergeWatchlistEntries(prev, savedAssets), prev));
-            })
-            .catch((err) => console.warn("Watchlist bulk sync skipped.", err));
-        }
-      })
-      .catch((err) => console.warn("Watchlist backend unavailable; using local watchlist.", err));
-  }, []);
-
-  useEffect(() => {
-    if (!hasAuthToken()) return undefined;
-    let isMounted = true;
-    zeninFetch(`/db/trades?limit=2000`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load trades from backend");
-        return res.json();
-      })
-      .then((data) => {
-        if (!isMounted) return;
-        const backendTrades = Array.isArray(data?.trades)
-          ? data.trades.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0)
-          : [];
-        if (backendTrades.length > 0) {
-          setTrades(backendTrades);
-        }
-      })
-      .catch((err) => console.warn("Trade history backend unavailable; using local trades.", err));
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
 
   useEffect(() => {
     const persistedTrades = trades.map((trade) => ({
@@ -562,13 +453,6 @@ useEffect(() => {
       isMounted = false;
       clearInterval(intervalId);
     };
-  }, []);
-
-  useEffect(() => {
-    zeninFetch(`/categories`)
-      .then((res) => res.json())
-      .then((data) => setCategories(Array.isArray(data.categories) && data.categories.length ? data.categories : FALLBACK_CATEGORIES))
-      .catch(() => setCategories(FALLBACK_CATEGORIES));
   }, []);
 
   useEffect(() => {
@@ -1980,7 +1864,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
-  const [accessCheckLoading, setAccessCheckLoading] = useState(false);
+  const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
@@ -2101,28 +1985,29 @@ const handleOptionTradeClosed = async (tradeId) => {
     () => isGuestUser ? sections : sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
     [sections, currentPlan, isAdmin, isGuestUser]
   );
+  const {
+    bootstrapData,
+    bootstrapError
+  } = useAppBootstrap({
+    enabled: !accessCheckLoading && !isGuestUser,
+    tradeLimit: 1000
+  });
 
   useEffect(() => {
     let mounted = true;
 
     const hydrateRequiredAuth = async () => {
-      const token = String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
-      if (!token) {
-        setIsGuestUser(true);
-        setAccessCheckLoading(false);
-        return;
-      }
-
       try {
         const res = await zeninFetch("/auth/me");
         const data = await res.json().catch(() => ({}));
         if (!mounted) return;
         if (!res.ok || !data?.authenticated || !data?.user) {
-          sessionStorage.removeItem("zenin_auth_token");
-          localStorage.removeItem("zenin_auth_token");
           localStorage.removeItem("zenin_auth_user");
           localStorage.removeItem("zenin_auth_expires_at");
           setIsGuestUser(true);
+          setIsAdmin(false);
+          setCurrentPlan("starter");
+          setAccountPlanLabel("Starter Plan");
           setAccessCheckLoading(false);
           return;
         } else {
@@ -2138,7 +2023,12 @@ const handleOptionTradeClosed = async (tradeId) => {
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
+        localStorage.removeItem("zenin_auth_user");
+        localStorage.removeItem("zenin_auth_expires_at");
         setIsGuestUser(true);
+        setIsAdmin(false);
+        setCurrentPlan("starter");
+        setAccountPlanLabel("Starter Plan");
         setAccessCheckLoading(false);
       }
     };
@@ -2155,6 +2045,85 @@ const handleOptionTradeClosed = async (tradeId) => {
       setActiveSection(accessibleSections[0]);
     }
   }, [accessibleSections, activeSection]);
+
+  useEffect(() => {
+    if (!bootstrapData) return;
+
+    const incomingBalances = Array.isArray(bootstrapData?.balances) ? bootstrapData.balances : [];
+    const incomingHoldings = Array.isArray(bootstrapData?.holdings) ? bootstrapData.holdings : [];
+    const incomingWatchlist = Array.isArray(bootstrapData?.watchlistAssets) ? bootstrapData.watchlistAssets : [];
+    const incomingTrades = Array.isArray(bootstrapData?.trades)
+      ? bootstrapData.trades.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0)
+      : [];
+    const localWatchlist = readStoredArray("zenin_watchlist_assets");
+    const mergedWatchlist = mergeWatchlistEntries(localWatchlist, incomingWatchlist);
+    const backendKeys = new Set(incomingWatchlist.map((asset) => getAssetCatalogKey(asset)));
+    const missingLocalAssets = localWatchlist.filter((asset) => !backendKeys.has(getAssetCatalogKey(asset)));
+
+    startTransition(() => {
+      const nextCashBalances = {};
+      incomingBalances.forEach((row) => {
+        const currency = String(row?.currency || "").trim().toUpperCase();
+        const amount = Number(row?.balance);
+        if (!currency || !Number.isFinite(amount)) return;
+        nextCashBalances[currency] = amount;
+      });
+      setCashBalances(nextCashBalances);
+      if (nextCashBalances.USD != null) {
+        setBalance(nextCashBalances.USD);
+      }
+
+      setPortfolio(incomingHoldings);
+      setActiveOptionsTrades(
+        incomingHoldings
+          .filter((holding) => holding && String(holding.marketType || "").toLowerCase() === "options")
+          .map(mapOptionHoldingToTrade)
+          .filter(Boolean)
+      );
+      setWatchlistAssets((prev) => mergeAssetPrices(mergedWatchlist, prev));
+      setTrades(incomingTrades);
+      setCategories(
+        Array.isArray(bootstrapData?.categories) && bootstrapData.categories.length
+          ? bootstrapData.categories
+          : FALLBACK_CATEGORIES
+      );
+    });
+
+    if (missingLocalAssets.length > 0) {
+      zeninFetch(`/db/watchlist/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets: missingLocalAssets })
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`Failed to sync watchlist: ${res.status}`);
+          return res.json();
+        })
+        .then((syncData) => {
+          const savedAssets = Array.isArray(syncData?.assets) ? syncData.assets : [];
+          if (!savedAssets.length) return;
+          startTransition(() => {
+            setWatchlistAssets((prev) => mergeAssetPrices(mergeWatchlistEntries(prev, savedAssets), prev));
+          });
+        })
+        .catch((err) => console.warn("Watchlist bulk sync skipped.", err));
+    }
+  }, [bootstrapData]);
+
+  useEffect(() => {
+    if (!bootstrapError) return;
+    console.warn("Workspace bootstrap unavailable; using existing local state.", bootstrapError);
+    if (!categories.length) {
+      setCategories(FALLBACK_CATEGORIES);
+    }
+  }, [bootstrapError, categories.length]);
+
+  useEffect(() => {
+    if (!isGuestUser) return;
+    if (!categories.length) {
+      setCategories(FALLBACK_CATEGORIES);
+    }
+  }, [isGuestUser, categories.length]);
   const [connectedAccounts, setConnectedAccounts] = useState(() => {
     const raw = localStorage.getItem("zenin_connected_accounts");
     if (!raw) return [];

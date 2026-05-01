@@ -72,11 +72,6 @@ function getEmailFromStorage() {
   return String(localStorage.getItem("zenin_email") || "").trim();
 }
 
-function getStoredAuthToken() {
-  if (typeof window === "undefined") return "";
-  return String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim();
-}
-
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
@@ -84,37 +79,37 @@ function isValidEmail(value) {
 function getPasswordRuleState(password) {
   const value = String(password || "");
   return {
-    length: value.length >= 8,
-    uppercase: /[A-Z]/.test(value),
-    numberOrSymbol: /[\d\W]/.test(value)
+    length: value.length >= 10,
+    letter: /[a-z]/i.test(value),
+    number: /\d/.test(value),
+    symbol: /[^a-z0-9]/i.test(value)
   };
 }
 
 function getPasswordStrengthLabel(rules) {
-  const metCount = Number(rules.length) + Number(rules.uppercase) + Number(rules.numberOrSymbol);
-  if (metCount >= 3) return "Good";
-  if (metCount === 2) return "Medium";
+  const metCount = Number(rules.length) + Number(rules.letter) + Number(rules.number) + Number(rules.symbol);
+  if (metCount >= 4) return "Good";
+  if (metCount >= 2) return "Medium";
   return "Weak";
 }
 
 function getPasswordStrengthPercent(rules) {
-  const metCount = Number(rules.length) + Number(rules.uppercase) + Number(rules.numberOrSymbol);
-  return Math.min(100, Math.max(15, metCount * 33));
+  const metCount = Number(rules.length) + Number(rules.letter) + Number(rules.number) + Number(rules.symbol);
+  return Math.min(100, Math.max(15, metCount * 25));
 }
 
-function persistAuth(result, remember = true) {
-  if (!result?.token) return;
-  sessionStorage.setItem("zenin_auth_token", result.token);
-  if (remember) {
-    localStorage.setItem("zenin_auth_token", result.token);
+function persistAuth(result) {
+  if (result?.expiresAt) {
+    localStorage.setItem("zenin_auth_expires_at", String(result.expiresAt));
   } else {
-    localStorage.removeItem("zenin_auth_token");
+    localStorage.removeItem("zenin_auth_expires_at");
   }
-  localStorage.setItem("zenin_auth_expires_at", String(result.expiresAt || ""));
-  if (result.user) {
+  if (result?.user) {
     localStorage.setItem("zenin_auth_user", JSON.stringify(result.user));
     if (result.user.email) localStorage.setItem("zenin_email", result.user.email);
+    return;
   }
+  localStorage.removeItem("zenin_auth_user");
 }
 
 async function applyRequestedPlanIfAny() {
@@ -180,11 +175,6 @@ export default function AuthPage() {
 
   useEffect(() => {
     let mounted = true;
-    const token = getStoredAuthToken();
-    if (!token) return () => {
-      mounted = false;
-    };
-
     zeninFetch("/auth/me")
       .then((res) => res.json().catch(() => ({})).then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
@@ -195,7 +185,10 @@ export default function AuthPage() {
           const target = getPostAuthRedirectPath();
           localStorage.removeItem("zenin_post_auth_next");
           window.location.replace(target);
+          return;
         }
+        localStorage.removeItem("zenin_auth_user");
+        localStorage.removeItem("zenin_auth_expires_at");
       })
       .catch(() => {
         // no-op, user can continue auth flow
@@ -264,7 +257,7 @@ export default function AuthPage() {
       })
     });
     const data = await readJson(res);
-    persistAuth(data, true);
+    persistAuth(data);
     setSignupStep("created");
   });
 
@@ -274,7 +267,8 @@ export default function AuthPage() {
     if (!signinForm.password.trim()) throw new Error("Enter your password.");
     const payload = {
       email: signinForm.email,
-      password: signinForm.password
+      password: signinForm.password,
+      rememberMe
     };
     if (signinForm.otpCode) payload.otpCode = signinForm.otpCode;
     if (signinForm.passkeyId) payload.passkeyId = signinForm.passkeyId;
@@ -283,10 +277,7 @@ export default function AuthPage() {
       body: JSON.stringify(payload)
     });
     const data = await readJson(res);
-    persistAuth(data, rememberMe);
-    if (!rememberMe) {
-      localStorage.removeItem("zenin_auth_expires_at");
-    }
+    persistAuth(data);
     await redirectToApp();
   });
 
@@ -311,7 +302,7 @@ export default function AuthPage() {
       body: JSON.stringify({ token: forgotForm.token, newPassword: forgotForm.newPassword })
     });
     const data = await readJson(res);
-    persistAuth(data, true);
+    persistAuth(data);
     await redirectToApp();
   });
 
@@ -419,7 +410,7 @@ export default function AuthPage() {
                   id="signup-password"
                   className="auth-v2-input"
                   type={showSignupPassword ? "text" : "password"}
-                  placeholder="Minimum 8 characters"
+                  placeholder="Minimum 10 characters"
                   value={signupForm.password}
                   onChange={(e) => setSignupForm((prev) => ({ ...prev, password: e.target.value }))}
                 />
@@ -435,9 +426,10 @@ export default function AuthPage() {
               </div>
 
               <ul className="auth-v2-rule-list">
-                <li className={signupPasswordRules.length ? "ok" : ""}>At least 8 characters</li>
-                <li className={signupPasswordRules.uppercase ? "ok" : ""}>One uppercase letter</li>
-                <li className={signupPasswordRules.numberOrSymbol ? "ok" : ""}>One number or symbol</li>
+                <li className={signupPasswordRules.length ? "ok" : ""}>At least 10 characters</li>
+                <li className={signupPasswordRules.letter ? "ok" : ""}>At least one letter</li>
+                <li className={signupPasswordRules.number ? "ok" : ""}>At least one number</li>
+                <li className={signupPasswordRules.symbol ? "ok" : ""}>At least one symbol</li>
               </ul>
 
               <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onCreateAccount}>Create account</button>

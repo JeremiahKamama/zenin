@@ -219,10 +219,18 @@ function sanitizeMacroMetrics(metrics = []) {
 // --------------------------------------------
 
 
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const SESSION_COOKIE_NAME = "zenin_session";
+
+app.set("trust proxy", 1);
+
 // Security headers with expanded CSP for production
 app.use(helmet.contentSecurityPolicy({
   directives: {
     defaultSrc: ["'self'"],
+    baseUri: ["'self'"],
+    formAction: ["'self'"],
+    frameAncestors: ["'none'"],
     connectSrc: [
       "'self'",
       "ws:",
@@ -236,13 +244,13 @@ app.use(helmet.contentSecurityPolicy({
       "https://api.derive.xyz",
       "https://fapi.binance.com"
     ],
-    scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Added unsafe-eval for some runtime modules if needed
+    scriptSrc: ["'self'"],
     styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
     fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
     imgSrc: ["'self'", "data:", "https:", "http:"],
     frameSrc: ["'none'"],
     objectSrc: ["'none'"],
-    upgradeInsecureRequests: [], // Allow upgrading if needed
+    upgradeInsecureRequests: []
   }
 }));
 
@@ -260,17 +268,22 @@ const configuredOrigins = String(process.env.FRONTEND_URLS || process.env.FRONTE
   .split(",")
   .map((origin) => normalizeOrigin(origin))
   .filter(Boolean);
+const allowVercelPreviewOrigins =
+  !IS_PRODUCTION ||
+  String(process.env.ALLOW_VERCEL_PREVIEW_ORIGINS || "").trim().toLowerCase() === "true";
 const allowedOrigins = Array.from(new Set([
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://localhost:5175",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:5174",
-  "http://127.0.0.1:5175",
-  "http://localhost:3000",
   "https://zenin.capital",
   "https://www.zenin.capital",
   "https://zenincapital.com",
+  ...(!IS_PRODUCTION ? [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175",
+    "http://localhost:3000"
+  ] : []),
   ...configuredOrigins
 ]));
 
@@ -290,6 +303,20 @@ const isLocalIP = (origin) => {
     return false;
   }
 };
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  const normalizedOrigin = normalizeOrigin(origin);
+  const isVercelPreview = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalizedOrigin);
+
+  if (allowedOrigins.includes(normalizedOrigin)) return true;
+  if (normalizedOrigin.endsWith(".zenin.capital") || normalizedOrigin.endsWith(".zenincapital.com")) {
+    return true;
+  }
+  if (!IS_PRODUCTION && isLocalIP(origin)) return true;
+  if (allowVercelPreviewOrigins && isVercelPreview) return true;
+  return false;
+}
 
 // Helper to fetch latest results from Dune Analytics
 async function fetchDuneLatestResults(queryId) {
@@ -319,17 +346,11 @@ async function fetchDuneLatestResults(queryId) {
 }
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    const normalizedOrigin = normalizeOrigin(origin);
-    const isVercelPreview = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalizedOrigin);
-
-    if (allowedOrigins.includes(normalizedOrigin) || isVercelPreview || isLocalIP(origin)) {
+    if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
+      const normalizedOrigin = normalizeOrigin(origin);
       console.warn(`[CORS] Blocked origin: ${origin} (Normalized: ${normalizedOrigin})`);
-      if (normalizedOrigin.endsWith(".zenin.capital") || normalizedOrigin.endsWith(".zenincapital.com")) {
-        return callback(null, true);
-      }
       callback(new Error("Not allowed by CORS"));
     }
   },
@@ -339,16 +360,31 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 
+function enforceTrustedOriginForStateChanges(req, res, next) {
+  if (["GET", "HEAD", "OPTIONS"].includes(String(req.method || "").toUpperCase())) {
+    return next();
+  }
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) {
+    return next();
+  }
+  if (!isAllowedOrigin(origin)) {
+    return res.status(403).json({ error: "Blocked origin" });
+  }
+  return next();
+}
 
-// Rate limiting — 300 requests per 15 minutes per IP
-const limiter = rateLimit({
+app.use(enforceTrustedOriginForStateChanges);
+
+// Rate limiting by route class
+const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 1000, // Increased for polling dashboard
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
 });
-app.use(limiter);
+app.use(generalLimiter);
 
 const writeLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -358,22 +394,52 @@ const writeLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many authentication attempts. Please try again later." }
 });
 
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many password reset attempts. Please try again later." }
+});
+
+const expensiveReadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many market-data requests. Please slow down." }
+});
+
 
 app.use(express.json({ limit: "100kb" }));
+app.use([
+  "/api/prices",
+  "/api/history",
+  "/api/watchlist",
+  "/api/finviz",
+  "/api/company-profile",
+  "/api/options/crypto",
+  "/api/analytics/equities",
+  "/api/app/bootstrap"
+], expensiveReadLimiter);
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
 const AUTH_HASH_KEY_RAW = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "").trim();
 const FALLBACK_SECRET = "zenin_default_secure_fallback_secret_32chars_min_9f2a1c77_placeholder";
-const AUTH_HASH_KEY = AUTH_HASH_KEY_RAW.length >= 32 ? AUTH_HASH_KEY_RAW : FALLBACK_SECRET;
+let AUTH_HASH_KEY = AUTH_HASH_KEY_RAW;
 
-if (AUTH_HASH_KEY === FALLBACK_SECRET) {
+if (AUTH_HASH_KEY.length < 32) {
+  if (IS_PRODUCTION) {
+    throw new Error("AUTH_HASH_KEY or ZENIN_APP_SECRET must be set to a 32+ character secret in production.");
+  }
+  AUTH_HASH_KEY = FALLBACK_SECRET;
   console.warn("********************************************************************************");
   console.warn("WARNING: Using a fallback AUTH_HASH_KEY. Please set a strong secret in your env.");
   console.warn("********************************************************************************");
@@ -453,66 +519,110 @@ function getBearerToken(req) {
   return authHeader.slice(7).trim() || null;
 }
 
+function parseCookies(req) {
+  const raw = String(req.headers.cookie || "");
+  if (!raw) return {};
+  return raw.split(";").reduce((acc, entry) => {
+    const separatorIndex = entry.indexOf("=");
+    if (separatorIndex <= 0) return acc;
+    const key = entry.slice(0, separatorIndex).trim();
+    const value = entry.slice(separatorIndex + 1).trim();
+    if (!key) return acc;
+    try {
+      acc[key] = decodeURIComponent(value);
+    } catch {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+}
+
+function getSessionTokenFromCookie(req) {
+  const cookies = parseCookies(req);
+  const token = String(cookies[SESSION_COOKIE_NAME] || "").trim();
+  return token || null;
+}
+
+function getRequestProtocol(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (forwardedProto) return forwardedProto;
+  return req.secure ? "https" : "http";
+}
+
+function shouldUseSecureCookies(req) {
+  return IS_PRODUCTION || getRequestProtocol(req) === "https";
+}
+
+function getRequestHost(req) {
+  return String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+}
+
+function getRequestOrigin(req) {
+  const host = getRequestHost(req);
+  if (!host) return "";
+  return `${getRequestProtocol(req)}://${host}`;
+}
+
+function resolveSessionSameSite(req, secure) {
+  if (!secure) return "lax";
+  const origin = normalizeOrigin(req.headers.origin);
+  const requestOrigin = normalizeOrigin(getRequestOrigin(req));
+  if (origin && requestOrigin && origin !== requestOrigin) {
+    return "none";
+  }
+  return "lax";
+}
+
+function buildSessionCookieOptions(req, { expiresAt = null, persistent = true } = {}) {
+  const secure = shouldUseSecureCookies(req);
+  const sameSite = resolveSessionSameSite(req, secure);
+  const options = {
+    httpOnly: true,
+    secure,
+    sameSite,
+    path: "/"
+  };
+  if (persistent && expiresAt) {
+    const expiryDate = new Date(expiresAt);
+    if (Number.isFinite(expiryDate.getTime())) {
+      options.expires = expiryDate;
+      options.maxAge = Math.max(0, expiryDate.getTime() - Date.now());
+    }
+  }
+  return options;
+}
+
+function setSessionCookie(res, req, token, expiresAt, { persistent = true } = {}) {
+  res.cookie(SESSION_COOKIE_NAME, token, buildSessionCookieOptions(req, { expiresAt, persistent }));
+}
+
+function clearSessionCookie(res, req) {
+  res.clearCookie(SESSION_COOKIE_NAME, buildSessionCookieOptions(req, { persistent: false }));
+}
+
 function resolveClientIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return forwarded || req.ip || null;
 }
 
 async function resolveAuthContext(req) {
-  const token = getBearerToken(req);
+  const token = getBearerToken(req) || getSessionTokenFromCookie(req);
+  const guestContext = {
+    isGuest: true,
+    userId: null,
+    user: null,
+    token: null
+  };
   if (!token) {
-    // For now, allow access without sign-up by defaulting to the Guest User (ID 1)
-    return {
-      isGuest: false,
-      userId: 1,
-      user: {
-        id: 1,
-        email: "guest@zenin.app",
-        displayName: "Guest User",
-        authProvider: "guest",
-        emailVerified: true,
-        currentPlan: "desk", // Upgraded to Desk for full app access (Options/Predictions)
-        currentBillingCycle: "monthly"
-      },
-      token: null
-    };
+    return guestContext;
   }
   const tokenHash = hashToken(token);
   const session = await userAuth.findSessionByTokenHash(tokenHash);
   if (!session) {
-    // If a token was provided but is invalid, still fall back to Guest instead of blocking
-    return {
-      isGuest: false,
-      userId: 1,
-      user: {
-        id: 1,
-        email: "guest@zenin.app",
-        displayName: "Guest User",
-        authProvider: "guest",
-        emailVerified: true,
-        currentPlan: "desk",
-        currentBillingCycle: "monthly"
-      },
-      token: null
-    };
+    return guestContext;
   }
-  const GUEST_CONTEXT = {
-    isGuest: false,
-    userId: 1,
-    user: {
-      id: 1,
-      email: "guest@zenin.app",
-      displayName: "Guest User",
-      authProvider: "guest",
-      emailVerified: true,
-      currentPlan: "desk",
-      currentBillingCycle: "monthly"
-    },
-    token: null
-  };
-
   if (session.revokedAt || new Date(session.expiresAt).getTime() <= Date.now()) {
-    return GUEST_CONTEXT;
+    return guestContext;
   }
 
   return {
@@ -605,6 +715,83 @@ async function writeServiceSnapshot(scope, params = {}, payload = {}) {
     console.warn("Service snapshot write failed:", error?.message || error);
   }
 }
+
+const runtimeSnapshotCache = new Map();
+const inflightSnapshotRequests = new Map();
+
+function readRuntimeSnapshot(scope, params = {}, ttlMs = 0) {
+  if (!(ttlMs > 0)) return null;
+  const cacheKey = buildSnapshotKey(scope, params);
+  const entry = runtimeSnapshotCache.get(cacheKey);
+  if (!entry?.payload || !entry?.updatedAtMs) return null;
+  if ((Date.now() - entry.updatedAtMs) >= ttlMs) {
+    runtimeSnapshotCache.delete(cacheKey);
+    return null;
+  }
+  return entry.payload;
+}
+
+function writeRuntimeSnapshot(scope, params = {}, payload = {}) {
+  const cacheKey = buildSnapshotKey(scope, params);
+  runtimeSnapshotCache.set(cacheKey, {
+    payload,
+    updatedAtMs: Date.now()
+  });
+}
+
+async function readFreshSnapshot(scope, params = {}, ttlMs = 0) {
+  const runtimePayload = readRuntimeSnapshot(scope, params, ttlMs);
+  if (runtimePayload) return runtimePayload;
+  const persisted = await readServiceSnapshot(scope, params);
+  if (!persisted?.payload || !isSnapshotFresh(persisted, ttlMs)) return null;
+  writeRuntimeSnapshot(scope, params, persisted.payload);
+  return persisted.payload;
+}
+
+async function writeAllSnapshots(scope, params = {}, payload = {}) {
+  writeRuntimeSnapshot(scope, params, payload);
+  await writeServiceSnapshot(scope, params, payload);
+}
+
+async function withInflightDedup(scope, params = {}, factory) {
+  const cacheKey = buildSnapshotKey(scope, params);
+  if (inflightSnapshotRequests.has(cacheKey)) {
+    return inflightSnapshotRequests.get(cacheKey);
+  }
+  const requestPromise = Promise.resolve()
+    .then(factory)
+    .finally(() => {
+      inflightSnapshotRequests.delete(cacheKey);
+    });
+  inflightSnapshotRequests.set(cacheKey, requestPromise);
+  return requestPromise;
+}
+
+function invalidateRuntimeSnapshotsByPrefix(scopePrefix) {
+  const prefix = `${String(scopePrefix || "").trim()}:`;
+  if (!prefix) return;
+  [...runtimeSnapshotCache.keys()].forEach((key) => {
+    if (key.startsWith(prefix)) runtimeSnapshotCache.delete(key);
+  });
+  [...inflightSnapshotRequests.keys()].forEach((key) => {
+    if (key.startsWith(prefix)) inflightSnapshotRequests.delete(key);
+  });
+}
+
+const ROUTE_CACHE_TTLS_MS = {
+  "app-bootstrap": 15 * 1000,
+  "prices:tradfi": 30 * 1000,
+  "prices:crypto": 30 * 1000,
+  "watchlist:stocks": 45 * 1000,
+  "watchlist:crypto": 45 * 1000,
+  "watchlist:indicators": 2 * 60 * 1000,
+  "history:tradfi": 5 * 60 * 1000,
+  "history:crypto": 90 * 1000,
+  finviz: 15 * 60 * 1000,
+  "company-profile": 15 * 60 * 1000,
+  "options-chain": 45 * 1000,
+  "analytics-equities": 2 * 60 * 1000
+};
 
 function isRateLimitReason(reason = "") {
   return /(^|\b)(429|rate[_\s-]?limit|too many requests)(\b|$)/i.test(String(reason || ""));
@@ -1778,6 +1965,67 @@ async function searchYahooFinance(query, type = "tradfi") {
 // USER BALANCE ENDPOINTS
 // ---------------------------------------------------------------------------
 
+async function buildUserBootstrapPayload(userId, options = {}) {
+  const tradeLimit = Math.max(200, Math.min(2000, Number(options.tradeLimit) || 1000));
+  const [balances, usdBalance, holdings, watchlistAssets, trades] = await Promise.all([
+    userWorkspace.cash.getAll(userId),
+    userWorkspace.balance.get(userId),
+    userWorkspace.portfolio.getAll(userId),
+    userWorkspace.watchlist.getAll(userId),
+    userWorkspace.trades.getAll(userId, tradeLimit)
+  ]);
+
+  const normalizedBalances = Array.isArray(balances) ? balances.slice() : [];
+  if (!normalizedBalances.some((row) => row?.currency === "USD")) {
+    normalizedBalances.unshift({
+      currency: "USD",
+      balance: usdBalance,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  return {
+    balances: normalizedBalances,
+    holdings: Array.isArray(holdings) ? holdings : [],
+    watchlistAssets: Array.isArray(watchlistAssets) ? watchlistAssets : [],
+    trades: Array.isArray(trades) ? trades : [],
+    categories: Object.keys(watchlistData),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+app.get("/api/app/bootstrap", requireSignedIn, async (req, res) => {
+  const tradeLimit = Math.max(200, Math.min(2000, Number(req.query.tradeLimit) || 1000));
+  const snapshotParams = { userId: req.auth.userId, tradeLimit };
+  const ttlMs = ROUTE_CACHE_TTLS_MS["app-bootstrap"];
+
+  try {
+    const fresh = await readFreshSnapshot("app-bootstrap", snapshotParams, ttlMs);
+    if (fresh) {
+      return res.json(fresh);
+    }
+
+    const payload = await withInflightDedup("app-bootstrap", snapshotParams, async () => {
+      const nextPayload = await buildUserBootstrapPayload(req.auth.userId, { tradeLimit });
+      await writeAllSnapshots("app-bootstrap", snapshotParams, nextPayload);
+      return nextPayload;
+    });
+    return res.json(payload);
+  } catch (error) {
+    const cached = await readServiceSnapshot("app-bootstrap", snapshotParams);
+    if (cached?.payload) {
+      return res.json({
+        ...cached.payload,
+        stale: true,
+        stale_reason: error?.message || "app_bootstrap_fetch_failed",
+        cache_updated_at: cached?.updatedAt || null,
+        stale_age_seconds: snapshotAgeSeconds(cached?.updatedAt)
+      });
+    }
+    return handleServerError(res, "Bootstrap fetch failed", error);
+  }
+});
+
 app.get("/api/db/balance", requireSignedIn, async (req, res) => {
   try {
     const current = await userWorkspace.balance.get(req.auth.userId);
@@ -1793,6 +2041,7 @@ app.post("/api/db/balance", requireSignedIn, writeLimiter, async (req, res) => {
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
     if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
     const newBalance = await userWorkspace.balance.applyChange(req.auth.userId, amount, type);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json({ balance: newBalance });
   } catch (err) {
     if (err.code === "INSUFFICIENT_BALANCE") {
@@ -1826,6 +2075,7 @@ app.post("/api/db/cash", requireSignedIn, writeLimiter, async (req, res) => {
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
     if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
     const balanceAfter = await userWorkspace.cash.applyChange(req.auth.userId, currency, amount, type);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json({ currency: String(currency || "USD").toUpperCase(), balance: balanceAfter });
   } catch (err) {
     if (err.code === "INSUFFICIENT_BALANCE") {
@@ -1835,7 +2085,7 @@ app.post("/api/db/cash", requireSignedIn, writeLimiter, async (req, res) => {
   }
 });
 
-async function issueSessionForUser(userId, req) {
+async function issueSessionForUser(userId, req, { persistent = true } = {}) {
   const rawToken = crypto.randomBytes(48).toString("hex");
   const tokenHash = hashToken(rawToken);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
@@ -1846,7 +2096,7 @@ async function issueSessionForUser(userId, req) {
     ipAddress: resolveClientIp(req),
     userAgent: String(req.headers["user-agent"] || "").slice(0, 512)
   });
-  return { token: rawToken, expiresAt };
+  return { token: rawToken, expiresAt, persistent };
 }
 
 app.get("/api/auth/me", async (req, res) => {
@@ -1910,9 +2160,9 @@ app.post("/api/auth/signup", authLimiter, async (req, res) => {
       authProvider: "email",
       emailVerified: false
     });
-    const session = await issueSessionForUser(created.id, req);
+    const session = await issueSessionForUser(created.id, req, { persistent: true });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
     return res.status(201).json({
-      token: session.token,
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(created)
     });
@@ -1935,9 +2185,10 @@ app.post("/api/auth/signin", authLimiter, async (req, res) => {
     // MFA verification is intentionally disabled until full WebAuthn/TOTP flows are implemented.
     // This avoids accepting insecure passkey-id/OTP-only shortcuts.
 
-    const session = await issueSessionForUser(user.id, req);
+    const rememberMe = req.body?.rememberMe !== false;
+    const session = await issueSessionForUser(user.id, req, { persistent: rememberMe });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
     return res.json({
-      token: session.token,
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(user)
     });
@@ -1948,17 +2199,18 @@ app.post("/api/auth/signin", authLimiter, async (req, res) => {
 
 app.post("/api/auth/signout", async (req, res) => {
   try {
-    const token = getBearerToken(req);
+    const token = getBearerToken(req) || getSessionTokenFromCookie(req);
     if (token) {
       await userAuth.revokeSessionByTokenHash(hashToken(token));
     }
+    clearSessionCookie(res, req);
     return res.json({ success: true });
   } catch (error) {
     return handleServerError(res, "Signout failed", error);
   }
 });
 
-app.post("/api/auth/forgot-password/request", authLimiter, async (req, res) => {
+app.post("/api/auth/forgot-password/request", passwordResetLimiter, async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     if (!email) return res.status(400).json({ error: "Email is required." });
@@ -1989,7 +2241,7 @@ app.post("/api/auth/forgot-password/request", authLimiter, async (req, res) => {
   }
 });
 
-app.post("/api/auth/forgot-password/confirm", authLimiter, async (req, res) => {
+app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
     const newPassword = String(req.body?.newPassword || "");
@@ -2003,11 +2255,11 @@ app.post("/api/auth/forgot-password/confirm", authLimiter, async (req, res) => {
     const { hash } = derivePasswordHash(newPassword);
     await userAuth.updatePassword(consumed.userId, hash);
     await userAuth.revokeSessionsByUserId(consumed.userId);
-    const session = await issueSessionForUser(consumed.userId, req);
+    const session = await issueSessionForUser(consumed.userId, req, { persistent: true });
     const user = await userAuth.findUserById(consumed.userId);
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
     return res.json({
       success: true,
-      token: session.token,
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(user)
     });
@@ -2087,9 +2339,9 @@ app.post("/api/auth/oauth/mock", authLimiter, async (req, res) => {
       authProvider: provider,
       emailVerified: true
     });
-    const session = await issueSessionForUser(created.id, req);
+    const session = await issueSessionForUser(created.id, req, { persistent: true });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
     return res.status(201).json({
-      token: session.token,
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(created),
       mode: "mock"
@@ -2319,26 +2571,37 @@ app.get("/api/history", async (req, res) => {
     interval: String(interval || "1D").toUpperCase()
   };
   const cached = await readServiceSnapshot("history", snapshotParams);
+  const ttlMs = normalizedType === "crypto"
+    ? ROUTE_CACHE_TTLS_MS["history:crypto"]
+    : ROUTE_CACHE_TTLS_MS["history:tradfi"];
+
+  const fresh = await readFreshSnapshot("history", snapshotParams, ttlMs);
+  if (fresh) {
+    return res.json(fresh);
+  }
 
   try {
-    let history = [];
-    let source = "";
-    if (normalizedType === "crypto") {
-      const cryptoHistory = await fetchHistoryForCrypto(resolvedSymbol, interval);
-      history = cryptoHistory.history;
-      source = cryptoHistory.source;
-    } else {
-      const stockHistory = await fetchHistoryFromYahoo(resolvedSymbol, interval);
-      history = stockHistory.history;
-      source = stockHistory.source || "yahoo";
-    }
-    const payload = {
-      history: Array.isArray(history) ? history : [],
-      source: source || "",
-      updatedAt: new Date().toISOString(),
-      stale: false
-    };
-    await writeServiceSnapshot("history", snapshotParams, payload);
+    const payload = await withInflightDedup("history", snapshotParams, async () => {
+      let history = [];
+      let source = "";
+      if (normalizedType === "crypto") {
+        const cryptoHistory = await fetchHistoryForCrypto(resolvedSymbol, interval);
+        history = cryptoHistory.history;
+        source = cryptoHistory.source;
+      } else {
+        const stockHistory = await fetchHistoryFromYahoo(resolvedSymbol, interval);
+        history = stockHistory.history;
+        source = stockHistory.source || "yahoo";
+      }
+      const nextPayload = {
+        history: Array.isArray(history) ? history : [],
+        source: source || "",
+        updatedAt: new Date().toISOString(),
+        stale: false
+      };
+      await writeAllSnapshots("history", snapshotParams, nextPayload);
+      return nextPayload;
+    });
     res.json(payload);
   } catch (error) {
     if (cached?.payload) {
@@ -2666,44 +2929,29 @@ app.get("/api/finviz", async (req, res) => {
   if (!safeSymbol) return res.status(400).json({ error: "Invalid symbol" });
   const snapshotParams = { symbol: requestedSymbol };
   const cached = await readServiceSnapshot("finviz", snapshotParams);
+  const fresh = await readFreshSnapshot("finviz", snapshotParams, ROUTE_CACHE_TTLS_MS.finviz);
+  if (fresh) {
+    return res.json(fresh);
+  }
 
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (payload) => {
-      if (settled) return;
-      settled = true;
-      res.json(payload);
-      resolve();
-    };
+  try {
+    const payload = await withInflightDedup("finviz", snapshotParams, () => new Promise((resolve) => {
+      const finish = (value) => resolve(value);
+      const scriptPath = path.join(__dirname, "scripts", "fetch_finviz.py");
+      const child = spawn(pythonBinary, [scriptPath, safeSymbol], { cwd: __dirname });
+      let stdout = "";
+      let stderr = "";
+      let timeoutId = null;
 
-    const scriptPath = path.join(__dirname, "scripts", "fetch_finviz.py");
-    const child = spawn(pythonBinary, [scriptPath, safeSymbol], { cwd: __dirname });
-    let stdout = "";
-    let stderr = "";
+      child.stdout.on("data", (d) => { stdout += d.toString(); });
+      child.stderr.on("data", (d) => { stderr += d.toString(); });
 
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-
-    child.on("close", async (code) => {
-      if (stderr) console.error("Finviz stderr:", stderr);
-      if (code !== 0) {
-        if (cached?.payload) {
-          return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_failed"));
-        }
-        return finish({
-          symbol: requestedSymbol,
-          resolvedSymbol: safeSymbol,
-          updatedAt: new Date().toISOString(),
-          stale: true,
-          unavailable: true,
-          stale_reason: "finviz_fetch_failed"
-        });
-      }
-      try {
-        const result = JSON.parse(stdout);
-        if (result?.error) {
+      child.on("close", async (code) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        if (stderr) console.error("Finviz stderr:", stderr);
+        if (code !== 0) {
           if (cached?.payload) {
-            return finish(applyStaleMeta(cached.payload, cached, result.error));
+            return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_failed"));
           }
           return finish({
             symbol: requestedSymbol,
@@ -2711,50 +2959,80 @@ app.get("/api/finviz", async (req, res) => {
             updatedAt: new Date().toISOString(),
             stale: true,
             unavailable: true,
-            stale_reason: result.error
+            stale_reason: "finviz_fetch_failed"
           });
         }
-        const payload = {
-          ...(result || {}),
-          symbol: requestedSymbol,
-          resolvedSymbol: safeSymbol,
-          updatedAt: new Date().toISOString(),
-          stale: false
-        };
-        await writeServiceSnapshot("finviz", snapshotParams, payload);
-        finish(payload);
-      } catch (e) {
-        console.error("Finviz parse error:", e);
-        if (cached?.payload) {
-          return finish(applyStaleMeta(cached.payload, cached, "finviz_parse_failed"));
+        try {
+          const result = JSON.parse(stdout);
+          if (result?.error) {
+            if (cached?.payload) {
+              return finish(applyStaleMeta(cached.payload, cached, result.error));
+            }
+            return finish({
+              symbol: requestedSymbol,
+              resolvedSymbol: safeSymbol,
+              updatedAt: new Date().toISOString(),
+              stale: true,
+              unavailable: true,
+              stale_reason: result.error
+            });
+          }
+          const nextPayload = {
+            ...(result || {}),
+            symbol: requestedSymbol,
+            resolvedSymbol: safeSymbol,
+            updatedAt: new Date().toISOString(),
+            stale: false
+          };
+          await writeAllSnapshots("finviz", snapshotParams, nextPayload);
+          finish(nextPayload);
+        } catch (e) {
+          console.error("Finviz parse error:", e);
+          if (cached?.payload) {
+            return finish(applyStaleMeta(cached.payload, cached, "finviz_parse_failed"));
+          }
+          finish({
+            symbol: requestedSymbol,
+            resolvedSymbol: safeSymbol,
+            updatedAt: new Date().toISOString(),
+            stale: true,
+            unavailable: true,
+            stale_reason: "finviz_parse_failed"
+          });
         }
-        finish({
-          symbol: requestedSymbol,
-          resolvedSymbol: safeSymbol,
-          updatedAt: new Date().toISOString(),
-          stale: true,
-          unavailable: true,
-          stale_reason: "finviz_parse_failed"
-        });
-      }
-    });
+      });
 
-    child.on("error", (err) => {
-      console.error("Failed to start Finviz process:", err);
-      if (cached?.payload) {
-        return finish(applyStaleMeta(cached.payload, cached, "finviz_process_start_failed"));
-      }
-      finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "process_start_failed" });
-    });
+      child.on("error", (err) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        console.error("Failed to start Finviz process:", err);
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "finviz_process_start_failed"));
+        }
+        finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "process_start_failed" });
+      });
 
-    setTimeout(() => {
-      child.kill();
-      if (cached?.payload) {
-        return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_timed_out"));
-      }
-      finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "timed_out" });
-    }, 12000);
-  });
+      timeoutId = setTimeout(() => {
+        child.kill();
+        if (cached?.payload) {
+          return finish(applyStaleMeta(cached.payload, cached, "finviz_fetch_timed_out"));
+        }
+        finish({ symbol: requestedSymbol, resolvedSymbol: safeSymbol, error: "timed_out" });
+      }, 12000);
+    }));
+    return res.json(payload);
+  } catch (error) {
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "finviz_fetch_failed"));
+    }
+    return res.json({
+      symbol: requestedSymbol,
+      resolvedSymbol: safeSymbol,
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "finviz_fetch_failed"
+    });
+  }
 });
 
 app.get("/api/company-profile", async (req, res) => {
@@ -2806,7 +3084,19 @@ app.get("/api/company-profile", async (req, res) => {
     };
   };
 
-  return new Promise((resolve) => {
+  const fresh = await readFreshSnapshot("company-profile", snapshotParams, ROUTE_CACHE_TTLS_MS["company-profile"]);
+  if (fresh) {
+    if (requestedSnapshotHash && requestedSnapshotHash === fresh.companyProfileHash) {
+      return res.json({
+        ...fresh,
+        unchanged: true,
+        snapshotCheckedAt: new Date().toISOString()
+      });
+    }
+    return res.json(fresh);
+  }
+
+  const payload = await withInflightDedup("company-profile", snapshotParams, () => new Promise((resolve) => {
     let settled = false;
     let timeoutId = null;
 
@@ -2814,8 +3104,7 @@ app.get("/api/company-profile", async (req, res) => {
       if (settled) return;
       settled = true;
       if (timeoutId) clearTimeout(timeoutId);
-      res.json(payload);
-      resolve();
+      resolve(payload);
     };
 
     try {
@@ -2878,11 +3167,11 @@ app.get("/api/company-profile", async (req, res) => {
                   updatedAt: cached.payload?.updatedAt || payload.updatedAt
                 }, false, { checkedAt, unchanged: true })
               : { ...payload, unchanged: true };
-            await writeServiceSnapshot("company-profile", snapshotParams, unchangedPayload);
+            await writeAllSnapshots("company-profile", snapshotParams, unchangedPayload);
             return finish(unchangedPayload);
           }
 
-          await writeServiceSnapshot("company-profile", snapshotParams, payload);
+          await writeAllSnapshots("company-profile", snapshotParams, payload);
           finish(payload);
         } catch {
           if (cached?.payload) {
@@ -2948,7 +3237,8 @@ app.get("/api/company-profile", async (req, res) => {
         stale_age_seconds: null
       }, true));
     }
-  });
+  }));
+  return res.json(payload);
 });
 
 app.get("/api/economic-calendar", async (req, res) => {
@@ -3322,18 +3612,31 @@ app.get("/api/watchlist", async (req, res) => {
     symbols: requestedSymbols.length > 0 ? requestedSymbols.slice().sort() : ["__all__"]
   };
   const cached = await readServiceSnapshot("watchlist", snapshotParams);
+  const ttlMs = key === "crypto"
+    ? ROUTE_CACHE_TTLS_MS["watchlist:crypto"]
+    : key === "indicators"
+      ? ROUTE_CACHE_TTLS_MS["watchlist:indicators"]
+      : ROUTE_CACHE_TTLS_MS["watchlist:stocks"];
+
+  const fresh = await readFreshSnapshot("watchlist", snapshotParams, ttlMs);
+  if (fresh) {
+    return res.json(fresh);
+  }
 
   // Crypto — live prices from Binance
   if (key === "crypto") {
     try {
-      const assets = await fetchCryptoMarketData();
-      const payload = {
-        category: key,
-        assets: Array.isArray(assets) ? assets : [],
-        updatedAt: new Date().toISOString(),
-        stale: false
-      };
-      await writeServiceSnapshot("watchlist", snapshotParams, payload);
+      const payload = await withInflightDedup("watchlist", snapshotParams, async () => {
+        const assets = await fetchCryptoMarketData();
+        const nextPayload = {
+          category: key,
+          assets: Array.isArray(assets) ? assets : [],
+          updatedAt: new Date().toISOString(),
+          stale: false
+        };
+        await writeAllSnapshots("watchlist", snapshotParams, nextPayload);
+        return nextPayload;
+      });
       return res.json(payload);
     } catch (error) {
       if (cached?.payload) {
@@ -3353,24 +3656,27 @@ app.get("/api/watchlist", async (req, res) => {
   }
 
   if (key === "indicators") {
-    const allDbAssets = await watchlist.getAll();
-    const indicatorAssets = allDbAssets
-      .filter((asset) => String(asset?.marketType || "").trim().toLowerCase() === "macro" || String(asset?.type || "").trim().toLowerCase() === "indicator")
-      .map((asset) => ({
-        ...asset,
-        type: "indicator",
-        category: "indicators",
-        marketType: "macro",
-        price: null,
-        priceChangePercent: null
-      }));
-    const payload = {
-      category: key,
-      assets: indicatorAssets,
-      updatedAt: new Date().toISOString(),
-      stale: false
-    };
-    await writeServiceSnapshot("watchlist", snapshotParams, payload);
+    const payload = await withInflightDedup("watchlist", snapshotParams, async () => {
+      const allDbAssets = await watchlist.getAll();
+      const indicatorAssets = allDbAssets
+        .filter((asset) => String(asset?.marketType || "").trim().toLowerCase() === "macro" || String(asset?.type || "").trim().toLowerCase() === "indicator")
+        .map((asset) => ({
+          ...asset,
+          type: "indicator",
+          category: "indicators",
+          marketType: "macro",
+          price: null,
+          priceChangePercent: null
+        }));
+      const nextPayload = {
+        category: key,
+        assets: indicatorAssets,
+        updatedAt: new Date().toISOString(),
+        stale: false
+      };
+      await writeAllSnapshots("watchlist", snapshotParams, nextPayload);
+      return nextPayload;
+    });
     return res.json(payload);
   }
 
@@ -3391,23 +3697,26 @@ app.get("/api/watchlist", async (req, res) => {
     ? symbols.filter((s) => requestedSymbols.includes(String(s || "").trim().toUpperCase()))
     : symbols;
   try {
-    const prices = pricedSymbols.length > 0
-      ? await fetchYFinancePrices(pricedSymbols)
-      : {};
+    const payload = await withInflightDedup("watchlist", snapshotParams, async () => {
+      const prices = pricedSymbols.length > 0
+        ? await fetchYFinancePrices(pricedSymbols)
+        : {};
 
-    const enrichedAssets = assets.map((asset) => ({
-      ...asset,
-      type: asset.type || "stock",
-      price: prices[asset.symbol]?.price ?? null,
-      priceChangePercent: prices[asset.symbol]?.priceChangePercent ?? null,
-    }));
-    const payload = {
-      category: key,
-      assets: enrichedAssets,
-      updatedAt: new Date().toISOString(),
-      stale: false
-    };
-    await writeServiceSnapshot("watchlist", snapshotParams, payload);
+      const enrichedAssets = assets.map((asset) => ({
+        ...asset,
+        type: asset.type || "stock",
+        price: prices[asset.symbol]?.price ?? null,
+        priceChangePercent: prices[asset.symbol]?.priceChangePercent ?? null,
+      }));
+      const nextPayload = {
+        category: key,
+        assets: enrichedAssets,
+        updatedAt: new Date().toISOString(),
+        stale: false
+      };
+      await writeAllSnapshots("watchlist", snapshotParams, nextPayload);
+      return nextPayload;
+    });
     return res.json(payload);
   } catch (error) {
     if (cached?.payload) {
@@ -3446,24 +3755,35 @@ app.get("/api/prices", async (req, res) => {
   }
   const snapshotParams = { type, symbols: symbols.slice().sort() };
   const cached = await readServiceSnapshot("prices", snapshotParams);
+  const ttlMs = type === "crypto"
+    ? ROUTE_CACHE_TTLS_MS["prices:crypto"]
+    : ROUTE_CACHE_TTLS_MS["prices:tradfi"];
+
+  const fresh = await readFreshSnapshot("prices", snapshotParams, ttlMs);
+  if (fresh) {
+    return res.json(fresh);
+  }
 
   try {
-    let payload = null;
-    if (type === "crypto") {
-      const prices = await fetchCryptoQuotesBySymbols(symbols);
-      payload = { type: "crypto", prices, updatedAt: new Date().toISOString(), stale: false };
-    } else {
-      const prices = await fetchYFinancePrices(symbols);
-      payload = { type: "tradfi", prices, updatedAt: new Date().toISOString(), stale: false };
-    }
+    const payload = await withInflightDedup("prices", snapshotParams, async () => {
+      let nextPayload = null;
+      if (type === "crypto") {
+        const prices = await fetchCryptoQuotesBySymbols(symbols);
+        nextPayload = { type: "crypto", prices, updatedAt: new Date().toISOString(), stale: false };
+      } else {
+        const prices = await fetchYFinancePrices(symbols);
+        nextPayload = { type: "tradfi", prices, updatedAt: new Date().toISOString(), stale: false };
+      }
 
-    const priceRows = payload?.prices && typeof payload.prices === "object" ? Object.values(payload.prices) : [];
-    const hasAnyFinitePrice = priceRows.some((row) => Number.isFinite(Number(row?.price)));
-    if (!hasAnyFinitePrice) {
-      throw new Error("prices_empty_from_provider");
-    }
+      const priceRows = nextPayload?.prices && typeof nextPayload.prices === "object" ? Object.values(nextPayload.prices) : [];
+      const hasAnyFinitePrice = priceRows.some((row) => Number.isFinite(Number(row?.price)));
+      if (!hasAnyFinitePrice) {
+        throw new Error("prices_empty_from_provider");
+      }
 
-    await writeServiceSnapshot("prices", snapshotParams, payload);
+      await writeAllSnapshots("prices", snapshotParams, nextPayload);
+      return nextPayload;
+    });
     return res.json(payload);
   } catch (error) {
     if (cached?.payload) {
@@ -4929,6 +5249,10 @@ app.post("/api/options/crypto", async (req, res) => {
     expiry: expiry == null ? "latest" : String(expiry)
   };
   const persistedSnapshot = await readServiceSnapshot("options-chain", snapshotParams);
+  const freshSnapshot = await readFreshSnapshot("options-chain", snapshotParams, ROUTE_CACHE_TTLS_MS["options-chain"]);
+  if (freshSnapshot) {
+    return res.json(freshSnapshot);
+  }
 
   try {
     // 1. Instruments
@@ -5125,7 +5449,7 @@ app.post("/api/options/crypto", async (req, res) => {
       payload,
       cachedAt: Date.now()
     });
-    await writeServiceSnapshot("options-chain", snapshotParams, payload);
+    await writeAllSnapshots("options-chain", snapshotParams, payload);
 
     res.json(payload);
 
@@ -5594,6 +5918,7 @@ app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validatePortfolioHo
   try {
     const holding = req.body;
     const result = await userWorkspace.portfolio.add(req.auth.userId, holding);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Portfolio write failed", error);
@@ -5606,6 +5931,7 @@ app.put("/api/db/portfolio/:id", requireSignedIn, writeLimiter, validatePortfoli
     if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: "Invalid id" });
     const holding = req.body;
     const result = await userWorkspace.portfolio.update(req.auth.userId, id, holding);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio update failed", error);
@@ -5616,6 +5942,7 @@ app.delete("/api/db/portfolio/:id", requireSignedIn, writeLimiter, async (req, r
   try {
     const { id } = req.params;
     const result = await userWorkspace.portfolio.delete(req.auth.userId, id);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio delete failed", error);
@@ -5663,6 +5990,7 @@ app.post("/api/db/trades", requireSignedIn, writeLimiter, async (req, res) => {
       return res.status(400).json({ error: "price must be a non-negative number" });
     }
     const saved = await userWorkspace.trades.add(req.auth.userId, payload);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(saved);
   } catch (error) {
     handleServerError(res, "Trade write failed", error);
@@ -5685,6 +6013,7 @@ app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validateWatchlistAs
   try {
     const asset = req.body;
     const result = await userWorkspace.watchlist.add(req.auth.userId, asset);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(result);
   } catch (error) {
     handleServerError(res, "Watchlist write failed", error);
@@ -5715,6 +6044,7 @@ app.post("/api/db/watchlist/bulk", requireSignedIn, writeLimiter, async (req, re
       savedAssets.push(await userWorkspace.watchlist.add(req.auth.userId, asset));
     }
 
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json({ assets: savedAssets });
   } catch (error) {
     handleServerError(res, "Watchlist bulk write failed", error);
@@ -5730,6 +6060,7 @@ app.delete("/api/db/watchlist/:symbol", requireSignedIn, writeLimiter, async (re
       return res.status(400).json({ error: "marketType query parameter required" });
     }
     const result = await userWorkspace.watchlist.delete(req.auth.userId, symbol, marketType, category, theme);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json(result);
   } catch (error) {
     handleServerError(res, "Watchlist delete failed", error);
@@ -6706,6 +7037,11 @@ app.get("/api/equities/market/actions", async (req, res) => {
 
 
 app.get('/api/analytics/equities', async (req, res) => {
+  const snapshotParams = { scope: "equities" };
+  const fresh = await readFreshSnapshot("analytics-equities", snapshotParams, ROUTE_CACHE_TTLS_MS["analytics-equities"]);
+  if (fresh) {
+    return res.json(fresh);
+  }
   try {
     const calculateCAGR = (series, assetKey, years) => {
       const recent = series.slice(0, years);
@@ -7011,7 +7347,7 @@ app.get('/api/analytics/equities', async (req, res) => {
       assetClass: idx % 3 === 0 ? "Equities" : idx % 3 === 1 ? "Multi-Asset" : "Fixed Income"
     }));
 
-    res.json({
+    const payload = {
       updatedAt: new Date().toISOString(),
       benchmarkIndexHistory,
       benchmarkPerformance,
@@ -7036,8 +7372,14 @@ app.get('/api/analytics/equities', async (req, res) => {
       reitData: REIT_DATA,
       mmfYields: MMF_YIELDS,
       fundsList: enrichedFundsList
-    });
+    };
+    await writeAllSnapshots("analytics-equities", snapshotParams, payload);
+    res.json(payload);
   } catch (error) {
+    const cached = await readServiceSnapshot("analytics-equities", snapshotParams);
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "analytics_equities_fetch_failed"));
+    }
     handleServerError(res, "Analytics Equities fetch failed", error);
   }
 });
@@ -7053,6 +7395,7 @@ app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validatePortfol
       return res.status(400).json({ error: "clientId is required for idempotent execution." });
     }
     const result = await userWorkspace.trading.executeTrade(req.auth.userId, payload);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(result);
   } catch (error) {
     if (error?.code === "INSUFFICIENT_BALANCE") {

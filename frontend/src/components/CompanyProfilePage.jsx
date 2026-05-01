@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
-
-import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { getCurrencySymbol } from "../utils/currencyUtils";
-
-const BACKEND_URL = ZENIN_API_BASE_URL;
+import { zeninFetch } from "../utils/zeninFetch";
 const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_DATE_KEY = "zenin_profile_session_date";
 
@@ -884,19 +881,32 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
 
   useEffect(() => {
     if (!normalizedSymbol) return;
+    let cancelled = false;
     const fetchFinviz = async () => {
       setFinvizLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${normalizedSymbol}`);
+        const res = await zeninFetch(`/finviz?symbol=${normalizedSymbol}`);
         const data = await res.json();
-        if (data && !data.error) setFinvizData(data);
+        if (!cancelled && data && !data.error) setFinvizData(data);
       } catch (err) {
         console.error("Failed to fetch Finviz for profile:", err);
       } finally {
-        setFinvizLoading(false);
+        if (!cancelled) setFinvizLoading(false);
       }
     };
-    fetchFinviz();
+
+    const schedule = typeof window !== "undefined" && typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(fetchFinviz, { timeout: 1200 })
+      : window.setTimeout(fetchFinviz, 180);
+
+    return () => {
+      cancelled = true;
+      if (typeof window !== "undefined" && typeof window.cancelIdleCallback === "function" && typeof schedule === "number") {
+        window.cancelIdleCallback(schedule);
+      } else {
+        clearTimeout(schedule);
+      }
+    };
   }, [normalizedSymbol]);
 
   useEffect(() => {
@@ -935,7 +945,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
         if (preferredTheme) params.set("theme", preferredTheme);
         if (preferredCategory) params.set("category", preferredCategory);
         if (cachedPayload?.companyProfileHash) params.set("snapshotHash", cachedPayload.companyProfileHash);
-        const res = await fetch(`${BACKEND_URL}/company-profile?${params.toString()}`, { signal: controller.signal });
+        const res = await zeninFetch(`/company-profile?${params.toString()}`, { signal: controller.signal });
         const data = await res.json();
         if (controller.signal.aborted || cancelled) return;
         if (!res.ok || data?.error) {
