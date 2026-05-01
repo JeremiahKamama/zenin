@@ -2,6 +2,7 @@ import sys
 import json
 import os
 import yfinance as yf
+import requests
 
 # Add scripts directory to path for market_status import
 sys.path.append(os.path.join(os.path.dirname(__file__), "scripts"))
@@ -163,14 +164,72 @@ def _price_and_change(series):
             change_pct = round(((price - prev) / prev) * 100, 4)
     return round(price, 8), change_pct
 
+def _price_and_change_from_chart(meta, closes):
+    normalized_closes = [float(value) for value in (closes or []) if value is not None]
+    price = meta.get("regularMarketPrice")
+    price = float(price) if price is not None else None
+
+    if price is None and normalized_closes:
+        price = normalized_closes[-1]
+    if price is None:
+        return None, None
+
+    prev = meta.get("previousClose")
+    if prev is None:
+        prev = meta.get("chartPreviousClose")
+    if prev is None and len(normalized_closes) >= 2:
+        prev = normalized_closes[-2]
+
+    change_pct = None
+    if prev not in (None, 0):
+        prev = float(prev)
+        if prev:
+            change_pct = round(((price - prev) / prev) * 100, 4)
+
+    return round(price, 8), change_pct
+
+def _fetch_from_yahoo_chart(yf_symbol: str):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*"
+    }
+    urls = [
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_symbol}?interval=1d&range=5d&includePrePost=false",
+        f"https://query2.finance.yahoo.com/v8/finance/chart/{yf_symbol}?interval=1d&range=5d&includePrePost=false",
+    ]
+
+    for url in urls:
+        try:
+            response = requests.get(url, headers=headers, timeout=8)
+            if not response.ok:
+                continue
+            payload = response.json()
+            results = (((payload or {}).get("chart") or {}).get("result")) or []
+            if not results:
+                continue
+            result = results[0] or {}
+            meta = result.get("meta") or {}
+            quote_rows = (((result.get("indicators") or {}).get("quote")) or [{}])
+            closes = (quote_rows[0] or {}).get("close") or []
+            price, change_pct = _price_and_change_from_chart(meta, closes)
+            if price is not None:
+                return price, change_pct
+        except Exception:
+            continue
+
+    return None, None
+
 def _fetch_single(yf_symbol: str):
     try:
         hist = yf.Ticker(yf_symbol).history(period="5d")
         if hist.empty:
-            return None, None
-        return _price_and_change(hist["Close"].dropna())
+            return _fetch_from_yahoo_chart(yf_symbol)
+        price, change_pct = _price_and_change(hist["Close"].dropna())
+        if price is not None:
+            return price, change_pct
     except Exception:
-        return None, None
+        pass
+    return _fetch_from_yahoo_chart(yf_symbol)
 
 def fetch_prices(requests: list) -> dict:
     if not requests:
