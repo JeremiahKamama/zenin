@@ -23,7 +23,7 @@ services:
       - key: EODHD_API_TOKEN
         sync: false
       - key: AUTH_HASH_KEY
-        sync: false
+        generateValue: true
       - key: ENABLE_DEV_AUTH_DEBUG
         value: "false"
       - key: ENABLE_OAUTH_MOCK

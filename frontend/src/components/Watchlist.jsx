@@ -5,7 +5,7 @@ import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
 import { zeninFetch } from "../utils/zeninFetch";
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
-import { getCurrencySymbol } from "../utils/currencyUtils";
+import { getCurrencySymbol, inferAssetCurrency } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -600,8 +600,7 @@ useEffect(() => {
                         <span className="price-val">
                           {(() => {
                             if (asset.market === "Treasury") return "";
-                            const assetSymbol = String(asset?.symbol || "").toUpperCase();
-                            const activeCurrency = (asset?.currency || asset?.quotedCurrency || (assetSymbol.endsWith(".T") ? "JPY" : assetSymbol.endsWith(".L") ? "GBP" : assetSymbol.endsWith(".PA") ? "EUR" : assetSymbol.endsWith(".DE") ? "EUR" : "USD")).toUpperCase();
+                            const activeCurrency = inferAssetCurrency(asset);
                             return getCurrencySymbol(activeCurrency);
                           })()}
                           {asset.price.toLocaleString(undefined, {

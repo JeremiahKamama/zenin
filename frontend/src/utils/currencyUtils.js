@@ -9,12 +9,54 @@ export const CURRENCY_SYMBOLS = {
   JPY: "¥",
   CAD: "C$",
   AUD: "A$",
-  CHF: "CHF",
-  CNY: "¥",
+  CHF: "CHF ",
+  CNY: "CN¥",
+  HKD: "HK$",
+  KRW: "₩",
+  TWD: "NT$",
+  AED: "AED ",
+  INR: "₹",
+  MXN: "MX$",
+  BRL: "R$",
+  SGD: "S$",
+  NZD: "NZ$",
   BTC: "₿",
   ETH: "Ξ",
-  SOL: "SOL",
-  HYPE: "H",
+  SOL: "SOL ",
+  HYPE: "H ",
+};
+
+const FOREX_QUOTE_CURRENCY = {
+  EURUSD: "USD",
+  "EUR/USD": "USD",
+  GBPUSD: "USD",
+  "GBP/USD": "USD",
+  AUDUSD: "USD",
+  "AUD/USD": "USD",
+  NZDUSD: "USD",
+  "NZD/USD": "USD",
+  USDJPY: "JPY",
+  "USD/JPY": "JPY",
+  USDCAD: "CAD",
+  "USD/CAD": "CAD",
+  USDCHF: "CHF",
+  "USD/CHF": "CHF",
+  EURGBP: "GBP",
+  "EUR/GBP": "GBP",
+  EURJPY: "JPY",
+  "EUR/JPY": "JPY",
+  GBPJPY: "JPY",
+  "GBP/JPY": "JPY",
+  "JPY=X": "JPY",
+  "CAD=X": "CAD",
+  "CHF=X": "CHF",
+  "EURUSD=X": "USD",
+  "GBPUSD=X": "USD",
+  "AUDUSD=X": "USD",
+  "NZDUSD=X": "USD",
+  "EURGBP=X": "GBP",
+  "EURJPY=X": "JPY",
+  "GBPJPY=X": "JPY",
 };
 
 // Default exchange rates (fallback if not provided by backend)
@@ -34,7 +76,46 @@ export const DEFAULT_FX_RATES = {
 };
 
 export function getCurrencySymbol(currency = "USD") {
-  return CURRENCY_SYMBOLS[String(currency).toUpperCase()] || "$";
+  const code = String(currency || "").trim().toUpperCase();
+  if (!code) return "$";
+  return CURRENCY_SYMBOLS[code] || `${code} `;
+}
+
+export function inferAssetCurrency(assetOrSymbol, fallback = "USD") {
+  const asset = assetOrSymbol && typeof assetOrSymbol === "object" ? assetOrSymbol : null;
+  const directCurrency = String(asset?.currency || asset?.quotedCurrency || "").trim().toUpperCase();
+  if (directCurrency) return directCurrency;
+
+  const symbol = String(asset ? asset.symbol || "" : assetOrSymbol || "").trim().toUpperCase();
+  if (!symbol) return fallback;
+
+  if (FOREX_QUOTE_CURRENCY[symbol]) return FOREX_QUOTE_CURRENCY[symbol];
+
+  if (symbol.includes("/")) {
+    const [, quote] = symbol.split("/");
+    if (quote && quote.length === 3) return quote;
+  }
+
+  if (symbol.length === 6 && /^[A-Z]+$/.test(symbol)) {
+    return symbol.slice(3);
+  }
+
+  if (symbol.endsWith(".T")) return "JPY";
+  if (symbol.endsWith(".L")) return "GBP";
+  if ([".DE", ".F", ".PA", ".MI", ".VI", ".AS", ".BR", ".LI", ".MC"].some((ext) => symbol.endsWith(ext))) return "EUR";
+  if ([".TO", ".V"].some((ext) => symbol.endsWith(ext))) return "CAD";
+  if (symbol.endsWith(".AX")) return "AUD";
+  if (symbol.endsWith(".HK")) return "HKD";
+  if ([".KS", ".KQ"].some((ext) => symbol.endsWith(ext))) return "KRW";
+  if ([".SZ", ".SS"].some((ext) => symbol.endsWith(ext))) return "CNY";
+  if (symbol.endsWith(".TW")) return "TWD";
+  if ([".BO", ".NS"].some((ext) => symbol.endsWith(ext))) return "INR";
+  if (symbol.endsWith(".SW")) return "CHF";
+  if (symbol.endsWith(".MX")) return "MXN";
+  if (symbol.endsWith(".SA")) return "BRL";
+  if (symbol.endsWith(".AE")) return "AED";
+
+  return fallback;
 }
 
 /**

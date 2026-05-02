@@ -5,7 +5,7 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
-import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
+import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 
@@ -630,7 +630,7 @@ export function HomeModule({
     const value = Number(asset?.price);
     if (!Number.isFinite(value)) return "—";
     if (isTreasuryAsset(asset)) return `${value.toFixed(2)}%`;
-    const currency = asset?.currency || asset?.quotedCurrency || "USD";
+    const currency = inferAssetCurrency(asset);
     const symbol = getCurrencySymbol(currency);
     return `${symbol}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };

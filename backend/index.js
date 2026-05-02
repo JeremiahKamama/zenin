@@ -435,14 +435,34 @@ const AUTH_HASH_KEY_RAW = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_
 const FALLBACK_SECRET = "zenin_default_secure_fallback_secret_32chars_min_9f2a1c77_placeholder";
 let AUTH_HASH_KEY = AUTH_HASH_KEY_RAW;
 
+function resolveStableAuthHashFallback() {
+  const productionSeed = String(
+    process.env.DATABASE_URL ||
+    process.env.RENDER_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.ADMIN_MIGRATION_KEY ||
+    ""
+  ).trim();
+
+  if (productionSeed.length < 32) return "";
+  return crypto.createHash("sha256").update(`zenin-auth-hash:${productionSeed}`).digest("hex");
+}
+
 if (AUTH_HASH_KEY.length < 32) {
   if (IS_PRODUCTION) {
-    throw new Error("AUTH_HASH_KEY or ZENIN_APP_SECRET must be set to a 32+ character secret in production.");
+    const derivedSecret = resolveStableAuthHashFallback();
+    if (!derivedSecret) {
+      throw new Error("AUTH_HASH_KEY or ZENIN_APP_SECRET must be set to a 32+ character secret in production.");
+    }
+    AUTH_HASH_KEY = derivedSecret;
+    console.warn("WARNING: AUTH_HASH_KEY is not set; deriving a stable production fallback from protected server config. Set AUTH_HASH_KEY explicitly to rotate onto a dedicated auth secret.");
+  } else {
+    AUTH_HASH_KEY = FALLBACK_SECRET;
+    console.warn("********************************************************************************");
+    console.warn("WARNING: Using a fallback AUTH_HASH_KEY. Please set a strong secret in your env.");
+    console.warn("********************************************************************************");
   }
-  AUTH_HASH_KEY = FALLBACK_SECRET;
-  console.warn("********************************************************************************");
-  console.warn("WARNING: Using a fallback AUTH_HASH_KEY. Please set a strong secret in your env.");
-  console.warn("********************************************************************************");
 }
 const OAUTH_PROVIDERS = ["google", "apple", "github", "microsoft"];
 const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();

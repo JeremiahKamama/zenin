@@ -117,8 +117,57 @@ def normalise(symbol: str) -> str:
         return f"{int(symbol):04d}.HK"
     return symbol
 
-def infer_currency(symbol: str) -> str:
-    s = symbol.upper()
+FOREX_QUOTE_CURRENCY = {
+    "EURUSD": "USD",
+    "EUR/USD": "USD",
+    "GBPUSD": "USD",
+    "GBP/USD": "USD",
+    "AUDUSD": "USD",
+    "AUD/USD": "USD",
+    "NZDUSD": "USD",
+    "NZD/USD": "USD",
+    "USDJPY": "JPY",
+    "USD/JPY": "JPY",
+    "USDCAD": "CAD",
+    "USD/CAD": "CAD",
+    "USDCHF": "CHF",
+    "USD/CHF": "CHF",
+    "EURGBP": "GBP",
+    "EUR/GBP": "GBP",
+    "EURJPY": "JPY",
+    "EUR/JPY": "JPY",
+    "GBPJPY": "JPY",
+    "GBP/JPY": "JPY",
+    "JPY=X": "JPY",
+    "CAD=X": "CAD",
+    "CHF=X": "CHF",
+    "EURUSD=X": "USD",
+    "GBPUSD=X": "USD",
+    "AUDUSD=X": "USD",
+    "NZDUSD=X": "USD",
+    "EURGBP=X": "GBP",
+    "EURJPY=X": "JPY",
+    "GBPJPY=X": "JPY",
+}
+
+
+def infer_currency(symbol: str, original_symbol: str = "") -> str:
+    original = str(original_symbol or "").upper()
+    s = str(symbol or "").upper()
+
+    if original in FOREX_QUOTE_CURRENCY:
+        return FOREX_QUOTE_CURRENCY[original]
+    if s in FOREX_QUOTE_CURRENCY:
+        return FOREX_QUOTE_CURRENCY[s]
+
+    if "/" in original:
+        parts = original.split("/")
+        if len(parts) == 2 and len(parts[1]) == 3:
+            return parts[1]
+
+    if len(original) == 6 and original.isalpha():
+        return original[3:]
+
     if s.endswith(".T"): return "JPY"
     if s.endswith(".L"): return "GBP"
     if any(s.endswith(ext) for ext in [".DE", ".F", ".PA", ".MI", ".VI", ".AS", ".BR", ".LI", ".MC"]): return "EUR"
@@ -126,11 +175,13 @@ def infer_currency(symbol: str) -> str:
     if s.endswith(".AX"): return "AUD"
     if s.endswith(".HK"): return "HKD"
     if any(s.endswith(ext) for ext in [".KS", ".KQ"]): return "KRW"
-    if any(s.endswith(ext) for ext in [".SN", ".SS"]): return "CNY"
+    if any(s.endswith(ext) for ext in [".SZ", ".SS"]): return "CNY"
+    if s.endswith(".TW"): return "TWD"
     if any(s.endswith(ext) for ext in [".BO", ".NS"]): return "INR"
     if s.endswith(".SW"): return "CHF"
     if s.endswith(".MX"): return "MXN"
     if s.endswith(".SA"): return "BRL"
+    if s.endswith(".AE"): return "AED"
     return "USD"
 
 def _extract_close(data, yf_symbol: str):
@@ -280,7 +331,7 @@ def fetch_prices(requests: list) -> dict:
                     "priceChangePercent": change_pct,
                     "isMarketOpen": item["isOpen"],
                     "marketStatus": item["status"],
-                    "currency": infer_currency(yf_sym)
+                    "currency": infer_currency(yf_sym, item["orig"])
                 }
 
     return results

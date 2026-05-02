@@ -366,7 +366,7 @@ Notes:
 - `PORT` (default `4000`)
 - `FRONTEND_URL` (CORS allowlist origin)
 - `DATABASE_URL` (recommended)
-- `AUTH_HASH_KEY` (strong secret used for session/reset/OTP hashing)
+- `AUTH_HASH_KEY` (recommended strong secret used for session/reset/OTP hashing; if omitted in production, Zenin derives a stable fallback from protected server config, but an explicit secret is preferred)
 - `DERIVE_API_URL` (optional provider override)
 
 Optional Postgres discrete vars (if not using `DATABASE_URL`):

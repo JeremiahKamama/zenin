@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-import { getCurrencySymbol, formatCurrency, convertToUSD } from "../utils/currencyUtils";
+import { getCurrencySymbol, formatCurrency, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { getMarketStatus } from "../utils/marketHours";
@@ -304,7 +304,7 @@ export function AssetModal({
         })();
 
   // Resolve display currency symbol from asset metadata
-  const activeCurrency = (fetchedCurrency || asset?.currency || asset?.quotedCurrency || (assetSymbol.endsWith(".T") ? "JPY" : assetSymbol.endsWith(".L") ? "GBP" : assetSymbol.endsWith(".PA") ? "EUR" : assetSymbol.endsWith(".DE") ? "EUR" : "USD")).toUpperCase();
+  const activeCurrency = inferAssetCurrency({ ...asset, currency: fetchedCurrency || asset?.currency, quotedCurrency: asset?.quotedCurrency });
   const currencySymbol = getCurrencySymbol(activeCurrency);
 
   const displayedChangePercent = Number.isFinite(Number(asset?.priceChangePercent))

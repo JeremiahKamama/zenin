@@ -5,7 +5,7 @@ import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
 import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
-import { updateFXRates, convertToUSD } from "./utils/currencyUtils";
+import { updateFXRates, convertToUSD, inferAssetCurrency } from "./utils/currencyUtils";
 import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
@@ -2848,7 +2848,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                               <div className="search-result-symbol">{asset.symbol}</div>
                               <div className="search-result-name">{asset.name}</div>
                               <div className="search-result-type">
-                                {asset.type?.toUpperCase()} · {asset.currency || (asset.symbol?.endsWith(".T") ? "JPY" : "USD")}
+                                {asset.type?.toUpperCase()} · {inferAssetCurrency(asset)}
                               </div>
                             </div>
                             <button
