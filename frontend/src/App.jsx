@@ -223,7 +223,7 @@ const mapOptionHoldingToTrade = (holding) => {
 function App() {
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
-  const [activeCategory, setActiveCategory] = useState("");
+  const [activeCategory, setActiveCategory] = useState("stocks");
   const [activeTheme, setActiveTheme] = useState("");
   const [portfolio, setPortfolio] = useState(() => {
     const stored = readStoredArray("zenin_portfolio");
@@ -270,7 +270,7 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchHasSettled, setSearchHasSettled] = useState(false);
-  const [searchType, setSearchType] = useState(null); // null, "tradfi", "crypto", or "indicator"
+  const [searchType, setSearchType] = useState("tradfi"); // null, "tradfi", "crypto", or "indicator"
   const [customStockThemes, setCustomStockThemes] = useState(() => {
     try {
       const raw = localStorage.getItem("zenin_custom_stock_themes");
