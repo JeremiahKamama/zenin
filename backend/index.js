@@ -4,7 +4,7 @@ dotenv.config({ path: path.join(__dirname, ".env") });
 dotenv.config();
 const express = require("express");
 const crypto = require("crypto");
-const { authenticator } = require("otplib");
+const { authenticator } = require("./utils/otplib-config");
 const qrcode = require("qrcode");
 const {
   generateRegistrationOptions,

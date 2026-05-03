@@ -2071,6 +2071,42 @@ const handleOptionTradeClosed = async (tradeId) => {
     () => isGuestUser ? sections : sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
     [sections, currentPlan, isAdmin, isGuestUser]
   );
+  const handleLogout = useCallback(async () => {
+    try {
+      await zeninFetch("/auth/signout", { method: "POST" });
+    } catch (err) {
+      console.warn("Backend signout failed", err);
+    }
+
+    // Comprehensive cleanup of all Zenin-related local storage items
+    const keysToRemove = [
+      "zenin_auth_user",
+      "zenin_auth_expires_at",
+      "zenin_email",
+      "zenin_balance",
+      "zenin_portfolio",
+      "zenin_watchlist_assets",
+      "zenin_active_options_trades",
+      "zenin_custom_stock_themes",
+      "zenin_trades",
+      "zenin_preferences",
+      "zenin_profile_security",
+      "zenin_connected_accounts",
+      "zenin_active_section",
+      "zenin_journal_entries",
+      "zenin_tax_estimates",
+      "zenin_tax_audit_trail",
+      "zenin_fx_rates",
+      "zenin_pricing_billing_cycle",
+      "zenin_post_auth_next"
+    ];
+
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+    
+    // Hard redirect to clear any memory-resident state
+    window.location.href = "/";
+  }, []);
+
   const {
     bootstrapData,
     bootstrapError
@@ -3091,26 +3127,18 @@ const handleOptionTradeClosed = async (tradeId) => {
             <span className="sidebar-account-chevron">⌄</span>
           </button>
 
-          {!isGuestUser && (
-            <button
-              className="sidebar-theme-row"
-              style={{ color: "var(--muted)", marginTop: "4px" }}
-              onClick={async () => {
-                try { await zeninFetch("/auth/signout", { method: "POST" }); } catch {}
-                localStorage.removeItem("zenin_auth_user");
-                localStorage.removeItem("zenin_auth_expires_at");
-                localStorage.removeItem("zenin_email");
-                window.location.href = "/";
-              }}
-              title="Sign out"
-              aria-label="Sign out"
-            >
-              <span className="sidebar-theme-left">
-                <span className="sidebar-theme-icon" aria-hidden="true">⏻</span>
-                <span className="sidebar-theme-label">Log out</span>
-              </span>
-            </button>
-          )}
+          <button
+            className="sidebar-theme-row"
+            style={{ color: "var(--muted)", marginTop: "4px" }}
+            onClick={handleLogout}
+            title={isGuestUser ? "Reset session" : "Sign out"}
+            aria-label={isGuestUser ? "Reset session" : "Sign out"}
+          >
+            <span className="sidebar-theme-left">
+              <span className="sidebar-theme-icon" aria-hidden="true">⏻</span>
+              <span className="sidebar-theme-label">{isGuestUser ? "Exit Guest" : "Log out"}</span>
+            </span>
+          </button>
         </div>
 
       </aside>
