@@ -646,6 +646,46 @@ function decryptTotpSecret(stored) {
   return decrypted;
 }
 
+// Encrypt/decrypt workspace secrets (API keys, etc) at rest (#EncryptionAtRest)
+const WORKSPACE_ENC_KEY = crypto.createHash("sha256").update(`zenin-workspace-enc:${AUTH_HASH_KEY}`).digest();
+
+function encryptWorkspaceData(data) {
+  if (!data) return null;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", WORKSPACE_ENC_KEY, iv);
+  let encrypted = cipher.update(typeof data === "string" ? data : JSON.stringify(data), "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const tag = cipher.getAuthTag().toString("hex");
+  return `wenc:${iv.toString("hex")}:${tag}:${encrypted}`;
+}
+
+function decryptWorkspaceData(stored) {
+  if (!stored || !stored.startsWith("wenc:")) return stored;
+  try {
+    const parts = stored.split(":");
+    if (parts.length !== 4) return null;
+    const [, ivHex, tagHex, ciphertext] = parts;
+    const decipher = crypto.createDecipheriv("aes-256-gcm", WORKSPACE_ENC_KEY, Buffer.from(ivHex, "hex"));
+    decipher.setAuthTag(Buffer.from(tagHex, "hex"));
+    let decrypted = decipher.update(ciphertext, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch (e) {
+    return null;
+  }
+}
+
+function maskApiKey(key) {
+  if (!key) return "";
+  const raw = decryptWorkspaceData(key); // Decrypt if it was encrypted
+  if (raw.length <= 8) return "****";
+  return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+}
+
+function hashBackupCode(code) {
+  return crypto.createHash("sha256").update(String(code || "").trim().toUpperCase()).digest("hex");
+}
+
 function derivePasswordHash(password, salt = null) {
   const safeSalt = salt || crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(String(password || ""), safeSalt, 64).toString("hex");
@@ -2364,7 +2404,13 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, writeLimite
 app.get("/api/db/exchange-keys", requireSignedIn, async (req, res) => {
   try {
     const keys = await userWorkspace.exchangeKeys.list(req.auth.userId);
-    res.json(keys);
+    // Mask sensitive keys for the list view
+    const maskedKeys = keys.map(k => ({
+      ...k,
+      apiKey: maskApiKey(k.apiKey),
+      extraData: k.extraData ? JSON.parse(JSON.stringify(k.extraData)) : {} // Ensure no secrets in extraData if any
+    }));
+    res.json(maskedKeys);
   } catch (err) {
     handleServerError(res, "Failed to list exchange keys", err);
   }
@@ -2372,8 +2418,19 @@ app.get("/api/db/exchange-keys", requireSignedIn, async (req, res) => {
 
 app.post("/api/db/exchange-keys", requireSignedIn, writeLimiter, validate(exchangeKeySchema), async (req, res) => {
   try {
-    const key = await userWorkspace.exchangeKeys.add(req.auth.userId, req.body);
-    res.json(key);
+    const { exchange, apiKey, apiSecret, extraData } = req.body;
+    // Encrypt sensitive data before storing (#EncryptionAtRest)
+    const payload = {
+      exchange,
+      apiKey: encryptWorkspaceData(apiKey),
+      apiSecret: encryptWorkspaceData(apiSecret),
+      extraData: extraData ? encryptWorkspaceData(JSON.stringify(extraData)) : null
+    };
+    const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload);
+    res.json({
+      ...key,
+      apiKey: maskApiKey(key.apiKey)
+    });
   } catch (err) {
     handleServerError(res, "Failed to add exchange key", err);
   }
@@ -2396,13 +2453,19 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, writeLimiter, async (req,
     const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id));
     if (!keyRecord) return res.status(404).json({ error: "Exchange key not found" });
 
+    // Decrypt credentials for sync
+    const apiKey = decryptWorkspaceData(keyRecord.apiKey);
+    const apiSecret = decryptWorkspaceData(keyRecord.apiSecret);
+    const extraDataStr = decryptWorkspaceData(keyRecord.extraData);
+    const extraData = extraDataStr ? JSON.parse(extraDataStr) : {};
+
     let result;
     if (keyRecord.exchange === "hyperliquid") {
-      result = await syncHyperliquid(keyRecord.apiKey, keyRecord.extraData);
+      result = await syncHyperliquid(apiKey, extraData);
     } else if (keyRecord.exchange === "binance") {
-      result = await syncBinance(keyRecord.apiKey, keyRecord.apiSecret);
+      result = await syncBinance(apiKey, apiSecret);
     } else if (keyRecord.exchange === "bybit") {
-      result = await syncBybit(keyRecord.apiKey, keyRecord.apiSecret);
+      result = await syncBybit(apiKey, apiSecret);
     } else {
       return res.status(400).json({ error: "Unsupported exchange" });
     }
@@ -2656,14 +2719,19 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
         mfaValid = (expectedHash === user.twoFactorSecretHash);
       }
 
-      // If TOTP/SMS/Email code failed, check backup codes (#5)
+      // If TOTP/SMS/Email code failed, check backup codes (#BackupCodeHashing)
       if (!mfaValid) {
+        const hashedVerificationCode = hashBackupCode(verificationCode);
         const parsedCodes = Array.isArray(user.backupCodes) ? user.backupCodes : [];
-        if (parsedCodes.includes(verificationCode)) {
+        
+        // Backup codes in DB are now stored as hashes
+        const foundHash = parsedCodes.find(h => h === hashedVerificationCode);
+        
+        if (foundHash) {
           mfaValid = true;
           usedBackupCode = true;
-          // Consume the backup code so it cannot be reused
-          const remaining = parsedCodes.filter(c => c !== verificationCode);
+          // Consume the backup code hash so it cannot be reused
+          const remaining = parsedCodes.filter(h => h !== foundHash);
           await userAuth.regenerateBackupCodes({ userId: user.id, backupCodes: remaining });
         }
       }
@@ -2883,7 +2951,9 @@ app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFacto
       secretToStore = hashToken(`${method}:${verificationCode}`); // Mock for sms/email
     }
 
-    const backupCodes = createBackupCodes();
+    const plaintextBackupCodes = createBackupCodes();
+    const hashedBackupCodes = plaintextBackupCodes.map(hashBackupCode);
+    
     await userAuth.upsertTwoFactor({
       userId: req.auth.userId,
       enabled: true,
@@ -2891,7 +2961,7 @@ app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFacto
       secretHash: secretToStore,
       provider,
       target,
-      backupCodes
+      backupCodes: hashedBackupCodes
     });
 
     // Session rotation after 2FA state change (#10)
@@ -2900,7 +2970,13 @@ app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFacto
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
 
     const user = await userAuth.findUserById(req.auth.userId);
-    return res.json({ success: true, user: sanitizeAuthUser(user) });
+    // Return plaintext codes ONLY once during enable
+    const sanitizedUser = sanitizeAuthUser(user);
+    return res.json({ 
+      success: true, 
+      user: sanitizedUser,
+      backupCodes: plaintextBackupCodes 
+    });
   } catch (error) {
     return handleServerError(res, "Enable 2FA failed", error);
   }
@@ -2991,9 +3067,13 @@ app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, asy
         createdAt: new Date().toISOString()
       };
       
+      const plaintextBackupCodes = createBackupCodes();
+      const hashedBackupCodes = plaintextBackupCodes.map(hashBackupCode);
+
       await userAuth.addPasskey({
         userId: user.id,
-        passkey: newPasskey
+        passkey: newPasskey,
+        backupCodes: hashedBackupCodes
       });
 
       // Session rotation after 2FA state change (#10)
@@ -3002,7 +3082,11 @@ app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, asy
       setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
       
       const updatedUser = await userAuth.findUserById(user.id);
-      return res.json({ success: true, user: sanitizeAuthUser(updatedUser) });
+      return res.json({ 
+        success: true, 
+        user: sanitizeAuthUser(updatedUser),
+        backupCodes: plaintextBackupCodes
+      });
     }
     
     return res.status(400).json({ error: "Passkey verification failed." });
@@ -3017,13 +3101,18 @@ app.post("/api/auth/2fa/backup-codes/regenerate", authLimiter, requireSignedIn, 
     if (!user?.twoFactorEnabled) {
       return res.status(400).json({ error: "Enable 2FA before generating backup codes." });
     }
-    const backupCodes = createBackupCodes();
+    const plaintextBackupCodes = createBackupCodes();
+    const hashedBackupCodes = plaintextBackupCodes.map(hashBackupCode);
     await userAuth.regenerateBackupCodes({
       userId: req.auth.userId,
-      backupCodes
+      backupCodes: hashedBackupCodes
     });
     const updated = await userAuth.findUserById(req.auth.userId);
-    return res.json({ success: true, user: sanitizeAuthUser(updated) });
+    return res.json({ 
+      success: true, 
+      user: sanitizeAuthUser(updated),
+      backupCodes: plaintextBackupCodes 
+    });
   } catch (error) {
     return handleServerError(res, "Backup code regeneration failed", error);
   }
