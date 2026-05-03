@@ -30,6 +30,14 @@ const STRATEGIES = [
 const EMPTY_LEG = { strike: "", expiry: "", type: "call", direction: "long", qty: 1, premium: "", iv: "" };
 const CALCULATIONS_PAGE_SIZE = 10;
 
+function hasStoredAuthToken() {
+  try {
+    return Boolean(String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim());
+  } catch {
+    return false;
+  }
+}
+
 function formatCalculationTimestamp(value) {
   if (!value) return "—";
   const parsed = new Date(value);
@@ -168,6 +176,7 @@ export function OptionsCalculator({   spotPrice = 0,
   const filteredSymbols = assets.filter((s) =>
     String(s || "").trim().toUpperCase().includes(normalizedSearch)
   );
+  const canUseSavedCalculations = hasStoredAuthToken();
 
   const commitSymbolSelection = (nextSymbol) => {
     const committed = String(nextSymbol || "").trim().toUpperCase();
@@ -399,6 +408,15 @@ export function OptionsCalculator({   spotPrice = 0,
   useEffect(() => {
     if (!normalizedSymbol) {
       setSavedCalculations([]);
+      setSavedCalculationsError("");
+      setSavedCalculationsLoading(false);
+      return undefined;
+    }
+
+    if (!canUseSavedCalculations) {
+      setSavedCalculations([]);
+      setSavedCalculationsError("");
+      setSavedCalculationsLoading(false);
       return undefined;
     }
 
@@ -438,9 +456,15 @@ export function OptionsCalculator({   spotPrice = 0,
       ignore = true;
       controller.abort();
     };
-  }, [normalizedSymbol]);
+  }, [normalizedSymbol, canUseSavedCalculations]);
 
   const saveCalculation = async () => {
+    if (!canUseSavedCalculations) {
+      setSaveMsgType("error");
+      setSaveMsg("Sign in to save calculations.");
+      setTimeout(() => setSaveMsg(""), 2500);
+      return;
+    }
     if (!normalizedSymbol) {
       setSaveMsgType("error");
       setSaveMsg("Search for an asset before saving.");
@@ -772,6 +796,8 @@ export function OptionsCalculator({   spotPrice = 0,
                 type="button"
                 onClick={() => setSavedCalculationsOpen(true)}
                 className="options-calculator-action-btn secondary"
+                disabled={!canUseSavedCalculations}
+                title={!canUseSavedCalculations ? "Sign in to view saved calculations" : "View saved calculations"}
               >
                 View Calculations
               </button>

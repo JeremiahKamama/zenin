@@ -905,7 +905,7 @@ export function AssetModal({
             </div>
           </div>
 
-{isTradFi && (
+{isTradFi && !isForexAsset && (
             <div className="asset-modal-fundamentals">
               <div className="asset-modal-section-head">
                 {isStockResearchEligible ? (

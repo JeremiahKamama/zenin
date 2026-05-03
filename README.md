@@ -112,7 +112,16 @@ This README reflects the current implementation in this repository.
 - Connected accounts modal for exchange/prediction market metadata
 - Notification + layout preference toggles
 
-## Current progress (as of April 26, 2026)
+## Current progress (as of May 3, 2026)
+
+- **Priority 1 UX fix pass shipped**:
+  - Home dead CTAs now route to real in-app destinations
+  - Tax Estimator `•••` menu and `+ Add Scenario` controls now have working UI logic
+  - Auth `Terms` and `Privacy Policy` are no longer dead `#` links and now open an in-app legal modal
+- **Priority 2 and Priority 3 are still pending**:
+  - Home and Portfolio flow actions still contain demo-only state transitions in several places
+  - Settings/account security flows are still primarily local-state simulations
+  - Some secondary exports and empty-state CTAs still need real wiring
 
 - **Auth foundation implemented**: Server-side auth/session/reset-token flows exist and are rate-limited.
 - **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
@@ -128,7 +137,7 @@ This README reflects the current implementation in this repository.
 - **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
 - **Mobile responsiveness fixes shipped**: Cross-market Analytics pills now stack cleanly on small screens; Journal and Portfolio tables were hardened for mobile overflow and clipping scenarios.
 
-## Current limitations (as of April 26, 2026)
+## Current limitations (as of May 3, 2026)
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
 - **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
@@ -139,6 +148,8 @@ This README reflects the current implementation in this repository.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 - **Homepage device preview assets**: Footer laptop/phone visuals currently use themed mock content (not live in-app screenshots).
+- **Priority 2 unfinished UX actions**: Several Home and Portfolio action flows still simulate work with local progress states rather than executing real save/export/rebalance logic.
+- **Priority 3 unfinished UX actions**: Some secondary exports, empty-state CTAs, and settings/security controls still need backend-backed behavior or stronger product labeling.
 
 ## Data sources and integrations
 

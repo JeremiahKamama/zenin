@@ -10,6 +10,34 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const fs = require("fs");
+const {
+  validate,
+  signupSchema,
+  signinSchema,
+  forgotPasswordRequestSchema,
+  forgotPasswordConfirmSchema,
+  executeTradeSchema,
+  portfolioUpdateSchema,
+  watchlistAssetSchema,
+  workspaceDocSchema,
+  workspaceCollectionSchema,
+  optionsCalculationSchema,
+  balanceChangeSchema,
+  cashChangeSchema,
+  exchangeKeySchema,
+  emailRequestSchema,
+  emailConfirmSchema,
+  passwordUpdateSchema,
+  planUpdateSchema,
+  twoFactorEnableSchema,
+  passkeyRegisterSchema,
+  historyQuerySchema,
+  searchQuerySchema,
+  pricesQuerySchema,
+  cryptoOptionsSchema,
+  tradeLogSchema,
+  watchlistBulkSchema,
+} = require("./validation");
 
 /**
  * Resolves the correct Python binary to use.
@@ -25,6 +53,7 @@ function resolvePythonBinary() {
   return "python3";
 }
 const pythonBinary = resolvePythonBinary();
+const { syncBinance, syncHyperliquid, syncBybit } = require("./exchangeSync");
 
 const { watchlistData } = require("./data");
 const {
@@ -190,7 +219,8 @@ const WORLD_BANK_INDICATOR_MAP = {
   inflation_rate: "FP.CPI.TOTL.ZG",
   unemployment_rate: "SL.UEM.TOTL.ZS",
   balance_of_trade: "NE.RSB.GNFS.CD",
-  cpi: "FP.CPI.TOTL"
+  cpi: "FP.CPI.TOTL",
+  consumer_confidence: "CSCICP03"
 };
 
 function sanitizeMacroMetrics(metrics = []) {
@@ -343,6 +373,87 @@ async function fetchDuneLatestResults(queryId) {
     console.error(`[Dune] Failed to fetch query ${queryId}:`, error.message);
     return null;
   }
+}
+
+/**
+ * Scrapes ETF flow data from Farside UK (farside.co.uk)
+ * Note: Cloudflare might block this in certain environments.
+ */
+async function fetchFarsideEtfFlows() {
+  const assets = ["btc", "eth", "sol"];
+  let allFlows = [];
+
+  for (const asset of assets) {
+    try {
+      const fetch = await resolveFetch();
+      const path = asset === "btc" ? "bitcoin" : asset === "eth" ? "ethereum" : "solana";
+      const url = `https://farside.co.uk/${path}-etf-flow/`;
+
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        }
+      });
+
+      if (!response.ok) {
+        console.warn(`[Farside] ${asset.toUpperCase()} fetch failed: ${response.status}`);
+        continue;
+      }
+
+      const html = await response.text();
+      
+      // Basic scraping logic for Farside's table structure
+      // We look for rows that contain a date and numerical values
+      const rows = html.match(/<tr[^>]*>([\s\S]*?)<\/tr>/g) || [];
+      const managerMap = {
+        btc: ["BlackRock", "Fidelity", "Bitwise", "Ark 21Shares", "Invesco", "Franklin", "Valkyrie", "WisdomTree", "VanEck", "Grayscale", "Hashdex"],
+        eth: ["BlackRock", "Fidelity", "Bitwise", "Grayscale", "Grayscale Mini", "Franklin", "VanEck", "21Shares", "Invesco"],
+        sol: ["21Shares", "VanEck", "Franklin", "Canaccord", "Global X"]
+      };
+
+      const tickers = {
+        btc: ["IBIT", "FBTC", "BITB", "ARKB", "BTCO", "EZBC", "BRRR", "BTCW", "HODL", "GBTC", "DEFI"],
+        eth: ["ETHA", "FETH", "ETHW", "ETHE", "ETH", "EZET", "ETHV", "CETH", "QETH"],
+        sol: ["ASOL", "VSOL", "FSOL", "CSOL", "GSOL"]
+      };
+
+      // We only take the last row that has data (excluding the total row)
+      let targetRow = null;
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i];
+        if (row.includes("Total") || !row.match(/\d{1,2}\s[A-Za-z]{3}\s\d{2,4}/)) continue;
+        targetRow = row;
+        break;
+      }
+
+      if (targetRow) {
+        const cells = targetRow.match(/<td[^>]*>([\s\S]*?)<\/td>/g) || [];
+        const dateStr = (cells[0] || "").replace(/<[^>]*>/g, "").trim();
+        
+        managerMap[asset].forEach((manager, idx) => {
+          const rawVal = (cells[idx + 1] || "").replace(/<[^>]*>/g, "").replace(/[$,]/g, "").trim();
+          const val = parseFloat(rawVal);
+          if (!isNaN(val)) {
+            allFlows.push({
+              id: `farside-${asset}-${tickers[asset][idx]}-${dateStr}`,
+              date: dateStr,
+              manager,
+              ticker: tickers[asset][idx],
+              asset: asset.toUpperCase(),
+              netUsd: val * 1000000, // Farside usually reports in millions
+              period: "daily",
+              source: "Farside"
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error(`[Farside] Error scraping ${asset}:`, error.message);
+    }
+  }
+
+  return allFlows.length > 0 ? allFlows : null;
 }
 app.use(cors({
   origin: (origin, callback) => {
@@ -511,14 +622,33 @@ function sanitizeAuthUser(user = null) {
     displayName: user.displayName || null,
     authProvider: user.authProvider || "email",
     emailVerified: Boolean(user.emailVerified),
+    pendingEmail: user.pendingEmail || null,
+    pendingEmailRequestedAt: user.pendingEmailRequestedAt || null,
+    passwordChangedAt: user.passwordChangedAt || null,
     twoFactorEnabled: Boolean(user.twoFactorEnabled),
     twoFactorMethod: user.twoFactorMethod || null,
+    twoFactorProvider: user.twoFactorProvider || null,
+    twoFactorTarget: user.twoFactorTarget || "",
+    twoFactorEnabledAt: user.twoFactorEnabledAt || null,
+    backupCodes: Array.isArray(user.backupCodes) ? user.backupCodes : [],
     passkeys: Array.isArray(user.passkeys) ? user.passkeys : [],
     currentPlan: String(user.currentPlan || "starter").trim().toLowerCase() || "starter",
     currentBillingCycle: String(user.currentBillingCycle || "monthly").trim().toLowerCase() || "monthly",
     planUpdatedAt: user.planUpdatedAt || null,
     createdAt: user.createdAt || null
   };
+}
+
+function createVerificationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function createBackupCodes() {
+  return Array.from({ length: 8 }, () => Math.random().toString(36).slice(2, 6).toUpperCase());
+}
+
+function isWorkspaceNamespaceValid(namespace) {
+  return /^[a-z0-9:_-]{3,80}$/i.test(String(namespace || "").trim());
 }
 
 function normalizePlanInput(plan) {
@@ -665,6 +795,13 @@ app.use(async (req, _res, next) => {
 function requireSignedIn(req, res, next) {
   if (!req.auth || req.auth.isGuest) {
     return res.status(401).json({ error: "Authentication required" });
+  }
+  return next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!isSignedInAdmin(req)) {
+    return res.status(403).json({ error: "Admin privileges required" });
   }
   return next();
 }
@@ -2055,7 +2192,7 @@ app.get("/api/db/balance", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/balance", requireSignedIn, writeLimiter, async (req, res) => {
+app.post("/api/db/balance", requireSignedIn, writeLimiter, validate(balanceChangeSchema), async (req, res) => {
   try {
     const { amount, type } = req.body;
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
@@ -2089,7 +2226,7 @@ app.get("/api/db/cash", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/cash", requireSignedIn, writeLimiter, async (req, res) => {
+app.post("/api/db/cash", requireSignedIn, writeLimiter, validate(cashChangeSchema), async (req, res) => {
   try {
     const { amount, type, currency = "USD" } = req.body || {};
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
@@ -2102,6 +2239,131 @@ app.post("/api/db/cash", requireSignedIn, writeLimiter, async (req, res) => {
       return res.status(400).json({ error: err.message || "Insufficient balance" });
     }
     handleServerError(res, "Cash balance update failed", err);
+  }
+});
+
+app.get("/api/db/workspace/docs/:namespace", requireSignedIn, async (req, res) => {
+  try {
+    const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
+    if (!isWorkspaceNamespaceValid(namespace)) {
+      return res.status(400).json({ error: "Invalid workspace namespace." });
+    }
+    const result = await userWorkspace.docs.get(req.auth.userId, namespace, null);
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, "Workspace document read failed", error);
+  }
+});
+
+app.put("/api/db/workspace/docs/:namespace", requireSignedIn, writeLimiter, validate(workspaceDocSchema), async (req, res) => {
+  try {
+    const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
+    if (!isWorkspaceNamespaceValid(namespace)) {
+      return res.status(400).json({ error: "Invalid workspace namespace." });
+    }
+    const result = await userWorkspace.docs.set(req.auth.userId, namespace, req.body?.document ?? null);
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, "Workspace document update failed", error);
+  }
+});
+
+app.get("/api/db/workspace/collections/:namespace", requireSignedIn, async (req, res) => {
+  try {
+    const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
+    if (!isWorkspaceNamespaceValid(namespace)) {
+      return res.status(400).json({ error: "Invalid workspace namespace." });
+    }
+    const result = await userWorkspace.collections.get(req.auth.userId, namespace, []);
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, "Workspace collection read failed", error);
+  }
+});
+
+app.put("/api/db/workspace/collections/:namespace", requireSignedIn, writeLimiter, validate(workspaceCollectionSchema), async (req, res) => {
+  try {
+    const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
+    if (!isWorkspaceNamespaceValid(namespace)) {
+      return res.status(400).json({ error: "Invalid workspace namespace." });
+    }
+    if (!Array.isArray(req.body?.items)) {
+      return res.status(400).json({ error: "items must be an array." });
+    }
+    const limit = Math.max(1, Math.min(2000, Number(req.body?.limit) || 500));
+    const result = await userWorkspace.collections.set(req.auth.userId, namespace, req.body.items, limit);
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, "Workspace collection update failed", error);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Exchange Keys Management
+// ---------------------------------------------------------------------------
+app.get("/api/db/exchange-keys", requireSignedIn, async (req, res) => {
+  try {
+    const keys = await userWorkspace.exchangeKeys.list(req.auth.userId);
+    res.json(keys);
+  } catch (err) {
+    handleServerError(res, "Failed to list exchange keys", err);
+  }
+});
+
+app.post("/api/db/exchange-keys", requireSignedIn, writeLimiter, validate(exchangeKeySchema), async (req, res) => {
+  try {
+    const key = await userWorkspace.exchangeKeys.add(req.auth.userId, req.body);
+    res.json(key);
+  } catch (err) {
+    handleServerError(res, "Failed to add exchange key", err);
+  }
+});
+
+app.delete("/api/db/exchange-keys/:id", requireSignedIn, writeLimiter, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await userWorkspace.exchangeKeys.remove(req.auth.userId, parseInt(id));
+    res.json({ success: true });
+  } catch (err) {
+    handleServerError(res, "Failed to remove exchange key", err);
+  }
+});
+
+// Exchange Sync Trigger
+app.post("/api/db/exchange-sync/:id", requireSignedIn, writeLimiter, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id));
+    if (!keyRecord) return res.status(404).json({ error: "Exchange key not found" });
+
+    let result;
+    if (keyRecord.exchange === "hyperliquid") {
+      result = await syncHyperliquid(keyRecord.apiKey, keyRecord.extraData);
+    } else if (keyRecord.exchange === "binance") {
+      result = await syncBinance(keyRecord.apiKey, keyRecord.apiSecret);
+    } else if (keyRecord.exchange === "bybit") {
+      result = await syncBybit(keyRecord.apiKey, keyRecord.apiSecret);
+    } else {
+      return res.status(400).json({ error: "Unsupported exchange" });
+    }
+
+    if (result) {
+      await userWorkspace.portfolio.sync(req.auth.userId, keyRecord.exchange, result.holdings);
+      await userWorkspace.trades.sync(req.auth.userId, result.trades);
+      if (result.currency && result.cashBalance != null) {
+        await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance);
+      }
+    }
+
+    res.json({
+      success: true,
+      holdingsCount: result?.holdings?.length || 0,
+      tradesCount: result?.trades?.length || 0,
+      cashBalance: result?.cashBalance,
+      currency: result?.currency
+    });
+  } catch (err) {
+    handleServerError(res, "Exchange sync failed", err);
   }
 });
 
@@ -2127,7 +2389,96 @@ app.get("/api/auth/me", async (req, res) => {
   return res.json({ authenticated: true, user: sanitizeAuthUser(user) });
 });
 
-app.post("/api/admin/migrations/admin-workspace", async (req, res) => {
+app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(emailRequestSchema), async (req, res) => {
+  try {
+    const nextEmail = String(req.body?.newEmail || "").trim().toLowerCase();
+    const currentPassword = String(req.body?.currentPassword || "");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    const currentUser = await userAuth.findUserById(req.auth.userId);
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (nextEmail === String(currentUser.email || "").trim().toLowerCase()) {
+      return res.status(400).json({ error: "New email must be different from current email." });
+    }
+    if (!currentPassword || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+    const existing = await userAuth.findUserByEmail(nextEmail);
+    if (existing && Number(existing.id) !== Number(req.auth.userId)) {
+      return res.status(409).json({ error: "An account with this email already exists." });
+    }
+
+    const verificationCode = createVerificationCode();
+    const updated = await userAuth.requestEmailChange({
+      userId: req.auth.userId,
+      nextEmail,
+      codeHash: hashToken(verificationCode)
+    });
+
+    return res.json({
+      success: true,
+      user: sanitizeAuthUser(updated),
+      message: `Verification sent to ${nextEmail}.`,
+      ...(ALLOW_DEV_AUTH_DEBUG ? { devVerificationCode: verificationCode } : {})
+    });
+  } catch (error) {
+    return handleServerError(res, "Email change request failed", error);
+  }
+});
+
+app.post("/api/account/email/confirm", authLimiter, requireSignedIn, validate(emailConfirmSchema), async (req, res) => {
+  try {
+    const verificationCode = String(req.body?.verificationCode || "").trim();
+    if (!/^\d{6}$/.test(verificationCode)) {
+      return res.status(400).json({ error: "Enter the 6-digit verification code." });
+    }
+    const confirmed = await userAuth.confirmEmailChange({
+      userId: req.auth.userId,
+      expectedCodeHash: hashToken(verificationCode)
+    });
+    if (confirmed === null) {
+      return res.status(400).json({ error: "No pending email change to verify." });
+    }
+    if (confirmed === false) {
+      return res.status(400).json({ error: "Verification code is invalid." });
+    }
+    return res.json({ success: true, user: sanitizeAuthUser(confirmed) });
+  } catch (error) {
+    if (error?.code === "23505") {
+      return res.status(409).json({ error: "That email is already in use." });
+    }
+    return handleServerError(res, "Email confirmation failed", error);
+  }
+});
+
+app.post("/api/account/password", authLimiter, requireSignedIn, validate(passwordUpdateSchema), async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({ error: "Password must be 10+ chars with letters, numbers, and symbols." });
+    }
+    const currentUser = await userAuth.findUserByEmail(req.auth.user?.email || "");
+    if (!currentUser || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+    if (verifyPassword(newPassword, currentUser.passwordHash)) {
+      return res.status(400).json({ error: "Choose a password different from your current password." });
+    }
+    const { hash } = derivePasswordHash(newPassword);
+    await userAuth.updatePassword(req.auth.userId, hash);
+    const user = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, user: sanitizeAuthUser(user) });
+  } catch (error) {
+    return handleServerError(res, "Password update failed", error);
+  }
+});
+
+app.post("/api/admin/migrations/admin-workspace", requireSignedIn, requireAdmin, async (req, res) => {
   try {
     if (!isSignedInAdmin(req) && !hasValidMigrationKey(req)) {
       return res.status(403).json({ error: "Admin privileges or valid migration key required." });
@@ -2140,7 +2491,7 @@ app.post("/api/admin/migrations/admin-workspace", async (req, res) => {
   }
 });
 
-app.post("/api/account/plan", requireSignedIn, async (req, res) => {
+app.post("/api/account/plan", requireSignedIn, validate(planUpdateSchema), async (req, res) => {
   try {
     const plan = normalizePlanInput(req.body?.plan);
     const billingCycle = normalizeBillingCycleInput(req.body?.billingCycle || "monthly");
@@ -2160,7 +2511,7 @@ app.post("/api/account/plan", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/auth/signup", authLimiter, async (req, res) => {
+app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
@@ -2191,7 +2542,7 @@ app.post("/api/auth/signup", authLimiter, async (req, res) => {
   }
 });
 
-app.post("/api/auth/signin", authLimiter, async (req, res) => {
+app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
@@ -2230,7 +2581,7 @@ app.post("/api/auth/signout", async (req, res) => {
   }
 });
 
-app.post("/api/auth/forgot-password/request", passwordResetLimiter, async (req, res) => {
+app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(forgotPasswordRequestSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     if (!email) return res.status(400).json({ error: "Email is required." });
@@ -2261,7 +2612,7 @@ app.post("/api/auth/forgot-password/request", passwordResetLimiter, async (req, 
   }
 });
 
-app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, async (req, res) => {
+app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(forgotPasswordConfirmSchema), async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
     const newPassword = String(req.body?.newPassword || "");
@@ -2288,11 +2639,33 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, async (req, 
   }
 });
 
-app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, async (req, res) => {
+app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFactorEnableSchema), async (req, res) => {
   try {
-    return res.status(501).json({
-      error: "2FA enable is temporarily disabled until secure WebAuthn/TOTP verification is implemented."
+    const method = String(req.body?.method || "").trim().toLowerCase();
+    const verificationCode = String(req.body?.verificationCode || "").trim();
+    const provider = String(req.body?.provider || "").trim() || null;
+    const target = String(req.body?.target || "").trim() || null;
+    if (!["authenticator", "sms", "email"].includes(method)) {
+      return res.status(400).json({ error: "Unsupported 2FA method." });
+    }
+    if (!/^\d{6}$/.test(verificationCode)) {
+      return res.status(400).json({ error: "Enter a valid 6-digit verification code." });
+    }
+    if ((method === "sms" || method === "email") && !target) {
+      return res.status(400).json({ error: "A delivery target is required for this 2FA method." });
+    }
+    const backupCodes = createBackupCodes();
+    await userAuth.upsertTwoFactor({
+      userId: req.auth.userId,
+      enabled: true,
+      method,
+      secretHash: hashToken(`${method}:${verificationCode}`),
+      provider,
+      target,
+      backupCodes
     });
+    const user = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
     return handleServerError(res, "Enable 2FA failed", error);
   }
@@ -2304,7 +2677,10 @@ app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res)
       userId: req.auth.userId,
       enabled: false,
       method: null,
-      secretHash: null
+      secretHash: null,
+      provider: null,
+      target: null,
+      backupCodes: []
     });
     const user = await userAuth.findUserById(req.auth.userId);
     return res.json({ success: true, user: sanitizeAuthUser(user) });
@@ -2313,13 +2689,46 @@ app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res)
   }
 });
 
-app.post("/api/auth/passkeys/register", authLimiter, requireSignedIn, async (req, res) => {
+app.post("/api/auth/passkeys/register", authLimiter, requireSignedIn, validate(passkeyRegisterSchema), async (req, res) => {
   try {
-    return res.status(501).json({
-      error: "Passkey registration requires full WebAuthn support and is currently disabled."
+    const name = String(req.body?.name || "").trim();
+    const provider = String(req.body?.provider || "").trim() || "Platform Authenticator";
+    if (name.length < 2) {
+      return res.status(400).json({ error: "Passkey name must be at least 2 characters." });
+    }
+    const backupCodes = createBackupCodes();
+    await userAuth.addPasskey({
+      userId: req.auth.userId,
+      passkey: {
+        id: `passkey-${Date.now()}`,
+        name,
+        provider,
+        createdAt: new Date().toISOString()
+      },
+      backupCodes
     });
+    const user = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
     return handleServerError(res, "Passkey registration failed", error);
+  }
+});
+
+app.post("/api/auth/2fa/backup-codes/regenerate", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    const user = await userAuth.findUserById(req.auth.userId);
+    if (!user?.twoFactorEnabled) {
+      return res.status(400).json({ error: "Enable 2FA before generating backup codes." });
+    }
+    const backupCodes = createBackupCodes();
+    await userAuth.regenerateBackupCodes({
+      userId: req.auth.userId,
+      backupCodes
+    });
+    const updated = await userAuth.findUserById(req.auth.userId);
+    return res.json({ success: true, user: sanitizeAuthUser(updated) });
+  } catch (error) {
+    return handleServerError(res, "Backup code regeneration failed", error);
   }
 });
 
@@ -2576,7 +2985,7 @@ app.get("/api/forex/rates", async (_req, res) => {
   }
 });
 
-app.get("/api/history", async (req, res) => {
+app.get("/api/history", validate(historyQuerySchema, "query"), async (req, res) => {
   const { type, interval = "1D" } = req.query;
   const rawSymbol = String(req.query.symbol || "").trim().toUpperCase();
   if (!rawSymbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -2780,7 +3189,7 @@ app.get("/api/greeks", async (req, res) => {
   }
 });
 
-app.get("/api/search", async (req, res) => {
+app.get("/api/search", validate(searchQuerySchema, "query"), async (req, res) => {
   const { q, type = "tradfi" } = req.query;
   if (!q) {
     return res.status(400).json({ error: "q parameter required" });
@@ -3760,7 +4169,7 @@ app.get("/api/watchlist", async (req, res) => {
   }
 });
 
-app.get("/api/prices", async (req, res) => {
+app.get("/api/prices", validate(pricesQuerySchema, "query"), async (req, res) => {
   const rawSymbols = String(req.query.symbols || "");
   const type = String(req.query.type || "tradfi").trim().toLowerCase();
   const symbols = [...new Set(
@@ -5255,7 +5664,7 @@ async function safePost(url, body, retries = 1) {
 // ---------------------------------------------------------------------------
 // ✅ STABLE Derive Options Chain Endpoint (FIXED)
 // ---------------------------------------------------------------------------
-app.post("/api/options/crypto", async (req, res) => {
+app.post("/api/options/crypto", validate(cryptoOptionsSchema), async (req, res) => {
   const { currency = "BTC", expiry } = req.body;
   const normalizedCurrency = String(currency || "BTC").toUpperCase();
   const marketStructure = normalizedCurrency === "HYPE" ? "rfq" : "orderbook";
@@ -5882,7 +6291,7 @@ app.get("/api/db/options-calculations", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/options-calculations", requireSignedIn, writeLimiter, validateOptionsCalculation, async (req, res) => {
+app.post("/api/db/options-calculations", requireSignedIn, writeLimiter, validate(optionsCalculationSchema), async (req, res) => {
   try {
     const payload = req.body || {};
     const record = await userWorkspace.options.add(req.auth.userId, payload);
@@ -5934,7 +6343,7 @@ app.get("/api/db/portfolio", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validatePortfolioHolding, async (req, res) => {
+app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validate(executeTradeSchema), async (req, res) => {
   try {
     const holding = req.body;
     const result = await userWorkspace.portfolio.add(req.auth.userId, holding);
@@ -5945,7 +6354,7 @@ app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validatePortfolioHo
   }
 });
 
-app.put("/api/db/portfolio/:id", requireSignedIn, writeLimiter, validatePortfolioUpdate, async (req, res) => {
+app.put("/api/db/portfolio/:id", requireSignedIn, writeLimiter, validate(portfolioUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: "Invalid id" });
@@ -5997,7 +6406,7 @@ app.get("/api/db/trades", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/trades", requireSignedIn, writeLimiter, async (req, res) => {
+app.post("/api/db/trades", requireSignedIn, writeLimiter, validate(tradeLogSchema), async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.asset) {
@@ -6029,7 +6438,7 @@ app.get("/api/db/watchlist", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validateWatchlistAsset, async (req, res) => {
+app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validate(watchlistAssetSchema), async (req, res) => {
   try {
     const asset = req.body;
     const result = await userWorkspace.watchlist.add(req.auth.userId, asset);
@@ -6040,7 +6449,7 @@ app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validateWatchlistAs
   }
 });
 
-app.post("/api/db/watchlist/bulk", requireSignedIn, writeLimiter, async (req, res) => {
+app.post("/api/db/watchlist/bulk", requireSignedIn, writeLimiter, validate(watchlistBulkSchema), async (req, res) => {
   try {
     const rawAssets = Array.isArray(req.body?.assets) ? req.body.assets : [];
     if (!rawAssets.length) {
@@ -6228,10 +6637,11 @@ app.get('/api/analytics/crypto', async (req, res) => {
       ETF_INFLOWS: "3834935"   // Example ID for ETF Flows
     };
 
-    const [duneMarketShareRows, duneOverviewRows, duneEtfFlowsRows] = await Promise.all([
+    const [duneMarketShareRows, duneOverviewRows, duneEtfFlowsRows, farsideFlows] = await Promise.all([
       fetchDuneLatestResults(DUNE_QUERY_IDS.MARKET_SHARE),
       fetchDuneLatestResults(DUNE_QUERY_IDS.OVERVIEW),
-      fetchDuneLatestResults(DUNE_QUERY_IDS.ETF_INFLOWS)
+      fetchDuneLatestResults(DUNE_QUERY_IDS.ETF_INFLOWS),
+      fetchFarsideEtfFlows()
     ]);
 
     // Map Dune data to our visual formats, falling back to static mocks if API fails
@@ -6261,21 +6671,24 @@ app.get('/api/analytics/crypto', async (req, res) => {
       { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
     ];
 
-    const etfInflows = duneEtfFlowsRows ? duneEtfFlowsRows.map(row => ({
+    const etfInflows = (farsideFlows && farsideFlows.length > 0) ? farsideFlows : (duneEtfFlowsRows ? duneEtfFlowsRows.map(row => ({
       id: row.id || `etf-${row.ticker}-${row.date}`,
       date: row.date || new Date().toISOString().split("T")[0],
       manager: row.manager || row.fund_manager || "Fidelity",
       ticker: row.ticker || "FBTC",
       asset: row.asset || "BTC",
       netUsd: Number(row.net_usd || row.amount || 0),
-      period: row.period || "daily"
+      period: row.period || "daily",
+      source: "Dune"
     })) : [
-      { id: "farside-1", date: "2024-03-27", manager: "BlackRock", ticker: "IBIT", asset: "BTC", netUsd: 323800000, period: "daily" },
-      { id: "farside-2", date: "2024-03-27", manager: "Fidelity", ticker: "FBTC", asset: "BTC", netUsd: 279500000, period: "daily" },
-      { id: "farside-3", date: "2024-03-27", manager: "Ark 21Shares", ticker: "ARKB", asset: "BTC", netUsd: 200700000, period: "daily" },
-      { id: "farside-4", date: "2024-03-27", manager: "Bitwise", ticker: "BITB", asset: "BTC", netUsd: 67200000, period: "daily" },
-      { id: "farside-5", date: "2024-03-27", manager: "Grayscale", ticker: "GBTC", asset: "BTC", netUsd: -299800000, period: "daily" }
-    ];
+      { id: "farside-1", date: "2024-03-27", manager: "BlackRock", ticker: "IBIT", asset: "BTC", netUsd: 323800000, period: "daily", source: "Farside (Static)" },
+      { id: "farside-2", date: "2024-03-27", manager: "Fidelity", ticker: "FBTC", asset: "BTC", netUsd: 279500000, period: "daily", source: "Farside (Static)" },
+      { id: "farside-3", date: "2024-03-27", manager: "Grayscale", ticker: "GBTC", asset: "BTC", netUsd: -299800000, period: "daily", source: "Farside (Static)" },
+      { id: "farside-eth-1", date: "2024-03-27", manager: "BlackRock", ticker: "ETHA", asset: "ETH", netUsd: 45200000, period: "daily", source: "Farside (Static)" },
+      { id: "farside-eth-2", date: "2024-03-27", manager: "Fidelity", ticker: "FETH", asset: "ETH", netUsd: 21300000, period: "daily", source: "Farside (Static)" },
+      { id: "farside-sol-1", date: "2024-03-27", manager: "VanEck", ticker: "VSOL", asset: "SOL", netUsd: 8500000, period: "daily", source: "Farside (Static)" },
+      { id: "farside-sol-2", date: "2024-03-27", manager: "21Shares", ticker: "ASOL", asset: "SOL", netUsd: 4200000, period: "daily", source: "Farside (Static)" }
+    ]);
 
     res.json({
       updatedAt: new Date().toISOString(),
@@ -7408,7 +7821,7 @@ app.get('/api/analytics/equities', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Atomic trade execution (portfolio + balance + trade journal)
 // ---------------------------------------------------------------------------
-app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validatePortfolioHolding, async (req, res) => {
+app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validate(executeTradeSchema), async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.clientId || typeof payload.clientId !== "string" || payload.clientId.trim().length > 120) {
@@ -7666,7 +8079,7 @@ module.exports = {
 // Analytics Module - Macro Routes (Compatibility for AnalyticsModule.jsx)
 // ---------------------------------------------------------------------------
 
-app.get("/api/macro/geographies", (req, res) => {
+app.get("/api/macro/geographies", requireSignedIn, (req, res) => {
   const query = String(req.query.query || "").toLowerCase();
   const macroRegions = [
     { type: "Global", name: "Global", code: "GLOBAL", parent: null },
@@ -7691,7 +8104,7 @@ app.get("/api/macro/geographies", (req, res) => {
   res.json(results);
 });
 
-app.get("/api/macro/indicators", (req, res) => {
+app.get("/api/macro/indicators", requireSignedIn, (req, res) => {
   res.json(MACRO_INDICATOR_CONFIG.map(c => ({
     code: c.key.toUpperCase(),
     name: c.label,
@@ -7700,20 +8113,20 @@ app.get("/api/macro/indicators", (req, res) => {
   })));
 });
 
-app.get("/api/macro/alerts", (req, res) => {
+app.get("/api/macro/alerts", requireSignedIn, (req, res) => {
   res.json([]);
 });
 
-app.get("/api/macro/global/overview", async (req, res) => {
+app.get("/api/macro/global/overview", requireSignedIn, async (req, res) => {
   res.json(buildMacroOverviewPayload("GLOBAL", "Global", buildDeterministicMacroMetrics("GLOBAL")));
 });
 
-app.get("/api/macro/region/:code/overview", async (req, res) => {
+app.get("/api/macro/region/:code/overview", requireSignedIn, async (req, res) => {
   const code = String(req.params.code || "REGION").trim().toUpperCase();
   res.json(buildMacroOverviewPayload(code, code, buildDeterministicMacroMetrics(code)));
 });
 
-app.get("/api/macro/country/:code/overview", async (req, res) => {
+app.get("/api/macro/country/:code/overview", requireSignedIn, async (req, res) => {
   const code = String(req.params.code || "USA").trim().toUpperCase();
   try {
     const metrics = sanitizeMacroMetrics(await fetchWorldBankMacroMetrics(code));

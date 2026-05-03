@@ -945,6 +945,10 @@ body.dark-theme .sidebar-footer {
   text-transform: uppercase;
   color: #94A3B8;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
 }
 
 .analytics-page-title {
@@ -1643,6 +1647,17 @@ body.dark-theme .sidebar-footer {
   margin: 0;
   color: #facc15;
   font-size: 0.8rem;
+}
+
+.settings-preview-note {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .settings-primary-btn {
@@ -10931,48 +10946,50 @@ body.dark-theme .sidebar-footer {
     grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)) !important;
   }
 
-  .intel-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 12px;
-    margin-bottom: 24px;
-  }
+}
 
-  .intel-summary-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    transition: all 0.2s ease;
-  }
+.intel-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
 
-  .intel-summary-card:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(56, 189, 248, 0.3);
-    transform: translateY(-2px);
-  }
+.intel-summary-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
 
-  .summary-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    color: #94a3b8;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-  }
+.intel-summary-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(56, 189, 248, 0.3);
+  transform: translateY(-2px);
+}
 
-  .summary-value {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--color-text-primary);
-  }
+.summary-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #94a3b8;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
 
-  .summary-value.positive { color: #4ade80; }
-  .summary-value.negative { color: #f87171; }
+.summary-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
 
-  /* Table Enhancements */
+.summary-value.positive { color: #4ade80; }
+.summary-value.negative { color: #f87171; }
+
+/* Table Enhancements */
 .intel-table .rating-cell {
   font-weight: 700;
   color: #e2e8f0;
@@ -10984,6 +11001,8 @@ body.dark-theme .sidebar-footer {
   color: #38bdf8;
   font-weight: 500;
 }
+
+@media (max-width: 430px) {
 
   .empty-table-msg, .empty-news-msg {
     padding: 20px;
@@ -12408,6 +12427,12 @@ body.light-theme-active .options-calculator-action-btn.primary {
   color: #ffffff !important;
 }
 
+body.light-theme-active .settings-preview-note {
+  background: #eff6ff;
+  border-color: rgba(37, 99, 235, 0.18);
+  color: #1e3a8a;
+}
+
 body.light-theme-active table,
 body.light-theme-active th,
 body.light-theme-active td,
@@ -13154,6 +13179,331 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   font-variant-numeric: tabular-nums;
 }
 
+.journal-day-view {
+  display: grid;
+  gap: 16px;
+}
+
+.journal-day-view-head,
+.journal-day-toolbar,
+.journal-day-filter-row,
+.journal-day-summary-grid,
+.journal-day-layout {
+  min-width: 0;
+}
+
+.journal-breadcrumb {
+  color: #94A3B8;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.journal-breadcrumb span {
+  margin: 0 6px;
+  color: #64748B;
+}
+
+.journal-day-view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.journal-day-view-head h3 {
+  margin: 8px 0 0;
+  font-size: clamp(28px, 3vw, 42px);
+  color: #f8fafc;
+}
+
+.journal-day-view-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.journal-day-toolbar,
+.journal-day-filter-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(260px, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.journal-day-filter-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+}
+
+.journal-day-date-nav {
+  display: inline-grid;
+  grid-template-columns: auto minmax(140px, auto) auto;
+  align-items: center;
+  gap: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(148,163,184,0.16);
+  overflow: hidden;
+  background: rgba(5,5,5,0.72);
+}
+
+.journal-day-date-nav > div {
+  min-height: 42px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #f8fafc;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  border-inline: 1px solid rgba(148,163,184,0.12);
+}
+
+.journal-day-search {
+  width: 100%;
+}
+
+.journal-day-search input {
+  width: 100%;
+}
+
+.journal-day-filter-row label {
+  display: grid;
+}
+
+.journal-day-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.journal-day-stat-card {
+  min-height: 86px;
+}
+
+.journal-day-stat-card strong {
+  margin-top: 8px;
+  font-size: clamp(18px, 1.8vw, 24px);
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.journal-day-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.journal-day-main,
+.journal-day-aside {
+  min-width: 0;
+}
+
+.journal-day-aside {
+  display: grid;
+  gap: 16px;
+}
+
+.journal-day-trade-log {
+  display: grid;
+  gap: 14px;
+}
+
+.journal-day-trades-list {
+  display: grid;
+  gap: 14px;
+}
+
+.journal-day-trade-row {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(148,163,184,0.12);
+  background: rgba(5,5,5,0.44);
+}
+
+.journal-day-trade-time {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.journal-day-trade-time strong {
+  color: #f8fafc;
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.journal-day-trade-time span,
+.journal-day-trade-time small {
+  color: #94A3B8;
+}
+
+.journal-day-trade-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.journal-day-trade-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.journal-day-chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.journal-day-trade-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.journal-day-trade-metrics div {
+  display: grid;
+  gap: 6px;
+}
+
+.journal-day-trade-metrics span {
+  color: #64748B;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.journal-day-trade-metrics strong {
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.journal-day-trade-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.journal-day-trade-footer p,
+.journal-day-empty-copy {
+  margin: 0;
+  color: #94A3B8;
+  line-height: 1.55;
+}
+
+.journal-day-trade-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.journal-day-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid rgba(148,163,184,0.10);
+}
+
+.journal-day-breakdown-grid div {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(148,163,184,0.10);
+}
+
+.journal-day-breakdown-grid div:nth-child(odd) {
+  padding-right: 14px;
+  border-right: 1px solid rgba(148,163,184,0.10);
+}
+
+.journal-day-breakdown-grid div:nth-child(even) {
+  padding-left: 14px;
+}
+
+.journal-day-breakdown-grid span {
+  display: block;
+  color: #64748B;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.journal-day-breakdown-grid strong {
+  display: block;
+  margin-top: 8px;
+  color: #f8fafc;
+}
+
+.journal-day-notes-list {
+  display: grid;
+  gap: 12px;
+}
+
+.journal-day-notes-list div {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(148,163,184,0.10);
+}
+
+.journal-day-notes-list div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.journal-day-notes-list span {
+  display: block;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.journal-day-notes-list p {
+  margin: 6px 0 0;
+  color: #94A3B8;
+  line-height: 1.55;
+}
+
+.journal-day-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.journal-day-attachment {
+  min-height: 108px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148,163,184,0.14);
+  background: rgba(5,5,5,0.54);
+  display: grid;
+  align-content: end;
+  gap: 8px;
+  color: #e2e8f0;
+}
+
+.journal-day-attachment strong {
+  color: #f8fafc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journal-day-attachment span {
+  color: #94A3B8;
+  font-size: 12px;
+}
+
+.journal-day-attachment.empty {
+  grid-column: 1 / -1;
+  border-style: dashed;
+}
+
 .journal-month-summary,
 .journal-review-summary,
 .journal-behavior-grid,
@@ -13560,6 +13910,18 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   .journal-stats-grid-v3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .journal-day-layout,
+  .journal-day-summary-grid,
+  .journal-day-toolbar,
+  .journal-day-filter-row,
+  .journal-day-trade-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .journal-day-trade-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 767px) {
@@ -13665,11 +14027,44 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   }
 
   .journal-calendar-layout,
+  .journal-day-layout,
   .journal-donut-row,
   .journal-analytics-grid,
   .journal-review-grid,
   .journal-action-plan {
     grid-template-columns: 1fr;
+  }
+
+  .journal-day-view-head,
+  .journal-day-toolbar,
+  .journal-day-filter-row,
+  .journal-day-trade-footer {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .journal-day-view-actions,
+  .journal-day-trade-actions,
+  .journal-day-chip-row {
+    width: 100%;
+  }
+
+  .journal-day-view-actions .journal-btn,
+  .journal-day-trade-actions .journal-btn {
+    flex: 1 1 0;
+  }
+
+  .journal-day-breakdown-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .journal-day-breakdown-grid div:nth-child(odd) {
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .journal-day-breakdown-grid div:nth-child(even) {
+    padding-left: 0;
   }
 
   .journal-heat-cell {
@@ -14879,6 +15274,39 @@ body.light-theme-active .journal-tab-nav button.active {
 body.light-theme-active .journal-stats-grid-v3 > * {
   background: rgba(255, 255, 255, 0.96) !important;
   border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+body.light-theme-active .journal-day-date-nav,
+body.light-theme-active .journal-day-attachment,
+body.light-theme-active .journal-day-trade-row,
+body.light-theme-active .journal-day-breakdown-grid div,
+body.light-theme-active .journal-day-notes-list div,
+body.light-theme-active .journal-selected-day,
+body.light-theme-active .journal-month-summary div {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+body.light-theme-active .journal-breadcrumb,
+body.light-theme-active .journal-day-trade-time span,
+body.light-theme-active .journal-day-trade-time small,
+body.light-theme-active .journal-day-trade-footer p,
+body.light-theme-active .journal-day-empty-copy,
+body.light-theme-active .journal-day-attachment span,
+body.light-theme-active .journal-day-breakdown-grid span,
+body.light-theme-active .journal-day-trade-metrics span,
+body.light-theme-active .journal-day-notes-list p {
+  color: #64748b !important;
+}
+
+body.light-theme-active .journal-day-view-head h3,
+body.light-theme-active .journal-day-date-nav > div,
+body.light-theme-active .journal-day-trade-time strong,
+body.light-theme-active .journal-day-trade-metrics strong,
+body.light-theme-active .journal-day-attachment strong,
+body.light-theme-active .journal-day-breakdown-grid strong,
+body.light-theme-active .journal-day-notes-list span {
+  color: #0f172a !important;
 }
 
 body.light-theme-active .journal-stat-value,

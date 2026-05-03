@@ -168,6 +168,7 @@ export default function AuthPage() {
   const [signinUsePasskey, setSigninUsePasskey] = useState(false);
   const [signupTouched, setSignupTouched] = useState(false);
   const [signinTouched, setSigninTouched] = useState(false);
+  const [legalDoc, setLegalDoc] = useState("");
 
   const signupPasswordRules = useMemo(() => getPasswordRuleState(signupForm.password), [signupForm.password]);
   const signupStrengthLabel = useMemo(() => getPasswordStrengthLabel(signupPasswordRules), [signupPasswordRules]);
@@ -335,6 +336,8 @@ export default function AuthPage() {
 
   const signupEmailInvalid = signupTouched && !isValidEmail(signupForm.email);
   const signinEmailInvalid = signinTouched && !isValidEmail(signinForm.email);
+  const openLegalDoc = (doc) => setLegalDoc(doc);
+  const closeLegalDoc = () => setLegalDoc("");
 
   return (
     <div className="auth-v2-shell">
@@ -381,7 +384,9 @@ export default function AuthPage() {
                     ))}
                   </div>
                 </>
-              ) : null}
+              ) : (
+                <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
+              )}
 
               <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSignupStep("passkey")}>Sign up with passkey</button>
               <p className="auth-v2-footnote">Use Face ID, Touch ID, Windows Hello, or your device passcode.</p>
@@ -389,7 +394,7 @@ export default function AuthPage() {
               <div className="auth-v2-divider auth-v2-divider-soft" />
 
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signin")}>Sign in</button></p>
-              <p className="auth-v2-terms">By continuing, you agree to Zenin Capital&apos;s <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.</p>
+              <p className="auth-v2-terms">By continuing, you agree to Zenin Capital&apos;s <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("terms")}>Terms</button> and <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("privacy")}>Privacy Policy</button>.</p>
             </>
           )}
 
@@ -447,7 +452,9 @@ export default function AuthPage() {
                     ))}
                   </div>
                 </>
-              ) : null}
+              ) : (
+                <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
+              )}
 
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signin")}>Sign in</button></p>
             </>
@@ -567,14 +574,16 @@ export default function AuthPage() {
                     ))}
                   </div>
                 </>
-              ) : null}
+              ) : (
+                <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
+              )}
 
               <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSigninUsePasskey((prev) => !prev)}>
                 {signinUsePasskey ? "Hide passkey option" : "Use passkey instead"}
               </button>
 
               <p className="auth-v2-bottom-link">New to Zenin Capital? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signup")}>Create account</button></p>
-              <p className="auth-v2-terms">By continuing, you agree to Zenin Capital&apos;s <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.</p>
+              <p className="auth-v2-terms">By continuing, you agree to Zenin Capital&apos;s <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("terms")}>Terms</button> and <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("privacy")}>Privacy Policy</button>.</p>
             </>
           )}
 
@@ -632,7 +641,52 @@ export default function AuthPage() {
           {error ? <p className="auth-v2-error">{error}</p> : null}
         </section>
       </main>
+      <AuthLegalModal doc={legalDoc} onClose={closeLegalDoc} />
       <SpeedInsights />
+    </div>
+  );
+}
+
+function AuthLegalModal({ doc, onClose }) {
+  if (!doc) return null;
+  const isTerms = doc === "terms";
+  return (
+    <div
+      className="home-v3-drawer-overlay"
+      onMouseDown={onClose}
+      role="presentation"
+      style={{ background: "rgba(2, 6, 23, 0.7)", backdropFilter: "blur(8px)" }}
+    >
+      <aside
+        className="home-v3-detail-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={isTerms ? "Terms of Service" : "Privacy Policy"}
+        style={{ maxWidth: 720 }}
+      >
+        <div className="home-v3-drawer-head">
+          <h2>{isTerms ? "Terms of Service" : "Privacy Policy"}</h2>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div className="home-v3-drawer-rows" style={{ gap: 16 }}>
+          {isTerms ? (
+            <>
+              <div><span>Access</span><strong>Use the workspace for lawful research, portfolio tracking, and analytics only.</strong></div>
+              <div><span>Accounts</span><strong>You are responsible for credentials, connected accounts, and read-only API usage.</strong></div>
+              <div><span>Market data</span><strong>Quotes, tax estimates, and analytics are informational and may be delayed or incomplete.</strong></div>
+              <div><span>Not advice</span><strong>Nothing in Zenin Capital is investment, legal, or tax advice.</strong></div>
+            </>
+          ) : (
+            <>
+              <div><span>Data stored</span><strong>Email, workspace preferences, saved calculations, and locally cached portfolio context.</strong></div>
+              <div><span>Connected sources</span><strong>Read-only keys and linked accounts are used to display holdings and analytics inside your workspace.</strong></div>
+              <div><span>Security</span><strong>Use least-privilege credentials and avoid providing withdrawal-enabled keys.</strong></div>
+              <div><span>Control</span><strong>You can remove local session data by signing out or clearing browser storage.</strong></div>
+            </>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

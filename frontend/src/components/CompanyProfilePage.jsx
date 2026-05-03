@@ -1043,8 +1043,42 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
 
   const filteredFinvizSummary = useMemo(() => {
     if (!finvizData?.summary) return [];
-    const excluded = ["Peers", "Industry", "Sector", "Country", "Description", "Title"];
-    return Object.entries(finvizData.summary).filter(([label]) => !excluded.includes(label));
+    const excluded = ["Peers", "Industry", "Sector", "Country", "Description", "Title", "Date"];
+    const seen = new Set();
+    const result = [];
+    
+    // Order of importance for duplicates: we prefer the more standard-looking labels
+    const sortedEntries = Object.entries(finvizData.summary).sort((a, b) => {
+      // Prioritize labels with uppercase letters or specific formatting
+      const aIsBetter = /[A-Z]/.test(a[0]) || a[0].includes('/') || a[0].includes(' ');
+      const bIsBetter = /[A-Z]/.test(b[0]) || b[0].includes('/') || b[0].includes(' ');
+      if (aIsBetter && !bIsBetter) return -1;
+      if (!aIsBetter && bIsBetter) return 1;
+      return 0;
+    });
+    
+    for (const [label, value] of sortedEntries) {
+      if (excluded.includes(label)) continue;
+      
+      // Normalize label for deduplication (e.g., 'market_cap' and 'Market Cap' become 'marketcap')
+      const normalized = label.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (seen.has(normalized)) continue;
+      
+      // Skip if value is empty or redundant
+      if (!value || value === "-" || value === "—") continue;
+
+      seen.add(normalized);
+      
+      let prettyLabel = label;
+      // Handle snake_case labels from some data sources
+      if (label === label.toLowerCase() && label.includes('_')) {
+        prettyLabel = label.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+      }
+      
+      result.push([prettyLabel, value]);
+    }
+    
+    return result;
   }, [finvizData?.summary]);
 
   const normalizedFinvizRatings = useMemo(

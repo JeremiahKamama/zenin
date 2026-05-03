@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo, LineZMark } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
+import AuthModal from "./components/AuthModal";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
 const VALID_BILLING_CYCLES = ["monthly", "yearly"];
@@ -88,6 +89,7 @@ export default function PublicHomepage() {
   const [openAppChecking, setOpenAppChecking] = useState(false);
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
+  const [authModal, setAuthModal] = useState({ open: false, mode: "signup" });
   const [billingCycle, setBillingCycle] = useState(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("zenin_pricing_billing_cycle") : "";
     return normalizeBillingCycle(stored || "monthly");
@@ -229,7 +231,11 @@ export default function PublicHomepage() {
 
   const handleOpenAppClick = async (event) => {
     event.preventDefault();
-    window.location.href = "/app";
+    if (authUser) {
+      window.location.href = "/app";
+    } else {
+      setAuthModal({ open: true, mode: "signup" });
+    }
   };
 
   return (
@@ -249,6 +255,15 @@ export default function PublicHomepage() {
           </nav>
 
           <div className={`nav-actions ${menuOpen ? "open" : ""}`}>
+            {!authUser && (
+              <button 
+                className="btn btn-secondary" 
+                style={{ background: 'transparent', border: 'none', padding: '0 10px', boxShadow: 'none' }}
+                onClick={(e) => { e.preventDefault(); setAuthModal({ open: true, mode: 'signin' }); }}
+              >
+                Sign In
+              </button>
+            )}
             <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
               {openAppChecking ? "Checking..." : "Open App →"}
             </a>
@@ -755,6 +770,11 @@ export default function PublicHomepage() {
 
       </footer>
       <SpeedInsights />
+      <AuthModal 
+        isOpen={authModal.open} 
+        initialMode={authModal.mode} 
+        onClose={() => setAuthModal({ ...authModal, open: false })} 
+      />
     </div>
   );
 }

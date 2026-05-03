@@ -3,6 +3,7 @@ import ReactApexChart from "react-apexcharts";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
@@ -16,6 +17,29 @@ const MOVERS_HORIZONS = {
   ytd: { label: "YTD", interval: "YTD" },
   yearly: { label: "Yearly", interval: "1Y" }
 };
+
+const HOME_VIEW_STORAGE_KEY = "zenin_home_view_state_v1";
+const HOME_SAVED_VIEWS_STORAGE_KEY = "zenin_home_saved_views";
+const HOME_ALERTS_STORAGE_KEY = "zenin_home_alerts";
+const HOME_TASKS_STORAGE_KEY = "zenin_home_workspace_tasks";
+const HOME_REBALANCE_STORAGE_KEY = "zenin_home_rebalance_queue";
+const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
+
+function readStoredJson(key, fallback) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function appendStoredRecord(key, record, limit = 30) {
+  const existing = readStoredJson(key, []);
+  const rows = Array.isArray(existing) ? existing : [];
+  localStorage.setItem(key, JSON.stringify([record, ...rows].slice(0, limit)));
+  return [record, ...rows].slice(0, limit);
+}
 
 export function HomeModule({
   portfolio,
@@ -32,7 +56,9 @@ export function HomeModule({
   calculatePortfolioGain,
   balance = 0,
   onViewAllPositions,
-  onViewFullMetrics
+  onViewFullMetrics,
+  onOpenWatchlist,
+  onOpenAnalytics
 }) {
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
@@ -59,6 +85,7 @@ export function HomeModule({
   const [homeToast, setHomeToast] = useState("");
   const [selectedHoldingDetail, setSelectedHoldingDetail] = useState(null);
   const [selectedActivityDetail, setSelectedActivityDetail] = useState(null);
+  const [showAllActivity, setShowAllActivity] = useState(false);
   const [marketScope, setMarketScope] = useState("all");
   const [marketDetailOpen, setMarketDetailOpen] = useState(false);
   const [marketDetailTab, setMarketDetailTab] = useState("equities");
@@ -70,6 +97,14 @@ export function HomeModule({
   const [marketDataLoading, setMarketDataLoading] = useState(false);
   const moversPerfCacheRef = useRef(new Map());
   const flowTimerRef = useRef(null);
+  const homePrefsHydratedRef = useRef(false);
+  const [flowOutcome, setFlowOutcome] = useState({ title: "", message: "" });
+
+  const syncHomeCollection = (namespace, rows, limit = 100) => {
+    saveWorkspaceCollection(namespace, rows, limit).catch((error) => {
+      console.warn(`Workspace sync skipped for ${namespace}.`, error);
+    });
+  };
 
   const topPositions = useMemo(() => {
     const spotPositions = (Array.isArray(portfolio) ? portfolio : []).map((asset) => {
@@ -443,10 +478,163 @@ export function HomeModule({
 
   const quickActions = [
     { id: "trade", label: "Add Trade", action: () => onSelectAsset?.(gainers[0] || moversUniverse[0] || null) },
-    { id: "rebalance", label: "Rebalance", action: () => setQuickActionFeedback("Rebalance flow queued. Open Portfolio to apply target weights.") },
-    { id: "alert", label: "Set Alert", action: () => setQuickActionFeedback("Alert draft created from top mover context.") },
-    { id: "journal", label: "Journal Note", action: () => setQuickActionFeedback("Journal shortcut ready in the Journal page.") }
+    { id: "rebalance", label: "Rebalance", action: () => openAttentionFlow("rebalance") },
+    { id: "alert", label: "Set Alert", action: () => {
+      const leader = gainers[0] || moversUniverse[0];
+      if (!leader) {
+        setQuickActionFeedback("Add holdings or watchlist assets before creating alerts.");
+        return;
+      }
+      const nextAlerts = appendStoredRecord(HOME_ALERTS_STORAGE_KEY, {
+        id: `home-alert-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        symbol: leader.symbol,
+        type: leader.__moverType || leader.type || "asset",
+        context: "home-top-mover",
+        message: `${leader.symbol} moved ${formatSignedPercent(Number(leader.__moverChange || 0))} on the ${MOVERS_HORIZONS[moversHorizon]?.label || "selected"} horizon.`
+      }, 50);
+      syncHomeCollection("home:alerts", nextAlerts, 50);
+      setQuickActionFeedback(`Alert saved to your Zenin workspace for ${leader.symbol}.`);
+    } },
+    { id: "journal", label: "Journal Note", action: () => {
+      const leader = gainers[0] || moversUniverse[0];
+      const existing = readStoredJson(JOURNAL_STORAGE_KEY, []);
+      const rows = Array.isArray(existing) ? existing : [];
+      const nowIso = new Date().toISOString();
+      const symbol = String(leader?.symbol || "MARKET").toUpperCase();
+      const note = {
+        id: `jrnl-home-${Date.now()}`,
+        createdAt: nowIso,
+        symbol,
+        tradeDate: nowIso,
+        side: "NOTE",
+        quantity: 0,
+        price: Number(leader?.price || 0),
+        notional: 0,
+        marketType: leader?.__moverType || leader?.type || "Insight",
+        status: "Idea",
+        strategy: "Home Insight",
+        setupTag: "Home Insight",
+        marketRegime: riskOn ? "Risk On" : "Risk Off",
+        timeframe: "intraday",
+        emotion: "neutral",
+        confidence: 4,
+        preThesis: leader
+          ? `${symbol} is a notable mover on the ${MOVERS_HORIZONS[moversHorizon]?.label || "selected"} horizon. Capture follow-up plan before taking a trade.`
+          : "Capture today’s market takeaway from the Home dashboard.",
+        postReview: "",
+        mistakeCategory: "",
+        learned: "",
+        chartLink: ""
+      };
+      const nextRows = [note, ...rows].slice(0, 300);
+      localStorage.setItem(JOURNAL_STORAGE_KEY, JSON.stringify(nextRows));
+      syncHomeCollection("journal:entries", nextRows, 500);
+      setQuickActionFeedback(`Journal note created in your Zenin workspace for ${symbol}.`);
+    } }
   ];
+
+  const queueWorkspaceTask = (kind, payload = {}) => {
+    const nextTasks = appendStoredRecord(HOME_TASKS_STORAGE_KEY, {
+      id: `home-task-${Date.now()}`,
+      kind,
+      createdAt: new Date().toISOString(),
+      ...payload
+    }, 60);
+    syncHomeCollection("home:tasks", nextTasks, 60);
+  };
+
+  const handleRefreshDashboard = (toastMessage = "Dashboard refreshed.") => {
+    setHomeLastUpdatedAt(Date.now());
+    setMarketRefreshNonce((prev) => prev + 1);
+    setHomeToast(toastMessage);
+  };
+
+  const handleSaveHomeView = () => {
+    const nextViews = appendStoredRecord(HOME_SAVED_VIEWS_STORAGE_KEY, {
+      id: `home-view-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      chartMode,
+      chartInterval,
+      moversHorizon,
+      marketScope,
+      marketDetailTab,
+      marketRegion,
+      marketSortBy
+    }, 25);
+    syncHomeCollection("home:saved_views", nextViews, 25);
+    setHomeToast("View saved to your Zenin workspace.");
+  };
+
+  const handleMissingDataAction = (mode) => {
+    const symbol = String(flowSelection?.symbol || "ASSET").toUpperCase();
+    const issue = flowSelection?.issue || "Missing price data";
+    queueWorkspaceTask("missing-data", { mode, symbol, issue });
+    runFlowProcessing(
+      4,
+      mode === "source" ? `Refreshing ${symbol} market data...` : `Saving manual review for ${symbol}...`,
+      3,
+      1100,
+      () => {
+        handleRefreshDashboard("");
+        setFlowOutcome({
+          title: mode === "source" ? "Refresh queued" : "Manual review saved",
+          message: mode === "source"
+            ? `${symbol} was added to your Zenin workspace refresh queue and will re-check pricing on the next sync.`
+            : `${symbol} was marked for manual follow-up in your Zenin workspace.`
+        });
+      }
+    );
+  };
+
+  const handleQueueHomeRebalance = () => {
+    const nextQueue = appendStoredRecord(HOME_REBALANCE_STORAGE_KEY, {
+      id: `home-rebalance-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      drift: Number(rebalanceDriftPct.toFixed(2)),
+      estimatedCost: Number(rebalancePlanRows.cost || 0),
+      plan: rebalancePlanRows.rows
+    }, 20);
+    syncHomeCollection("home:rebalance_queue", nextQueue, 20);
+    runFlowProcessing(4, "Saving rebalance plan to your workspace...", 3, 1100, () => {
+      setHomeLastUpdatedAt(Date.now());
+      setFlowOutcome({
+        title: "Rebalance queued",
+        message: "The rebalance plan was saved to your Zenin workspace for later execution."
+      });
+    });
+  };
+
+  const handleVolatilityAction = (action) => {
+    const symbol = String(flowSelection?.symbol || "ASSET").toUpperCase();
+    if (action === "alert") {
+      const nextAlerts = appendStoredRecord(HOME_ALERTS_STORAGE_KEY, {
+        id: `vol-alert-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        symbol,
+        type: "volatility",
+        context: "action-center",
+        message: `${symbol} volatility exceeded your recent baseline.`
+      }, 50);
+      syncHomeCollection("home:alerts", nextAlerts, 50);
+    } else {
+      queueWorkspaceTask(action === "hedge" ? "hedge-review" : "position-review", {
+        symbol,
+        context: "volatility",
+        volatility24h: Number(flowSelection?.volatility24h || 0)
+      });
+    }
+    runFlowProcessing(4, `Saving ${symbol} ${action} workflow...`, 3, 950, () => {
+      setFlowOutcome({
+        title: action === "alert" ? "Alert saved" : action === "hedge" ? "Hedge task queued" : "Review queued",
+        message: action === "alert"
+          ? `${symbol} will stay on your Zenin workspace alert list.`
+          : action === "hedge"
+            ? `${symbol} was added to your Zenin workspace hedge review queue.`
+            : `${symbol} was added to your Zenin workspace position review queue.`
+      });
+    });
+  };
 
   useEffect(() => {
     if (!marketDetailOpen) return;
@@ -480,6 +668,63 @@ export function HomeModule({
   }, [marketDetailOpen, marketRefreshNonce]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const applySavedView = (saved) => {
+      if (!saved || typeof saved !== "object") return;
+      if (saved.chartMode) setChartMode(saved.chartMode);
+      if (saved.chartInterval) setChartInterval(saved.chartInterval);
+      if (saved.moversHorizon) setMoversHorizon(saved.moversHorizon);
+      if (saved.marketScope) setMarketScope(saved.marketScope);
+      if (saved.marketDetailTab) setMarketDetailTab(saved.marketDetailTab);
+      if (saved.marketRegion) setMarketRegion(saved.marketRegion);
+      if (saved.marketSortBy) setMarketSortBy(saved.marketSortBy);
+    };
+
+    const hydrateViewState = async () => {
+      const localSaved = readStoredJson(HOME_VIEW_STORAGE_KEY, null);
+      applySavedView(localSaved);
+      try {
+        const remote = await loadWorkspaceDoc("home:view_state", localSaved);
+        if (cancelled) return;
+        applySavedView(remote?.document);
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Home view sync unavailable.", error);
+        }
+      } finally {
+        if (!cancelled) {
+          homePrefsHydratedRef.current = true;
+        }
+      }
+    };
+
+    hydrateViewState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!homePrefsHydratedRef.current) return;
+    const nextViewState = {
+      chartMode,
+      chartInterval,
+      moversHorizon,
+      marketScope,
+      marketDetailTab,
+      marketRegion,
+      marketSortBy,
+      updatedAt: new Date().toISOString()
+    };
+    localStorage.setItem(HOME_VIEW_STORAGE_KEY, JSON.stringify(nextViewState));
+    saveWorkspaceDoc("home:view_state", nextViewState).catch((error) => {
+      console.warn("Home view sync skipped.", error);
+    });
+  }, [chartMode, chartInterval, moversHorizon, marketScope, marketDetailTab, marketRegion, marketSortBy]);
+
+  useEffect(() => {
     return () => {
       if (flowTimerRef.current) clearTimeout(flowTimerRef.current);
     };
@@ -492,18 +737,19 @@ export function HomeModule({
   }, [homeToast]);
 
   useEffect(() => {
-    if (!activeAttentionFlow && !selectedHoldingDetail && !selectedActivityDetail && !marketDetailOpen) return;
+    if (!activeAttentionFlow && !selectedHoldingDetail && !selectedActivityDetail && !showAllActivity && !marketDetailOpen) return;
     const handleKeydown = (event) => {
       if (event.key === "Escape") {
         setActiveAttentionFlow(null);
         setSelectedHoldingDetail(null);
         setSelectedActivityDetail(null);
+        setShowAllActivity(false);
         setMarketDetailOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [activeAttentionFlow, selectedHoldingDetail, selectedActivityDetail, marketDetailOpen]);
+  }, [activeAttentionFlow, selectedHoldingDetail, selectedActivityDetail, showAllActivity, marketDetailOpen]);
 
   const relativeAgeLabel = (raw, fallbackDays = 2) => {
     const ts = new Date(raw || 0).getTime();
@@ -580,6 +826,7 @@ export function HomeModule({
     setAttentionFlowStep(1);
     setFlowBusy(false);
     setFlowActionLabel("");
+    setFlowOutcome({ title: "", message: "" });
     if (flowKind === "missing") {
       setFlowSelection(missingFlowRows[0] || null);
     } else if (flowKind === "rebalance") {
@@ -593,14 +840,16 @@ export function HomeModule({
     setActiveAttentionFlow(null);
     setFlowBusy(false);
     setFlowActionLabel("");
+    setFlowOutcome({ title: "", message: "" });
   };
 
-  const runFlowProcessing = (nextStep, actionLabel, processingStep = 3, delayMs = 1300) => {
+  const runFlowProcessing = (nextStep, actionLabel, processingStep = 3, delayMs = 1300, onComplete = null) => {
     setFlowActionLabel(actionLabel || "");
     setFlowBusy(true);
     setAttentionFlowStep(processingStep);
     if (flowTimerRef.current) clearTimeout(flowTimerRef.current);
     flowTimerRef.current = setTimeout(() => {
+      onComplete?.();
       setFlowBusy(false);
       setAttentionFlowStep(nextStep);
     }, delayMs);
@@ -1280,8 +1529,8 @@ export function HomeModule({
               <div><strong>How to fix</strong><p>Reconnect your data source or update this asset manually.</p></div>
             </div>
             <div className="home-v2-flow-actions">
-              <button type="button" className="home-v2-flow-btn primary warn" onClick={() => runFlowProcessing(4, `Updating ${selectedSymbol || "asset"} data source...`)}>Update Source</button>
-              <button type="button" className="home-v2-flow-btn" onClick={() => runFlowProcessing(4, `Applying manual update for ${selectedSymbol || "asset"}...`)}>Update Manually</button>
+              <button type="button" className="home-v2-flow-btn primary warn" onClick={() => handleMissingDataAction("source")}>Update Source</button>
+              <button type="button" className="home-v2-flow-btn" onClick={() => handleMissingDataAction("manual")}>Update Manually</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(1)}>Back</button>
             </div>
           </div>
@@ -1298,8 +1547,8 @@ export function HomeModule({
         flowBody = (
           <div className="home-v2-flow-status-card success">
             <div className="home-v2-flow-success-mark">✓</div>
-            <h3>Data updated</h3>
-            <p>{selectedSymbol || "Asset"} data is now up to date.</p>
+            <h3>{flowOutcome.title || "Data task completed"}</h3>
+            <p>{flowOutcome.message || `${selectedSymbol || "Asset"} data is now up to date.`}</p>
             <div className="home-v2-flow-actions">
               <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(1)}>Back to Missing Data</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
@@ -1351,7 +1600,7 @@ export function HomeModule({
             <p>You are about to place the following trades.</p>
             <div className="home-v2-flow-summary">This will reduce drift from <strong>{rebalanceDriftPct.toFixed(1)}%</strong> to <strong>{Math.max(0, rebalanceDriftPct * 0.08).toFixed(1)}%</strong>.</div>
             <div className="home-v2-flow-actions">
-              <button type="button" className="home-v2-flow-btn primary" onClick={() => runFlowProcessing(4, "Submitting rebalance orders...", 3)}>Confirm</button>
+              <button type="button" className="home-v2-flow-btn primary" onClick={handleQueueHomeRebalance}>Confirm</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(2)}>Cancel</button>
             </div>
           </div>
@@ -1368,8 +1617,8 @@ export function HomeModule({
         flowBody = (
           <div className="home-v2-flow-status-card success">
             <div className="home-v2-flow-success-mark">✓</div>
-            <h3>Rebalance Submitted</h3>
-            <p>Your trades have been submitted successfully.</p>
+            <h3>{flowOutcome.title || "Rebalance submitted"}</h3>
+            <p>{flowOutcome.message || "Your trades have been submitted successfully."}</p>
             <div className="home-v2-flow-actions">
               <button type="button" className="home-v2-flow-btn primary" onClick={() => { onViewAllPositions?.(); closeAttentionFlow(); }}>View Portfolio</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
@@ -1420,9 +1669,9 @@ export function HomeModule({
             <li>Position variance is above your rolling baseline.</li>
           </ul>
           <div className="home-v2-flow-actions">
-            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(4)}>Review Position</button>
-            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(4)}>Set Alert</button>
-            <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(4)}>Hedge Position</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("review")}>Review Position</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("alert")}>Set Alert</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("hedge")}>Hedge Position</button>
           </div>
         </div>
       );
@@ -1430,8 +1679,8 @@ export function HomeModule({
       flowBody = (
         <div className="home-v2-flow-status-card success">
           <div className="home-v2-flow-success-mark">✓</div>
-          <h3>Alert Reviewed</h3>
-          <p>We&apos;ll continue monitoring this symbol for you.</p>
+          <h3>{flowOutcome.title || "Alert reviewed"}</h3>
+          <p>{flowOutcome.message || "We&apos;ll continue monitoring this symbol for you."}</p>
           <div className="home-v2-flow-actions">
             <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(1)}>Back to Alerts</button>
             <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
@@ -1477,6 +1726,14 @@ export function HomeModule({
     setHomeLastUpdatedAt(Date.now());
     setMarketRefreshNonce((value) => value + 1);
     setHomeToast("Market context refreshed.");
+  };
+
+  const openAllActivityDrawer = () => {
+    if (!recentActivityRows.length) {
+      setHomeToast("No recent activity to show yet.");
+      return;
+    }
+    setShowAllActivity(true);
   };
 
   if (marketDetailOpen) {
@@ -1555,7 +1812,7 @@ export function HomeModule({
           <div className="market-context-panel market-impact-panel">
             <div className="market-panel-head">
               <h3>Portfolio Impact</h3>
-              <button type="button">View full</button>
+              <button type="button" onClick={() => onViewAllPositions?.()}>View full</button>
             </div>
             <div className="market-impact-table">
               <div className="market-impact-row market-impact-header">
@@ -1594,7 +1851,7 @@ export function HomeModule({
           <div className="market-context-panel market-top-movers-panel">
             <div className="market-panel-head">
               <h3>Top Movers</h3>
-              <button type="button">View all</button>
+              <button type="button" onClick={() => onOpenWatchlist?.()}>View all</button>
             </div>
             <div className="market-mover-tabs">
               {["equities", "crypto", "options", "commodities", "macro"].map((tab) => (
@@ -1612,7 +1869,7 @@ export function HomeModule({
           <div className="market-context-panel">
             <div className="market-panel-head">
               <div><h3>Market Signals</h3><p>AI-curated insights across markets</p></div>
-              <button type="button">View all signals</button>
+              <button type="button" onClick={() => onOpenAnalytics?.()}>View all signals</button>
             </div>
             <div className="market-signal-list">
               {marketSignals.map((signal) => (
@@ -1631,7 +1888,7 @@ export function HomeModule({
           <div className="market-context-panel">
             <div className="market-panel-head">
               <div><h3>Macro Context</h3><p>Key macroeconomic indicators</p></div>
-              <button type="button">View full calendar</button>
+              <button type="button" onClick={() => onOpenAnalytics?.()}>View full calendar</button>
             </div>
             <div className="market-macro-table">
               {macroContextRows.map((row) => (
@@ -1649,7 +1906,7 @@ export function HomeModule({
           <div className="market-context-panel">
             <div className="market-panel-head">
               <h3>Upcoming Events</h3>
-              <button type="button">View economic calendar</button>
+              <button type="button" onClick={() => onOpenAnalytics?.()}>View economic calendar</button>
             </div>
             <div className="market-event-list">
               {upcomingEvents.map((event) => (
@@ -1677,8 +1934,8 @@ export function HomeModule({
         </div>
         <div className="home-v3-header-actions">
           <span>Last updated {new Date(homeLastUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-          <button type="button" className="home-v3-btn secondary" onClick={() => { setHomeLastUpdatedAt(Date.now()); setHomeToast("Dashboard refreshed."); }}>Refresh</button>
-          <button type="button" className="home-v3-btn primary" onClick={() => setHomeToast("View saved.")}>Save View</button>
+          <button type="button" className="home-v3-btn secondary" onClick={() => handleRefreshDashboard("Dashboard refreshed.")}>Refresh</button>
+          <button type="button" className="home-v3-btn primary" onClick={handleSaveHomeView}>Save View</button>
         </div>
       </header>
 
@@ -1930,7 +2187,7 @@ export function HomeModule({
           </div>
 
           <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header"><h2>Recent Activity</h2><button type="button" className="home-v2-link-btn">View all activity</button></div>
+            <div className="section-header"><h2>Recent Activity</h2><button type="button" className="home-v2-link-btn" onClick={openAllActivityDrawer}>View all activity</button></div>
             <div className="home-v2-activity-list">
               {recentActivityRows.length ? recentActivityRows.map((row) => (
                 <button key={row.id} type="button" className="home-v2-activity-row" onClick={() => setSelectedActivityDetail(row)}>
@@ -2031,6 +2288,15 @@ export function HomeModule({
           ["Amount", formatMoney(selectedActivityDetail.value)],
           ["Status", selectedActivityDetail.status]
         ] : []}
+      />
+      <HomeDetailDrawer
+        title="Recent Activity"
+        open={showAllActivity}
+        onClose={() => setShowAllActivity(false)}
+        rows={showAllActivity ? recentActivityRows.map((row) => [
+          row.when,
+          `${row.action} ${row.symbol} · ${formatMoney(row.value)} · ${row.status}`
+        ]) : []}
       />
     </div>
   );

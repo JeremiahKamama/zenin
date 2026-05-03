@@ -1,11 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
+const JOURNAL_REVIEW_NOTE_KEY = "zenin_journal_review_note";
+const JOURNAL_REVIEW_TASKS_KEY = "zenin_journal_review_tasks";
+
+function toDateKey(value) {
+  if (!value) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return String(value);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
+}
+
+function extractFileLabel(value, fallback = "Attachment") {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  try {
+    const parsed = new URL(raw);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    return decodeURIComponent(segments[segments.length - 1] || fallback);
+  } catch {
+    const segments = raw.split("/").filter(Boolean);
+    return decodeURIComponent(segments[segments.length - 1] || fallback);
+  }
+}
 
 export function JournalModule({ 
   trades = [], 
@@ -84,9 +108,17 @@ export function JournalModule({
   const [saveStatus, setSaveStatus] = useState("idle");
   const [entryErrors, setEntryErrors] = useState({});
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
-  const [reviewNote, setReviewNote] = useState("");
+  const [selectedCalendarTradeDate, setSelectedCalendarTradeDate] = useState("");
+  const [reviewNote, setReviewNote] = useState(() => localStorage.getItem(JOURNAL_REVIEW_NOTE_KEY) || "");
   const quickEntryRef = useRef(null);
   const drawerRef = useRef(null);
+  const journalSyncReadyRef = useRef(false);
+
+  const syncJournalCollection = (namespace, rows, limit = 500) => {
+    saveWorkspaceCollection(namespace, rows, limit).catch((error) => {
+      console.warn(`Workspace sync skipped for ${namespace}.`, error);
+    });
+  };
 
   useEffect(() => {
     const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
@@ -94,8 +126,58 @@ export function JournalModule({
   }, []);
 
   useEffect(() => {
+    setReportPage(1);
+  }, [journalFilters, selectedSymbols, journalView]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateWorkspaceJournal = async () => {
+      try {
+        const [entriesResult, reviewNoteResult] = await Promise.all([
+          loadWorkspaceCollection("journal:entries", []),
+          loadWorkspaceDoc("journal:review_note", "")
+        ]);
+        if (cancelled) return;
+        if (Array.isArray(entriesResult?.items) && entriesResult.items.length) {
+          setJournalEntries(entriesResult.items);
+        }
+        if (typeof reviewNoteResult?.document === "string") {
+          setReviewNote(reviewNoteResult.document);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Journal workspace sync unavailable.", error);
+        }
+      } finally {
+        if (!cancelled) {
+          journalSyncReadyRef.current = true;
+        }
+      }
+    };
+
+    hydrateWorkspaceJournal();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem("zenin_journal_entries", JSON.stringify(journalEntries.slice(0, 300)));
+    if (journalSyncReadyRef.current) {
+      syncJournalCollection("journal:entries", journalEntries.slice(0, 500), 500);
+    }
   }, [journalEntries]);
+
+  useEffect(() => {
+    localStorage.setItem(JOURNAL_REVIEW_NOTE_KEY, reviewNote);
+    if (journalSyncReadyRef.current) {
+      saveWorkspaceDoc("journal:review_note", reviewNote).catch((error) => {
+        console.warn("Journal review note sync skipped.", error);
+      });
+    }
+  }, [reviewNote]);
 
   useEffect(() => {
     const normalizeTimeframe = (trade) => {
@@ -976,6 +1058,12 @@ export function JournalModule({
     setExpandedExecutionGroups({});
   }, [safeRecentPage, executionRows.length]);
 
+  useEffect(() => {
+    if (journalView !== "calendar") {
+      setSelectedCalendarTradeDate("");
+    }
+  }, [journalView]);
+
   const frequentTradedSymbols = analytics.tradedAssetsReport
     .filter((row) => row.tradeCount > 0)
     .map((row) => row.symbol);
@@ -996,14 +1084,6 @@ export function JournalModule({
   };
 
   const calendarPnlByDate = useMemo(() => {
-    const normalizeDateKey = (dateStr) => {
-      if (!dateStr) return "";
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
-      const d = new Date(dateStr);
-      if (Number.isNaN(d.getTime())) return "";
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    };
-
     const equityByDate = new Map();
     const sorted = [...executionRows].sort((a, b) => {
       const ta = new Date(a.executedAt || a.date || 0).getTime() || 0;
@@ -1012,7 +1092,7 @@ export function JournalModule({
     });
 
     for (const trade of sorted) {
-      const dayKey = normalizeDateKey(trade.executedAt || trade.date);
+      const dayKey = toDateKey(trade.executedAt || trade.date);
       if (!dayKey) continue;
       const eqRaw = Number(trade.accountEquityAfter);
       const balRaw = Number(trade.balanceAfter);
@@ -1097,6 +1177,17 @@ export function JournalModule({
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const escapeCsvCell = (value) => {
+    const text = String(value ?? "");
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+
+  const downloadCsv = (rows, fileName) => {
+    const csv = rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    downloadBlob(blob, fileName);
   };
 
   const exportTradedAssetsToExcel = () => {
@@ -1226,6 +1317,19 @@ export function JournalModule({
 
     const blob = createSimplePdfBlob(lines.slice(0, 45));
     downloadBlob(blob, `traded-assets-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+
+  const appendLocalReviewTask = (task) => {
+    try {
+      const existing = JSON.parse(localStorage.getItem(JOURNAL_REVIEW_TASKS_KEY) || "[]");
+      const rows = Array.isArray(existing) ? existing : [];
+      const nextRows = [task, ...rows].slice(0, 100);
+      localStorage.setItem(JOURNAL_REVIEW_TASKS_KEY, JSON.stringify(nextRows));
+      syncJournalCollection("journal:review_tasks", nextRows, 100);
+    } catch {
+      localStorage.setItem(JOURNAL_REVIEW_TASKS_KEY, JSON.stringify([task]));
+      syncJournalCollection("journal:review_tasks", [task], 100);
+    }
   };
 
   const monthDateRangeLabel = useMemo(() => {
@@ -1396,10 +1500,12 @@ export function JournalModule({
       review: entry.postReview || entry.learned || ""
     }));
 
-  const tradeLogRows = [
+  const allTradeLogRows = [
     ...executionRows.map(buildTradeLogRow),
     ...manualTradeRows
-  ].filter((row) => {
+  ];
+
+  const tradeLogRows = allTradeLogRows.filter((row) => {
     const query = String(journalFilters.search || "").trim().toLowerCase();
     if (query) {
       const haystack = `${row.symbol} ${row.setup} ${row.regime} ${row.entry?.preThesis || ""} ${row.entry?.postReview || ""}`.toLowerCase();
@@ -1412,6 +1518,11 @@ export function JournalModule({
     if (journalFilters.status !== "all" && String(row.status || "").toLowerCase() !== journalFilters.status) return false;
     return true;
   }).slice(0, 50);
+  const JOURNAL_PAGE_SIZE = 12;
+  const journalEntriesTotalRows = tradeLogRows.length;
+  const journalEntriesTotalPages = Math.max(1, Math.ceil(journalEntriesTotalRows / JOURNAL_PAGE_SIZE));
+  const safeEntriesPage = Math.min(reportPage, journalEntriesTotalPages);
+  const paginatedTradeLogRows = tradeLogRows.slice((safeEntriesPage - 1) * JOURNAL_PAGE_SIZE, safeEntriesPage * JOURNAL_PAGE_SIZE);
 
   const statCards = [
     { label: "Total Trades", value: analytics.totalTrades, delta: `+${Math.max(0, weeklyMonthlyReview.monthly.wins - weeklyMonthlyReview.weekly.wins)} vs last 30d`, tone: "neutral", icon: "T" },
@@ -1441,14 +1552,130 @@ export function JournalModule({
     setJournalFilters((prev) => ({ ...prev, strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", search: "" }));
   };
 
+  const saveJournalNoteEntry = ({ title, body, status = "Saved", learned = "" }) => {
+    const newEntry = {
+      id: `jrnl-note-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      symbol: "JOURNAL",
+      tradeDate: new Date().toISOString(),
+      side: "NOTE",
+      quantity: 0,
+      price: 0,
+      notional: 0,
+      marketType: "Journal",
+      status,
+      strategy: title,
+      setupTag: title,
+      marketRegime: "",
+      timeframe: "weekly",
+      emotion: "neutral",
+      confidence: 4,
+      preThesis: body,
+      postReview: "",
+      mistakeCategory: "",
+      learned,
+      chartLink: ""
+    };
+    setJournalEntries((prev) => [newEntry, ...prev].slice(0, 500));
+    return newEntry;
+  };
+
+  const exportAnalyticsReport = () => {
+    const rows = [
+      ["Section", "Metric", "Value"],
+      ["Summary", "Total Trades", analytics.totalTrades],
+      ["Summary", "Win Rate", `${analytics.winRate.toFixed(1)}%`],
+      ["Summary", "Profit Factor", weeklyMonthlyReview.monthly.profitFactor.toFixed(2)],
+      ["Summary", "Expectancy", analytics.tradeExpectancy.toFixed(2)],
+      ...assetPnlRows.map((row) => ["Asset Class", `${row.name} P&L`, Number(row.pnl || 0).toFixed(2)]),
+      ...setupPnlRows.map((row) => ["Setup", row.setup, `${Number(row.pnl || 0).toFixed(2)} (${row.trades} trades)`])
+    ];
+    downloadCsv(rows, `journal-analytics-${new Date().toISOString().slice(0, 10)}.csv`);
+    notify("Analytics report downloaded.", "success");
+  };
+
+  const exportReviewReport = () => {
+    const rows = [
+      ["Section", "Metric", "Value"],
+      ["Review", "Total Trades", analytics.totalTrades],
+      ["Review", "Net P&L", Number(analytics.totalGainLoss || 0).toFixed(2)],
+      ["Review", "Win Rate", `${analytics.winRate.toFixed(1)}%`],
+      ["Review", "Review Note", reviewNote || "No review note captured"],
+      ...mistakeRows.map((row) => ["Mistake", row.mistake, `${row.count}x / ${Number(row.cost || 0).toFixed(2)}`])
+    ];
+    downloadCsv(rows, `journal-review-${new Date().toISOString().slice(0, 10)}.csv`);
+    notify("Review summary downloaded.", "success");
+  };
+
+  const saveAnalyticsInsightToJournal = () => {
+    const bestSetup = [...setupPnlRows].sort((a, b) => Number(b.pnl) - Number(a.pnl))[0];
+    saveJournalNoteEntry({
+      title: "Analytics Insight",
+      body: `Best current setup: ${bestSetup?.setup || "Momentum"} with ${bestSetup ? formatValue(bestSetup.pnl, true) : "$0.00"} in P&L. Win rate is ${analytics.winRate.toFixed(1)}% across ${analytics.totalTrades} trades.`,
+      learned: "Analytics insight snapshot saved from the Journal workspace."
+    });
+    notify("Analytics insight saved to Journal.", "success");
+  };
+
+  const createReviewTask = () => {
+    const task = {
+      id: `review-task-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      title: "Journal weekly review follow-up",
+      note: reviewNote || "Review latest mistakes and reinforce rule adherence."
+    };
+    appendLocalReviewTask(task);
+    saveJournalNoteEntry({
+      title: "Review Task",
+      body: task.note,
+      status: "Task",
+      learned: "Task created from the Journal review workspace."
+    });
+    notify("Review task created in your Zenin workspace.", "success");
+  };
+
+  const addReviewToJournal = () => {
+    saveJournalNoteEntry({
+      title: "Weekly Review",
+      body: reviewNote || "Weekly review saved without additional notes.",
+      learned: "Weekly review exported into the Journal feed."
+    });
+    notify("Review added to Journal.", "success");
+  };
+
+  const saveReviewSnapshot = () => {
+    saveWorkspaceDoc("journal:review_note", reviewNote).catch((error) => {
+      console.warn("Journal review note sync skipped.", error);
+    });
+    notify("Review saved to your Zenin workspace.", "success");
+  };
+
   const handleExportChoice = (choice) => {
     setIsExportMenuOpen(false);
-    if (choice === "entries") exportTradedAssetsToExcel();
-    notify("Export is being prepared.", "info");
+    if (choice === "entries") {
+      exportTradedAssetsToExcel();
+      notify("Traded assets report downloaded.", "success");
+      return;
+    }
+    if (choice === "analytics") {
+      exportAnalyticsReport();
+      return;
+    }
+    if (choice === "review") {
+      exportReviewReport();
+    }
   };
 
   const selectedDay = selectedCalendarDay || calendarCells.find((cell) => cell.type === "day" && cell.pnl != null) || calendarCells.find((cell) => cell.type === "day");
-  const selectedDayTrades = tradeLogRows.filter((row) => String(row.rawDate || row.date || "").slice(0, 10) === String(selectedDay?.key || "").slice(0, 10));
+  const selectedDayTrades = allTradeLogRows.filter((row) => toDateKey(row.rawDate || row.date) === String(selectedDay?.key || ""));
+  const availableTradeDateKeys = [...new Set(
+    tradeLogRows
+      .map((row) => toDateKey(row.rawDate || row.date))
+      .filter(Boolean)
+  )].sort();
+  const activeCalendarTradeDate = selectedCalendarTradeDate || String(selectedDay?.key || "");
+  const activeCalendarTradeRows = allTradeLogRows.filter((row) => toDateKey(row.rawDate || row.date) === activeCalendarTradeDate);
+  const isCalendarDayView = journalView === "calendar" && Boolean(selectedCalendarTradeDate);
   const assetPnlRows = marketTypeDistribution.map((row) => ({
     ...row,
     pnl: tradeLogRows.filter((trade) => String(trade.assetType || "").toLowerCase().includes(row.name.toLowerCase().slice(0, -1))).reduce((sum, trade) => sum + Number(trade.pnl || 0), 0)
@@ -1472,112 +1699,139 @@ export function JournalModule({
   return (
     <div className="view-container journal-page">
       <JournalToast toast={toast} />
-      <JournalHeader
-        search={journalFilters.search}
-        onSearch={(value) => setJournalFilters((prev) => ({ ...prev, search: value }))}
-        onNewEntry={openNewEntry}
-        exportMenuOpen={isExportMenuOpen}
-        setExportMenuOpen={setIsExportMenuOpen}
-        exportMenuRef={exportMenuRef}
-        onExportChoice={handleExportChoice}
-      />
-
-      <JournalStatsGrid stats={statCards} />
-      <JournalTabNav activeTab={journalView} onChange={setJournalView} />
-
-      <div className="journal-workspace">
-        <main className="journal-main-panel">
-          {journalView === "entries" ? (
-            <JournalEntriesView
-              rows={tradeLogRows}
-              totalRows={executionRows.length + manualTradeRows.length}
-              filters={journalFilters}
-              setFilters={setJournalFilters}
-              showMoreFilters={showMoreFilters}
-              setShowMoreFilters={setShowMoreFilters}
-              symbolOptions={symbolOptions}
-              setupOptions={setupOptions}
-              regimeOptions={regimeOptions}
-              selectedSymbols={selectedSymbols}
-              setSelectedSymbols={setSelectedSymbols}
-              onReset={resetFilters}
-              onNewEntry={openNewEntry}
-              onOpenDetail={openTradeDetail}
-              formatValue={formatValue}
-            />
-          ) : null}
-
-          {journalView === "calendar" ? (
-            <JournalCalendarView
-              calendarMonthLabel={calendarMonthLabel}
-              monthDateRangeLabel={monthDateRangeLabel}
-              calendarCells={calendarCells}
-              selectedDay={selectedDay}
-              selectedDayTrades={selectedDayTrades}
-              onSelectDay={setSelectedCalendarDay}
-              onMoveMonth={moveCalendarMonth}
-              selectedSymbol={selectedSymbols[0] || ""}
-              setSelectedSymbols={setSelectedSymbols}
-              symbolOptions={symbolOptions}
-              monthPnL={monthPnL}
-              bestDay={bestDay}
-              worstDay={worstDay}
-              avgDayPnL={avgDayPnL}
-              profitableDays={profitableDays}
-              losingDays={losingDays}
-              breakevenDays={breakevenDays}
-              formatValue={formatValue}
-            />
-          ) : null}
-
-          {journalView === "analytics" ? (
-            <JournalAnalyticsView
-              analytics={analytics}
-              winLossOptions={winLossOptions}
-              winLossSeries={winLossSeries}
-              winnersCount={winnersCount}
-              losersCount={losersCount}
-              breakevenCount={breakevenCount}
-              weeklyMonthlyReview={weeklyMonthlyReview}
-              assetPnlRows={assetPnlRows}
-              setupPnlRows={setupPnlRows}
-              tradeLogRows={tradeLogRows}
-              onToast={notify}
-              formatValue={formatValue}
-            />
-          ) : null}
-
-          {journalView === "review" ? (
-            <JournalReviewView
-              analytics={analytics}
-              weeklyMonthlyReview={weeklyMonthlyReview}
-              mistakeRows={mistakeRows}
-              setupPnlRows={setupPnlRows}
-              reviewNote={reviewNote}
-              setReviewNote={setReviewNote}
-              onToast={notify}
-              formatValue={formatValue}
-            />
-          ) : null}
-        </main>
-
-        <aside className="journal-quick-column" ref={quickEntryRef} tabIndex={-1}>
-          <JournalQuickEntryPanel
-            entryDraft={entryDraft}
-            setEntryDraft={setEntryDraft}
-            entryErrors={entryErrors}
-            saveStatus={saveStatus}
-            confidenceDots={confidenceDots}
-            editingEntryId={editingEntryId}
-            onSave={addJournalEntry}
-            todayNotes={todayNotes}
+      {isCalendarDayView ? (
+        <JournalCalendarDayView
+          dateKey={activeCalendarTradeDate}
+          rows={activeCalendarTradeRows}
+          availableDateKeys={availableTradeDateKeys}
+          onBack={() => setSelectedCalendarTradeDate("")}
+          onNavigateDate={setSelectedCalendarTradeDate}
+          onNewEntry={openNewEntry}
+          onOpenDetail={openTradeDetail}
+          formatValue={formatValue}
+        />
+      ) : (
+        <>
+          <JournalHeader
+            search={journalFilters.search}
+            onSearch={(value) => setJournalFilters((prev) => ({ ...prev, search: value }))}
+            onNewEntry={openNewEntry}
+            exportMenuOpen={isExportMenuOpen}
+            setExportMenuOpen={setIsExportMenuOpen}
+            exportMenuRef={exportMenuRef}
+            onExportChoice={handleExportChoice}
           />
-        </aside>
-      </div>
 
-      <button type="button" className="journal-mobile-new-entry" onClick={openNewEntry}>
-        + New Entry
-      </button>
+          <JournalStatsGrid stats={statCards} />
+          <JournalTabNav activeTab={journalView} onChange={setJournalView} />
+
+          <div className="journal-workspace">
+            <main className="journal-main-panel">
+              {journalView === "entries" ? (
+                <JournalEntriesView
+                  rows={paginatedTradeLogRows}
+                  totalRows={journalEntriesTotalRows}
+                  page={safeEntriesPage}
+                  pageSize={JOURNAL_PAGE_SIZE}
+                  totalPages={journalEntriesTotalPages}
+                  filters={journalFilters}
+                  setFilters={setJournalFilters}
+                  showMoreFilters={showMoreFilters}
+                  setShowMoreFilters={setShowMoreFilters}
+                  symbolOptions={symbolOptions}
+                  setupOptions={setupOptions}
+                  regimeOptions={regimeOptions}
+                  selectedSymbols={selectedSymbols}
+                  setSelectedSymbols={setSelectedSymbols}
+                  onReset={resetFilters}
+                  onNewEntry={openNewEntry}
+                  onOpenDetail={openTradeDetail}
+                  onPrevPage={() => setReportPage((prev) => Math.max(1, prev - 1))}
+                  onNextPage={() => setReportPage((prev) => Math.min(journalEntriesTotalPages, prev + 1))}
+                  formatValue={formatValue}
+                />
+              ) : null}
+
+              {journalView === "calendar" ? (
+                <JournalCalendarView
+                  calendarMonthLabel={calendarMonthLabel}
+                  monthDateRangeLabel={monthDateRangeLabel}
+                  calendarCells={calendarCells}
+                  selectedDay={selectedDay}
+                  selectedDayTrades={selectedDayTrades}
+                  onSelectDay={setSelectedCalendarDay}
+                  onMoveMonth={moveCalendarMonth}
+                  onViewTrades={(day) => setSelectedCalendarTradeDate(String(day?.key || ""))}
+                  selectedSymbol={selectedSymbols[0] || ""}
+                  setSelectedSymbols={setSelectedSymbols}
+                  symbolOptions={symbolOptions}
+                  monthPnL={monthPnL}
+                  bestDay={bestDay}
+                  worstDay={worstDay}
+                  avgDayPnL={avgDayPnL}
+                  profitableDays={profitableDays}
+                  losingDays={losingDays}
+                  breakevenDays={breakevenDays}
+                  formatValue={formatValue}
+                />
+              ) : null}
+
+              {journalView === "analytics" ? (
+                <JournalAnalyticsView
+                  analytics={analytics}
+                  winLossOptions={winLossOptions}
+                  winLossSeries={winLossSeries}
+                  winnersCount={winnersCount}
+                  losersCount={losersCount}
+                  breakevenCount={breakevenCount}
+                  weeklyMonthlyReview={weeklyMonthlyReview}
+                  assetPnlRows={assetPnlRows}
+                  setupPnlRows={setupPnlRows}
+                  tradeLogRows={tradeLogRows}
+                  onToast={notify}
+                  onExportAnalytics={exportAnalyticsReport}
+                  onSaveInsight={saveAnalyticsInsightToJournal}
+                  onCreateReviewTask={createReviewTask}
+                  formatValue={formatValue}
+                />
+              ) : null}
+
+              {journalView === "review" ? (
+                <JournalReviewView
+                  analytics={analytics}
+                  weeklyMonthlyReview={weeklyMonthlyReview}
+                  mistakeRows={mistakeRows}
+                  setupPnlRows={setupPnlRows}
+                  reviewNote={reviewNote}
+                  setReviewNote={setReviewNote}
+                  onToast={notify}
+                  onSaveReview={saveReviewSnapshot}
+                  onExportReview={exportReviewReport}
+                  onAddToJournal={addReviewToJournal}
+                  formatValue={formatValue}
+                />
+              ) : null}
+            </main>
+
+            <aside className="journal-quick-column" ref={quickEntryRef} tabIndex={-1}>
+              <JournalQuickEntryPanel
+                entryDraft={entryDraft}
+                setEntryDraft={setEntryDraft}
+                entryErrors={entryErrors}
+                saveStatus={saveStatus}
+                confidenceDots={confidenceDots}
+                editingEntryId={editingEntryId}
+                onSave={addJournalEntry}
+                todayNotes={todayNotes}
+              />
+            </aside>
+          </div>
+
+          <button type="button" className="journal-mobile-new-entry" onClick={openNewEntry}>
+            + New Entry
+          </button>
+        </>
+      )}
 
       <JournalQuickEntryDrawer
         open={isQuickEntryOpen}
@@ -1715,6 +1969,9 @@ function JournalTabNav({ activeTab, onChange }) {
 function JournalEntriesView({
   rows,
   totalRows,
+  page,
+  pageSize,
+  totalPages,
   filters,
   setFilters,
   showMoreFilters,
@@ -1727,8 +1984,12 @@ function JournalEntriesView({
   onReset,
   onNewEntry,
   onOpenDetail,
+  onPrevPage,
+  onNextPage,
   formatValue
 }) {
+  const pageStart = totalRows === 0 ? 0 : ((page - 1) * Math.max(1, pageSize || 1)) + 1;
+  const pageEnd = totalRows === 0 ? 0 : Math.min(totalRows, pageStart + rows.length - 1);
   return (
     <section className="journal-card journal-entries-view">
       <JournalFilters
@@ -1747,10 +2008,10 @@ function JournalEntriesView({
         <>
           <JournalEntriesTable rows={rows} onOpenDetail={onOpenDetail} formatValue={formatValue} />
           <div className="journal-table-footer">
-            <span>Showing 1-{rows.length} of {totalRows} entries</span>
+            <span>Showing {pageStart}-{pageEnd} of {totalRows} entries</span>
             <div>
-              <button type="button" className="journal-btn secondary">Prev</button>
-              <button type="button" className="journal-btn secondary">Next</button>
+              <button type="button" className="journal-btn secondary" onClick={onPrevPage} disabled={page <= 1}>Prev</button>
+              <button type="button" className="journal-btn secondary" onClick={onNextPage} disabled={page >= totalPages}>Next</button>
             </div>
           </div>
         </>
@@ -1845,7 +2106,19 @@ function JournalEntriesTable({ rows, onOpenDetail, formatValue }) {
                 <td><JournalStatusPill status={row.status} /></td>
                 <td className={`numeric ${Number(row.pnl) >= 0 ? "positive" : "negative"}`}>{Number(row.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(row.pnl), true)}</td>
                 <td><span className="journal-notes-count" aria-label={`${row.notesCount} notes`}>▣ {row.notesCount}</span></td>
-                <td className="numeric"><button type="button" className="journal-kebab" aria-label={`Open actions for ${row.symbol}`}>⋯</button></td>
+                <td className="numeric">
+                  <button
+                    type="button"
+                    className="journal-kebab"
+                    aria-label={`Open actions for ${row.symbol}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenDetail(row);
+                    }}
+                  >
+                    ⋯
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1907,7 +2180,7 @@ function ConfidenceDots({ value }) {
   return <span className="journal-confidence" aria-label={`Confidence ${count} of 5`}>{"●".repeat(count)}{"○".repeat(5 - count)}</span>;
 }
 
-function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendarCells, selectedDay, selectedDayTrades, onSelectDay, onMoveMonth, selectedSymbol, setSelectedSymbols, symbolOptions, monthPnL, bestDay, worstDay, avgDayPnL, profitableDays, losingDays, breakevenDays, formatValue }) {
+function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendarCells, selectedDay, selectedDayTrades, onSelectDay, onMoveMonth, onViewTrades, selectedSymbol, setSelectedSymbols, symbolOptions, monthPnL, bestDay, worstDay, avgDayPnL, profitableDays, losingDays, breakevenDays, formatValue }) {
   const summary = [
     ["Month P&L", monthPnL, monthPnL >= 0 ? "positive" : "negative", true],
     ["Best Day", bestDay, "positive", true],
@@ -1970,7 +2243,14 @@ function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendar
           <h3>{selectedDay?.key || "Selected Day"}</h3>
           <strong className={Number(selectedDay?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatValue(selectedDay?.pnl || 0, true)}</strong>
           <p>{selectedDayTrades.length} trades · {selectedDayTrades.filter((row) => Number(row.pnl) > 0).length} winners / {selectedDayTrades.filter((row) => Number(row.pnl) < 0).length} losers</p>
-          <button type="button" className="journal-btn primary journal-btn-small">View trades</button>
+          <button
+            type="button"
+            className="journal-btn primary journal-btn-small"
+            onClick={() => onViewTrades?.(selectedDay)}
+            disabled={!selectedDay?.key}
+          >
+            View trades
+          </button>
         </aside>
       </div>
       <div className="journal-month-summary">
@@ -1985,12 +2265,392 @@ function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendar
   );
 }
 
-function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winnersCount, losersCount, breakevenCount, weeklyMonthlyReview, assetPnlRows, setupPnlRows, tradeLogRows, onToast, formatValue }) {
+function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNavigateDate, onNewEntry, onOpenDetail, formatValue }) {
+  const [search, setSearch] = useState("");
+  const [assetFilter, setAssetFilter] = useState("all");
+  const [setupFilter, setSetupFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [marketFilter, setMarketFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("time-asc");
+  const [visibleCount, setVisibleCount] = useState(25);
+
+  const assetOptions = useMemo(
+    () => [...new Set(rows.map((row) => String(row.symbol || "").trim().toUpperCase()).filter(Boolean))],
+    [rows]
+  );
+  const setupOptions = useMemo(
+    () => [...new Set(rows.map((row) => String(row.setup || "").trim()).filter(Boolean))],
+    [rows]
+  );
+  const marketOptions = useMemo(
+    () => [...new Set(rows.map((row) => String(row.assetType || "").trim()).filter(Boolean))],
+    [rows]
+  );
+
+  const filteredRows = useMemo(() => {
+    const query = String(search || "").trim().toLowerCase();
+    const nextRows = rows.filter((row) => {
+      if (assetFilter !== "all" && String(row.symbol || "").toUpperCase() !== assetFilter) return false;
+      if (setupFilter !== "all" && String(row.setup || "") !== setupFilter) return false;
+      if (statusFilter !== "all" && String(row.status || "").toLowerCase() !== statusFilter) return false;
+      if (marketFilter !== "all" && String(row.assetType || "") !== marketFilter) return false;
+      if (!query) return true;
+      const haystack = [
+        row.symbol,
+        row.setup,
+        row.review,
+        row.entry?.preThesis,
+        row.entry?.postReview,
+        row.entry?.learned,
+        row.mistakeCategory
+      ].join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+
+    nextRows.sort((a, b) => {
+      const ta = new Date(a.rawDate || a.date || 0).getTime() || 0;
+      const tb = new Date(b.rawDate || b.date || 0).getTime() || 0;
+      if (sortBy === "time-desc") return tb - ta;
+      if (sortBy === "pnl-desc") return Number(b.pnl || 0) - Number(a.pnl || 0);
+      if (sortBy === "pnl-asc") return Number(a.pnl || 0) - Number(b.pnl || 0);
+      return ta - tb;
+    });
+
+    return nextRows;
+  }, [rows, search, assetFilter, setupFilter, statusFilter, marketFilter, sortBy]);
+
+  const visibleRows = filteredRows.slice(0, visibleCount);
+  const totalPnl = filteredRows.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
+  const winners = filteredRows.filter((row) => Number(row.pnl || 0) > 0);
+  const losers = filteredRows.filter((row) => Number(row.pnl || 0) < 0);
+  const grossGains = winners.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
+  const grossLosses = losers.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
+  const fees = filteredRows.reduce((sum, row) => sum + Math.abs(Number(row.fees || 0)), 0);
+  const winRate = filteredRows.length ? (winners.length / filteredRows.length) * 100 : 0;
+  const bestTrade = [...filteredRows].sort((a, b) => Number(b.pnl || 0) - Number(a.pnl || 0))[0] || null;
+  const worstTrade = [...filteredRows].sort((a, b) => Number(a.pnl || 0) - Number(b.pnl || 0))[0] || null;
+
+  const avgHoldLabel = useMemo(() => {
+    const hours = filteredRows
+      .map((row) => {
+        const match = String(row.holdingTime || "").match(/([\d.]+)\s*h/i);
+        return match ? Number(match[1]) : null;
+      })
+      .filter((value) => Number.isFinite(value));
+    if (!hours.length) return "—";
+    const averageHours = hours.reduce((sum, value) => sum + value, 0) / hours.length;
+    const wholeHours = Math.floor(averageHours);
+    const mins = Math.round((averageHours - wholeHours) * 60);
+    return `${wholeHours}h ${String(mins).padStart(2, "0")}m`;
+  }, [filteredRows]);
+
+  const intradaySeries = [{
+    name: "P&L",
+    data: filteredRows.map((row) => ({
+      x: `${row.symbol}\n${new Date(row.rawDate || row.date || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+      y: Number(row.pnl || 0)
+    }))
+  }];
+  const intradayOptions = {
+    chart: { toolbar: { show: false }, foreColor: "#94A3B8", background: "transparent" },
+    grid: { borderColor: "rgba(148,163,184,0.12)" },
+    theme: { mode: "dark" },
+    plotOptions: {
+      bar: {
+        borderRadius: 6,
+        distributed: true
+      }
+    },
+    colors: filteredRows.map((row) => Number(row.pnl || 0) >= 0 ? "#22C55E" : "#EF4444"),
+    xaxis: {
+      labels: {
+        style: { colors: "#94A3B8", fontSize: "11px" }
+      }
+    },
+    yaxis: {
+      labels: {
+        formatter: (value) => formatValue(value, true)
+      }
+    },
+    tooltip: {
+      y: {
+        formatter: (value) => formatValue(value, true)
+      }
+    },
+    legend: { show: false },
+    dataLabels: { enabled: false }
+  };
+
+  const notesBlocks = [
+    { label: "Thesis", value: filteredRows.map((row) => row.entry?.preThesis).find(Boolean) || "No thesis notes yet." },
+    { label: "Mistakes", value: filteredRows.map((row) => row.mistakeCategory || row.entry?.mistakeCategory).find(Boolean) || "No mistakes logged for this day." },
+    { label: "Lessons", value: filteredRows.map((row) => row.entry?.learned || row.review).find(Boolean) || "No lessons captured yet." },
+    { label: "Next Actions", value: filteredRows.map((row) => row.entry?.postReview).find(Boolean) || "Add a post-review note to capture next actions." }
+  ];
+  const attachments = filteredRows
+    .map((row, index) => {
+      const link = String(row.chartLink || row.entry?.chartLink || "").trim();
+      if (!link) return null;
+      return {
+        id: `${row.id || index}-${link}`,
+        href: link,
+        label: extractFileLabel(link, `${row.symbol || "Attachment"} screenshot`)
+      };
+    })
+    .filter(Boolean);
+
+  const currentDateIndex = Math.max(0, availableDateKeys.indexOf(dateKey));
+  const previousDate = currentDateIndex > 0 ? availableDateKeys[currentDateIndex - 1] : "";
+  const nextDate = currentDateIndex >= 0 && currentDateIndex < availableDateKeys.length - 1 ? availableDateKeys[currentDateIndex + 1] : "";
+
+  const exportDayCsv = () => {
+    if (!filteredRows.length) return;
+    const header = ["time", "symbol", "market", "side", "strategy", "qty", "entry_price", "exit_price", "pnl", "status", "notes"];
+    const lines = filteredRows.map((row) => ([
+      new Date(row.rawDate || row.date || Date.now()).toISOString(),
+      row.symbol,
+      row.assetType,
+      row.side,
+      row.setup,
+      row.size,
+      row.entryPrice,
+      row.exitPrice || "",
+      Number(row.pnl || 0),
+      row.status,
+      `"${String(row.review || row.entry?.preThesis || "").replace(/"/g, '""')}"`
+    ].join(",")));
+    const csv = [header.join(","), ...lines].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `journal-trades-${dateKey}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <section className="journal-day-view">
+      <div className="journal-day-view-head">
+        <div>
+          <div className="journal-breadcrumb">Journal <span>/</span> Calendar <span>/</span> View Trades</div>
+          <h3>Trades for {dateKey || "Selected Day"}</h3>
+        </div>
+        <div className="journal-day-view-actions">
+          <button type="button" className="journal-btn secondary" onClick={exportDayCsv}>Export</button>
+          <button type="button" className="journal-btn primary" onClick={onNewEntry}>
+            <span aria-hidden="true">+</span> Add New Entry
+          </button>
+        </div>
+      </div>
+
+      <div className="journal-day-toolbar">
+        <button type="button" className="journal-btn secondary" onClick={onBack}>← Back to Calendar</button>
+        <div className="journal-day-date-nav">
+          <button type="button" className="journal-kebab" disabled={!previousDate} onClick={() => previousDate && onNavigateDate(previousDate)}>‹</button>
+          <div>{dateKey || "—"}</div>
+          <button type="button" className="journal-kebab" disabled={!nextDate} onClick={() => nextDate && onNavigateDate(nextDate)}>›</button>
+        </div>
+        <label className="journal-search journal-day-search">
+          <span aria-hidden="true">⌕</span>
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search symbol, strategy, notes..." />
+        </label>
+      </div>
+
+      <div className="journal-day-filter-row">
+        <label>
+          <select value={assetFilter} onChange={(event) => setAssetFilter(event.target.value)}>
+            <option value="all">All Assets</option>
+            {assetOptions.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+          </select>
+        </label>
+        <label>
+          <select value={setupFilter} onChange={(event) => setSetupFilter(event.target.value)}>
+            <option value="all">All Strategies</option>
+            {setupOptions.map((setup) => <option key={setup} value={setup}>{setup}</option>)}
+          </select>
+        </label>
+        <label>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All Statuses</option>
+            <option value="closed">Closed</option>
+            <option value="open">Open</option>
+            <option value="review">Review</option>
+          </select>
+        </label>
+        <label>
+          <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}>
+            <option value="all">Market Type</option>
+            {marketOptions.map((market) => <option key={market} value={market}>{market}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="journal-day-summary-grid">
+        <article className="journal-card journal-day-stat-card">
+          <span className="journal-card-label">Total P&amp;L</span>
+          <strong className={totalPnl >= 0 ? "positive" : "negative"}>{formatValue(totalPnl, true)}</strong>
+        </article>
+        <article className="journal-card journal-day-stat-card">
+          <span className="journal-card-label">Trades</span>
+          <strong>{filteredRows.length}</strong>
+        </article>
+        <article className="journal-card journal-day-stat-card">
+          <span className="journal-card-label">Winners</span>
+          <strong className="positive">{winners.length}</strong>
+        </article>
+        <article className="journal-card journal-day-stat-card">
+          <span className="journal-card-label">Losers</span>
+          <strong className="negative">{losers.length}</strong>
+        </article>
+        <article className="journal-card journal-day-stat-card">
+          <span className="journal-card-label">Win Rate</span>
+          <strong>{winRate.toFixed(1)}%</strong>
+        </article>
+      </div>
+
+      <div className="journal-day-layout">
+        <div className="journal-day-main">
+          <section className="journal-card journal-day-trade-log">
+            <div className="journal-section-head">
+              <h3>Trade Log</h3>
+              <div className="journal-inline-actions">
+                <label>
+                  <span>Sort by</span>
+                  <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                    <option value="time-asc">Time (Asc)</option>
+                    <option value="time-desc">Time (Desc)</option>
+                    <option value="pnl-desc">P&amp;L (High-Low)</option>
+                    <option value="pnl-asc">P&amp;L (Low-High)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Show</span>
+                  <select value={visibleCount} onChange={(event) => setVisibleCount(Number(event.target.value) || 25)}>
+                    {[10, 25, 50].map((count) => <option key={count} value={count}>{count}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="journal-day-trades-list">
+              {visibleRows.length ? visibleRows.map((row) => {
+                const tradeTime = new Date(row.rawDate || row.date || Date.now());
+                return (
+                  <article key={row.id} className="journal-day-trade-row">
+                    <div className="journal-day-trade-time">
+                      <strong>{tradeTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</strong>
+                      <span>{tradeTime.toLocaleDateString()}</span>
+                      <small>{row.holdingTime || "—"}</small>
+                    </div>
+                    <div className="journal-day-trade-body">
+                      <div className="journal-day-trade-top">
+                        <div className="journal-symbol-cell">
+                          <span>{String(row.symbol || "A")[0]}</span>
+                          <div>
+                            <strong>{row.symbol}</strong>
+                            <small>{row.entry?.symbolName || row.assetType || "Trade"}</small>
+                          </div>
+                        </div>
+                        <div className="journal-day-chip-row">
+                          <span className="journal-chip status open">{row.assetType || "Spot"}</span>
+                          <JournalSideChip side={row.side} />
+                          <span className="journal-chip">{row.setup || "Setup"}</span>
+                        </div>
+                      </div>
+
+                      <div className="journal-day-trade-metrics">
+                        <div><span>Qty</span><strong>{Number(row.size || 0).toFixed(4)}</strong></div>
+                        <div><span>Entry</span><strong>{formatValue(row.entryPrice || 0, true)}</strong></div>
+                        <div><span>Exit</span><strong>{row.exitPrice ? formatValue(row.exitPrice, true) : "—"}</strong></div>
+                        <div><span>P&amp;L</span><strong className={Number(row.pnl || 0) >= 0 ? "positive" : "negative"}>{formatValue(row.pnl || 0, true)}</strong></div>
+                        <div><span>Status</span><strong><JournalStatusPill status={row.status} /></strong></div>
+                      </div>
+
+                      <div className="journal-day-trade-footer">
+                        <p>{row.review || row.entry?.preThesis || "No notes captured for this trade yet."}</p>
+                        <div className="journal-day-trade-actions">
+                          <button type="button" className="journal-btn secondary" onClick={() => onOpenDetail(row)}>View</button>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              }) : (
+                <JournalEmptyState
+                  title="No trades match these filters"
+                  description="Try adjusting the date filters or journal search to see more trades."
+                />
+              )}
+            </div>
+          </section>
+        </div>
+
+        <aside className="journal-day-aside">
+          <section className="journal-card">
+            <div className="journal-section-head"><h3>Day Breakdown</h3></div>
+            <div className="journal-day-breakdown-grid">
+              <div><span>Gross Gains</span><strong className="positive">{formatValue(grossGains, true)}</strong></div>
+              <div><span>Net P&amp;L</span><strong className={totalPnl >= 0 ? "positive" : "negative"}>{formatValue(totalPnl, true)}</strong></div>
+              <div><span>Gross Losses</span><strong className="negative">{formatValue(grossLosses, true)}</strong></div>
+              <div><span>Best Trade</span><strong className="positive">{bestTrade ? `${formatValue(bestTrade.pnl, true)} (${bestTrade.symbol})` : "—"}</strong></div>
+              <div><span>Fees</span><strong>{formatValue(-fees, true)}</strong></div>
+              <div><span>Worst Trade</span><strong className="negative">{worstTrade ? `${formatValue(worstTrade.pnl, true)} (${worstTrade.symbol})` : "—"}</strong></div>
+              <div><span>Avg Hold Time</span><strong>{avgHoldLabel}</strong></div>
+            </div>
+          </section>
+
+          <section className="journal-card">
+            <div className="journal-section-head"><h3>Intraday P&amp;L by Trade</h3></div>
+            {filteredRows.length ? (
+              <Chart options={intradayOptions} series={intradaySeries} type="bar" height={220} />
+            ) : (
+              <p className="journal-day-empty-copy">No trade chart data for this day.</p>
+            )}
+          </section>
+
+          <section className="journal-card">
+            <div className="journal-section-head"><h3>Notes &amp; Review</h3></div>
+            <div className="journal-day-notes-list">
+              {notesBlocks.map((item) => (
+                <div key={item.label}>
+                  <span>{item.label}</span>
+                  <p>{item.value}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="journal-card">
+            <div className="journal-section-head"><h3>Attachments / Screenshots</h3></div>
+            <div className="journal-day-attachments">
+              {attachments.length ? attachments.map((item) => (
+                <a key={item.id} className="journal-day-attachment" href={item.href} target="_blank" rel="noreferrer">
+                  <strong>{item.label}</strong>
+                  <span>Open link</span>
+                </a>
+              )) : (
+                <div className="journal-day-attachment empty">
+                  <strong>No attachments yet</strong>
+                  <span>Add chart links in journal entries to see them here.</span>
+                </div>
+              )}
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winnersCount, losersCount, breakevenCount, weeklyMonthlyReview, assetPnlRows, setupPnlRows, tradeLogRows, onToast, onExportAnalytics, onSaveInsight, onCreateReviewTask, formatValue }) {
   const maxAbs = Math.max(1, ...assetPnlRows.map((row) => Math.abs(Number(row.pnl || 0))));
   return (
     <section className="journal-analytics-grid">
       <div className="journal-card journal-performance-card">
-        <div className="journal-section-head"><h3>Performance Overview</h3><button type="button" className="journal-btn secondary">Summary</button></div>
+        <div className="journal-section-head"><h3>Performance Overview</h3><button type="button" className="journal-btn secondary" onClick={() => onToast("Summary reflects the current Journal filters.", "info")}>Summary</button></div>
         <div className="journal-donut-row">
           <Chart options={winLossOptions} series={winLossSeries.some((v) => v > 0) ? winLossSeries : [1, 1]} type="donut" height={190} />
           <div className="journal-overview-list">
@@ -2003,7 +2663,7 @@ function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winner
         </div>
       </div>
       <div className="journal-card">
-        <div className="journal-section-head"><h3>P&L by Asset Class</h3><button type="button" className="journal-btn secondary" onClick={() => onToast("Export is being prepared.", "info")}>Export analytics</button></div>
+        <div className="journal-section-head"><h3>P&L by Asset Class</h3><button type="button" className="journal-btn secondary" onClick={onExportAnalytics}>Export analytics</button></div>
         <div className="journal-bar-list">
           {assetPnlRows.map((row) => (
             <div key={row.name}>
@@ -2040,16 +2700,16 @@ function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winner
         <span>What this means</span>
         <p>Your strongest results came from momentum setups with high confidence. Losses are concentrated in options trades taken during volatile regimes.</p>
         <div className="journal-inline-actions">
-          <button type="button" className="journal-btn primary" onClick={() => onToast("Journal entry saved.", "success")}>Save insight to Journal</button>
-          <button type="button" className="journal-btn secondary" onClick={() => onToast("Export is being prepared.", "info")}>Export analytics</button>
-          <button type="button" className="journal-btn secondary">Create review task</button>
+          <button type="button" className="journal-btn primary" onClick={onSaveInsight}>Save insight to Journal</button>
+          <button type="button" className="journal-btn secondary" onClick={onExportAnalytics}>Export analytics</button>
+          <button type="button" className="journal-btn secondary" onClick={onCreateReviewTask}>Create review task</button>
         </div>
       </div>
     </section>
   );
 }
 
-function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, setReviewNote, onToast, formatValue }) {
+function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, setReviewNote, onToast, onSaveReview, onExportReview, onAddToJournal, formatValue }) {
   const bestSetup = [...setupPnlRows].sort((a, b) => Number(b.pnl) - Number(a.pnl))[0]?.setup || "Momentum";
   return (
     <section className="journal-review-grid">
@@ -2097,9 +2757,9 @@ function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, s
           <textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="What is the one behavior you want to improve next week?" />
         </label>
         <div className="journal-inline-actions">
-          <button type="button" className="journal-btn primary" onClick={() => onToast("Review saved.", "success")}>Save Review</button>
-          <button type="button" className="journal-btn secondary" onClick={() => onToast("Export is being prepared.", "info")}>Export Review</button>
-          <button type="button" className="journal-btn secondary" onClick={() => onToast("Journal entry saved.", "success")}>Add to Journal</button>
+          <button type="button" className="journal-btn primary" onClick={onSaveReview}>Save Review</button>
+          <button type="button" className="journal-btn secondary" onClick={onExportReview}>Export Review</button>
+          <button type="button" className="journal-btn secondary" onClick={onAddToJournal}>Add to Journal</button>
         </div>
       </div>
       <div className="journal-action-plan">

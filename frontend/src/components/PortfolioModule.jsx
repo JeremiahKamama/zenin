@@ -1,9 +1,33 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD } from "../utils/currencyUtils";
+import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
+
+const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
+const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
+const PORTFOLIO_ALERTS_KEY = "zenin_portfolio_alerts";
+const PORTFOLIO_REBALANCE_QUEUE_KEY = "zenin_portfolio_rebalance_queue";
+const PORTFOLIO_EXPORTS_KEY = "zenin_portfolio_exports";
+const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
+
+function readStoredJson(key, fallback) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function appendStoredRecord(key, record, limit = 30) {
+  const existing = readStoredJson(key, []);
+  const rows = Array.isArray(existing) ? existing : [];
+  localStorage.setItem(key, JSON.stringify([record, ...rows].slice(0, limit)));
+  return [record, ...rows].slice(0, limit);
+}
 
 export function PortfolioModule({
   portfolio,
@@ -17,7 +41,9 @@ export function PortfolioModule({
   spotPrices = {},
   onRemove,
   onSellAsset,
-  onSelectAsset
+  onSelectAsset,
+  onOpenPredictions,
+  onOpenJournal
 }){
   const [chartMode, setChartMode] = useState("equity");
   const [chartInterval, setChartInterval] = useState("1D");
@@ -31,10 +57,21 @@ export function PortfolioModule({
   const [flowSelection, setFlowSelection] = useState(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [flowActionLabel, setFlowActionLabel] = useState("");
+  const [flowOutcome, setFlowOutcome] = useState({ title: "", message: "", tone: "success" });
   const [displayCurrency, setDisplayCurrency] = useState("USD");
   const [assetClassFilter, setAssetClassFilter] = useState("all");
+  const [showPredictionGuide, setShowPredictionGuide] = useState(false);
+  const [showConnectionsModal, setShowConnectionsModal] = useState(false);
+  const [exchangeKeys, setExchangeKeys] = useState([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const prefsHydratedRef = useRef(false);
   const G7_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
   const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
+  const syncPortfolioCollection = (namespace, rows, limit = 100) => {
+    saveWorkspaceCollection(namespace, rows, limit).catch((error) => {
+      console.warn(`Workspace sync skipped for ${namespace}.`, error);
+    });
+  };
 
   const filteredTrades = useMemo(() => {
     if (assetClassFilter === "all") return trades;
@@ -722,6 +759,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
           pnlPositive: Number(holding.positionGain || 0) >= 0,
           status,
           statusClass: status.toLowerCase(),
+          fundingRate: item?.fundingRate,
+          openInterest: item?.openInterest,
+          marketType: item?.marketType,
           raw: item
         };
       }
@@ -785,6 +825,132 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const cashWeight = currentAccountEquity > 0 ? (liveAvailableBalance / currentAccountEquity) * 100 : 0;
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const applySavedView = (saved) => {
+      if (saved && typeof saved === "object") {
+        if (saved.chartMode) setChartMode(saved.chartMode);
+        if (saved.chartInterval) setChartInterval(saved.chartInterval);
+        if (saved.displayCurrency) setDisplayCurrency(saved.displayCurrency);
+        if (saved.assetClassFilter) setAssetClassFilter(saved.assetClassFilter);
+        if (saved.benchmarkSymbol) setBenchmarkSymbol(saved.benchmarkSymbol);
+        if (saved.selectedTaxLotMethod) setSelectedTaxLotMethod(saved.selectedTaxLotMethod);
+      }
+    };
+
+    const hydrateViewState = async () => {
+      const localSaved = readStoredJson(PORTFOLIO_VIEW_STORAGE_KEY, null);
+      applySavedView(localSaved);
+      try {
+        const remote = await loadWorkspaceDoc("portfolio:view_state", localSaved);
+        if (cancelled) return;
+        applySavedView(remote?.document);
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Portfolio view sync unavailable.", error);
+        }
+      } finally {
+        if (!cancelled) {
+          prefsHydratedRef.current = true;
+        }
+      }
+    };
+
+    hydrateViewState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!prefsHydratedRef.current) return;
+    const nextViewState = {
+      chartMode,
+      chartInterval,
+      displayCurrency,
+      assetClassFilter,
+      benchmarkSymbol,
+      selectedTaxLotMethod,
+      updatedAt: new Date().toISOString()
+    };
+    localStorage.setItem(PORTFOLIO_VIEW_STORAGE_KEY, JSON.stringify(nextViewState));
+    saveWorkspaceDoc("portfolio:view_state", nextViewState).catch((error) => {
+      console.warn("Portfolio view sync skipped.", error);
+    });
+  }, [chartMode, chartInterval, displayCurrency, assetClassFilter, benchmarkSymbol, selectedTaxLotMethod]);
+
+  useEffect(() => {
+    const fetchExchangeKeys = async () => {
+      try {
+        const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-keys`, {
+          headers: { "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setExchangeKeys(data);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch exchange keys", err);
+      }
+    };
+    if (showConnectionsModal) fetchExchangeKeys();
+  }, [showConnectionsModal]);
+
+  const handleAddExchangeKey = async (payload) => {
+    try {
+      const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-keys`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}`
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const newKey = await res.json();
+        setExchangeKeys(prev => [newKey, ...prev]);
+      }
+    } catch (err) {
+      console.error("Failed to add exchange key", err);
+    }
+  };
+
+  const handleRemoveExchangeKey = async (id) => {
+    try {
+      const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-keys/${id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}` }
+      });
+      if (res.ok) {
+        setExchangeKeys(prev => prev.filter(k => k.id !== id));
+      }
+    } catch (err) {
+      console.error("Failed to remove exchange key", err);
+    }
+  };
+
+  const handleSyncExchange = async (id) => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-sync/${id}`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}` }
+      });
+      if (res.ok) {
+        // We should trigger a full workspace refresh here if possible,
+        // or just rely on the user to refresh.
+        // Actually, the app likely has a refresh logic.
+        window.location.reload(); // Hard refresh for now to ensure all state updates
+      }
+    } catch (err) {
+      console.error("Sync failed", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const insightFlowSteps = {
     attribution: ["Dashboard", "Overview", "Drilldown", "Insight Detail", "Action / Export"],
     exposure: ["Dashboard", "Overview", "Detailed Exposure", "Insights & Risk", "Portfolio Response"],
@@ -797,6 +963,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     setFlowSelection(selection);
     setFlowBusy(false);
     setFlowActionLabel("");
+    setFlowOutcome({ title: "", message: "", tone: "success" });
   };
 
   const closeInsightFlow = () => {
@@ -805,16 +972,175 @@ const isProfitable = currentAccountEquity >= initialBalance;
     setFlowSelection(null);
     setFlowBusy(false);
     setFlowActionLabel("");
+    setFlowOutcome({ title: "", message: "", tone: "success" });
   };
 
-  const runFlowProcessing = (doneStep, label, fromStep = insightFlowStep) => {
+  const openRelatedHoldingFromInsight = (selection = null) => {
+    const target = selection || flowSelection;
+    const targetName = String(target?.name || "").trim().toLowerCase();
+    const targetSymbol = String(target?.symbol || target?.name || "").trim().toLowerCase();
+    const match = combinedHoldings.find((holding) => {
+      const row = holding?.row || {};
+      const symbol = String(row?.symbol || row?.asset || "").trim().toLowerCase();
+      const name = String(row?.name || row?.strategy || "").trim().toLowerCase();
+      return (targetSymbol && symbol === targetSymbol) || (targetName && name === targetName);
+    });
+
+    if (!match) {
+      setFlowOutcome({
+        title: "No related holding found",
+        message: "This insight is not tied to an active holding in your portfolio right now.",
+        tone: "warning"
+      });
+      return;
+    }
+
+    const row = match.row || {};
+    setSelectedHolding({
+      symbol: String(row?.symbol || row?.asset || "N/A").toUpperCase(),
+      quantity: Number(row?.quantity || row?.qty || 0),
+      price: Number(row?.price || row?.currentMark || 0),
+      positionValue: Number(match.positionValue || 0),
+      positionGain: Number(match.positionGain || 0)
+    });
+    closeInsightFlow();
+  };
+
+  const runFlowProcessing = (doneStep, label, fromStep = insightFlowStep, onComplete = null) => {
     setFlowBusy(true);
     setFlowActionLabel(label);
     setInsightFlowStep(fromStep);
     window.setTimeout(() => {
+      onComplete?.();
       setFlowBusy(false);
       setInsightFlowStep(doneStep);
     }, 950);
+  };
+
+  const downloadTextFile = (text, fileName, mimeType = "text/plain;charset=utf-8") => {
+    const blob = new Blob([text], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const saveJournalInsight = (title, body, extra = {}) => {
+    const existing = readStoredJson(JOURNAL_STORAGE_KEY, []);
+    const rows = Array.isArray(existing) ? existing : [];
+    const createdAt = new Date().toISOString();
+    const symbol = String(extra.symbol || "").toUpperCase();
+    const entry = {
+      id: `jrnl-portfolio-${Date.now()}`,
+      createdAt,
+      symbol,
+      tradeDate: createdAt,
+      side: "NOTE",
+      quantity: 0,
+      price: 0,
+      notional: 0,
+      marketType: extra.marketType || "Insight",
+      status: "Saved",
+      strategy: title,
+      setupTag: title,
+      marketRegime: extra.marketRegime || "",
+      timeframe: "swing",
+      emotion: "neutral",
+      confidence: 4,
+      preThesis: body,
+      postReview: "",
+      mistakeCategory: "",
+      learned: extra.learned || "",
+      chartLink: ""
+    };
+    const nextEntries = [entry, ...rows].slice(0, 300);
+    localStorage.setItem(JOURNAL_STORAGE_KEY, JSON.stringify(nextEntries));
+    syncPortfolioCollection("journal:entries", nextEntries, 500);
+    return entry;
+  };
+
+  const exportAttributionReport = () => {
+    const sections = Object.entries(attributionRows || {}).flatMap(([group, rows]) =>
+      (Array.isArray(rows) ? rows : []).map((row) => [
+        group,
+        row?.name || "Unclassified",
+        Number(row?.pnl || 0).toFixed(2)
+      ])
+    );
+    const csv = [
+      ["group", "name", "pnl_usd"].join(","),
+      ...sections.map((row) => row.join(","))
+    ].join("\n");
+    const nextExports = appendStoredRecord(PORTFOLIO_EXPORTS_KEY, {
+      id: `portfolio-export-${Date.now()}`,
+      type: "attribution",
+      createdAt: new Date().toISOString()
+    }, 40);
+    syncPortfolioCollection("portfolio:exports", nextExports, 40);
+    downloadTextFile(csv, `portfolio-attribution-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv;charset=utf-8");
+  };
+
+  const exportExposureReport = () => {
+    const csv = [
+      ["bucket", "name", "weight_pct", "risk"].join(","),
+      ...exposureRows.map((row) => [
+        row.bucket,
+        row.name,
+        Number(row.weight || 0).toFixed(2),
+        row.risk
+      ].join(","))
+    ].join("\n");
+    const nextExports = appendStoredRecord(PORTFOLIO_EXPORTS_KEY, {
+      id: `portfolio-export-${Date.now()}`,
+      type: "exposure",
+      createdAt: new Date().toISOString()
+    }, 40);
+    syncPortfolioCollection("portfolio:exports", nextExports, 40);
+    downloadTextFile(csv, `portfolio-exposure-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv;charset=utf-8");
+  };
+
+  const savePortfolioView = (context = "portfolio") => {
+    const nextViews = appendStoredRecord(PORTFOLIO_SAVED_VIEWS_KEY, {
+      id: `portfolio-view-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      context,
+      chartMode,
+      chartInterval,
+      displayCurrency,
+      assetClassFilter,
+      benchmarkSymbol,
+      selectedTaxLotMethod
+    }, 25);
+    syncPortfolioCollection("portfolio:saved_views", nextViews, 25);
+  };
+
+  const saveExposureAlert = (row) => {
+    const nextAlerts = appendStoredRecord(PORTFOLIO_ALERTS_KEY, {
+      id: `portfolio-alert-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      type: "exposure",
+      bucket: row?.bucket || "Exposure",
+      name: row?.name || "Portfolio",
+      weight: Number(row?.weight || 0)
+    }, 40);
+    syncPortfolioCollection("portfolio:alerts", nextAlerts, 40);
+  };
+
+  const queuePortfolioRebalance = (context = "portfolio-response") => {
+    const nextQueue = appendStoredRecord(PORTFOLIO_REBALANCE_QUEUE_KEY, {
+      id: `portfolio-rebalance-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      context,
+      tradesRequired: rebalanceMetrics.tradesRequired,
+      totalDrift: Number(rebalanceMetrics.totalDrift || 0),
+      estFees: Number(rebalanceMetrics.estFees || 0),
+      suggestions: rebalanceSuggestions.filter((row) => row.action !== "Hold")
+    }, 20);
+    syncPortfolioCollection("portfolio:rebalance_queue", nextQueue, 20);
   };
 
   const renderInsightFlow = () => {
@@ -996,19 +1322,40 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <span>Step complete</span>
             </div>
             <div className="portfolio-v2-flow-list stacked">
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Exporting attribution report...")}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Preparing attribution export...", 5, () => {
+                exportAttributionReport();
+                setFlowOutcome({
+                  title: "Attribution report downloaded",
+                  message: "A CSV snapshot was exported from your Zenin workspace.",
+                  tone: "success"
+                });
+              })}>
                 <strong>Export report</strong><span>Download PDF / CSV</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving insight to journal...")}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving insight to journal...", 5, () => {
+                saveJournalInsight(
+                  "Portfolio Attribution Insight",
+                  `${pickAttribution?.name || "This contributor"} added ${formatSignedMoney(Number(pickAttribution?.pnl || 0))} to portfolio performance.`,
+                  {
+                    symbol: pickAttribution?.name || "",
+                    marketType: "Attribution"
+                  }
+                );
+                setFlowOutcome({
+                  title: "Insight added to Journal",
+                  message: "The attribution note was saved to your Journal workspace.",
+                  tone: "success"
+                });
+              })}>
                 <strong>Add to journal</strong><span>Save this insight note</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={closeInsightFlow}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => openRelatedHoldingFromInsight(pickAttribution)}>
                 <strong>Review positions</strong><span>Open related holdings</span>
               </button>
             </div>
             <div className="portfolio-v2-flow-status-inline success">
               <span>✓</span>
-              <div><strong>Insight saved successfully</strong><small>Added to your journal.</small></div>
+              <div><strong>{flowOutcome.title || "Insight ready"}</strong><small>{flowOutcome.message || "Choose an action to export or save this insight."}</small></div>
             </div>
             <div className="portfolio-v2-flow-actions">
               <button type="button" className="portfolio-v2-flow-btn ghost" onClick={closeInsightFlow}>Close</button>
@@ -1162,19 +1509,41 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <span>{activeSector?.name || "Sector"}</span>
             </div>
             <div className="portfolio-v2-flow-list stacked">
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Applying rebalance action...")}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving rebalance response...", 5, () => {
+                queuePortfolioRebalance("exposure-response");
+                setFlowOutcome({
+                  title: "Rebalance plan queued",
+                  message: "The response was saved to your Zenin workspace for later execution.",
+                  tone: "success"
+                });
+              })}>
                 <strong>Rebalance portfolio</strong><span>Adjust allocations</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving new alert threshold...")}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving exposure alert...", 5, () => {
+                saveExposureAlert(activeSector);
+                setFlowOutcome({
+                  title: "Exposure alert saved",
+                  message: `${activeSector?.name || "This bucket"} is now on your Zenin workspace alert list.`,
+                  tone: "success"
+                });
+              })}>
                 <strong>Set alert</strong><span>Notify if exposure is breached</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving heatmap view...")}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving heatmap view...", 5, () => {
+                savePortfolioView("exposure-heatmap");
+                exportExposureReport();
+                setFlowOutcome({
+                  title: "View saved and exported",
+                  message: "Your heatmap filters were saved to your Zenin workspace and a CSV export was downloaded.",
+                  tone: "success"
+                });
+              })}>
                 <strong>Save view</strong><span>Store this heatmap configuration</span>
               </button>
             </div>
             <div className="portfolio-v2-flow-status-inline success">
               <span>✓</span>
-              <div><strong>Changes saved</strong><small>Your portfolio response has been recorded.</small></div>
+              <div><strong>{flowOutcome.title || "Portfolio response ready"}</strong><small>{flowOutcome.message || "Choose an action to save or respond to this concentration risk."}</small></div>
             </div>
             <div className="portfolio-v2-flow-actions">
               <button type="button" className="portfolio-v2-flow-btn ghost" onClick={closeInsightFlow}>Close</button>
@@ -1323,7 +1692,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
                </div>
             </div>
             <div className="portfolio-v2-flow-actions">
-              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => runFlowProcessing(5, "Executing rebalance strategy...")}>Confirm</button>
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => runFlowProcessing(5, "Saving rebalance queue...", 4, () => {
+                queuePortfolioRebalance("rebalance-confirm");
+                setFlowOutcome({
+                  title: "Rebalance queued",
+                  message: "This plan was saved in your Zenin workspace and is ready for manual execution.",
+                  tone: "success"
+                });
+              })}>Confirm</button>
               <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(3)}>Back</button>
             </div>
           </div>
@@ -1339,8 +1715,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <div className="portfolio-v2-flow-status-inline success" style={{ flexDirection: 'column', padding: '20px', gap: '16px' }}>
               <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(34,197,94,0.15)', color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>✓</div>
               <div style={{ textAlign: 'center' }}>
-                <h3 style={{ fontSize: '20px', color: '#f8fafc', margin: '0 0 8px' }}>Rebalance Submitted</h3>
-                <p style={{ color: '#94a3b8', fontSize: '14px' }}>Your trades have been submitted successfully.</p>
+                <h3 style={{ fontSize: '20px', color: '#f8fafc', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance submitted"}</h3>
+                <p style={{ color: '#94a3b8', fontSize: '14px' }}>{flowOutcome.message || "Your trades have been submitted successfully."}</p>
               </div>
             </div>
 
@@ -1349,7 +1725,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <span>Projected Drift</span><strong className="positive">0.0%</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Status</span><strong style={{ color: '#f59e0b' }}>In Progress</strong>
+                  <span>Status</span><strong style={{ color: '#f59e0b' }}>Queued Locally</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
                   <span>Next Review</span><strong>30 days</strong>
@@ -1371,14 +1747,89 @@ const isProfitable = currentAccountEquity >= initialBalance;
         : "Rebalancing Suggestions Flow";
 
     return (
-      <div className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Portfolio user flow">
+      <div className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true">
         <div className="portfolio-v2-flow-shell">
           <div className="portfolio-v2-flow-top">
             <h2>{flowTitle}</h2>
-            <button type="button" className="portfolio-v2-flow-close" onClick={closeInsightFlow} aria-label="Close flow">✕</button>
+            <button type="button" className="portfolio-v2-flow-close" onClick={closeInsightFlow}>✕</button>
           </div>
-          {progress}
-          <div className="portfolio-v2-flow-body">{body}</div>
+          <div className="portfolio-v2-flow-body">
+            {body}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
+  const renderConnectionsModal = () => {
+    if (!showConnectionsModal) return null;
+    return (
+      <div className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true" style={{ zIndex: 1000 }}>
+        <div className="portfolio-v2-flow-shell" style={{ maxWidth: '500px' }}>
+          <div className="portfolio-v2-flow-top">
+            <h2>Exchange Connections</h2>
+            <button type="button" className="portfolio-v2-flow-close" onClick={() => setShowConnectionsModal(false)}>✕</button>
+          </div>
+          <div className="portfolio-v2-flow-body" style={{ padding: '20px' }}>
+            <div className="portfolio-v2-flow-list stacked">
+              {exchangeKeys.map(k => (
+                <div key={k.id} className="portfolio-v2-flow-action-row" style={{ cursor: 'default', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <strong style={{ textTransform: 'capitalize' }}>{k.exchange}</strong>
+                    <small style={{ color: 'var(--color-text-secondary)' }}>{k.apiKey.slice(0, 8)}...</small>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="portfolio-v2-flow-btn ghost"
+                      onClick={() => handleSyncExchange(k.id)}
+                      disabled={isSyncing}
+                      style={{ padding: '4px 12px', fontSize: '12px' }}
+                    >
+                      {isSyncing ? "Syncing..." : "Sync"}
+                    </button>
+                    <button
+                      className="portfolio-v2-flow-btn ghost"
+                      style={{ color: '#ef4444', padding: '4px 12px', fontSize: '12px' }}
+                      onClick={() => handleRemoveExchangeKey(k.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {exchangeKeys.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '20px', color: 'var(--color-text-secondary)' }}>
+                  No exchanges connected yet.
+                </div>
+              )}
+            </div>
+
+            <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.08)' }} />
+
+            <h3>Add New Connection</h3>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.target);
+              handleAddExchangeKey({
+                exchange: formData.get("exchange"),
+                apiKey: formData.get("apiKey"),
+                apiSecret: formData.get("apiSecret"),
+                extraData: { address: formData.get("address") }
+              });
+              e.target.reset();
+            }} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+              <select name="exchange" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} required>
+                <option value="binance">Binance (Spot/Perp)</option>
+                <option value="hyperliquid">Hyperliquid (Perp)</option>
+                <option value="bybit">Bybit (Perp)</option>
+              </select>
+              <input name="apiKey" placeholder="API Key / Address" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} required />
+              <input name="apiSecret" placeholder="API Secret (Optional for HL)" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} />
+              <input name="address" placeholder="Wallet Address (Optional)" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} />
+              <button type="submit" className="portfolio-v2-flow-btn primary" style={{ width: '100%', padding: '10px' }}>Connect Exchange</button>
+            </form>
+          </div>
         </div>
       </div>
     );
@@ -1402,6 +1853,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <option value="commodities">Commodities</option>
             <option value="crypto">Crypto</option>
           </select>
+          <button
+            type="button"
+            className="portfolio-v2-range-btn"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '0 12px' }}
+            onClick={() => setShowConnectionsModal(true)}
+          >
+            <span style={{ fontSize: '14px' }}>🔌</span>
+            <span>Connections</span>
+          </button>
           <div className="portfolio-v2-range">
             {INTERVALS.map((int) => (
               <button
@@ -1540,13 +2000,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
                     <th>Allocation</th>
                     <th>Mark / Value</th>
                     <th>P&amp;L</th>
+                    <th>Funding / OI</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {holdingsTableRows.length === 0 ? (
                     <tr>
-                      <td colSpan={5}>
+                      <td colSpan={6}>
                         <div className="portfolio-v2-empty" style={{ padding: '40px 20px', textAlign: 'center' }}>
                           <div className="portfolio-v2-empty-icon" style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.5 }}>📊</div>
                           <h3 style={{ margin: '0 0 8px', color: '#f8fafc' }}>No positions found</h3>
@@ -1580,6 +2041,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
                           </div>
                         </td>
                         <td>
+                          {row.marketType === "perp" ? (
+                            <div className="portfolio-v2-stack" style={{ fontSize: '11px' }}>
+                              <strong style={{ color: 'var(--color-brand-cyan)' }}>{row.fundingRate != null ? `${(row.fundingRate * 100).toFixed(4)}%` : "—"}</strong>
+                              <span style={{ color: 'var(--color-text-secondary)' }}>{row.openInterest != null ? formatMoney(row.openInterest) : "—"}</span>
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--color-text-secondary)', fontSize: '11px' }}>—</span>
+                          )}
+                        </td>
+                        <td>
                           <span className={`portfolio-v2-status ${row.statusClass || ""}`}>{row.status || "Open"}</span>
                         </td>
                       </tr>
@@ -1589,7 +2060,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <tfoot>
                   <tr>
                     <td colSpan={2}><span>Total Account Equity</span> <strong>{formatMoney(currentAccountEquity)}</strong></td>
-                    <td colSpan={3}><span>Total Gain/Loss</span> <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)</strong></td>
+                    <td colSpan={4}><span>Total Gain/Loss</span> <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)</strong></td>
                   </tr>
                 </tfoot>
               </table>
@@ -1745,8 +2216,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <h3>No prediction market positions yet</h3>
                 <p>Track event-driven opportunities across markets, macro, crypto, and equities.</p>
                 <div className="portfolio-v2-empty-actions">
-                  <button type="button" className="portfolio-v2-link">Explore Markets</button>
-                  <button type="button" className="portfolio-v2-link secondary">Learn how it works</button>
+                  <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Explore Markets</button>
+                  <button type="button" className="portfolio-v2-link secondary" onClick={() => setShowPredictionGuide(true)}>Learn how it works</button>
                 </div>
               </div>
             ) : (
@@ -1782,6 +2253,37 @@ const isProfitable = currentAccountEquity >= initialBalance;
         </aside>
       </div>
       {renderInsightFlow()}
+
+      {showPredictionGuide ? (
+        <div className="portfolio-v2-flow-overlay" onClick={() => setShowPredictionGuide(false)}>
+          <div className="portfolio-v2-flow-shell" onClick={(event) => event.stopPropagation()}>
+            <div className="portfolio-v2-flow-top">
+              <h2>Prediction Markets in Zenin</h2>
+              <button type="button" className="portfolio-v2-flow-close" onClick={() => setShowPredictionGuide(false)} aria-label="Close guide">✕</button>
+            </div>
+            <div className="portfolio-v2-flow-body">
+              <div className="portfolio-v2-flow-card">
+                <div className="portfolio-v2-flow-headline">
+                  <h3>How it works</h3>
+                  <span>Workspace preview</span>
+                </div>
+                <ul className="portfolio-v2-flow-bullets">
+                  <li>Explore live event markets in Predictions, then add positions as you take them.</li>
+                  <li>Portfolio tracks market P&amp;L separately from spot, options, and equity holdings.</li>
+                  <li>These positions are informational until a live linked prediction account is connected.</li>
+                </ul>
+                <div className="portfolio-v2-flow-actions">
+                  <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => {
+                    setShowPredictionGuide(false);
+                    onOpenPredictions?.();
+                  }}>Open Predictions</button>
+                  <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setShowPredictionGuide(false)}>Close</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showDiversificationModal ? (
         <div className="modal-overlay" onClick={() => setShowDiversificationModal(false)}>
@@ -1862,6 +2364,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         </div>
       ) : null}
+      {renderConnectionsModal()}
     </div>
   );
 }

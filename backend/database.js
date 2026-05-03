@@ -98,12 +98,21 @@ function toNumber(value, fallback = 0) {
 
 function parseJsonPayload(value, fallback = null) {
   if (value == null) return fallback;
-  if (typeof value === "object") return value;
+  if (typeof value === "object" || typeof value === "number" || typeof value === "boolean") return value;
   try {
     return JSON.parse(value);
   } catch {
-    return fallback;
+    return typeof value === "string" ? value : fallback;
   }
+}
+
+function mapAuthUserRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    passkeys: parseJsonPayload(row.passkeys, []),
+    backupCodes: parseJsonPayload(row.backupCodes, [])
+  };
 }
 
 function mapPortfolioRow(row) {
@@ -545,9 +554,17 @@ async function initializeDatabase() {
         display_name TEXT,
         auth_provider TEXT NOT NULL DEFAULT 'email',
         email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        pending_email TEXT,
+        pending_email_code_hash TEXT,
+        pending_email_requested_at TIMESTAMPTZ,
+        password_changed_at TIMESTAMPTZ,
         two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         two_factor_method TEXT,
         two_factor_secret_hash TEXT,
+        two_factor_provider TEXT,
+        two_factor_target TEXT,
+        two_factor_enabled_at TIMESTAMPTZ,
+        backup_codes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         passkeys_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         current_plan TEXT NOT NULL DEFAULT 'starter',
         current_billing_cycle TEXT NOT NULL DEFAULT 'monthly',
@@ -555,6 +572,46 @@ async function initializeDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS pending_email TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS pending_email_code_hash TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS pending_email_requested_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS two_factor_provider TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS two_factor_target TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS two_factor_enabled_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS backup_codes_json JSONB NOT NULL DEFAULT '[]'::jsonb;
     `);
 
     await client.query(`
@@ -642,6 +699,11 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
+      ALTER TABLE user_workspace_portfolio ADD COLUMN IF NOT EXISTS funding_rate DOUBLE PRECISION;
+      ALTER TABLE user_workspace_portfolio ADD COLUMN IF NOT EXISTS open_interest DOUBLE PRECISION;
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_workspace_watchlist (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -698,6 +760,39 @@ async function initializeDatabase() {
         breakevens TEXT,
         legs_json TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_documents (
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        namespace TEXT NOT NULL,
+        payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, namespace)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_collections (
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        namespace TEXT NOT NULL,
+        items_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, namespace)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_exchange_keys (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        exchange TEXT NOT NULL,
+        api_key TEXT NOT NULL,
+        api_secret TEXT,
+        extra_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
@@ -1753,11 +1848,21 @@ const userAuth = {
       RETURNING
         id,
         email,
+        password_hash AS "passwordHash",
         display_name AS "displayName",
         auth_provider AS "authProvider",
         email_verified AS "emailVerified",
+        pending_email AS "pendingEmail",
+        pending_email_code_hash AS "pendingEmailCodeHash",
+        pending_email_requested_at AS "pendingEmailRequestedAt",
+        password_changed_at AS "passwordChangedAt",
         two_factor_enabled AS "twoFactorEnabled",
         two_factor_method AS "twoFactorMethod",
+        two_factor_secret_hash AS "twoFactorSecretHash",
+        two_factor_provider AS "twoFactorProvider",
+        two_factor_target AS "twoFactorTarget",
+        two_factor_enabled_at AS "twoFactorEnabledAt",
+        backup_codes_json AS "backupCodes",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
         current_billing_cycle AS "currentBillingCycle",
@@ -1777,10 +1882,7 @@ const userAuth = {
       ON CONFLICT (user_id) DO NOTHING;
     `, [result.rows[0].id, DEFAULT_BALANCE]);
 
-    return {
-      ...result.rows[0],
-      passkeys: parseJsonPayload(result.rows[0].passkeys, [])
-    };
+    return mapAuthUserRow(result.rows[0]);
   },
 
   findUserByEmail: async (email) => {
@@ -1792,9 +1894,17 @@ const userAuth = {
         display_name AS "displayName",
         auth_provider AS "authProvider",
         email_verified AS "emailVerified",
+        pending_email AS "pendingEmail",
+        pending_email_code_hash AS "pendingEmailCodeHash",
+        pending_email_requested_at AS "pendingEmailRequestedAt",
+        password_changed_at AS "passwordChangedAt",
         two_factor_enabled AS "twoFactorEnabled",
         two_factor_method AS "twoFactorMethod",
         two_factor_secret_hash AS "twoFactorSecretHash",
+        two_factor_provider AS "twoFactorProvider",
+        two_factor_target AS "twoFactorTarget",
+        two_factor_enabled_at AS "twoFactorEnabledAt",
+        backup_codes_json AS "backupCodes",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
         current_billing_cycle AS "currentBillingCycle",
@@ -1806,10 +1916,7 @@ const userAuth = {
     `, [String(email || "").trim().toLowerCase()]);
     const row = result.rows[0];
     if (!row) return null;
-    return {
-      ...row,
-      passkeys: parseJsonPayload(row.passkeys, [])
-    };
+    return mapAuthUserRow(row);
   },
 
   findUserById: async (userId) => {
@@ -1817,11 +1924,20 @@ const userAuth = {
       SELECT
         id,
         email,
+        password_hash AS "passwordHash",
         display_name AS "displayName",
         auth_provider AS "authProvider",
         email_verified AS "emailVerified",
+        pending_email AS "pendingEmail",
+        pending_email_code_hash AS "pendingEmailCodeHash",
+        pending_email_requested_at AS "pendingEmailRequestedAt",
+        password_changed_at AS "passwordChangedAt",
         two_factor_enabled AS "twoFactorEnabled",
         two_factor_method AS "twoFactorMethod",
+        two_factor_provider AS "twoFactorProvider",
+        two_factor_target AS "twoFactorTarget",
+        two_factor_enabled_at AS "twoFactorEnabledAt",
+        backup_codes_json AS "backupCodes",
         passkeys_json AS passkeys,
         current_plan AS "currentPlan",
         current_billing_cycle AS "currentBillingCycle",
@@ -1833,10 +1949,7 @@ const userAuth = {
     `, [toUserId(userId)]);
     const row = result.rows[0];
     if (!row) return null;
-    return {
-      ...row,
-      passkeys: parseJsonPayload(row.passkeys, [])
-    };
+    return mapAuthUserRow(row);
   },
 
   createSession: async ({ userId, tokenHash, expiresAt, ipAddress = null, userAgent = null }) => {
@@ -1863,9 +1976,17 @@ const userAuth = {
         s.revoked_at AS "revokedAt",
         u.email,
         u.display_name AS "displayName",
+        u.auth_provider AS "authProvider",
         u.email_verified AS "emailVerified",
+        u.pending_email AS "pendingEmail",
+        u.pending_email_requested_at AS "pendingEmailRequestedAt",
+        u.password_changed_at AS "passwordChangedAt",
         u.two_factor_enabled AS "twoFactorEnabled",
         u.two_factor_method AS "twoFactorMethod",
+        u.two_factor_provider AS "twoFactorProvider",
+        u.two_factor_target AS "twoFactorTarget",
+        u.two_factor_enabled_at AS "twoFactorEnabledAt",
+        u.backup_codes_json AS "backupCodes",
         u.passkeys_json AS passkeys,
         u.current_plan AS "currentPlan",
         u.current_billing_cycle AS "currentBillingCycle",
@@ -1877,10 +1998,7 @@ const userAuth = {
     `, [String(tokenHash || "")]);
     const row = result.rows[0];
     if (!row) return null;
-    return {
-      ...row,
-      passkeys: parseJsonPayload(row.passkeys, [])
-    };
+    return mapAuthUserRow(row);
   },
 
   revokeSessionByTokenHash: async (tokenHash) => {
@@ -1900,11 +2018,148 @@ const userAuth = {
   },
 
   updatePassword: async (userId, passwordHash) => {
-    await pool.query(`
+    const result = await pool.query(`
       UPDATE app_users
-      SET password_hash = $2, updated_at = NOW()
+      SET password_hash = $2, password_changed_at = NOW(), updated_at = NOW()
       WHERE id = $1;
     `, [toUserId(userId), String(passwordHash || "")]);
+    return result.rowCount > 0;
+  },
+
+  requestEmailChange: async ({ userId, nextEmail, codeHash }) => {
+    const result = await pool.query(`
+      UPDATE app_users
+      SET
+        pending_email = $2,
+        pending_email_code_hash = $3,
+        pending_email_requested_at = NOW(),
+        email_verified = FALSE,
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING
+        id,
+        email,
+        password_hash AS "passwordHash",
+        display_name AS "displayName",
+        auth_provider AS "authProvider",
+        email_verified AS "emailVerified",
+        pending_email AS "pendingEmail",
+        pending_email_code_hash AS "pendingEmailCodeHash",
+        pending_email_requested_at AS "pendingEmailRequestedAt",
+        password_changed_at AS "passwordChangedAt",
+        two_factor_enabled AS "twoFactorEnabled",
+        two_factor_method AS "twoFactorMethod",
+        two_factor_secret_hash AS "twoFactorSecretHash",
+        two_factor_provider AS "twoFactorProvider",
+        two_factor_target AS "twoFactorTarget",
+        two_factor_enabled_at AS "twoFactorEnabledAt",
+        backup_codes_json AS "backupCodes",
+        passkeys_json AS passkeys,
+        current_plan AS "currentPlan",
+        current_billing_cycle AS "currentBillingCycle",
+        plan_updated_at AS "planUpdatedAt",
+        created_at AS "createdAt";
+    `, [toUserId(userId), String(nextEmail || "").trim().toLowerCase(), String(codeHash || "")]);
+    return mapAuthUserRow(result.rows[0]);
+  },
+
+  confirmEmailChange: async ({ userId, expectedCodeHash }) => {
+    const resolvedUserId = toUserId(userId);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const found = await client.query(`
+        SELECT
+          id,
+          email,
+          password_hash AS "passwordHash",
+          display_name AS "displayName",
+          auth_provider AS "authProvider",
+          email_verified AS "emailVerified",
+          pending_email AS "pendingEmail",
+          pending_email_code_hash AS "pendingEmailCodeHash",
+          pending_email_requested_at AS "pendingEmailRequestedAt",
+          password_changed_at AS "passwordChangedAt",
+          two_factor_enabled AS "twoFactorEnabled",
+          two_factor_method AS "twoFactorMethod",
+          two_factor_secret_hash AS "twoFactorSecretHash",
+          two_factor_provider AS "twoFactorProvider",
+          two_factor_target AS "twoFactorTarget",
+          two_factor_enabled_at AS "twoFactorEnabledAt",
+          backup_codes_json AS "backupCodes",
+          passkeys_json AS passkeys,
+          current_plan AS "currentPlan",
+          current_billing_cycle AS "currentBillingCycle",
+          plan_updated_at AS "planUpdatedAt",
+          created_at AS "createdAt"
+        FROM app_users
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE;
+      `, [resolvedUserId]);
+      const row = mapAuthUserRow(found.rows[0]);
+      if (!row || !row.pendingEmail || !row.pendingEmailCodeHash) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      if (String(row.pendingEmailCodeHash || "") !== String(expectedCodeHash || "")) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const updated = await client.query(`
+        UPDATE app_users
+        SET
+          email = pending_email,
+          pending_email = NULL,
+          pending_email_code_hash = NULL,
+          pending_email_requested_at = NULL,
+          email_verified = TRUE,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING
+          id,
+          email,
+          password_hash AS "passwordHash",
+          display_name AS "displayName",
+          auth_provider AS "authProvider",
+          email_verified AS "emailVerified",
+          pending_email AS "pendingEmail",
+          pending_email_code_hash AS "pendingEmailCodeHash",
+          pending_email_requested_at AS "pendingEmailRequestedAt",
+          password_changed_at AS "passwordChangedAt",
+          two_factor_enabled AS "twoFactorEnabled",
+          two_factor_method AS "twoFactorMethod",
+          two_factor_secret_hash AS "twoFactorSecretHash",
+          two_factor_provider AS "twoFactorProvider",
+          two_factor_target AS "twoFactorTarget",
+          two_factor_enabled_at AS "twoFactorEnabledAt",
+          backup_codes_json AS "backupCodes",
+          passkeys_json AS passkeys,
+          current_plan AS "currentPlan",
+          current_billing_cycle AS "currentBillingCycle",
+          plan_updated_at AS "planUpdatedAt",
+          created_at AS "createdAt";
+      `, [resolvedUserId]);
+      await client.query("COMMIT");
+      return mapAuthUserRow(updated.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  clearPendingEmailChange: async (userId) => {
+    await pool.query(`
+      UPDATE app_users
+      SET
+        pending_email = NULL,
+        pending_email_code_hash = NULL,
+        pending_email_requested_at = NULL,
+        updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId)]);
   },
 
   createPasswordResetToken: async ({ userId, tokenHash, expiresAt }) => {
@@ -1949,19 +2204,39 @@ const userAuth = {
     }
   },
 
-  upsertTwoFactor: async ({ userId, enabled, method = null, secretHash = null }) => {
+  upsertTwoFactor: async ({ userId, enabled, method = null, secretHash = null, provider = null, target = null, backupCodes = null }) => {
     await pool.query(`
       UPDATE app_users
       SET
         two_factor_enabled = $2,
         two_factor_method = $3,
         two_factor_secret_hash = $4,
+        two_factor_provider = $5,
+        two_factor_target = $6,
+        two_factor_enabled_at = CASE WHEN $2 THEN COALESCE(two_factor_enabled_at, NOW()) ELSE NULL END,
+        backup_codes_json = COALESCE($7::jsonb, backup_codes_json),
         updated_at = NOW()
       WHERE id = $1;
-    `, [toUserId(userId), Boolean(enabled), method, secretHash]);
+    `, [
+      toUserId(userId),
+      Boolean(enabled),
+      method,
+      secretHash,
+      provider,
+      target,
+      backupCodes == null ? null : JSON.stringify(Array.isArray(backupCodes) ? backupCodes : [])
+    ]);
   },
 
-  addPasskey: async ({ userId, passkey }) => {
+  regenerateBackupCodes: async ({ userId, backupCodes }) => {
+    await pool.query(`
+      UPDATE app_users
+      SET backup_codes_json = $2::jsonb, updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId), JSON.stringify(Array.isArray(backupCodes) ? backupCodes : [])]);
+  },
+
+  addPasskey: async ({ userId, passkey, backupCodes = null }) => {
     const user = await userAuth.findUserById(userId);
     const current = Array.isArray(user?.passkeys) ? user.passkeys : [];
     const next = [passkey, ...current].slice(0, 20);
@@ -1971,9 +2246,19 @@ const userAuth = {
         passkeys_json = $2::jsonb,
         two_factor_enabled = TRUE,
         two_factor_method = 'passkey',
+        two_factor_provider = $3,
+        two_factor_target = $4,
+        two_factor_enabled_at = COALESCE(two_factor_enabled_at, NOW()),
+        backup_codes_json = COALESCE($5::jsonb, backup_codes_json),
         updated_at = NOW()
       WHERE id = $1;
-    `, [toUserId(userId), JSON.stringify(next)]);
+    `, [
+      toUserId(userId),
+      JSON.stringify(next),
+      passkey?.provider || null,
+      passkey?.name || null,
+      backupCodes == null ? null : JSON.stringify(Array.isArray(backupCodes) ? backupCodes : [])
+    ]);
   },
 
   updateCurrentPlan: async (userId, plan, billingCycle = "monthly") => {
@@ -2003,14 +2288,46 @@ const userAuth = {
     `, [toUserId(userId), normalizedPlan, normalizedBillingCycle]);
     const row = result.rows[0];
     if (!row) return null;
-    return {
-      ...row,
-      passkeys: parseJsonPayload(row.passkeys, [])
-    };
+    return mapAuthUserRow(row);
   }
 };
 
 const userWorkspace = {
+  exchangeKeys: {
+    list: async (userId) => {
+      const result = await pool.query(`
+        SELECT id, exchange, api_key AS "apiKey", extra_data AS "extraData", created_at AS "createdAt"
+        FROM user_exchange_keys
+        WHERE user_id = $1
+        ORDER BY created_at DESC;
+      `, [toUserId(userId)]);
+      return result.rows;
+    },
+    add: async (userId, payload) => {
+      const { exchange, apiKey, apiSecret, extraData } = payload;
+      const result = await pool.query(`
+        INSERT INTO user_exchange_keys (user_id, exchange, api_key, api_secret, extra_data)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, exchange, api_key AS "apiKey", extra_data AS "extraData";
+      `, [toUserId(userId), exchange, apiKey, apiSecret, extraData || {}]);
+      return result.rows[0];
+    },
+    remove: async (userId, id) => {
+      await pool.query(`
+        DELETE FROM user_exchange_keys
+        WHERE id = $1 AND user_id = $2;
+      `, [id, toUserId(userId)]);
+    },
+    getById: async (userId, id) => {
+      const result = await pool.query(`
+        SELECT id, exchange, api_key AS "apiKey", api_secret AS "apiSecret", extra_data AS "extraData"
+        FROM user_exchange_keys
+        WHERE id = $1 AND user_id = $2;
+      `, [id, toUserId(userId)]);
+      return result.rows[0];
+    }
+  },
+
   balance: {
     get: async (userId) => {
       const resolvedUserId = toUserId(userId);
@@ -2096,6 +2413,41 @@ const userWorkspace = {
         ORDER BY date_added DESC;
       `, [resolvedUserId, QTY_EPSILON]);
       return result.rows.map(mapPortfolioRow);
+    },
+    sync: async (userId, exchange, holdings) => {
+      const resolvedUserId = toUserId(userId);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const strategyPrefix = `${exchange}%`;
+        await client.query(`
+          DELETE FROM user_workspace_portfolio
+          WHERE user_id = $1 AND strategy_name LIKE $2;
+        `, [resolvedUserId, strategyPrefix]);
+        for (const h of holdings) {
+          await client.query(`
+            INSERT INTO user_workspace_portfolio (
+              user_id, symbol, name, price, quantity, entry_price, opened_at, type,
+              market_type, order_type, strategy_name, legs_json, date_added, funding_rate, open_interest
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ON CONFLICT (user_id, symbol, market_type, strategy_name) DO UPDATE
+            SET quantity = EXCLUDED.quantity, price = EXCLUDED.price, entry_price = EXCLUDED.entry_price,
+                funding_rate = EXCLUDED.funding_rate, open_interest = EXCLUDED.open_interest, updated_at = NOW();
+          `, [
+            resolvedUserId, h.symbol, h.name, h.price || 0, h.quantity, h.entry_price || h.price || 0,
+            h.opened_at || new Date().toISOString(), h.type, h.market_type, h.order_type, h.strategyName,
+            JSON.stringify(h.legs_json || {}), h.date_added || new Date().toISOString(),
+            h.fundingRate || null, h.openInterest || null
+          ]);
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     add: async (userId, holding) => {
@@ -2330,6 +2682,23 @@ const userWorkspace = {
       } finally {
         client.release();
       }
+    },
+
+    set: async (userId, currency, balance) => {
+      const resolvedUserId = toUserId(userId);
+      const cur = String(currency || "USD").toUpperCase();
+      const val = toNumber(balance);
+      await pool.query(`
+        INSERT INTO user_workspace_cash (user_id, currency, balance)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, currency) DO UPDATE
+        SET balance = EXCLUDED.balance, updated_at = NOW();
+      `, [resolvedUserId, cur, val]);
+      if (cur === "USD" || cur === "USDT" || cur === "USDC") {
+        // Update legacy balance if it's a USD-peg
+        await pool.query(`UPDATE user_workspace_balance SET balance = $2 WHERE user_id = $1`, [resolvedUserId, val]);
+      }
+      return val;
     }
   },
 
@@ -2364,6 +2733,22 @@ const userWorkspace = {
         LIMIT $2;
       `, [resolvedUserId, safeLimit]);
       return result.rows.map(mapTradeRow);
+    },
+    sync: async (userId, trades) => {
+      const resolvedUserId = toUserId(userId);
+      for (const t of trades) {
+        await pool.query(`
+          INSERT INTO user_workspace_trades (
+            user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
+            quantity, price, notional, strategy_name, legs_json
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          ON CONFLICT (user_id, client_id) DO NOTHING;
+        `, [
+          resolvedUserId, t.clientId, t.date, t.executedAt, t.asset, t.name, t.type, t.side,
+          t.marketType, t.status, t.quantity, t.price, t.notional, t.strategyName, JSON.stringify(t.legsJson || {})
+        ]);
+      }
     },
 
     add: async (userId, trade) => {
@@ -2657,6 +3042,78 @@ const userWorkspace = {
         LIMIT $2;
       `, [resolvedUserId, safeLimit]);
       return result.rows.map((row) => ({ ...row, created_at: toIsoString(row.created_at) }));
+    }
+  },
+
+  docs: {
+    get: async (userId, namespace, fallback = null) => {
+      const result = await pool.query(`
+        SELECT payload_json AS payload, updated_at AS "updatedAt"
+        FROM user_workspace_documents
+        WHERE user_id = $1 AND namespace = $2
+        LIMIT 1;
+      `, [toUserId(userId), String(namespace || "").trim()]);
+      if (!result.rows[0]) {
+        return { namespace: String(namespace || "").trim(), document: fallback, updatedAt: null };
+      }
+      return {
+        namespace: String(namespace || "").trim(),
+        document: parseJsonPayload(result.rows[0].payload, fallback),
+        updatedAt: toIsoString(result.rows[0].updatedAt)
+      };
+    },
+
+    set: async (userId, namespace, document) => {
+      const resolvedNamespace = String(namespace || "").trim();
+      const result = await pool.query(`
+        INSERT INTO user_workspace_documents (user_id, namespace, payload_json, updated_at)
+        VALUES ($1, $2, $3::jsonb, NOW())
+        ON CONFLICT (user_id, namespace) DO UPDATE
+        SET payload_json = EXCLUDED.payload_json, updated_at = NOW()
+        RETURNING payload_json AS payload, updated_at AS "updatedAt";
+      `, [toUserId(userId), resolvedNamespace, JSON.stringify(document ?? null)]);
+      return {
+        namespace: resolvedNamespace,
+        document: parseJsonPayload(result.rows[0]?.payload, document ?? null),
+        updatedAt: toIsoString(result.rows[0]?.updatedAt)
+      };
+    }
+  },
+
+  collections: {
+    get: async (userId, namespace, fallback = []) => {
+      const result = await pool.query(`
+        SELECT items_json AS items, updated_at AS "updatedAt"
+        FROM user_workspace_collections
+        WHERE user_id = $1 AND namespace = $2
+        LIMIT 1;
+      `, [toUserId(userId), String(namespace || "").trim()]);
+      if (!result.rows[0]) {
+        return { namespace: String(namespace || "").trim(), items: Array.isArray(fallback) ? fallback : [], updatedAt: null };
+      }
+      const items = parseJsonPayload(result.rows[0].items, fallback);
+      return {
+        namespace: String(namespace || "").trim(),
+        items: Array.isArray(items) ? items : [],
+        updatedAt: toIsoString(result.rows[0].updatedAt)
+      };
+    },
+
+    set: async (userId, namespace, items, limit = 500) => {
+      const resolvedNamespace = String(namespace || "").trim();
+      const normalizedItems = Array.isArray(items) ? items.slice(0, Math.max(1, Math.min(2000, Number(limit) || 500))) : [];
+      const result = await pool.query(`
+        INSERT INTO user_workspace_collections (user_id, namespace, items_json, updated_at)
+        VALUES ($1, $2, $3::jsonb, NOW())
+        ON CONFLICT (user_id, namespace) DO UPDATE
+        SET items_json = EXCLUDED.items_json, updated_at = NOW()
+        RETURNING items_json AS items, updated_at AS "updatedAt";
+      `, [toUserId(userId), resolvedNamespace, JSON.stringify(normalizedItems)]);
+      return {
+        namespace: resolvedNamespace,
+        items: parseJsonPayload(result.rows[0]?.items, normalizedItems),
+        updatedAt: toIsoString(result.rows[0]?.updatedAt)
+      };
     }
   },
 

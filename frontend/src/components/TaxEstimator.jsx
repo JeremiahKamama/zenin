@@ -360,6 +360,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const [fileName, setFileName] = useState('');
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(true);
   const [showImportPreview, setShowImportPreview] = useState(false);
+  const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const [detectedCountry, setDetectedCountry] = useState('');
   const [additionalIncome, setAdditionalIncome] = useState(DEFAULT_INCOME_BREAKDOWN);
   const [scenario, setScenario] = useState({
@@ -367,6 +368,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     countryB: 'UAE',
     shiftDays: 365
   });
+  const [comparisonScenarios, setComparisonScenarios] = useState([]);
   const [advanced, setAdvanced] = useState({
     costBasisMethod: "fifo",
     realizationMode: "realized",
@@ -566,6 +568,47 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     handleExportCsv();
   };
 
+  const handleReset = () => {
+    setJurisdictions(['USA']);
+    setJurisdictionSearch('');
+    setActiveRegion('All');
+    setTaxYear('2026');
+    setGains(emptyGains());
+    setHasManualGainEdit(false);
+    setResults([]);
+    setFileName('');
+    setShowImportPreview(false);
+    setAdditionalIncome(DEFAULT_INCOME_BREAKDOWN);
+    setScenario({
+      countryA: 'USA',
+      countryB: 'UAE',
+      shiftDays: 365
+    });
+    setComparisonScenarios([]);
+    setAdvanced({
+      costBasisMethod: "fifo",
+      realizationMode: "realized",
+      acquisitionDate: "",
+      saleDate: "",
+      fees: 0,
+      slippage: 0,
+      brokerage: 0,
+      fxRate: 1,
+      currency: "USD",
+      lossCarryforward: 0,
+      exemptionThreshold: 0,
+      foreignTaxPaid: 0,
+      withholdingTax: 0,
+      residencyStatus: "resident",
+      taxRegime: "individual",
+      filingStatus: "single",
+      maritalStatus: "single",
+      notes: "",
+      fxSource: "Manual"
+    });
+    setIsActionsMenuOpen(false);
+  };
+
   const handleDocumentImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -726,6 +769,39 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     };
   }, [scenario, gains, advanced, ordinaryIncomeTotal]);
 
+  const comparisonScenarioCards = useMemo(() => {
+    return comparisonScenarios.map((item) => {
+      const shiftedSaleDate = advanced.saleDate
+        ? new Date(new Date(advanced.saleDate).getTime() + Number(item.shiftDays || 0) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        : '';
+      const shiftedGains = buildAdjustedGains(gains, { ...advanced, saleDate: shiftedSaleDate }).adjustedGains;
+      const liability = calcLiability(item.country, shiftedGains, { ordinaryIncomeTotal }).liability;
+      return {
+        ...item,
+        liability,
+        effectiveRate: summaryPreview.taxableGain > 0 ? ((liability / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100) : 0,
+        netAfterTax: Math.max(0, summaryPreview.grossTotal - liability)
+      };
+    });
+  }, [comparisonScenarios, gains, advanced, ordinaryIncomeTotal, summaryPreview.taxableGain, summaryPreview.grossTotal]);
+
+  const handleAddScenario = () => {
+    const usedCountries = new Set([
+      scenario.countryA,
+      scenario.countryB,
+      ...comparisonScenarios.map((item) => item.country)
+    ]);
+    const nextCountry = Object.keys(TAX_RULES).find((key) => !usedCountries.has(key)) || 'Singapore';
+    setComparisonScenarios((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${prev.length}`,
+        country: nextCountry,
+        shiftDays: Number(scenario.shiftDays || 0) + (prev.length + 1) * 30
+      }
+    ]);
+  };
+
   const setBucketTotal = (bucket, keys, nextTotal) => {
     const target = Math.max(0, Number(nextTotal) || 0);
     setHasManualGainEdit(true);
@@ -798,10 +874,25 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           <h2>Global Tax Estimator</h2>
           <p>Estimate capital gains liabilities across 40+ global jurisdictions.</p>
         </div>
-        <div className="tax-v2-head-actions">
+        <div className="tax-v2-head-actions" style={{ position: 'relative' }}>
           <button type="button" className="pagination-button tax-v2-action-btn" onClick={handleSave}>Saved scenarios</button>
           <button type="button" className="pagination-button tax-v2-action-btn" onClick={handleExportCsv}>Export</button>
-          <button type="button" className="pagination-button tax-v2-action-btn tax-v2-more-btn" aria-label="More options">•••</button>
+          <button
+            type="button"
+            className="pagination-button tax-v2-action-btn tax-v2-more-btn"
+            aria-label="More options"
+            onClick={() => setIsActionsMenuOpen((value) => !value)}
+          >
+            •••
+          </button>
+          {isActionsMenuOpen ? (
+            <div className="journal-export-menu" role="menu" style={{ right: 0, left: 'auto', top: 'calc(100% + 8px)' }}>
+              <button type="button" role="menuitem" onClick={() => { handleSave(); setIsActionsMenuOpen(false); }}>Save scenarios</button>
+              <button type="button" role="menuitem" onClick={() => { handleExportCsv(); setIsActionsMenuOpen(false); }}>Export CSV</button>
+              <button type="button" role="menuitem" onClick={() => { handleExport('pdf'); setIsActionsMenuOpen(false); }}>Print report</button>
+              <button type="button" role="menuitem" onClick={handleReset}>Reset inputs</button>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1054,7 +1145,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
         <section className="tax-v2-panel">
           <div className="tax-v2-panel-head">
             <h3><span className="num">5</span> Scenario Comparison</h3>
-            <button type="button" className="pagination-button tax-v2-action-btn">+ Add Scenario</button>
+            <button type="button" className="pagination-button tax-v2-action-btn" onClick={handleAddScenario}>+ Add Scenario</button>
           </div>
           <div className="tax-v2-scenario-grid">
             <div className="tax-v2-scenario-card">
@@ -1071,6 +1162,16 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
               <div><span>Effective Rate</span><strong>{summaryPreview.taxableGain > 0 ? ((scenarioComparison.nowB / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100).toFixed(2) : "0.00"}%</strong></div>
               <div><span>Net After Tax</span><strong>{formatMoney(Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowB))}</strong></div>
             </div>
+            {comparisonScenarioCards.map((item) => (
+              <div className="tax-v2-scenario-card" key={item.id}>
+                <h4>{countryFlag(item.country)} {TAX_RULES[item.country]?.name}</h4>
+                <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
+                <div><span>Estimated Tax</span><strong>{formatMoney(item.liability)}</strong></div>
+                <div><span>Effective Rate</span><strong>{item.effectiveRate.toFixed(2)}%</strong></div>
+                <div><span>Net After Tax</span><strong>{formatMoney(item.netAfterTax)}</strong></div>
+                <div><span>Sale shift</span><strong>{Number(item.shiftDays || 0)} days</strong></div>
+              </div>
+            ))}
           </div>
           <div className="tax-v2-save-strip">
             You save ${(scenarioComparison.nowB - scenarioComparison.nowA).toLocaleString(undefined, { maximumFractionDigits: 0 })} ({summaryPreview.grossTotal > 0 ? (((scenarioComparison.nowB - scenarioComparison.nowA) / summaryPreview.grossTotal) * 100).toFixed(2) : "0.00"}%)

@@ -10,6 +10,7 @@ import { ZeninLogo } from "./components/Branding";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch } from "./utils/zeninFetch";
+import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection } from "./utils/workspacePersistence";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
@@ -18,14 +19,69 @@ import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
 
-const HomeModule = lazy(() => import("./components/HomeModule").then((mod) => ({ default: mod.HomeModule })));
-const PortfolioModule = lazy(() => import("./components/PortfolioModule").then((mod) => ({ default: mod.PortfolioModule })));
-const OptionsModule = lazy(() => import("./components/OptionsModule").then((mod) => ({ default: mod.OptionsModule })));
-const JournalModule = lazy(() => import("./components/JournalModule").then((mod) => ({ default: mod.JournalModule })));
-const AnalyticsModule = lazy(() => import("./components/AnalyticsModule").then((mod) => ({ default: mod.AnalyticsModule })));
-const PredictionMarketModule = lazy(() => import("./components/PredictionMarketModule").then((mod) => ({ default: mod.PredictionMarketModule })));
-const TaxEstimator = lazy(() => import("./components/TaxEstimator").then((mod) => ({ default: mod.TaxEstimator })));
-const FullMetricsPage = lazy(() => import("./components/FullMetricsPage").then((mod) => ({ default: mod.FullMetricsPage })));
+function isStaleChunkError(error) {
+  const message = String(error?.message || error || "");
+  return /Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError/i.test(message);
+}
+
+function lazyWithReloadRetry(loader, retryKey) {
+  return lazy(async () => {
+    try {
+      const mod = await loader();
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(retryKey);
+      }
+      return mod;
+    } catch (error) {
+      if (typeof window === "undefined" || !isStaleChunkError(error)) {
+        throw error;
+      }
+
+      const hasRetried = sessionStorage.getItem(retryKey) === "1";
+      if (!hasRetried) {
+        sessionStorage.setItem(retryKey, "1");
+        window.location.reload();
+        return new Promise(() => {});
+      }
+
+      sessionStorage.removeItem(retryKey);
+      throw error;
+    }
+  });
+}
+
+const HomeModule = lazyWithReloadRetry(
+  () => import("./components/HomeModule").then((mod) => ({ default: mod.HomeModule })),
+  "zenin_lazy_retry_home"
+);
+const PortfolioModule = lazyWithReloadRetry(
+  () => import("./components/PortfolioModule").then((mod) => ({ default: mod.PortfolioModule })),
+  "zenin_lazy_retry_portfolio"
+);
+const OptionsModule = lazyWithReloadRetry(
+  () => import("./components/OptionsModule").then((mod) => ({ default: mod.OptionsModule })),
+  "zenin_lazy_retry_options"
+);
+const JournalModule = lazyWithReloadRetry(
+  () => import("./components/JournalModule").then((mod) => ({ default: mod.JournalModule })),
+  "zenin_lazy_retry_journal"
+);
+const AnalyticsModule = lazyWithReloadRetry(
+  () => import("./components/AnalyticsModule").then((mod) => ({ default: mod.AnalyticsModule })),
+  "zenin_lazy_retry_analytics"
+);
+const PredictionMarketModule = lazyWithReloadRetry(
+  () => import("./components/PredictionMarketModule").then((mod) => ({ default: mod.PredictionMarketModule })),
+  "zenin_lazy_retry_predictions"
+);
+const TaxEstimator = lazyWithReloadRetry(
+  () => import("./components/TaxEstimator").then((mod) => ({ default: mod.TaxEstimator })),
+  "zenin_lazy_retry_tax"
+);
+const FullMetricsPage = lazyWithReloadRetry(
+  () => import("./components/FullMetricsPage").then((mod) => ({ default: mod.FullMetricsPage })),
+  "zenin_lazy_retry_metrics"
+);
 
 
 
@@ -135,12 +191,7 @@ function hasSectionAccessForUser(plan, isAdmin, section) {
 }
 
 function hasStoredAuthSession() {
-  try {
-    const rawUser = localStorage.getItem("zenin_auth_user");
-    return Boolean(rawUser);
-  } catch {
-    return false;
-  }
+  return hasWorkspaceSession();
 }
 
 function isAdminUser(user) {
@@ -192,12 +243,45 @@ const readStoredArray = (key) => {
 };
 
 const hasAuthToken = () => {
-  try {
-    return Boolean(localStorage.getItem("zenin_auth_user"));
-  } catch {
-    return false;
-  }
+  return hasWorkspaceSession();
 };
+
+function buildDefaultProfileSecurity(email) {
+  return {
+    email: email || "user@zenin.app",
+    pendingEmail: "",
+    pendingEmailCodeHash: "",
+    pendingEmailRequestedAt: null,
+    emailVerified: true,
+    passwordHash: "",
+    passwordChangedAt: null,
+    twoFactorEnabled: false,
+    twoFactorMethod: null,
+    twoFactorProvider: null,
+    twoFactorTarget: "",
+    twoFactorEnabledAt: null,
+    backupCodes: [],
+    passkeys: []
+  };
+}
+
+function profileSecurityFromUser(user, fallbackEmail = "user@zenin.app") {
+  return {
+    ...buildDefaultProfileSecurity(String(user?.email || fallbackEmail || "user@zenin.app")),
+    email: String(user?.email || fallbackEmail || "user@zenin.app"),
+    pendingEmail: String(user?.pendingEmail || ""),
+    pendingEmailRequestedAt: user?.pendingEmailRequestedAt || null,
+    emailVerified: Boolean(user?.emailVerified),
+    passwordChangedAt: user?.passwordChangedAt || null,
+    twoFactorEnabled: Boolean(user?.twoFactorEnabled),
+    twoFactorMethod: user?.twoFactorMethod || null,
+    twoFactorProvider: user?.twoFactorProvider || null,
+    twoFactorTarget: String(user?.twoFactorTarget || ""),
+    twoFactorEnabledAt: user?.twoFactorEnabledAt || null,
+    backupCodes: Array.isArray(user?.backupCodes) ? user.backupCodes : [],
+    passkeys: Array.isArray(user?.passkeys) ? user.passkeys : []
+  };
+}
 
 const mapOptionHoldingToTrade = (holding) => {
   if (!holding) return null;
@@ -1198,7 +1282,8 @@ const handleOptionTradeExecuted = async (tradePayload) => {
     price: entryPremium,
     strategyName: tradePayload.strategy || tradePayload.name,
     legsJson: tradePayload.legs || [],
-    executedAt: new Date().toISOString()
+    executedAt: new Date().toISOString(),
+    clientId: tradePayload.id || `opt-trade-${Date.now()}`
   };
 
   const recordSimulatedOptionTrade = () => {
@@ -2008,6 +2093,11 @@ const handleOptionTradeClosed = async (tradeId) => {
           setIsAdmin(false);
           setCurrentPlan("starter");
           setAccountPlanLabel("Starter Plan");
+          setProfileSecurity((prev) => ({
+            ...buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || prev?.email || "user@zenin.app"),
+            passwordHash: prev?.passwordHash || ""
+          }));
+          settingsSyncReadyRef.current = false;
           setAccessCheckLoading(false);
           return;
         } else {
@@ -2019,6 +2109,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           setIsGuestUser(false);
           setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
           setAccountPlanLabel(userIsAdmin ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
         }
         setAccessCheckLoading(false);
       } catch {
@@ -2029,6 +2120,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         setIsAdmin(false);
         setCurrentPlan("starter");
         setAccountPlanLabel("Starter Plan");
+        settingsSyncReadyRef.current = false;
         setAccessCheckLoading(false);
       }
     };
@@ -2038,6 +2130,50 @@ const handleOptionTradeClosed = async (tradeId) => {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (accessCheckLoading) return undefined;
+    if (isGuestUser) {
+      settingsSyncReadyRef.current = false;
+      return undefined;
+    }
+
+    let cancelled = false;
+    settingsSyncReadyRef.current = false;
+
+    const loadWorkspaceSettings = async () => {
+      try {
+        const [preferencesResult, accountsResult] = await Promise.all([
+          loadWorkspaceDoc("settings:preferences", null),
+          loadWorkspaceCollection("settings:connected_accounts", [])
+        ]);
+        if (cancelled) return;
+        if (preferencesResult?.document && typeof preferencesResult.document === "object") {
+          setPreferences((prev) => ({
+            ...prev,
+            ...preferencesResult.document
+          }));
+        }
+        if (Array.isArray(accountsResult?.items)) {
+          setConnectedAccounts(accountsResult.items);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Workspace settings sync unavailable.", error);
+        }
+      } finally {
+        if (!cancelled) {
+          settingsSyncReadyRef.current = true;
+        }
+      }
+    };
+
+    loadWorkspaceSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessCheckLoading, isGuestUser]);
 
   useEffect(() => {
     if (!accessibleSections.length) return;
@@ -2146,22 +2282,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   const PASSKEY_OPTIONS = ["iCloud Keychain", "Google Password Manager", "1Password", "Dashlane", "Bitwarden"];
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
-    const fallback = {
-      email: localStorage.getItem("zenin_email") || "user@zenin.app",
-      pendingEmail: "",
-      pendingEmailCodeHash: "",
-      pendingEmailRequestedAt: null,
-      emailVerified: true,
-      passwordHash: "",
-      passwordChangedAt: null,
-      twoFactorEnabled: false,
-      twoFactorMethod: null,
-      twoFactorProvider: null,
-      twoFactorTarget: "",
-      twoFactorEnabledAt: null,
-      backupCodes: [],
-      passkeys: []
-    };
+    const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
     if (!raw) return fallback;
     try {
       const parsed = JSON.parse(raw);
@@ -2175,6 +2296,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return fallback;
     }
   });
+  const settingsSyncReadyRef = useRef(false);
   const [profileForms, setProfileForms] = useState({
     newEmail: "",
     emailPassword: "",
@@ -2198,7 +2320,12 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   useEffect(() => {
     localStorage.setItem("zenin_preferences", JSON.stringify(preferences));
-  }, [preferences]);
+    if (!isGuestUser && settingsSyncReadyRef.current) {
+      saveWorkspaceDoc("settings:preferences", preferences).catch((error) => {
+        console.warn("Preference sync skipped.", error);
+      });
+    }
+  }, [preferences, isGuestUser]);
 
   useEffect(() => {
     localStorage.setItem("zenin_email", userEmail);
@@ -2268,20 +2395,29 @@ const handleOptionTradeClosed = async (tradeId) => {
     setIsConnectWindowOpen(true);
   };
 
-  const connectAccount = () => {
+  const connectAccount = async () => {
     if (!accountForm.username.trim() || !accountForm.apiKey.trim()) return;
     const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
-    setConnectedAccounts((prev) => [
-      {
-        id: Date.now(),
-        venueType: accountForm.venueType,
-        provider: accountForm.provider,
-        username: accountForm.username.trim(),
-        apiKeyMasked: masked,
-        connectedAt: new Date().toISOString()
-      },
-      ...prev
-    ]);
+    const nextAccount = {
+      id: Date.now(),
+      venueType: accountForm.venueType,
+      provider: accountForm.provider,
+      username: accountForm.username.trim(),
+      apiKeyMasked: masked,
+      connectedAt: new Date().toISOString()
+    };
+    const nextAccounts = [nextAccount, ...connectedAccounts];
+    setConnectedAccounts(nextAccounts);
+    if (!isGuestUser) {
+      try {
+        const saved = await saveWorkspaceCollection("settings:connected_accounts", nextAccounts, 100);
+        if (Array.isArray(saved?.items)) {
+          setConnectedAccounts(saved.items);
+        }
+      } catch (error) {
+        console.warn("Connected account sync skipped.", error);
+      }
+    }
     setIsConnectWindowOpen(false);
   };
 
@@ -2321,7 +2457,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     return { ok: true };
   };
 
-  const requestEmailChange = () => {
+  const requestEmailChange = async () => {
     const nextEmail = profileForms.newEmail.trim().toLowerCase();
     const password = profileForms.emailPassword.trim();
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail);
@@ -2330,13 +2466,43 @@ const handleOptionTradeClosed = async (tradeId) => {
       setProfileMessage("email", "error", "Enter a valid email address.");
       return;
     }
+    if (nextEmail === String(profileSecurity.email || "").toLowerCase()) {
+      setProfileMessage("email", "error", "New email must be different from current email.");
+      return;
+    }
+
+    if (!isGuestUser) {
+      try {
+        const res = await zeninFetch("/account/email/request", {
+          method: "POST",
+          body: JSON.stringify({ newEmail: nextEmail, currentPassword: password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "Email change request failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || nextEmail));
+        }
+        setProfileForms((prev) => ({ ...prev, newEmail: "", emailPassword: "", emailVerificationCode: "" }));
+        setProfileMessage(
+          "email",
+          "success",
+          data?.devVerificationCode
+            ? `Verification sent to ${nextEmail}. Dev code: ${data.devVerificationCode}`
+            : `Verification sent to ${nextEmail}. Enter the code to confirm.`
+        );
+        return;
+      } catch (error) {
+        setProfileMessage("email", "error", error?.message || "Email change request failed.");
+        return;
+      }
+    }
+
     const passwordCheck = verifyCurrentPassword(password);
     if (!passwordCheck.ok) {
       setProfileMessage("email", "error", passwordCheck.message);
-      return;
-    }
-    if (nextEmail === String(profileSecurity.email || "").toLowerCase()) {
-      setProfileMessage("email", "error", "New email must be different from current email.");
       return;
     }
 
@@ -2357,9 +2523,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     );
   };
 
-  const verifyPendingEmail = () => {
+  const verifyPendingEmail = async () => {
     const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
-    const expectedHash = String(profileSecurity.pendingEmailCodeHash || "").trim();
     const typedCode = String(profileForms.emailVerificationCode || "").trim();
     if (!pendingEmail) {
       setProfileMessage("email", "error", "No pending email change to verify.");
@@ -2369,6 +2534,31 @@ const handleOptionTradeClosed = async (tradeId) => {
       setProfileMessage("email", "error", "Enter the 6-digit verification code.");
       return;
     }
+    if (!isGuestUser) {
+      try {
+        const res = await zeninFetch("/account/email/confirm", {
+          method: "POST",
+          body: JSON.stringify({ verificationCode: typedCode })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "Email confirmation failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email));
+          setUserEmail(data.user.email);
+        }
+        setProfileForms((prev) => ({ ...prev, emailVerificationCode: "" }));
+        setProfileMessage("email", "success", `Email updated to ${data?.user?.email || pendingEmail}.`);
+        return;
+      } catch (error) {
+        setProfileMessage("email", "error", error?.message || "Email confirmation failed.");
+        return;
+      }
+    }
+    const expectedHash = String(profileSecurity.pendingEmailCodeHash || "").trim();
     if (!expectedHash || expectedHash !== hashSecret(typedCode)) {
       setProfileMessage("email", "error", "Verification code is invalid.");
       return;
@@ -2386,10 +2576,42 @@ const handleOptionTradeClosed = async (tradeId) => {
     setProfileMessage("email", "success", `Email updated to ${pendingEmail}.`);
   };
 
-  const updatePassword = () => {
+  const updatePassword = async () => {
     const currentPassword = profileForms.currentPassword.trim();
     const newPassword = profileForms.newPassword.trim();
     const confirmPassword = profileForms.confirmPassword.trim();
+
+    if (!isGuestUser) {
+      if (newPassword !== confirmPassword) {
+        setProfileMessage("password", "error", "New password and confirmation do not match.");
+        return;
+      }
+      try {
+        const res = await zeninFetch("/account/password", {
+          method: "POST",
+          body: JSON.stringify({ currentPassword, newPassword })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "Password update failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
+        }
+        setProfileForms((prev) => ({
+          ...prev,
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: ""
+        }));
+        setProfileMessage("password", "success", "Password updated successfully.");
+        return;
+      } catch (error) {
+        setProfileMessage("password", "error", error?.message || "Password update failed.");
+        return;
+      }
+    }
 
     const passwordCheck = verifyCurrentPassword(currentPassword);
     if (!passwordCheck.ok) {
@@ -2427,12 +2649,46 @@ const handleOptionTradeClosed = async (tradeId) => {
     setProfileMessage("password", "success", "Password updated successfully.");
   };
 
-  const enableTwoFactor = () => {
+  const enableTwoFactor = async () => {
     const method = String(profileForms.twoFactorMethod || "authenticator");
     const code = profileForms.twoFactorCode.trim();
     if (method !== "passkey" && !/^\d{6}$/.test(code)) {
       setProfileMessage("twofa", "error", "Enter a valid 6-digit verification code.");
       return;
+    }
+
+    if (!isGuestUser) {
+      const target = method === "sms"
+        ? profileForms.phoneNumber.trim()
+        : method === "email"
+          ? profileForms.recoveryEmail.trim().toLowerCase()
+          : "";
+      const provider = method === "authenticator" ? profileForms.authenticatorService : method === "sms" ? "SMS OTP" : "Email OTP";
+      try {
+        const res = await zeninFetch("/auth/2fa/enable", {
+          method: "POST",
+          body: JSON.stringify({
+            method,
+            verificationCode: code,
+            provider,
+            target
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "2FA enable failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
+        }
+        setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+        setProfileMessage("twofa", "success", `${provider} 2FA enabled.`);
+        return;
+      } catch (error) {
+        setProfileMessage("twofa", "error", error?.message || "2FA enable failed.");
+        return;
+      }
     }
 
     if (method === "authenticator") {
@@ -2492,12 +2748,39 @@ const handleOptionTradeClosed = async (tradeId) => {
     setProfileMessage("twofa", "success", "Email OTP 2FA enabled.");
   };
 
-  const registerPasskey = () => {
+  const registerPasskey = async () => {
     const passkeyName = profileForms.passkeyName.trim();
     if (passkeyName.length < 2) {
       setProfileMessage("twofa", "error", "Passkey name must be at least 2 characters.");
       return;
     }
+
+    if (!isGuestUser) {
+      try {
+        const res = await zeninFetch("/auth/passkeys/register", {
+          method: "POST",
+          body: JSON.stringify({
+            name: passkeyName,
+            provider: profileForms.passkeyProvider
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "Passkey registration failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
+        }
+        setProfileForms((prev) => ({ ...prev, passkeyName: "Primary Device" }));
+        setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
+        return;
+      } catch (error) {
+        setProfileMessage("twofa", "error", error?.message || "Passkey registration failed.");
+        return;
+      }
+    }
+
     const newPasskey = {
       id: Date.now(),
       name: passkeyName,
@@ -2518,7 +2801,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
   };
 
-  const regenerateBackupCodes = () => {
+  const regenerateBackupCodes = async () => {
     if (!profileSecurity.twoFactorEnabled) {
       setProfileMessage("twofa", "error", "Enable 2FA before generating backup codes.");
       return;
@@ -2527,11 +2810,53 @@ const handleOptionTradeClosed = async (tradeId) => {
       setProfileMessage("twofa", "error", "Select and enable a 2FA method first.");
       return;
     }
+    if (!isGuestUser) {
+      try {
+        const res = await zeninFetch("/auth/2fa/backup-codes/regenerate", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "Backup code regeneration failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
+        }
+        setProfileMessage("twofa", "success", "Backup codes regenerated.");
+        return;
+      } catch (error) {
+        setProfileMessage("twofa", "error", error?.message || "Backup code regeneration failed.");
+        return;
+      }
+    }
     setProfileSecurity((prev) => ({ ...prev, backupCodes: createBackupCodes() }));
     setProfileMessage("twofa", "success", "Backup codes regenerated.");
   };
 
-  const disableTwoFactor = () => {
+  const disableTwoFactor = async () => {
+    if (!isGuestUser) {
+      try {
+        const res = await zeninFetch("/auth/2fa/disable", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "2FA disable failed.");
+        }
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
+        }
+        setProfileMessage("twofa", "info", "2FA disabled for this workspace profile.");
+        return;
+      } catch (error) {
+        setProfileMessage("twofa", "error", error?.message || "2FA disable failed.");
+        return;
+      }
+    }
     setProfileSecurity((prev) => ({
       ...prev,
       twoFactorEnabled: false,
@@ -2566,6 +2891,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (method === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(profileForms?.recoveryEmail || "").trim());
     return true;
   })();
+
+  const settingsPreviewNote = "Workspace sync: profile, security, preferences, and connected-account metadata now save to your Zenin workspace. They still do not sync trades or permissions to external providers.";
 
   const sectionIcon = (section) => {
     if (section === "Home") {
@@ -2769,6 +3096,14 @@ const handleOptionTradeClosed = async (tradeId) => {
               if (routeState.type === "company") navigateToAppRoute();
               setActiveSection("Metrics");
             }}
+            onOpenWatchlist={() => {
+              if (routeState.type === "company") navigateToAppRoute();
+              setActiveSection("Watchlist");
+            }}
+            onOpenAnalytics={() => {
+              if (routeState.type === "company") navigateToAppRoute();
+              setActiveSection("Analytics");
+            }}
           />
         )}
         {activeSection === "Metrics" && (
@@ -2928,6 +3263,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                     marketType: String(asset.marketType || "spot").toLowerCase()
                   };
                   setSelectedAsset(enriched);
+                }}
+                onOpenPredictions={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Predictions");
+                }}
+                onOpenJournal={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Journal");
                 }}
               />
 
@@ -3109,6 +3452,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               <section className="settings-content">
                 {activeSettingsCategory === "Profile" && (
                   <>
+                    <div className="settings-preview-note">{settingsPreviewNote}</div>
                     <div className="settings-panel">
                       <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-email")}>
                         <span>Email Address</span>
@@ -3479,6 +3823,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsCategory === "Accounts" && (
                   <>
+                    <div className="settings-preview-note">{settingsPreviewNote}</div>
                     <div className="settings-panel">
                       <button className="settings-panel-header" onClick={() => toggleSettingsPanel("accounts-connected")}>
                         <span>Connected Accounts</span>

@@ -1259,7 +1259,7 @@ export function AnalyticsModule({ backendUrl }) {
                     )
                   )}
                   subvalue="Summed from latest ETF inflow rows"
-                  source="Dune"
+                  source={(cryptoData.etfInflows || [])[0]?.source || "Farside"}
                   tone="positive"
                 />
               </div>
