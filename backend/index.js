@@ -4,6 +4,14 @@ dotenv.config({ path: path.join(__dirname, ".env") });
 dotenv.config();
 const express = require("express");
 const crypto = require("crypto");
+const { authenticator } = require("otplib");
+const qrcode = require("qrcode");
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} = require("@simplewebauthn/server");
 const { sendPasswordResetEmail } = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -54,6 +62,20 @@ function resolvePythonBinary() {
 }
 const pythonBinary = resolvePythonBinary();
 const { syncBinance, syncHyperliquid, syncBybit } = require("./exchangeSync");
+
+const rpName = "Zenin Capital";
+const rpID = process.env.RP_ID || "localhost";
+const expectedOrigin = process.env.EXPECTED_ORIGIN || "http://localhost:5173";
+const webAuthnChallenges = new Map();
+const WEBAUTHN_CHALLENGE_TTL_MS = 120_000; // 2 minutes
+
+// Periodic cleanup of expired WebAuthn challenges (#7)
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of webAuthnChallenges) {
+    if (entry.expiresAt < now) webAuthnChallenges.delete(key);
+  }
+}, 60_000);
 
 const { watchlistData } = require("./data");
 const {
@@ -287,6 +309,17 @@ app.use(helmet.contentSecurityPolicy({
 app.use(helmet.hsts({ maxAge: 31536000, includeSubDomains: true }));
 app.use(helmet.noSniff());
 app.use(helmet.frameguard({ action: "deny" }));
+app.use(helmet.referrerPolicy({ policy: "strict-origin-when-cross-origin" }));
+app.use(helmet.permittedCrossDomainPolicies());
+
+// CSRF origin validation for state-changing requests (#6)
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next(); // same-origin requests may omit Origin
+  if (isAllowedOrigin(origin)) return next();
+  return res.status(403).json({ error: "Origin not allowed." });
+});
 
 function sanitizeSymbol(symbol) {
   return symbol.replace(/[^a-zA-Z0-9.\-_:]/g, "").slice(0, 30);
@@ -589,6 +622,30 @@ function hashToken(token) {
   return crypto.createHmac("sha256", AUTH_HASH_KEY).update(String(token || "")).digest("hex");
 }
 
+// Encrypt/decrypt TOTP secrets at rest with AES-256-GCM (#2)
+const TOTP_ENC_KEY = crypto.createHash("sha256").update(`zenin-totp-enc:${AUTH_HASH_KEY}`).digest();
+
+function encryptTotpSecret(secret) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", TOTP_ENC_KEY, iv);
+  let encrypted = cipher.update(String(secret), "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const tag = cipher.getAuthTag().toString("hex");
+  return `enc:${iv.toString("hex")}:${tag}:${encrypted}`;
+}
+
+function decryptTotpSecret(stored) {
+  if (!stored || !stored.startsWith("enc:")) return stored; // fallback for unencrypted legacy
+  const parts = stored.split(":");
+  if (parts.length !== 4) return null;
+  const [, ivHex, tagHex, ciphertext] = parts;
+  const decipher = crypto.createDecipheriv("aes-256-gcm", TOTP_ENC_KEY, Buffer.from(ivHex, "hex"));
+  decipher.setAuthTag(Buffer.from(tagHex, "hex"));
+  let decrypted = decipher.update(ciphertext, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+
 function derivePasswordHash(password, salt = null) {
   const safeSalt = salt || crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(String(password || ""), safeSalt, 64).toString("hex");
@@ -616,6 +673,8 @@ function isStrongPassword(password) {
 
 function sanitizeAuthUser(user = null) {
   if (!user) return null;
+  // Strip all secret material: passwordHash, twoFactorSecretHash, raw backupCodes (#3, #11)
+  const passkeys = Array.isArray(user.passkeys) ? user.passkeys : [];
   return {
     id: Number(user.id),
     email: String(user.email || "").toLowerCase(),
@@ -630,8 +689,8 @@ function sanitizeAuthUser(user = null) {
     twoFactorProvider: user.twoFactorProvider || null,
     twoFactorTarget: user.twoFactorTarget || "",
     twoFactorEnabledAt: user.twoFactorEnabledAt || null,
-    backupCodes: Array.isArray(user.backupCodes) ? user.backupCodes : [],
-    passkeys: Array.isArray(user.passkeys) ? user.passkeys : [],
+    backupCodesCount: Array.isArray(user.backupCodes) ? user.backupCodes.length : 0,
+    passkeys: passkeys.map(p => ({ name: p.name, provider: p.provider, createdAt: p.createdAt })),
     currentPlan: String(user.currentPlan || "starter").trim().toLowerCase() || "starter",
     currentBillingCycle: String(user.currentBillingCycle || "monthly").trim().toLowerCase() || "monthly",
     planUpdatedAt: user.planUpdatedAt || null,
@@ -644,7 +703,8 @@ function createVerificationCode() {
 }
 
 function createBackupCodes() {
-  return Array.from({ length: 8 }, () => Math.random().toString(36).slice(2, 6).toUpperCase());
+  // Use crypto.randomBytes for cryptographic security (#4)
+  return Array.from({ length: 8 }, () => crypto.randomBytes(4).toString("hex").toUpperCase());
 }
 
 function isWorkspaceNamespaceValid(namespace) {
@@ -2549,13 +2609,69 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
     if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
 
     const user = await userAuth.findUserByEmail(email);
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    if (!user) return res.status(401).json({ error: "Invalid email or password." });
+
+    // Check account lockout (#8)
+    if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
+      return res.status(423).json({ 
+        error: "Account is temporarily locked due to multiple failed attempts. Please try again later." 
+      });
+    }
+
+    if (!verifyPassword(password, user.passwordHash)) {
+      await userAuth.incrementFailedLogin(user.id);
+      // user.failedLoginCount is from BEFORE this increment in the found user object
+      if ((user.failedLoginCount || 0) >= 4) { 
+        const lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        await userAuth.lockAccountUntil(user.id, lockedUntil);
+      }
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
-    // MFA verification is intentionally disabled until full WebAuthn/TOTP flows are implemented.
-    // This avoids accepting insecure passkey-id/OTP-only shortcuts.
+    // Success - reset lockout
+    await userAuth.resetFailedLogin(user.id);
 
+    if (user.twoFactorEnabled) {
+      const verificationCode = String(req.body?.verificationCode || "").trim();
+      if (!verificationCode) {
+        return res.json({ requiresMfa: true, method: user.twoFactorMethod });
+      }
+
+      let mfaValid = false;
+      let usedBackupCode = false;
+
+      if (user.twoFactorMethod === "authenticator") {
+        if (!user.twoFactorSecretHash) {
+           return res.status(500).json({ error: "MFA setup is incomplete." });
+        }
+        // Decrypt the TOTP secret before verification (#2)
+        const decryptedSecret = decryptTotpSecret(user.twoFactorSecretHash);
+        if (!decryptedSecret) {
+          return res.status(500).json({ error: "Could not decrypt MFA secret." });
+        }
+        mfaValid = authenticator.verify({ token: verificationCode, secret: decryptedSecret });
+      } else {
+        // sms or email
+        const expectedHash = hashToken(`${user.twoFactorMethod}:${verificationCode}`);
+        mfaValid = (expectedHash === user.twoFactorSecretHash);
+      }
+
+      // If TOTP/SMS/Email code failed, check backup codes (#5)
+      if (!mfaValid) {
+        const parsedCodes = Array.isArray(user.backupCodes) ? user.backupCodes : [];
+        if (parsedCodes.includes(verificationCode)) {
+          mfaValid = true;
+          usedBackupCode = true;
+          // Consume the backup code so it cannot be reused
+          const remaining = parsedCodes.filter(c => c !== verificationCode);
+          await userAuth.regenerateBackupCodes({ userId: user.id, backupCodes: remaining });
+        }
+      }
+
+      if (!mfaValid) {
+        return res.status(401).json({ error: "Invalid verification code." });
+      }
+    }
     const rememberMe = req.body?.rememberMe !== false;
     const session = await issueSessionForUser(user.id, req, { persistent: rememberMe });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
@@ -2639,31 +2755,150 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(for
   }
 });
 
+app.get("/api/auth/passkeys/authenticate/generate-options", authLimiter, async (req, res) => {
+  try {
+    const options = await generateAuthenticationOptions({
+      rpID,
+      userVerification: 'preferred',
+    });
+    
+    // Using a temporary key for unauthenticated users based on IP or a session ID would be better,
+    // but since we don't have the user ID yet, we'll store the challenge keyed by the challenge itself
+    // or we can require the user to input their email first.
+    // A passwordless flow usually requires email first OR discoverable credentials.
+    // If discoverable credentials, we don't know the user ID. We'll key it by challenge id.
+    const challengeId = crypto.randomUUID();
+    webAuthnChallenges.set(`auth_${challengeId}`, { challenge: options.challenge, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
+    
+    return res.json({ ...options, challengeId });
+  } catch (error) {
+    return handleServerError(res, "Generate Passkey Auth Options failed", error);
+  }
+});
+
+app.post("/api/auth/passkeys/authenticate/verify", authLimiter, async (req, res) => {
+  try {
+    const { response, challengeId, rememberMe } = req.body;
+    const challengeEntry = webAuthnChallenges.get(`auth_${challengeId}`);
+    
+    if (!challengeEntry || challengeEntry.expiresAt < Date.now()) {
+      if (challengeEntry) webAuthnChallenges.delete(`auth_${challengeId}`);
+      return res.status(400).json({ error: "Authentication session expired or invalid." });
+    }
+    const expectedChallenge = challengeEntry.challenge;
+    
+    // We need to find the user by credential ID
+    const credentialID = response.id;
+    // Parameterized query to prevent SQL injection (#1)
+    const result = await pool.query(`
+      SELECT id FROM app_users 
+      WHERE passkeys_json @> $1::jsonb
+      LIMIT 1;
+    `, [JSON.stringify([{ credentialID }])]);
+    
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Passkey not recognized." });
+    }
+    
+    const user = await userAuth.findUserById(result.rows[0].id);
+    const passkey = user.passkeys.find(p => p.credentialID === credentialID);
+    
+    if (!passkey) {
+      return res.status(401).json({ error: "Passkey not found on user." });
+    }
+    
+    const verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge,
+      expectedOrigin,
+      expectedRPID: rpID,
+      authenticator: {
+        credentialPublicKey: Buffer.from(passkey.credentialPublicKey, 'base64url'),
+        credentialID: Buffer.from(passkey.credentialID, 'base64url'),
+        counter: passkey.counter,
+        transports: passkey.transports,
+      },
+    });
+    
+    if (verification.verified) {
+      webAuthnChallenges.delete(`auth_${challengeId}`);
+      
+      // Update the counter
+      const updatedPasskeys = user.passkeys.map(p => {
+        if (p.credentialID === credentialID) {
+          return { ...p, counter: verification.authenticationInfo.newCounter };
+        }
+        return p;
+      });
+      await pool.query('UPDATE app_users SET passkeys_json = $1::jsonb WHERE id = $2', [JSON.stringify(updatedPasskeys), user.id]);
+      
+      const session = await issueSessionForUser(user.id, req, { persistent: rememberMe !== false });
+      setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+      
+      return res.json({ success: true, user: sanitizeAuthUser(user), expiresAt: session.expiresAt });
+    }
+    
+    return res.status(401).json({ error: "Passkey verification failed." });
+  } catch (error) {
+    return handleServerError(res, "Verify Passkey Auth failed", error);
+  }
+});
+
+app.get("/api/auth/2fa/generate", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    const user = await userAuth.findUserById(req.auth.userId);
+    const secret = authenticator.generateSecret();
+    const otpauth = authenticator.keyuri(user.email, "Zenin Capital", secret);
+    const qrCodeDataUrl = await qrcode.toDataURL(otpauth);
+    return res.json({ secret, qrCodeDataUrl });
+  } catch (error) {
+    return handleServerError(res, "Generate 2FA failed", error);
+  }
+});
+
 app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFactorEnableSchema), async (req, res) => {
   try {
     const method = String(req.body?.method || "").trim().toLowerCase();
     const verificationCode = String(req.body?.verificationCode || "").trim();
     const provider = String(req.body?.provider || "").trim() || null;
     const target = String(req.body?.target || "").trim() || null;
+    const secret = String(req.body?.secret || "").trim();
+    
     if (!["authenticator", "sms", "email"].includes(method)) {
       return res.status(400).json({ error: "Unsupported 2FA method." });
     }
     if (!/^\d{6}$/.test(verificationCode)) {
       return res.status(400).json({ error: "Enter a valid 6-digit verification code." });
     }
-    if ((method === "sms" || method === "email") && !target) {
-      return res.status(400).json({ error: "A delivery target is required for this 2FA method." });
+    
+    let secretToStore = null;
+    if (method === "authenticator") {
+      if (!secret) return res.status(400).json({ error: "Secret is required for authenticator method." });
+      const isValid = authenticator.verify({ token: verificationCode, secret });
+      if (!isValid) return res.status(400).json({ error: "Invalid verification code." });
+      // Encrypt the secret before storing it (#2)
+      secretToStore = encryptTotpSecret(secret);
+    } else {
+      if (!target) return res.status(400).json({ error: "A delivery target is required for this 2FA method." });
+      secretToStore = hashToken(`${method}:${verificationCode}`); // Mock for sms/email
     }
+
     const backupCodes = createBackupCodes();
     await userAuth.upsertTwoFactor({
       userId: req.auth.userId,
       enabled: true,
       method,
-      secretHash: hashToken(`${method}:${verificationCode}`),
+      secretHash: secretToStore,
       provider,
       target,
       backupCodes
     });
+
+    // Session rotation after 2FA state change (#10)
+    await userAuth.revokeSessionsByUserId(req.auth.userId);
+    const session = await issueSessionForUser(req.auth.userId, req, { persistent: true });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+
     const user = await userAuth.findUserById(req.auth.userId);
     return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
@@ -2682,6 +2917,12 @@ app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res)
       target: null,
       backupCodes: []
     });
+
+    // Session rotation after 2FA state change (#10)
+    await userAuth.revokeSessionsByUserId(req.auth.userId);
+    const session = await issueSessionForUser(req.auth.userId, req, { persistent: true });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+
     const user = await userAuth.findUserById(req.auth.userId);
     return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
@@ -2689,28 +2930,84 @@ app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res)
   }
 });
 
-app.post("/api/auth/passkeys/register", authLimiter, requireSignedIn, validate(passkeyRegisterSchema), async (req, res) => {
+app.get("/api/auth/passkeys/register/generate-options", authLimiter, requireSignedIn, async (req, res) => {
   try {
-    const name = String(req.body?.name || "").trim();
-    const provider = String(req.body?.provider || "").trim() || "Platform Authenticator";
-    if (name.length < 2) {
-      return res.status(400).json({ error: "Passkey name must be at least 2 characters." });
-    }
-    const backupCodes = createBackupCodes();
-    await userAuth.addPasskey({
-      userId: req.auth.userId,
-      passkey: {
-        id: `passkey-${Date.now()}`,
-        name,
-        provider,
-        createdAt: new Date().toISOString()
-      },
-      backupCodes
-    });
     const user = await userAuth.findUserById(req.auth.userId);
-    return res.json({ success: true, user: sanitizeAuthUser(user) });
+    const userPasskeys = Array.isArray(user.passkeys) ? user.passkeys : [];
+
+    const options = await generateRegistrationOptions({
+      rpName,
+      rpID,
+      userID: String(user.id),
+      userName: user.email,
+      attestationType: 'none',
+      excludeCredentials: userPasskeys.map(passkey => ({
+        id: passkey.credentialID,
+        type: 'public-key',
+        transports: passkey.transports,
+      })),
+      authenticatorSelection: {
+        residentKey: 'preferred',
+        userVerification: 'preferred',
+      },
+    });
+
+    webAuthnChallenges.set(`reg_${user.id}`, { challenge: options.challenge, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
+    return res.json(options);
   } catch (error) {
-    return handleServerError(res, "Passkey registration failed", error);
+    return handleServerError(res, "Generate Passkey Options failed", error);
+  }
+});
+
+app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    const user = await userAuth.findUserById(req.auth.userId);
+    const challengeEntry = webAuthnChallenges.get(`reg_${user.id}`);
+    
+    if (!challengeEntry || challengeEntry.expiresAt < Date.now()) {
+      if (challengeEntry) webAuthnChallenges.delete(`reg_${user.id}`);
+      return res.status(400).json({ error: "Registration session expired or invalid." });
+    }
+    const expectedChallenge = challengeEntry.challenge;
+    
+    const verification = await verifyRegistrationResponse({
+      response: req.body.response,
+      expectedChallenge,
+      expectedOrigin,
+      expectedRPID: rpID,
+    });
+    
+    if (verification.verified && verification.registrationInfo) {
+      webAuthnChallenges.delete(`reg_${user.id}`);
+      const { credentialPublicKey, credentialID, counter } = verification.registrationInfo;
+      
+      const newPasskey = {
+        credentialID: Buffer.from(credentialID).toString('base64url'),
+        credentialPublicKey: Buffer.from(credentialPublicKey).toString('base64url'),
+        counter,
+        transports: req.body.response.response.transports || [],
+        name: req.body.name || "Passkey",
+        provider: req.body.provider || "Platform Authenticator",
+        createdAt: new Date().toISOString()
+      };
+      
+      await userAuth.addPasskey({
+        userId: user.id,
+        passkey: newPasskey
+      });
+
+      // Session rotation after 2FA state change (#10)
+      await userAuth.revokeSessionsByUserId(user.id);
+      const session = await issueSessionForUser(user.id, req, { persistent: true });
+      setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+      
+      const updatedUser = await userAuth.findUserById(user.id);
+      return res.json({ success: true, user: sanitizeAuthUser(updatedUser) });
+    }
+    
+    return res.status(400).json({ error: "Passkey verification failed." });
+  } catch (error) {
+    return handleServerError(res, "Verify Passkey failed", error);
   }
 });
 

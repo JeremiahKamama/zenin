@@ -1,4 +1,5 @@
-import { lazy, startTransition, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startRegistration } from "@simplewebauthn/browser";
 import { Watchlist } from "./components/Watchlist";
 import { AssetModal } from "./components/AssetModal";
 import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
@@ -2312,11 +2313,28 @@ const handleOptionTradeClosed = async (tradeId) => {
     passkeyName: "Primary Device",
     passkeyProvider: PASSKEY_OPTIONS[0]
   });
+  const [totpSetup, setTotpSetup] = useState({ secret: null, qrCodeDataUrl: null, loading: false });
   const [profileFeedback, setProfileFeedback] = useState({
     email: null,
     password: null,
     twofa: null
   });
+
+  const fetchTotpSetup = useCallback(async () => {
+    if (isGuestUser) return;
+    setTotpSetup(prev => ({ ...prev, loading: true }));
+    try {
+      const res = await zeninFetch("/auth/2fa/generate");
+      const data = await res.json();
+      if (res.ok && data.secret) {
+        setTotpSetup({ secret: data.secret, qrCodeDataUrl: data.qrCodeDataUrl, loading: false });
+      } else {
+        setTotpSetup(prev => ({ ...prev, loading: false }));
+      }
+    } catch {
+      setTotpSetup(prev => ({ ...prev, loading: false }));
+    }
+  }, [isGuestUser]);
 
   useEffect(() => {
     localStorage.setItem("zenin_preferences", JSON.stringify(preferences));
@@ -2664,6 +2682,11 @@ const handleOptionTradeClosed = async (tradeId) => {
           ? profileForms.recoveryEmail.trim().toLowerCase()
           : "";
       const provider = method === "authenticator" ? profileForms.authenticatorService : method === "sms" ? "SMS OTP" : "Email OTP";
+      const secret = method === "authenticator" ? (totpSetup.secret || "") : "";
+      if (method === "authenticator" && !secret) {
+        setProfileMessage("twofa", "error", "Generate a QR code first.");
+        return;
+      }
       try {
         const res = await zeninFetch("/auth/2fa/enable", {
           method: "POST",
@@ -2671,7 +2694,8 @@ const handleOptionTradeClosed = async (tradeId) => {
             method,
             verificationCode: code,
             provider,
-            target
+            target,
+            secret
           })
         });
         const data = await res.json().catch(() => ({}));
@@ -2757,26 +2781,36 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     if (!isGuestUser) {
       try {
-        const res = await zeninFetch("/auth/passkeys/register", {
+        // Step 1: Get registration options from the server
+        const optionsRes = await zeninFetch("/auth/passkeys/register/generate-options");
+        const options = await optionsRes.json();
+        if (!optionsRes.ok) throw new Error(options?.error || "Failed to get registration options.");
+
+        // Step 2: Start the WebAuthn registration ceremony in the browser
+        const attResp = await startRegistration(options);
+
+        // Step 3: Send the result back to the server for verification
+        const verifyRes = await zeninFetch("/auth/passkeys/register/verify", {
           method: "POST",
           body: JSON.stringify({
+            response: attResp,
             name: passkeyName,
             provider: profileForms.passkeyProvider
           })
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || "Passkey registration failed.");
-        }
-        if (data?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
+        const verifyData = await verifyRes.json().catch(() => ({}));
+        if (!verifyRes.ok) throw new Error(verifyData?.error || "Passkey verification failed.");
+
+        if (verifyData?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(verifyData.user));
+          setProfileSecurity(profileSecurityFromUser(verifyData.user, verifyData.user.email || userEmail));
         }
         setProfileForms((prev) => ({ ...prev, passkeyName: "Primary Device" }));
         setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
         return;
       } catch (error) {
-        setProfileMessage("twofa", "error", error?.message || "Passkey registration failed.");
+        const msg = error?.name === "NotAllowedError" ? "Passkey registration was cancelled." : (error?.message || "Passkey registration failed.");
+        setProfileMessage("twofa", "error", msg);
         return;
       }
     }
@@ -3056,6 +3090,27 @@ const handleOptionTradeClosed = async (tradeId) => {
             </div>
             <span className="sidebar-account-chevron">⌄</span>
           </button>
+
+          {!isGuestUser && (
+            <button
+              className="sidebar-theme-row"
+              style={{ color: "var(--muted)", marginTop: "4px" }}
+              onClick={async () => {
+                try { await zeninFetch("/auth/signout", { method: "POST" }); } catch {}
+                localStorage.removeItem("zenin_auth_user");
+                localStorage.removeItem("zenin_auth_expires_at");
+                localStorage.removeItem("zenin_email");
+                window.location.href = "/";
+              }}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <span className="sidebar-theme-left">
+                <span className="sidebar-theme-icon" aria-hidden="true">⏻</span>
+                <span className="sidebar-theme-label">Log out</span>
+              </span>
+            </button>
+          )}
         </div>
 
       </aside>
@@ -3620,6 +3675,23 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 </select>
                               </label>
                               <p className="settings-meta">Scan QR in your app, then enter the 6-digit code below.</p>
+                              {!isGuestUser && !totpSetup.secret && !totpSetup.loading ? (
+                                <button className="settings-secondary-btn" style={{ margin: "12px 0" }} onClick={fetchTotpSetup}>Generate QR Code</button>
+                              ) : null}
+                              {totpSetup.loading ? (
+                                <p className="settings-meta" style={{ margin: "12px 0" }}>Generating...</p>
+                              ) : null}
+                              {totpSetup.qrCodeDataUrl && totpSetup.secret ? (
+                                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "12px", margin: "16px 0" }}>
+                                  <div style={{ background: "#fff", padding: "12px", borderRadius: "8px", display: "inline-block" }}>
+                                    <img src={totpSetup.qrCodeDataUrl} alt="TOTP QR Code" width="160" height="160" style={{ display: "block" }} />
+                                  </div>
+                                  <div>
+                                    <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Secret Key</span>
+                                    <p style={{ fontFamily: "monospace", fontSize: "1.05rem", color: "var(--text)", margin: "4px 0 0 0", letterSpacing: "1px", wordBreak: "break-all" }}>{totpSetup.secret}</p>
+                                  </div>
+                                </div>
+                              ) : null}
                             </>
                           ) : null}
 

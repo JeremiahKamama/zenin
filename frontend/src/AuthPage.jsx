@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
@@ -147,6 +148,9 @@ export default function AuthPage() {
   const [signupStep, setSignupStep] = useState("email");
   const [forgotStep, setForgotStep] = useState("request");
   const [resetTokenMode, setResetTokenMode] = useState(false);
+  const [mfaStep, setMfaStep] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaMethod, setMfaMethod] = useState("");
 
   const [signupForm, setSignupForm] = useState({
     email: getEmailFromStorage(),
@@ -262,7 +266,7 @@ export default function AuthPage() {
     setSignupStep("created");
   });
 
-  const onSignin = () => runAction(async () => {
+  const onSignin = (overrideCode) => runAction(async () => {
     setSigninTouched(true);
     if (!isValidEmail(signinForm.email)) throw new Error("Enter a valid email address.");
     if (!signinForm.password.trim()) throw new Error("Enter your password.");
@@ -271,13 +275,39 @@ export default function AuthPage() {
       password: signinForm.password,
       rememberMe
     };
-    if (signinForm.otpCode) payload.otpCode = signinForm.otpCode;
-    if (signinForm.passkeyId) payload.passkeyId = signinForm.passkeyId;
+    const code = overrideCode || mfaCode;
+    if (code) payload.verificationCode = code;
     const res = await zeninFetch("/auth/signin", {
       method: "POST",
       body: JSON.stringify(payload)
     });
     const data = await readJson(res);
+    if (data.requiresMfa) {
+      setMfaMethod(data.method || "authenticator");
+      setMfaCode("");
+      setMfaStep(true);
+      return;
+    }
+    persistAuth(data);
+    await redirectToApp();
+  });
+
+  const onMfaVerify = () => runAction(async () => {
+    if (!/^\d{6,8}$/.test(mfaCode.trim())) throw new Error("Enter a valid verification code.");
+    await onSignin(mfaCode.trim());
+  });
+
+  const onPasskeySignin = () => runAction(async () => {
+    const optionsRes = await zeninFetch("/auth/passkeys/authenticate/generate-options");
+    const options = await optionsRes.json();
+    if (!optionsRes.ok) throw new Error(options?.error || "Failed to get passkey options.");
+    const { challengeId, ...webAuthnOptions } = options;
+    const assertion = await startAuthentication(webAuthnOptions);
+    const verifyRes = await zeninFetch("/auth/passkeys/authenticate/verify", {
+      method: "POST",
+      body: JSON.stringify({ response: assertion, challengeId, rememberMe }),
+    });
+    const data = await readJson(verifyRes);
     persistAuth(data);
     await redirectToApp();
   });
@@ -321,17 +351,21 @@ export default function AuthPage() {
   });
 
   const onRegisterPasskey = () => runAction(async () => {
-    const res = await zeninFetch("/auth/passkeys/register", {
+    const optionsRes = await zeninFetch("/auth/passkeys/register/generate-options");
+    const options = await optionsRes.json();
+    if (!optionsRes.ok) throw new Error(options?.error || "Failed to get registration options.");
+    const attResp = await startRegistration(options);
+    const verifyRes = await zeninFetch("/auth/passkeys/register/verify", {
       method: "POST",
       body: JSON.stringify({
+        response: attResp,
         name: passkeyForm.name,
         provider: passkeyForm.provider
       })
     });
-    const data = await readJson(res);
+    const data = await readJson(verifyRes);
     if (data?.user) localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-    setSigninForm((prev) => ({ ...prev, passkeyId: data?.passkey?.id || prev.passkeyId }));
-    setMessage("Passkey created successfully.");
+    setMessage("Passkey registered successfully.");
   });
 
   const signupEmailInvalid = signupTouched && !isValidEmail(signupForm.email);
@@ -547,40 +581,54 @@ export default function AuthPage() {
                 <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("forgot")}>Forgot password?</button>
               </div>
 
-              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onSignin}>Sign in</button>
-
-              {signinUsePasskey ? (
+              {mfaStep ? (
                 <>
-                  <label className="auth-v2-label" htmlFor="signin-passkey-id">Passkey ID</label>
-                  <input
-                    id="signin-passkey-id"
-                    className="auth-v2-input"
-                    placeholder="Enter passkey ID if prompted"
-                    value={signinForm.passkeyId}
-                    onChange={(e) => setSigninForm((prev) => ({ ...prev, passkeyId: e.target.value }))}
-                  />
-                </>
-              ) : null}
-
-              {ENABLE_OAUTH_MOCK ? (
-                <>
-                  <div className="auth-v2-divider"><span>Or continue with</span></div>
-                  <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked">
-                    {OAUTH_PROVIDERS.map((provider) => (
-                      <button key={provider.key} className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock(provider.key)}>
-                        <span className="provider-icon">{provider.icon}</span>
-                        <span>Continue with {provider.label}</span>
-                      </button>
-                    ))}
+                  <div style={{ margin: '16px 0 8px', padding: '16px', borderRadius: '10px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <p className="auth-v2-subtitle" style={{ marginBottom: '12px' }}>Enter the 6-digit code from your {mfaMethod === "authenticator" ? "authenticator app" : mfaMethod === "sms" ? "phone" : "email"}.</p>
+                    <label className="auth-v2-label" htmlFor="mfa-code">Verification Code</label>
+                    <input
+                      id="mfa-code"
+                      className="auth-v2-input"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      placeholder="000000"
+                      maxLength={8}
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      autoFocus
+                    />
                   </div>
+                  <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onMfaVerify}>{loading ? "Verifying..." : "Verify"}</button>
+                  <button className="auth-v2-btn auth-v2-btn-ghost" onClick={() => { setMfaStep(false); setMfaCode(""); setError(""); }}>Back</button>
                 </>
               ) : (
-                <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
-              )}
+                <>
+                  <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={() => onSignin()}>Sign in</button>
 
-              <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSigninUsePasskey((prev) => !prev)}>
-                {signinUsePasskey ? "Hide passkey option" : "Use passkey instead"}
-              </button>
+                  <div className="auth-v2-divider"><span>Or</span></div>
+
+                  <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={onPasskeySignin}>
+                    🔑 Sign in with Passkey
+                  </button>
+
+                  {ENABLE_OAUTH_MOCK ? (
+                    <>
+                      <div className="auth-v2-divider"><span>Or continue with</span></div>
+                      <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked">
+                        {OAUTH_PROVIDERS.map((provider) => (
+                          <button key={provider.key} className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock(provider.key)}>
+                            <span className="provider-icon">{provider.icon}</span>
+                            <span>Continue with {provider.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
+                  )}
+                </>
+              )}
 
               <p className="auth-v2-bottom-link">New to Zenin Capital? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signup")}>Create account</button></p>
               <p className="auth-v2-terms">By continuing, you agree to Zenin Capital&apos;s <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("terms")}>Terms</button> and <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("privacy")}>Privacy Policy</button>.</p>

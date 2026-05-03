@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { startAuthentication } from "@simplewebauthn/browser";
 import { zeninFetch } from "../utils/zeninFetch";
 import { ZeninLogo } from "./Branding";
 
@@ -35,7 +36,7 @@ async function readJson(res) {
  * Includes a "Continue as Guest" option.
  */
 export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
-  const [mode, setMode] = useState(initialMode); // 'signin', 'signup', 'forgot', 'forgot_success'
+  const [mode, setMode] = useState(initialMode); // 'signin', 'signup', 'forgot', 'forgot_success', 'mfa'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -43,6 +44,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
   const [signinForm, setSigninForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({ email: "", password: "", fullName: "" });
   const [forgotForm, setForgotForm] = useState({ email: "" });
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaMethod, setMfaMethod] = useState("");
 
   useEffect(() => {
     if (isOpen) {
@@ -59,20 +62,62 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
     window.location.href = target;
   };
 
-  const handleSignin = async (e) => {
-    e.preventDefault();
+  const handleSignin = async (e, overrideCode) => {
+    if (e) e.preventDefault();
     setLoading(true);
     setError("");
     try {
+      const payload = { ...signinForm };
+      const code = overrideCode || mfaCode;
+      if (code) payload.verificationCode = code;
       const res = await zeninFetch("/auth/signin", {
         method: "POST",
-        body: JSON.stringify(signinForm),
+        body: JSON.stringify(payload),
       });
       const data = await readJson(res);
+      if (data.requiresMfa) {
+        setMfaMethod(data.method || "authenticator");
+        setMfaCode("");
+        setMode("mfa");
+        return;
+      }
       writeStoredAuthUser(data?.user, data?.expiresAt || null);
       redirectToApp();
     } catch (err) {
       setError(err.message || "Failed to sign in");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaSubmit = async (e) => {
+    e.preventDefault();
+    if (!/^\d{6,8}$/.test(mfaCode.trim())) {
+      setError("Enter a valid verification code.");
+      return;
+    }
+    await handleSignin(null, mfaCode.trim());
+  };
+
+  const handlePasskeySignin = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const optionsRes = await zeninFetch("/auth/passkeys/authenticate/generate-options");
+      const options = await optionsRes.json();
+      if (!optionsRes.ok) throw new Error(options?.error || "Failed to get passkey options.");
+      const { challengeId, ...webAuthnOptions } = options;
+      const assertion = await startAuthentication(webAuthnOptions);
+      const verifyRes = await zeninFetch("/auth/passkeys/authenticate/verify", {
+        method: "POST",
+        body: JSON.stringify({ response: assertion, challengeId }),
+      });
+      const data = await readJson(verifyRes);
+      writeStoredAuthUser(data?.user, data?.expiresAt || null);
+      redirectToApp();
+    } catch (err) {
+      const msg = err?.name === "NotAllowedError" ? "Passkey authentication was cancelled." : (err?.message || "Passkey sign-in failed.");
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -241,6 +286,16 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
               className="auth-v2-btn auth-v2-btn-ghost" 
               type="button"
               style={{ width: '100%' }}
+              onClick={handlePasskeySignin}
+              disabled={loading}
+            >
+              🔑 Sign in with Passkey
+            </button>
+
+            <button 
+              className="auth-v2-btn auth-v2-btn-ghost" 
+              type="button"
+              style={{ width: '100%', marginTop: '8px' }}
               onClick={() => window.location.href = "/app"}
             >
               Use as Guest
@@ -248,6 +303,37 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
 
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center', marginTop: '24px' }}>
               New to Zenin Capital? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signup")}>Create account</button>
+            </p>
+          </form>
+        )}
+
+        {mode === "mfa" && (
+          <form onSubmit={handleMfaSubmit}>
+            <h1 style={{ textAlign: 'center' }}>Verification required</h1>
+            <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>
+              Enter the 6-digit code from your {mfaMethod === "authenticator" ? "authenticator app" : mfaMethod === "sms" ? "phone" : "email"}.
+            </p>
+
+            <label className="auth-v2-label">Verification Code</label>
+            <input 
+              className="auth-v2-input"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="000000"
+              maxLength={8}
+              value={mfaCode}
+              onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+              autoFocus
+              required
+            />
+
+            <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} type="submit" style={{ width: '100%', marginTop: '12px' }}>
+              {loading ? "Verifying..." : "Verify"}
+            </button>
+
+            <p className="auth-v2-bottom-link" style={{ textAlign: 'center', marginTop: '24px' }}>
+              <button type="button" className="auth-v2-link-btn" onClick={() => { setMode("signin"); setMfaCode(""); setError(""); }}>Back to sign in</button>
             </p>
           </form>
         )}

@@ -616,6 +616,12 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS failed_login_count INT DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
       ADD COLUMN IF NOT EXISTS current_plan TEXT NOT NULL DEFAULT 'starter';
     `);
 
@@ -809,8 +815,7 @@ async function initializeDatabase() {
     await client.query(`
       INSERT INTO app_users (id, email, password_hash, display_name, auth_provider, email_verified, current_plan)
       VALUES (1, 'guest@zenin.app', '', 'Guest User', 'guest', TRUE, 'desk')
-      ON CONFLICT (id) DO UPDATE
-      SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, auth_provider = EXCLUDED.auth_provider, email_verified = TRUE, current_plan = 'desk';
+      ON CONFLICT (id) DO NOTHING;
     `);
 
     await client.query(`
@@ -1909,6 +1914,8 @@ const userAuth = {
         current_plan AS "currentPlan",
         current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
+        failed_login_count AS "failedLoginCount",
+        locked_until AS "lockedUntil",
         created_at AS "createdAt"
       FROM app_users
       WHERE email = $1
@@ -1942,6 +1949,8 @@ const userAuth = {
         current_plan AS "currentPlan",
         current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
+        failed_login_count AS "failedLoginCount",
+        locked_until AS "lockedUntil",
         created_at AS "createdAt"
       FROM app_users
       WHERE id = $1
@@ -2289,6 +2298,34 @@ const userAuth = {
     const row = result.rows[0];
     if (!row) return null;
     return mapAuthUserRow(row);
+  },
+
+  incrementFailedLogin: async (userId) => {
+    await pool.query(`
+      UPDATE app_users
+      SET failed_login_count = failed_login_count + 1,
+          updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId)]);
+  },
+
+  resetFailedLogin: async (userId) => {
+    await pool.query(`
+      UPDATE app_users
+      SET failed_login_count = 0,
+          locked_until = NULL,
+          updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId)]);
+  },
+
+  lockAccountUntil: async (userId, lockedUntil) => {
+    await pool.query(`
+      UPDATE app_users
+      SET locked_until = $2,
+          updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId), lockedUntil]);
   }
 };
 
