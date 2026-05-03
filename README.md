@@ -97,14 +97,13 @@ This README reflects the current implementation in this repository.
 - CSV and PDF export support
 
 ### 10) Account and security
-- Backend auth endpoints for sign up/sign in/sign out/session lookup (`/api/auth/*`)
-- Forgot-password request/confirm flow with token validation
-- 2FA and passkey scaffolding routes
-- OAuth provider discovery + mock social sign-in route for local/dev flow testing
-- New dark-themed multi-step auth UX at `/auth`:
-  - Sign up: email step → secure account (password strength) → passkey setup → account created
-  - Sign in: password flow + optional passkey-id flow + social buttons
-  - Forgot password: request reset → check-email state → token-based confirm path (dev/local)
+- **Full MFA Suite**: Production-grade implementation of TOTP (Google Authenticator) and WebAuthn (Passkeys).
+- **Secure Recovery**: Cryptographically secure backup codes with one-way SHA-256 hashing and one-time consumption.
+- **Account Lockout**: Brute-force protection with automatic 15-minute lockout after 5 failed login attempts.
+- **Session Lifecycle**: Strict session rotation on all security status changes (2FA enable/disable) and server-side revocation.
+- **Advanced Encryption**: Industry-standard AES-256-GCM encryption for TOTP secrets and Exchange API credentials at rest.
+- **OAuth Discovery**: Provider discovery and mocked social sign-in for development/testing.
+- **Multi-step Auth UX**: Secure onboarding flow with staged screens for sign-up, passkey setup, and recovery.
 
 ### 11) Settings & account panel
 - Profile and security controls (email/password/2FA/passkeys UI scaffolding in settings/auth)
@@ -114,15 +113,15 @@ This README reflects the current implementation in this repository.
 
 ## Current progress (as of May 3, 2026)
 
-- **Priority 1 UX fix pass shipped**:
-  - Home dead CTAs now route to real in-app destinations
-  - Tax Estimator `•••` menu and `+ Add Scenario` controls now have working UI logic
-  - Auth `Terms` and `Privacy Policy` are no longer dead `#` links and now open an in-app legal modal
-- **Priority 2 and Priority 3 are still pending**:
-  - Home and Portfolio flow actions still contain demo-only state transitions in several places
-  - Settings/account security flows are still primarily local-state simulations
-  - Some secondary exports and empty-state CTAs still need real wiring
-
+- **Security Hardening (Post-Audit) shipped**:
+  - **Injection Protection**: Parameterized passkey queries to prevent SQL injection.
+  - **At-Rest Encryption**: All TOTP secrets and Exchange API keys/secrets are encrypted with **AES-256-GCM**.
+  - **One-way Hashing**: Backup codes and session tokens are stored using secure one-way hashes (`SHA-256`).
+  - **Session Rotation**: Forced revocation and re-issuance of sessions after any 2FA modification.
+  - **Account Lockout**: Automated brute-force protection implemented across the sign-in flow.
+  - **CSRF Protection**: Global `Origin` header validation for all mutating API requests.
+  - **Data Privacy**: Stripped all sensitive credentials (hashes, secrets, raw backup codes) from frontend-facing API responses.
+  - **Challenge TTL**: Implemented expiration and background eviction for WebAuthn challenges.
 - **Auth foundation implemented**: Server-side auth/session/reset-token flows exist and are rate-limited.
 - **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
 - **Homepage Open App preflight shipped**: CTA now verifies prior login + account tier context before app entry.
@@ -143,8 +142,7 @@ This README reflects the current implementation in this repository.
 - **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
 - **Auth enforcement mode**: Homepage `Open App` now validates session/tier first, but direct `/app` URL access still allows guest mode by design for current rollout.
 - **OAuth provider setup**: Google/Apple/GitHub/Microsoft routes are scaffolded in backend; production OAuth client credentials/callback exchange are not yet configured.
-- **Passkey implementation depth**: Passkey flows are scaffolded for registration + login testing, but full WebAuthn challenge/attestation verification is still a next step.
-- **MFA delivery**: OTP verification is wired, but SMS/email delivery integrations are not yet connected to external providers.
+- **Recovery delivery**: While recovery flows are implemented, production-grade email/SMS delivery integrations are still pending connection to external providers.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 - **Homepage device preview assets**: Footer laptop/phone visuals currently use themed mock content (not live in-app screenshots).
@@ -397,11 +395,10 @@ See `backend/.env.example` for template values.
 ## Next steps
 
 1. Replace `/api/auth/oauth/mock` with real OAuth code exchange (Google/Apple/GitHub/Microsoft) and provider-specific scopes.
-2. Upgrade passkeys from scaffolded IDs to full WebAuthn challenge generation + verification (`navigator.credentials.create/get` + server attestation/assertion checks).
-3. Integrate trusted delivery providers for MFA and password reset notifications (email + SMS) and remove dev token exposure in non-production paths.
-4. Add refresh-token rotation / short-lived access tokens and account-level security telemetry (device/session management UI).
-5. Add automated backend tests for auth, session expiry/revocation, and per-user data isolation on all `/api/db/*` endpoints.
-6. Replace homepage footer mock device content with captured in-app Options and Analytics screenshots for production marketing parity.
+2. Integrate trusted delivery providers for MFA and password reset notifications (email + SMS).
+3. Add refresh-token rotation / short-lived access tokens and account-level security telemetry (device/session management UI).
+4. Add automated backend tests for auth, session expiry/revocation, and per-user data isolation on all `/api/db/*` endpoints.
+5. Replace homepage footer mock device content with captured in-app Options and Analytics screenshots for production marketing parity.
 
 ## Deployment
 
