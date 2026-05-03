@@ -1,4 +1,13 @@
 {
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:admin": "cd admin && npm run dev",
+    "build:backend": "cd backend && npm start",
+    "build:frontend": "cd frontend && npm run build",
+    "build:admin": "cd admin && npm run build",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install && cd ../admin && npm install"
+  },
   "dependencies": {
     "@vercel/speed-insights": "^2.0.0",
     "axios": "^1.15.0",

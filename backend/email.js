@@ -1,38 +1,26 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 /**
- * Centralized email service for Zenin.
- * Handles SMTP transport and email templates.
+ * Centralized email service for Zenin using Resend.
+ * https://resend.com/docs/introduction
  */
 
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || "587", 10);
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || "Zenin Capital <noreply@zenin.capital>";
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const SMTP_FROM = process.env.SMTP_FROM || "Zenin Capital <onboarding@resend.dev>";
 
-// Create a lazy-initialized transporter
-let transporter = null;
+// Initialize Resend client
+let resend = null;
 
-function getTransporter() {
-  if (transporter) return transporter;
+function getResendClient() {
+  if (resend) return resend;
 
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
-    console.warn("Email service: SMTP credentials missing. Emails will not be sent.");
+  if (!RESEND_API_KEY) {
+    console.warn("Email service: RESEND_API_KEY missing. Emails will not be sent.");
     return null;
   }
 
-  transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465, // true for 465, false for other ports
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,
-    },
-  });
-
-  return transporter;
+  resend = new Resend(RESEND_API_KEY);
+  return resend;
 }
 
 /**
@@ -41,9 +29,9 @@ function getTransporter() {
  * @param {string} resetToken - The raw reset token (not hashed)
  */
 async function sendPasswordResetEmail(email, resetToken) {
-  const t = getTransporter();
-  if (!t) {
-    console.error(`Failed to send reset email to ${email}: SMTP not configured.`);
+  const client = getResendClient();
+  if (!client) {
+    console.error(`Failed to send reset email to ${email}: Resend not configured.`);
     return false;
   }
 
@@ -80,18 +68,22 @@ async function sendPasswordResetEmail(email, resetToken) {
   `;
 
   try {
-    const info = await t.sendMail({
+    const { data, error } = await client.emails.send({
       from: SMTP_FROM,
       to: email,
       subject: "Reset your Zenin Capital password",
-      text: `Reset your password by clicking this link: ${resetLink}`,
       html: htmlContent,
     });
 
-    console.log(`Email sent to ${email}: ${info.messageId}`);
+    if (error) {
+      console.error(`Resend error sending to ${email}:`, error);
+      return false;
+    }
+
+    console.log(`Email sent to ${email} via Resend: ${data.id}`);
     return true;
   } catch (error) {
-    console.error(`Error sending email to ${email}:`, error);
+    console.error(`Unexpected error sending email to ${email}:`, error);
     return false;
   }
 }

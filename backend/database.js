@@ -1,5 +1,6 @@
 const { Pool } = require("pg");
 const { watchlistData } = require("./data");
+const crypto = require("crypto");
 
 const QTY_EPSILON = 1e-8;
 const DEFAULT_BALANCE = 10000;
@@ -634,6 +635,17 @@ async function initializeDatabase() {
       ALTER TABLE app_users
       ADD COLUMN IF NOT EXISTS plan_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    // Ensure the root admin email is always an admin
+    const adminEmail = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
+    await client.query(`
+      UPDATE app_users SET is_admin = TRUE WHERE email = $1;
+    `, [adminEmail]);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -1987,6 +1999,7 @@ const userAuth = {
         u.display_name AS "displayName",
         u.auth_provider AS "authProvider",
         u.email_verified AS "emailVerified",
+        u.is_admin AS "isAdmin",
         u.pending_email AS "pendingEmail",
         u.pending_email_requested_at AS "pendingEmailRequestedAt",
         u.password_changed_at AS "passwordChangedAt",
@@ -3468,6 +3481,71 @@ async function closeDatabase() {
   await pool.end();
 }
 
+const admin = {
+  listAllUsers: async () => {
+    const result = await pool.query(`
+      SELECT id, email, display_name AS name, current_plan AS plan, is_admin AS "isAdmin", created_at AS joined
+      FROM app_users
+      ORDER BY created_at DESC
+    `);
+    return result.rows.map(r => ({
+      ...r,
+      joined: toIsoString(r.joined)
+    }));
+  },
+  updateUserPlan: async (userId, plan) => {
+    const validPlan = normalizePlanValue(plan);
+    const result = await pool.query(`
+      UPDATE app_users 
+      SET current_plan = $2, plan_updated_at = NOW(), updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, email, current_plan AS plan;
+    `, [toUserId(userId), validPlan]);
+    return result.rows[0] || null;
+  },
+  updateUserAdminStatus: async (userId, isAdmin) => {
+    const result = await pool.query(`
+      UPDATE app_users 
+      SET is_admin = $2, updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, email, is_admin AS "isAdmin";
+    `, [toUserId(userId), Boolean(isAdmin)]);
+    return result.rows[0] || null;
+  },
+  createPasswordResetToken: async (userId) => {
+    // Reusing the existing userAuth logic if available, or implementing here
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 3600000); // 1 hour
+
+    await pool.query(`
+      INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+      VALUES ($1, $2, $3)
+    `, [toUserId(userId), tokenHash, expiresAt]);
+
+    return token;
+  },
+  getSystemStats: async () => {
+    const userCount = await pool.query("SELECT COUNT(*)::int AS count FROM app_users");
+    const sessionCount = await pool.query("SELECT COUNT(*)::int AS count FROM auth_sessions WHERE expires_at > NOW() AND revoked_at IS NULL");
+    const tradeCount = await pool.query("SELECT COUNT(*)::int AS count FROM user_workspace_trades");
+    const proCount = await pool.query("SELECT COUNT(*)::int AS count FROM app_users WHERE current_plan = 'pro'");
+    
+    return {
+      totalUsers: userCount.rows[0].count,
+      activeSessions: sessionCount.rows[0].count,
+      totalTrades: tradeCount.rows[0].count,
+      proSubscriptions: proCount.rows[0].count
+    };
+  },
+  logAdminAction: async ({ adminId, targetUserId, action, details, ipAddress }) => {
+    await pool.query(`
+      INSERT INTO admin_audit_logs (admin_user_id, target_user_id, action, details, ip_address)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [adminId, targetUserId, action, details ? JSON.stringify(details) : null, ipAddress]);
+  }
+};
+
 module.exports = {
   pool,
   initializeDatabase,
@@ -3481,6 +3559,7 @@ module.exports = {
   serviceSnapshots,
   tradeExecutions,
   trading,
+  admin,
   clearAllData,
   closeDatabase
 };

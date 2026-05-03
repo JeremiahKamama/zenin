@@ -76,7 +76,6 @@ setInterval(() => {
     if (entry.expiresAt < now) webAuthnChallenges.delete(key);
   }
 }, 60_000);
-
 const { watchlistData } = require("./data");
 const {
   initializeDatabase,
@@ -89,7 +88,8 @@ const {
   serviceSnapshots,
   tradeExecutions,
   balance,
-  trading
+  trading,
+  admin
 } = require("./database");
 const { ANNUAL_RETURNS, REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
 
@@ -907,8 +907,30 @@ function requireAdmin(req, res, next) {
 }
 
 function isSignedInAdmin(req) {
+  const bypass = !IS_PRODUCTION && process.env.ZENIN_ADMIN_BYPASS === "true";
+  
+  // Developer Bypass (Local only)
+  if (bypass) {
+    console.warn("[Admin] Developer bypass active: Granting admin privileges.");
+    return true;
+  }
+
+  // Check for is_admin flag in the user record
+  const isAdmin = Boolean(req?.auth?.user?.isAdmin);
+  if (isAdmin) {
+    console.log(`[Admin] User ${req?.auth?.user?.email} granted access via DB flag.`);
+    return true;
+  }
+
+  // Fallback to hardcoded ADMIN_EMAIL (legacy support)
   const email = String(req?.auth?.user?.email || "").trim().toLowerCase();
-  return Boolean(email) && email === ADMIN_EMAIL;
+  const isHardcodedAdmin = Boolean(email) && email === ADMIN_EMAIL;
+  if (isHardcodedAdmin) {
+    console.log(`[Admin] User ${email} granted access via hardcoded email.`);
+    return true;
+  }
+
+  return false;
 }
 
 function hasValidMigrationKey(req) {
@@ -2598,6 +2620,105 @@ app.post("/api/account/password", authLimiter, requireSignedIn, validate(passwor
     return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
     return handleServerError(res, "Password update failed", error);
+  }
+});
+
+const adminRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  message: { error: "Too many administrative requests. Please try again later." }
+});
+
+app.use("/api/admin/*", adminRateLimit);
+
+app.get("/api/admin/users", async (req, res) => {
+  try {
+    if (!isSignedInAdmin(req)) {
+      return res.status(403).json({ error: "Admin privileges required" });
+    }
+    const users = await admin.listAllUsers();
+    return res.json(users);
+  } catch (error) {
+    console.error("[Admin] Failed to list users:", error);
+    return handleServerError(res, "Failed to list users", error);
+  }
+});
+
+app.get("/api/admin/stats", async (req, res) => {
+  try {
+    if (!isSignedInAdmin(req)) {
+      return res.status(403).json({ error: "Admin privileges required" });
+    }
+    const stats = await admin.getSystemStats();
+    return res.json(stats);
+  } catch (error) {
+    console.error("[Admin] Critical Error fetching stats:", error);
+    return res.status(500).json({ error: "Failed to fetch stats", details: error.message });
+  }
+});
+
+app.patch("/api/admin/users/:id/plan", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { plan } = req.body;
+    const updatedUser = await admin.updateUserPlan(id, plan);
+    if (!updatedUser) return res.status(404).json({ error: "User not found" });
+
+    // Audit Logging
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0, // 0 for bypass mode
+      targetUserId: id,
+      action: "UPDATE_PLAN",
+      details: { oldPlan: "unknown", newPlan: plan },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, user: updatedUser });
+  } catch (error) {
+    return handleServerError(res, "Failed to update user plan", error);
+  }
+});
+
+app.patch("/api/admin/users/:id/role", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isAdmin } = req.body;
+    const updatedUser = await admin.updateUserAdminStatus(id, isAdmin);
+    if (!updatedUser) return res.status(404).json({ error: "User not found" });
+
+    // Audit Logging
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: id,
+      action: "UPDATE_ROLE",
+      details: { isAdmin },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, user: updatedUser });
+  } catch (error) {
+    return handleServerError(res, "Failed to update user admin status", error);
+  }
+});
+
+app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = await admin.createPasswordResetToken(id);
+    const recoveryLink = `${req.protocol}://${req.get("host")}/reset-password?token=${token}`;
+
+    // Audit Logging
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: id,
+      action: "GENERATE_RECOVERY_LINK",
+      details: { note: "Recovery link generated via dashboard" },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, recoveryLink });
+  } catch (error) {
+    return handleServerError(res, "Failed to generate recovery link", error);
   }
 });
 
