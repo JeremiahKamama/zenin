@@ -911,6 +911,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
       if (res.ok) {
         const newKey = await res.json();
         setExchangeKeys(prev => [newKey, ...prev]);
+        // Automatically trigger initial sync after adding
+        await handleSyncExchange(newKey.id);
       }
     } catch (err) {
       console.error("Failed to add exchange key", err);
@@ -1807,7 +1809,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
             <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.08)' }} />
 
-            <h3>Add New Connection</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px' }}>
+              <h3 style={{ margin: 0 }}>Add New Connection</h3>
+              <div style={{ fontSize: '10px', color: 'var(--color-brand-cyan)', background: 'rgba(6,182,212,0.1)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(6,182,212,0.2)' }}>
+                🛡️ ONLY "ENABLE READING" REQUIRED
+              </div>
+            </div>
             <form onSubmit={(e) => {
               e.preventDefault();
               const formData = new FormData(e.target);

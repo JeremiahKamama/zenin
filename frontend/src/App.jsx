@@ -1950,6 +1950,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
+  const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
@@ -2312,9 +2313,11 @@ const handleOptionTradeClosed = async (tradeId) => {
     venueType: "cex",
     provider: "Binance",
     username: "",
-    apiKey: ""
+    apiKey: "",
+    apiSecret: ""
   });
-  const settingsCategories = ["Profile", "General", "Accounts", "Layout", "Notification"];
+  const [isSyncingAccount, setIsSyncingAccount] = useState(false);
+  const settingsCategories = ["Profile", "Subscription", "General", "Accounts", "Layout", "Notification"];
   const AUTHENTICATOR_OPTIONS = ["Google Authenticator", "Authy", "Microsoft Authenticator", "1Password", "Bitwarden"];
   const PASSKEY_OPTIONS = ["iCloud Keychain", "Google Password Manager", "1Password", "Dashlane", "Bitwarden"];
   const [profileSecurity, setProfileSecurity] = useState(() => {
@@ -2444,37 +2447,86 @@ const handleOptionTradeClosed = async (tradeId) => {
       venueType: "cex",
       provider: CEX_OPTIONS[0],
       username: "",
-      apiKey: ""
+      apiKey: "",
+      apiSecret: ""
     });
     setIsConnectWindowOpen(true);
   };
 
   const connectAccount = async () => {
     if (!accountForm.username.trim() || !accountForm.apiKey.trim()) return;
-    const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
-    const nextAccount = {
-      id: Date.now(),
-      venueType: accountForm.venueType,
-      provider: accountForm.provider,
-      username: accountForm.username.trim(),
-      apiKeyMasked: masked,
-      connectedAt: new Date().toISOString()
-    };
-    const nextAccounts = [nextAccount, ...connectedAccounts];
-    setConnectedAccounts(nextAccounts);
-    if (!isGuestUser) {
-      try {
-        const saved = await saveWorkspaceCollection("settings:connected_accounts", nextAccounts, 100);
-        if (Array.isArray(saved?.items)) {
-          setConnectedAccounts(saved.items);
-        }
-      } catch (error) {
-        console.warn("Connected account sync skipped.", error);
-      }
-    }
-    setIsConnectWindowOpen(false);
-  };
+    
+    // Only CEX typically needs secret, but we handle conditionally if others do.
+    const requiresSecret = accountForm.venueType === "cex" || accountForm.provider.toLowerCase() === "hyperliquid";
+    if (requiresSecret && !accountForm.apiSecret.trim()) return;
 
+    setIsSyncingAccount(true);
+
+    try {
+      if (!isGuestUser) {
+        // 1. Send the key to backend for encryption & storage
+        const payload = {
+          exchange: accountForm.provider.toLowerCase(),
+          apiKey: accountForm.apiKey.trim(),
+          apiSecret: accountForm.apiSecret.trim() || "",
+          extraData: { username: accountForm.username.trim(), venueType: accountForm.venueType }
+        };
+
+        const res = await zeninFetch("/db/exchange-keys", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to add exchange key");
+        }
+
+        const addedKey = await res.json();
+
+        // 2. Trigger the immediate sync
+        const syncRes = await zeninFetch(`/db/exchange-sync/${addedKey.id}`, { method: "POST" });
+        if (!syncRes.ok) {
+          const syncErr = await syncRes.json().catch(() => ({}));
+          throw new Error(syncErr.error || "Failed to sync exchange data");
+        }
+
+        // 3. Re-fetch workspace to update PortfolioContext
+        await fetchWorkspace();
+        
+        // 4. Update the local UI state for connected accounts
+        const nextAccount = {
+          id: addedKey.id,
+          venueType: accountForm.venueType,
+          provider: accountForm.provider,
+          username: accountForm.username.trim(),
+          apiKeyMasked: addedKey.apiKey,
+          connectedAt: new Date().toISOString()
+        };
+        const nextAccounts = [nextAccount, ...connectedAccounts];
+        setConnectedAccounts(nextAccounts);
+      } else {
+        // Guest user fallback (localStorage)
+        const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
+        const nextAccount = {
+          id: Date.now(),
+          venueType: accountForm.venueType,
+          provider: accountForm.provider,
+          username: accountForm.username.trim(),
+          apiKeyMasked: masked,
+          connectedAt: new Date().toISOString()
+        };
+        const nextAccounts = [nextAccount, ...connectedAccounts];
+        setConnectedAccounts(nextAccounts);
+      }
+      setIsConnectWindowOpen(false);
+    } catch (error) {
+      console.error("Connected account sync failed:", error);
+      alert(error.message || "Failed to connect and sync account.");
+    } finally {
+      setIsSyncingAccount(false);
+    }
+  };
   const createBackupCodes = () =>
     Array.from({ length: 8 }, () => Math.random().toString(36).slice(2, 6).toUpperCase());
 
@@ -2509,6 +2561,31 @@ const handleOptionTradeClosed = async (tradeId) => {
       return { ok: false, message: "Current password is incorrect." };
     }
     return { ok: true };
+  };
+
+  const handleUpdatePlan = async (targetPlan, billingCycle = "monthly") => {
+    try {
+      const res = await zeninFetch(`${BACKEND_URL}/api/account/plan`, {
+        method: "POST",
+        body: JSON.stringify({ plan: targetPlan, billingCycle })
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to update plan");
+      }
+      const data = await res.json();
+      setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
+      setAccountPlanLabel(isAdminUser(data.user) ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
+      setProfileFeedback((prev) => ({
+        ...prev,
+        plan: { type: "success", text: `Account updated to ${targetPlan} successfully.` }
+      }));
+    } catch (err) {
+      setProfileFeedback((prev) => ({
+        ...prev,
+        plan: { type: "danger", text: err.message }
+      }));
+    }
   };
 
   const requestEmailChange = async () => {
@@ -3848,6 +3925,56 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
+                {activeSettingsCategory === "Subscription" && (
+                  <div className="settings-panel">
+                    <button className="settings-panel-header" onClick={() => toggleSettingsPanel("subscription-plan")}>
+                      <span>My Plan</span>
+                      <span>{expandedSettingsPanels["subscription-plan"] ? "−" : "+"}</span>
+                    </button>
+                    {expandedSettingsPanels["subscription-plan"] && (
+                      <div className="settings-panel-body">
+                        <div className="settings-chip-row">
+                          <span className="settings-chip success">Current: {accountPlanLabel}</span>
+                        </div>
+                        <p className="settings-meta" style={{ marginTop: "10px" }}>
+                          You are currently on the {currentPlan.toUpperCase()} plan. 
+                          Contact support to upgrade or downgrade your account.
+                        </p>
+                        
+                        {(userEmail === "jeremiahkamama@gmail.com" || userEmail.startsWith("admin")) && (
+                          <div style={{ marginTop: "20px", padding: "12px", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: "8px" }}>
+                            <h4 style={{ margin: "0 0 10px 0", color: "#f87171" }}>Developer Admin Simulator</h4>
+                            <label className="settings-field">
+                              <span>Simulate Plan Tier</span>
+                              <select 
+                                value={simulatePlan} 
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setSimulatePlan(val);
+                                  if (val) {
+                                    localStorage.setItem("zenin_simulate_plan", val);
+                                  } else {
+                                    localStorage.removeItem("zenin_simulate_plan");
+                                  }
+                                  window.location.reload();
+                                }}
+                              >
+                                <option value="">Real Plan (No simulation)</option>
+                                <option value="starter">Starter</option>
+                                <option value="pro">Pro</option>
+                                <option value="desk">Desk</option>
+                              </select>
+                            </label>
+                            <p className="settings-meta" style={{ marginTop: "8px" }}>
+                              Selecting a tier above will reload the app and override your tier in backend requests.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {activeSettingsCategory === "General" && (
                   <>
                     <div className="settings-panel">
@@ -4096,14 +4223,27 @@ const handleOptionTradeClosed = async (tradeId) => {
                         value={accountForm.apiKey}
                         onChange={(e) => setAccountForm((prev) => ({ ...prev, apiKey: e.target.value }))}
                         placeholder="Enter read-only API key or account ID"
+                        disabled={isSyncingAccount}
                       />
                     </label>
+                    {(accountForm.venueType === "cex" || accountForm.provider === "Hyperliquid") && (
+                      <label className="settings-field">
+                        <span>API Secret</span>
+                        <input
+                          type="password"
+                          value={accountForm.apiSecret}
+                          onChange={(e) => setAccountForm((prev) => ({ ...prev, apiSecret: e.target.value }))}
+                          placeholder="Enter read-only API secret"
+                          disabled={isSyncingAccount}
+                        />
+                      </label>
+                    )}
                     <button
                       className="settings-primary-btn"
                       onClick={connectAccount}
-                      disabled={!accountForm.username.trim() || !accountForm.apiKey.trim()}
+                      disabled={isSyncingAccount || !accountForm.username.trim() || !accountForm.apiKey.trim()}
                     >
-                      Connect
+                      {isSyncingAccount ? "Syncing..." : "Connect"}
                     </button>
                   </div>
                 </div>

@@ -899,6 +899,38 @@ function requireSignedIn(req, res, next) {
   return next();
 }
 
+const PLAN_RANK = {
+  starter: 0,
+  pro: 1,
+  desk: 2
+};
+
+function requirePlan(minPlan) {
+  return (req, res, next) => {
+    const isAdmin = isSignedInAdmin(req);
+    const simulationPlan = req.headers["x-zenin-simulate-plan"];
+    
+    // If admin is NOT simulating, they bypass
+    if (isAdmin && !simulationPlan) return next();
+    
+    // Use the simulated plan if provided by an admin, otherwise use the actual user plan
+    const userPlan = (isAdmin && simulationPlan) 
+      ? simulationPlan 
+      : (req.auth?.user?.currentPlan || "starter");
+
+    if ((PLAN_RANK[userPlan] || 0) < (PLAN_RANK[minPlan] || 0)) {
+      return res.status(403).json({ 
+        error: "Upgrade required", 
+        message: `The ${minPlan} plan is required to access this feature.`,
+        required: minPlan, 
+        current: userPlan,
+        simulated: isAdmin && !!simulationPlan
+      });
+    }
+    next();
+  };
+}
+
 function requireAdmin(req, res, next) {
   if (!isSignedInAdmin(req)) {
     return res.status(403).json({ error: "Admin privileges required" });
@@ -2423,22 +2455,39 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, writeLimite
 // ---------------------------------------------------------------------------
 // Exchange Keys Management
 // ---------------------------------------------------------------------------
-app.get("/api/db/exchange-keys", requireSignedIn, async (req, res) => {
+app.get("/api/db/exchange-keys", requireSignedIn, requirePlan("pro"), async (req, res) => {
   try {
     const keys = await userWorkspace.exchangeKeys.list(req.auth.userId);
     // Mask sensitive keys for the list view
-    const maskedKeys = keys.map(k => ({
-      ...k,
-      apiKey: maskApiKey(k.apiKey),
-      extraData: k.extraData ? JSON.parse(JSON.stringify(k.extraData)) : {} // Ensure no secrets in extraData if any
-    }));
+    const maskedKeys = keys.map(k => {
+      const maskedKey = maskApiKey(k.apiKey);
+      let parsedExtra = {};
+      try {
+        // extraData might be a string (wenc:...) or already an object
+        const rawExtra = typeof k.extraData === "string" ? decryptWorkspaceData(k.extraData) : k.extraData;
+        parsedExtra = typeof rawExtra === "string" ? JSON.parse(rawExtra) : (rawExtra || {});
+        // Mask address if present in extraData (common for Hyperliquid)
+        if (parsedExtra.address && parsedExtra.address.length > 8) {
+          parsedExtra.address = `${parsedExtra.address.slice(0, 4)}...${parsedExtra.address.slice(-4)}`;
+        }
+      } catch (e) {
+        console.warn("Failed to process extraData for key", k.id);
+      }
+      return {
+        id: k.id,
+        exchange: k.exchange,
+        apiKey: maskedKey,
+        extraData: parsedExtra,
+        createdAt: k.createdAt
+      };
+    });
     res.json(maskedKeys);
   } catch (err) {
     handleServerError(res, "Failed to list exchange keys", err);
   }
 });
 
-app.post("/api/db/exchange-keys", requireSignedIn, writeLimiter, validate(exchangeKeySchema), async (req, res) => {
+app.post("/api/db/exchange-keys", requireSignedIn, requirePlan("pro"), writeLimiter, validate(exchangeKeySchema), async (req, res) => {
   try {
     const { exchange, apiKey, apiSecret, extraData } = req.body;
     // Encrypt sensitive data before storing (#EncryptionAtRest)
@@ -2450,8 +2499,10 @@ app.post("/api/db/exchange-keys", requireSignedIn, writeLimiter, validate(exchan
     };
     const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload);
     res.json({
-      ...key,
-      apiKey: maskApiKey(key.apiKey)
+      id: key.id,
+      exchange: key.exchange,
+      apiKey: maskApiKey(key.apiKey),
+      extraData: extraData // Send back the original unencrypted extraData for immediate UI update
     });
   } catch (err) {
     handleServerError(res, "Failed to add exchange key", err);
@@ -2469,7 +2520,7 @@ app.delete("/api/db/exchange-keys/:id", requireSignedIn, writeLimiter, async (re
 });
 
 // Exchange Sync Trigger
-app.post("/api/db/exchange-sync/:id", requireSignedIn, writeLimiter, async (req, res) => {
+app.post("/api/db/exchange-sync/:id", requireSignedIn, requirePlan("pro"), writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
     const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id));
@@ -2631,11 +2682,8 @@ const adminRateLimit = rateLimit({
 
 app.use("/api/admin/*", adminRateLimit);
 
-app.get("/api/admin/users", async (req, res) => {
+app.get("/api/admin/users", requireAdmin, async (req, res) => {
   try {
-    if (!isSignedInAdmin(req)) {
-      return res.status(403).json({ error: "Admin privileges required" });
-    }
     const users = await admin.listAllUsers();
     return res.json(users);
   } catch (error) {
@@ -2644,11 +2692,8 @@ app.get("/api/admin/users", async (req, res) => {
   }
 });
 
-app.get("/api/admin/stats", async (req, res) => {
+app.get("/api/admin/stats", requireAdmin, async (req, res) => {
   try {
-    if (!isSignedInAdmin(req)) {
-      return res.status(403).json({ error: "Admin privileges required" });
-    }
     const stats = await admin.getSystemStats();
     return res.json(stats);
   } catch (error) {
@@ -2657,7 +2702,35 @@ app.get("/api/admin/stats", async (req, res) => {
   }
 });
 
-app.patch("/api/admin/users/:id/plan", requireSignedIn, requireAdmin, async (req, res) => {
+app.get("/api/admin/database", requireAdmin, async (req, res) => {
+  try {
+    const stats = await admin.getDatabaseStats();
+    res.json(stats);
+  } catch (error) {
+    handleServerError(res, "getDatabaseStats", error);
+  }
+});
+
+app.get("/api/admin/billing", requireAdmin, async (req, res) => {
+  try {
+    const stats = await admin.getBillingStats();
+    res.json(stats);
+  } catch (error) {
+    handleServerError(res, "getBillingStats", error);
+  }
+});
+
+app.get("/api/admin/logs", requireAdmin, async (req, res) => {
+  try {
+    const auditLogs = await admin.getAdminLogs();
+    const systemLogs = await admin.getSystemLogs();
+    res.json({ auditLogs, systemLogs });
+  } catch (error) {
+    handleServerError(res, "getAdminLogs", error);
+  }
+});
+
+app.patch("/api/admin/users/:id/plan", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { plan } = req.body;
@@ -2679,7 +2752,7 @@ app.patch("/api/admin/users/:id/plan", requireSignedIn, requireAdmin, async (req
   }
 });
 
-app.patch("/api/admin/users/:id/role", requireSignedIn, requireAdmin, async (req, res) => {
+app.patch("/api/admin/users/:id/role", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { isAdmin } = req.body;
@@ -2719,6 +2792,45 @@ app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, async (r
     return res.json({ success: true, recoveryLink });
   } catch (error) {
     return handleServerError(res, "Failed to generate recovery link", error);
+  }
+});
+
+app.post("/api/admin/users/:id/suspend", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isSuspended } = req.body;
+    const result = await admin.suspendUser(id, isSuspended);
+    
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: id,
+      action: isSuspended ? "SUSPEND_USER" : "UNSUSPEND_USER",
+      details: { isSuspended },
+      ipAddress: resolveClientIp(req)
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await admin.deleteUser(id);
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: id,
+      action: "DELETE_USER",
+      details: { email: result?.email },
+      ipAddress: resolveClientIp(req)
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

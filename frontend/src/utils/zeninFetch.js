@@ -18,6 +18,11 @@ export async function zeninFetch(endpoint, options = {}) {
     headers["Content-Type"] = "application/json";
   }
 
+  const simulatePlan = localStorage.getItem("zenin_simulate_plan");
+  if (simulatePlan) {
+    headers["x-zenin-simulate-plan"] = simulatePlan;
+  }
+
   const response = await fetch(url, {
     ...options,
     credentials: options.credentials || "include",

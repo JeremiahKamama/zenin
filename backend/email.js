@@ -8,36 +8,55 @@ const { Resend } = require("resend");
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const SMTP_FROM = process.env.SMTP_FROM || "Zenin Capital <onboarding@resend.dev>";
 
-// Initialize Resend client
+// Detect placeholder / unconfigured key
+const RESEND_CONFIGURED =
+  RESEND_API_KEY &&
+  RESEND_API_KEY.startsWith("re_") &&
+  RESEND_API_KEY !== "re_your_api_key";
+
+// Initialize Resend client (lazy)
 let resend = null;
 
 function getResendClient() {
   if (resend) return resend;
-
-  if (!RESEND_API_KEY) {
-    console.warn("Email service: RESEND_API_KEY missing. Emails will not be sent.");
-    return null;
-  }
-
+  if (!RESEND_CONFIGURED) return null;
   resend = new Resend(RESEND_API_KEY);
   return resend;
 }
 
 /**
+ * Dev-only fallback: logs the reset link to stdout so it can be used
+ * without a real Resend API key during local development.
+ */
+function logDevResetLink(email, resetLink) {
+  console.log("\n" + "=".repeat(70));
+  console.log("[DEV] Password reset email NOT sent (Resend not configured).");
+  console.log(`[DEV] Recipient : ${email}`);
+  console.log(`[DEV] Reset Link: ${resetLink}`);
+  console.log("[DEV] Paste the link above into your browser to complete the reset.");
+  console.log("=".repeat(70) + "\n");
+}
+
+/**
  * Sends a password reset email to a user.
+ * Falls back to console logging in local/dev environments.
  * @param {string} email - Recipient email address
  * @param {string} resetToken - The raw reset token (not hashed)
  */
 async function sendPasswordResetEmail(email, resetToken) {
-  const client = getResendClient();
-  if (!client) {
-    console.error(`Failed to send reset email to ${email}: Resend not configured.`);
-    return false;
-  }
-
   const frontendUrl = (process.env.FRONTEND_URL || "https://www.zenin.capital").replace(/\/+$/, "");
   const resetLink = `${frontendUrl}/auth?mode=forgot&token=${resetToken}`;
 
+  const client = getResendClient();
+
+  // --- Dev fallback: no Resend key ---
+  if (!client) {
+    console.warn("[Email] RESEND_API_KEY missing or placeholder — falling back to console log.");
+    logDevResetLink(email, resetLink);
+    return false; // return false so callers know real email wasn't sent
+  }
+
+  // --- Production: send via Resend ---
   const htmlContent = `
     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 8px; background-color: #ffffff; color: #333333;">
       <div style="text-align: center; margin-bottom: 30px;">
@@ -76,14 +95,17 @@ async function sendPasswordResetEmail(email, resetToken) {
     });
 
     if (error) {
-      console.error(`Resend error sending to ${email}:`, error);
+      console.error(`[Email] Resend error sending to ${email}:`, error);
+      // Still log the link as a fallback so nothing is totally lost
+      logDevResetLink(email, resetLink);
       return false;
     }
 
-    console.log(`Email sent to ${email} via Resend: ${data.id}`);
+    console.log(`[Email] Sent to ${email} via Resend (id: ${data.id})`);
     return true;
-  } catch (error) {
-    console.error(`Unexpected error sending email to ${email}:`, error);
+  } catch (err) {
+    console.error(`[Email] Unexpected error sending to ${email}:`, err);
+    logDevResetLink(email, resetLink);
     return false;
   }
 }
