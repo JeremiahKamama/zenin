@@ -111,6 +111,13 @@ This README reflects the current implementation in this repository.
 - Connected accounts modal for exchange/prediction market metadata
 - Notification + layout preference toggles
 
+### 12) Admin Console (New)
+- **Centralized Governance**: Dedicated administrative portal at `admin.zenin.capital`.
+- **System Overview**: Real-time monitoring of platform users, active sessions, and multi-asset trade volume.
+- **User Management**: Lifecycle controls for account suspension, plan migration, and administrative role assignment.
+- **Platform Health**: Live health indicators for API, Database, and Auth services.
+- **Audit Logging**: Comprehensive administrative audit trail and system error monitoring.
+
 ## Current progress (as of May 3, 2026)
 
 - **Security Hardening (Post-Audit) shipped**:
@@ -135,6 +142,11 @@ This README reflects the current implementation in this repository.
 - **Watchlist earnings fetch optimization shipped**: Earnings calendar now uses extended caching windows (frontend + backend) to avoid unnecessary reload fetches.
 - **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
 - **Mobile responsiveness fixes shipped**: Cross-market Analytics pills now stack cleanly on small screens; Journal and Portfolio tables were hardened for mobile overflow and clipping scenarios.
+- **Zenin Admin Console finalized**:
+  - **Production Deployment**: Hosted at `admin.zenin.capital` with dynamic API resolution.
+  - **Premium Dashboard**: Custom-designed administrative interface for real-time system monitoring.
+  - **Secure Access**: Integrated with central auth system (`/api/auth/me`) with strict `isAdmin` enforcement.
+  - **Interactive Management**: Full CRUD capabilities for user accounts and platform settings.
 
 ## Current limitations (as of May 3, 2026)
 
