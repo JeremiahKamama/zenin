@@ -1,12 +1,11 @@
 import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
-import AuthPage from "./AuthPage";
-import PublicHomepage from "./PublicHomepage";
-import "./styles.css";
-import "./public.css";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { GenericErrorBoundary } from "./components/ErrorBoundary";
 
 function resolveEntry(pathname) {
+  if (typeof window !== "undefined" && window.__ZENIN_ENTRY__) {
+    return window.__ZENIN_ENTRY__;
+  }
   const path = String(pathname || "/").toLowerCase();
   if (path.startsWith("/app")) return "app";
   if (path.startsWith("/auth")) return "auth";
@@ -20,7 +19,24 @@ function redirectUnauthenticatedAppEntry(entry) {
 
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");
 redirectUnauthenticatedAppEntry(entry);
-const RootComponent = entry === "app" ? App : entry === "auth" ? AuthPage : PublicHomepage;
+
+async function loadEntryComponent(currentEntry) {
+  try {
+    if (currentEntry === "app") {
+      const mod = await import("./App");
+      return mod.default;
+    }
+    if (currentEntry === "auth") {
+      const mod = await import("./AuthPage");
+      return mod.default;
+    }
+    const mod = await import("./PublicHomepage");
+    return mod.default;
+  } catch (err) {
+    console.error("Critical entry component load failure:", err);
+    throw err;
+  }
+}
 
 function applyGlobalTheme() {
   if (typeof document === "undefined") return;
@@ -39,8 +55,35 @@ function applyGlobalTheme() {
 
 applyGlobalTheme();
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <RootComponent />
-  </React.StrictMode>
-);
+const rootElement = document.getElementById("root");
+const hasPrerenderedMarkup = entry === "public" && Boolean(rootElement?.hasChildNodes());
+
+loadEntryComponent(entry).then((RootComponent) => {
+  const app = (
+    <React.StrictMode>
+      <GenericErrorBoundary>
+        <RootComponent />
+      </GenericErrorBoundary>
+    </React.StrictMode>
+  );
+
+  if (hasPrerenderedMarkup) {
+    hydrateRoot(rootElement, app);
+    return;
+  }
+
+  createRoot(rootElement).render(app);
+}).catch(err => {
+  console.error("Fatal startup error:", err);
+  if (rootElement) {
+    rootElement.innerHTML = `
+      <div style="padding: 2rem; color: #ef4444; font-family: system-ui, sans-serif;">
+        <h1 style="font-size: 1.5rem;">Zenin failed to start</h1>
+        <p style="color: #94a3b8;">${err.message || "Unknown initialization error"}</p>
+        <button onclick="window.location.reload()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer;">
+          Retry Loading
+        </button>
+      </div>
+    `;
+  }
+});

@@ -12,6 +12,8 @@ const {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } = require("@simplewebauthn/server");
+const { OAuth2Client } = require("google-auth-library");
+const appleSignin = require("apple-signin-auth");
 const { sendPasswordResetEmail } = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -2680,6 +2682,10 @@ const adminRateLimit = rateLimit({
   message: { error: "Too many administrative requests. Please try again later." }
 });
 
+function buildAdminRecoveryLink(token) {
+  return `${String(expectedOrigin || "").replace(/\/$/, "")}/reset-password?token=${encodeURIComponent(String(token || ""))}`;
+}
+
 app.use("/api/admin/*", adminRateLimit);
 
 app.get("/api/admin/users", requireAdmin, async (req, res) => {
@@ -2689,6 +2695,58 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("[Admin] Failed to list users:", error);
     return handleServerError(res, "Failed to list users", error);
+  }
+});
+
+app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const displayName = String(req.body?.name || "").trim();
+    const requestedPlan = normalizePlanInput(req.body?.plan) || "starter";
+    const isAdmin = Boolean(req.body?.isAdmin);
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    if (!displayName) {
+      return res.status(400).json({ error: "Enter the user's full name." });
+    }
+
+    const existing = await userAuth.findUserByEmail(email);
+    if (existing) {
+      return res.status(409).json({ error: "A user with that email already exists." });
+    }
+
+    const temporaryPassword = `Zn!${crypto.randomBytes(18).toString("hex")}`;
+    const { hash } = derivePasswordHash(temporaryPassword);
+
+    const createdUser = await admin.createUser({
+      email,
+      displayName,
+      plan: requestedPlan,
+      isAdmin,
+      passwordHash: hash
+    });
+
+    if (!createdUser) {
+      return res.status(500).json({ error: "Failed to create the user." });
+    }
+
+    const token = await admin.createPasswordResetToken(createdUser.id);
+    const recoveryLink = buildAdminRecoveryLink(token);
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: createdUser.id,
+      action: "CREATE_USER",
+      details: { email, plan: requestedPlan, isAdmin },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.status(201).json({ success: true, user: createdUser, recoveryLink });
+  } catch (error) {
+    return handleServerError(res, "Failed to create user", error);
   }
 });
 
@@ -2778,7 +2836,7 @@ app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, async (r
   try {
     const { id } = req.params;
     const token = await admin.createPasswordResetToken(id);
-    const recoveryLink = `${req.protocol}://${req.get("host")}/reset-password?token=${token}`;
+    const recoveryLink = buildAdminRecoveryLink(token);
 
     // Audit Logging
     await admin.logAdminAction({
@@ -3360,14 +3418,125 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
   if (!OAUTH_PROVIDERS.includes(provider)) {
     return res.status(400).json({ error: "Unsupported provider." });
   }
-  const redirectUri = String(req.body?.redirectUri || "").trim() || null;
+
+  const redirectUriBase = process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host");
+
+  if (provider === "google") {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) return res.status(500).json({ error: "Google OAuth not configured." });
+    
+    const redirectUri = `${redirectUriBase}/api/auth/oauth/google/callback`;
+    const client = new OAuth2Client(clientId);
+    const authUrl = client.generateAuthUrl({
+      access_type: "offline",
+      scope: ["https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"],
+      redirect_uri: redirectUri
+    });
+    return res.json({ provider, configured: true, authorizationUrl: authUrl });
+  }
+
+  if (provider === "apple") {
+    const clientId = process.env.APPLE_CLIENT_ID;
+    if (!clientId) return res.status(500).json({ error: "Apple OAuth not configured." });
+
+    const redirectUri = `${redirectUriBase}/api/auth/oauth/apple/callback`;
+    const authUrl = appleSignin.getAuthorizationUrl({
+      clientID: clientId,
+      redirectURI: redirectUri,
+      scope: "name email",
+      responseMode: "form_post",
+    });
+    return res.json({ provider, configured: true, authorizationUrl: authUrl });
+  }
+
   return res.json({
     provider,
-    redirectUri,
     configured: false,
     authorizationUrl: null,
     message: `${provider} OAuth is scaffolded but not configured.`
   });
+});
+
+app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.redirect(`${expectedOrigin}/auth?error=No+code+provided`);
+
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUriBase = process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host");
+    const redirectUri = `${redirectUriBase}/api/auth/oauth/google/callback`;
+
+    const client = new OAuth2Client(clientId, clientSecret, redirectUri);
+    const { tokens } = await client.getToken(code);
+    client.setCredentials(tokens);
+
+    const userInfoRes = await client.request({
+      url: "https://www.googleapis.com/oauth2/v3/userinfo"
+    });
+    const { email, name, sub } = userInfoRes.data;
+
+    const user = await userAuth.upsertOAuthUser({
+      email,
+      displayName: name,
+      authProvider: "google"
+    });
+
+    const session = await issueSessionForUser(user.id, req, { persistent: true });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: true });
+
+    return res.redirect(`${expectedOrigin}/app`);
+  } catch (error) {
+    console.error("[Google OAuth] Callback failed:", error);
+    return res.redirect(`${expectedOrigin}/auth?error=Google+sign-in+failed`);
+  }
+});
+
+app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ extended: true }), async (req, res) => {
+  const { code, id_token, user: userJson } = req.body;
+  
+  try {
+    const clientId = process.env.APPLE_CLIENT_ID;
+    const teamId = process.env.APPLE_TEAM_ID;
+    const keyId = process.env.APPLE_KEY_ID;
+    const privateKey = (process.env.APPLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+
+    const tokenResponse = await appleSignin.getAuthorizationToken(code, {
+      clientID: clientId,
+      teamID: teamId,
+      keyID: keyId,
+      privateKey: privateKey,
+      redirectURI: `${process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host")}/api/auth/oauth/apple/callback`,
+    });
+
+    const decodedToken = await appleSignin.verifyIdToken(tokenResponse.id_token, {
+      audience: clientId,
+      ignoreExpiration: false,
+    });
+
+    const email = decodedToken.email;
+    let displayName = null;
+    if (userJson) {
+      const userData = JSON.parse(userJson);
+      if (userData.name) {
+        displayName = `${userData.name.firstName || ""} ${userData.name.lastName || ""}`.trim();
+      }
+    }
+
+    const user = await userAuth.upsertOAuthUser({
+      email,
+      displayName,
+      authProvider: "apple"
+    });
+
+    const session = await issueSessionForUser(user.id, req, { persistent: true });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: true });
+
+    return res.redirect(`${expectedOrigin}/app`);
+  } catch (error) {
+    console.error("[Apple OAuth] Callback failed:", error);
+    return res.redirect(`${expectedOrigin}/auth?error=Apple+sign-in+failed`);
+  }
 });
 
 app.post("/api/auth/oauth/mock", authLimiter, async (req, res) => {

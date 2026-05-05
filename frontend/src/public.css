@@ -89,6 +89,21 @@ body.page-dark-theme #root {
   text-decoration: none;
 }
 
+.zc-home a:focus-visible,
+.zc-home button:focus-visible {
+  outline: 2px solid #f8fafc;
+  outline-offset: 3px;
+}
+
+.zc-home #features,
+.zc-home #screens,
+.zc-home #coverage,
+.zc-home #pricing,
+.zc-home #faq,
+.zc-home #about {
+  scroll-margin-top: 108px;
+}
+
 .zc-home .container {
   width: min(calc(100% - 32px), var(--content));
   margin: 0 auto;
@@ -356,6 +371,7 @@ body.page-dark-theme #root {
 
 .zc-home .dashboard-shell {
   position: relative;
+  width: 100%;
   border-radius: 24px;
   border: 1px solid rgba(126, 159, 255, 0.22);
   background: linear-gradient(180deg, rgba(9, 18, 34, 0.94), rgba(5, 11, 23, 0.94));
@@ -475,11 +491,16 @@ body.page-dark-theme #root {
 .zc-home .stat-card,
 .zc-home .panel,
 .zc-home .feature-card,
-.zc-home .bottom-cta {
+.zc-home .bottom-cta,
+.zc-home .coverage-card,
+.zc-home .pricing-card,
+.zc-home .about-card,
+.zc-home .faq-card {
   background: linear-gradient(180deg, rgba(11, 22, 42, 0.86), rgba(7, 15, 29, 0.94));
   border: 1px solid var(--border);
   border-radius: 18px;
   transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+  min-width: 0;
 }
 
 .zc-home .feature-card:hover {
@@ -1008,6 +1029,7 @@ body.page-dark-theme #root {
   padding: 20px;
 }
 
+.zc-home .coverage-head h2,
 .zc-home .coverage-head h3 {
   margin: 0 0 8px;
   font-size: clamp(1.5rem, 3.2vw, 2.2rem);
@@ -1131,6 +1153,7 @@ body.page-dark-theme #root {
   margin-bottom: 18px;
 }
 
+.zc-home .pricing-head h2,
 .zc-home .pricing-head h3 {
   margin: 0 0 8px;
   font-size: clamp(1.5rem, 3.2vw, 2.2rem);
@@ -1148,7 +1171,9 @@ body.page-dark-theme #root {
 .zc-home .pricing-billing-pill {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: 100%;
   padding: 6px;
   border-radius: 999px;
   border: 1px solid rgba(104, 149, 255, 0.28);
@@ -1346,6 +1371,7 @@ body.page-dark-theme #root {
 .zc-home .pricing-table-wrap {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable both-edges;
   mask-image: linear-gradient(to right, #000 92%, transparent 100%);
   -webkit-mask-image: linear-gradient(to right, #000 92%, transparent 100%);
 }
@@ -1388,6 +1414,7 @@ body.page-dark-theme #root {
   padding: 20px;
 }
 
+.zc-home .about-head h2,
 .zc-home .about-head h3 {
   margin: 0 0 8px;
   font-size: clamp(1.45rem, 3vw, 2rem);
@@ -1445,6 +1472,38 @@ body.page-dark-theme #root {
   flex-wrap: wrap;
 }
 
+.zc-home .faq-section {
+  margin-top: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(104, 149, 255, 0.2);
+  background: linear-gradient(180deg, rgba(8, 18, 36, 0.9), rgba(5, 12, 24, 0.94));
+  padding: 20px;
+}
+
+.zc-home .faq-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.zc-home .faq-card {
+  padding: 16px;
+}
+
+.zc-home .faq-card h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.zc-home .faq-card p {
+  margin: 0;
+  color: #cddbf5;
+  font-size: 0.93rem;
+  line-height: 1.65;
+}
+
 .zc-home .bottom-cta {
   margin-top: 24px;
   padding: 28px 30px;
@@ -1468,6 +1527,7 @@ body.page-dark-theme #root {
   pointer-events: none;
 }
 
+.zc-home .bottom-cta h2,
 .zc-home .bottom-cta h3 {
   margin: 0 0 14px;
   font-size: clamp(1.8rem, 4vw, 3rem);
@@ -1642,6 +1702,10 @@ body.page-dark-theme #root {
     grid-template-columns: 1fr;
   }
 
+  .zc-home .faq-grid {
+    grid-template-columns: 1fr;
+  }
+
   .zc-home .coverage-grid {
     grid-template-columns: 1fr;
   }
@@ -1757,6 +1821,7 @@ body.page-dark-theme #root {
     left: 0;
     right: 0;
     bottom: 0;
+    overflow-y: auto;
     z-index: 1000;
     animation: fadeInSlideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
@@ -1833,6 +1898,14 @@ body.page-dark-theme #root {
     align-items: flex-start;
   }
 
+  .zc-home .pricing-billing-pill {
+    width: 100%;
+  }
+
+  .zc-home .pricing-billing-pill button {
+    flex: 1 1 0;
+  }
+
   .zc-home .pricing-compare-head {
     flex-direction: column;
     align-items: flex-start;
@@ -1847,6 +1920,10 @@ body.page-dark-theme #root {
   }
 
   .zc-home .about-section {
+    padding: 16px;
+  }
+
+  .zc-home .faq-section {
     padding: 16px;
   }
 
@@ -2008,6 +2085,7 @@ body.page-dark-theme #root {
 
   .zc-home .proof-item {
     padding: 18px 14px;
+    align-items: flex-start;
   }
 
   .zc-home .section {
@@ -2057,6 +2135,16 @@ body.page-dark-theme #root {
 
   .zc-home .phone {
     width: min(100%, 168px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zc-home *,
+  .zc-home *::before,
+  .zc-home *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }
 

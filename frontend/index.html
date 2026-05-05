@@ -4,6 +4,40 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="Zenin Capital is a multi-asset market intelligence platform for portfolio tracking, stock research, options analysis, prediction-market monitoring, and tax estimation."
+    />
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+    <link rel="canonical" href="https://www.zenin.capital/" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Zenin Capital" />
+    <meta
+      property="og:title"
+      content="Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator"
+    />
+    <meta
+      property="og:description"
+      content="Track portfolios, research stocks, model options, monitor prediction markets, and estimate taxes from one unified workspace."
+    />
+    <meta property="og:url" content="https://www.zenin.capital/" />
+    <meta property="og:image" content="https://www.zenin.capital/og/zenin-capital-home.svg" />
+    <meta property="og:image:alt" content="Zenin Capital dashboard preview for portfolio tracking and market intelligence." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator"
+    />
+    <meta
+      name="twitter:description"
+      content="Track portfolios, research stocks, model options, monitor prediction markets, and estimate taxes from one unified workspace."
+    />
+    <meta name="twitter:image" content="https://www.zenin.capital/og/zenin-capital-home.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap" rel="stylesheet">
@@ -11,10 +45,80 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192x192.png" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png" />
-    <title>Zenin Capital</title>
+    <title>Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator</title>
+    <script>
+      (function () {
+        var path = String(window.location.pathname || "/").toLowerCase();
+        var isAuth = path.indexOf("/auth") === 0;
+        var isApp = path.indexOf("/app") === 0;
+        var siteUrl = "https://www.zenin.capital";
+        var entry = isAuth ? "auth" : isApp ? "app" : "public";
+        var robots = entry === "public"
+          ? "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+          : "noindex, nofollow, noarchive";
+        var title = "Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator";
+        if (entry === "auth") title = "Zenin Capital | Sign In, Sign Up, and Account Security";
+        if (entry === "app") title = "Zenin Capital App | Trading Dashboard";
+
+        var robotsMeta = document.querySelector('meta[name="robots"]');
+        if (robotsMeta) robotsMeta.setAttribute("content", robots);
+
+        var canonical = document.querySelector('link[rel="canonical"]');
+        if (canonical) {
+          canonical.setAttribute("href", siteUrl + (entry === "public" ? "/" : path));
+        }
+
+        document.title = title;
+        window.__ZENIN_ENTRY__ = entry;
+      })();
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Zenin Capital",
+        "url": "https://www.zenin.capital/",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web",
+        "description": "Zenin Capital is a multi-asset market intelligence platform for portfolio tracking, stock research, options analysis, prediction-market monitoring, and tax estimation.",
+        "offers": [
+          {
+            "@type": "Offer",
+            "name": "Starter",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          {
+            "@type": "Offer",
+            "name": "Pro",
+            "price": "29",
+            "priceCurrency": "USD"
+          },
+          {
+            "@type": "Offer",
+            "name": "Desk",
+            "price": "99",
+            "priceCurrency": "USD"
+          }
+        ],
+        "featureList": [
+          "Portfolio tracking",
+          "Stock research",
+          "Options analysis",
+          "Prediction-market monitoring",
+          "Tax estimation"
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      if (window.__ZENIN_ENTRY__ && window.__ZENIN_ENTRY__ !== "public") {
+        var root = document.getElementById("root");
+        if (root) root.innerHTML = "";
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

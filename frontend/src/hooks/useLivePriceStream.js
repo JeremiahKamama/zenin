@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState, useRef } from "react";
 import { canUseWebSocket, resolveZeninWsUrl } from "../utils/livePriceStream";
 
 const normalizeSymbol = (symbol) => String(symbol || "").trim().toUpperCase();
@@ -26,6 +26,13 @@ export function useLivePriceStream({
 } = {}) {
   const [status, setStatus] = useState("idle");
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const reconnectTimerRef = useRef(null);
+  const heartbeatTimerRef = useRef(null);
+  const watchdogTimerRef = useRef(null);
+  
+  const WATCHDOG_TIMEOUT_MS = 45000; // 45s without a message = dead connection
+  const HEARTBEAT_INTERVAL_MS = 30000; // 30s ping to keep alive
 
   const symbolsByType = useMemo(() => {
     const groups = { tradfi: new Set(), crypto: new Set() };
@@ -67,7 +74,17 @@ export function useLivePriceStream({
     const sockets = [];
     const socketUrl = resolveZeninWsUrl("/live");
 
+    const resetWatchdog = () => {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = setTimeout(() => {
+        if (cancelled) return;
+        console.warn("Live stream watchdog triggered: No messages received for 45s. Reconnecting...");
+        handleConnectionFailure();
+      }, WATCHDOG_TIMEOUT_MS);
+    };
+
     const applyLiveQuotes = (prices, updatedAt) => {
+      resetWatchdog();
       const entries = Object.entries(prices || {})
         .map(([symbol, quote]) => {
           const normalizedSymbol = normalizeSymbol(symbol);
@@ -123,47 +140,76 @@ export function useLivePriceStream({
       });
     };
 
+    const handleConnectionFailure = () => {
+      if (cancelled) return;
+      setStatus("degraded");
+      sockets.forEach(s => { try { s.close(); } catch {} });
+      
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => {
+        if (!cancelled) setRetryCount(c => c + 1);
+      }, delay);
+    };
+
     subscriptions.forEach(({ quoteType, symbols }) => {
-      const ws = new WebSocket(socketUrl);
-      sockets.push(ws);
+      try {
+        const ws = new WebSocket(socketUrl);
+        sockets.push(ws);
 
-      ws.addEventListener("open", () => {
-        if (cancelled) return;
-        setStatus("connected");
-        ws.send(JSON.stringify({ type: "subscribePrices", quoteType, symbols }));
-      });
+        ws.addEventListener("open", () => {
+          if (cancelled) return;
+          setStatus("connected");
+          setRetryCount(0);
+          ws.send(JSON.stringify({ type: "subscribePrices", quoteType, symbols }));
+          
+          // Start heartbeat
+          clearInterval(heartbeatTimerRef.current);
+          heartbeatTimerRef.current = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "ping" }));
+            }
+          }, HEARTBEAT_INTERVAL_MS);
+          
+          resetWatchdog();
+        });
 
-      ws.addEventListener("message", (event) => {
-        if (cancelled) return;
-        try {
-          const payload = JSON.parse(event.data);
-          if (payload?.type === "price_update") {
-            setStatus("connected");
-            applyLiveQuotes(payload.prices, payload.updatedAt);
-          } else if (payload?.type === "price_error") {
-            setStatus("degraded");
+        ws.addEventListener("message", (event) => {
+          if (cancelled) return;
+          resetWatchdog();
+          try {
+            const payload = JSON.parse(event.data);
+            if (payload?.type === "price_update") {
+              setStatus("connected");
+              applyLiveQuotes(payload.prices, payload.updatedAt);
+            } else if (payload?.type === "pong") {
+              // Heartbeat acknowledged
+            } else if (payload?.type === "price_error") {
+              setStatus("degraded");
+            }
+          } catch (err) {
+            console.warn("Live price stream message ignored:", err);
           }
-        } catch (err) {
-          console.warn("Live price stream message ignored:", err);
-        }
-      });
+        });
 
-      ws.addEventListener("error", () => {
-        if (!cancelled) setStatus("degraded");
-      });
-
-      ws.addEventListener("close", () => {
-        if (!cancelled) setStatus("degraded");
-      });
+        ws.addEventListener("error", handleConnectionFailure);
+        ws.addEventListener("close", handleConnectionFailure);
+      } catch (err) {
+        console.warn("Failed to initiate WebSocket:", err);
+        handleConnectionFailure();
+      }
     });
 
     return () => {
       cancelled = true;
+      clearTimeout(reconnectTimerRef.current);
+      clearTimeout(watchdogTimerRef.current);
+      clearInterval(heartbeatTimerRef.current);
       sockets.forEach((ws) => {
         try { ws.close(); } catch {}
       });
     };
-  }, [symbolsByType.crypto.join(","), symbolsByType.tradfi.join(",")]);
+  }, [symbolsByType.crypto.join(","), symbolsByType.tradfi.join(","), retryCount]);
 
   return { liveStreamStatus: status, lastLivePriceAt: lastUpdatedAt };
 }

@@ -59,7 +59,14 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
   const redirectToApp = () => {
     const target = getPostAuthRedirectPath();
     localStorage.removeItem("zenin_post_auth_next");
+    console.log("Redirecting to:", target);
     window.location.href = target;
+  };
+
+  const handleGuestEntry = () => {
+    console.log("Entering as guest...");
+    localStorage.removeItem("zenin_auth_user");
+    window.location.href = "/app";
   };
 
   const handleSignin = async (e, overrideCode) => {
@@ -141,6 +148,27 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
       redirectToApp();
     } catch (err) {
       setError(err.message || "Failed to create account");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onOAuthStart = async (provider) => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await zeninFetch("/auth/oauth/start", {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      });
+      const data = await readJson(res);
+      if (data.authorizationUrl) {
+        window.location.href = data.authorizationUrl;
+      } else {
+        throw new Error(data.message || "OAuth is not configured.");
+      }
+    } catch (err) {
+      setError(err.message || "OAuth failed");
     } finally {
       setLoading(false);
     }
@@ -237,10 +265,33 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
               className="auth-v2-btn auth-v2-btn-ghost" 
               type="button"
               style={{ width: '100%' }}
-              onClick={() => window.location.href = "/app"}
+              onClick={handleGuestEntry}
             >
               Use as Guest
             </button>
+
+            <div className="auth-v2-divider"><span>OR</span></div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                onClick={() => onOAuthStart("google")}
+                disabled={loading}
+              >
+                <span style={{ fontSize: '1.2rem' }}>G</span> Google
+              </button>
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                onClick={() => onOAuthStart("apple")}
+                disabled={loading}
+              >
+                <span style={{ fontSize: '1.2rem' }}></span> Apple
+              </button>
+            </div>
 
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center', marginTop: '24px' }}>
               Already have an account? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signin")}>Sign in</button>
@@ -296,10 +347,33 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
               className="auth-v2-btn auth-v2-btn-ghost" 
               type="button"
               style={{ width: '100%', marginTop: '8px' }}
-              onClick={() => window.location.href = "/app"}
+              onClick={handleGuestEntry}
             >
               Use as Guest
             </button>
+
+            <div className="auth-v2-divider"><span>OR</span></div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                onClick={() => onOAuthStart("google")}
+                disabled={loading}
+              >
+                <span style={{ fontSize: '1.2rem' }}>G</span> Google
+              </button>
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                onClick={() => onOAuthStart("apple")}
+                disabled={loading}
+              >
+                <span style={{ fontSize: '1.2rem' }}></span> Apple
+              </button>
+            </div>
 
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center', marginTop: '24px' }}>
               New to Zenin Capital? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signup")}>Create account</button>

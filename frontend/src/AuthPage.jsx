@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
+import "./public.css";
 import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
+import { applySeo } from "./utils/seo";
 
 const OAUTH_PROVIDERS = [
   { key: "google", label: "Google", icon: "G" },
@@ -179,6 +181,19 @@ export default function AuthPage() {
   const signupStrengthPercent = useMemo(() => getPasswordStrengthPercent(signupPasswordRules), [signupPasswordRules]);
 
   useEffect(() => {
+    applySeo({
+      title: "Zenin Capital | Sign In, Sign Up, and Account Security",
+      description: "Access your Zenin Capital account, create a new workspace, manage passkeys, and recover account access securely.",
+      robots: "noindex, nofollow, noarchive",
+      pathname: typeof window !== "undefined" ? window.location.pathname : "/auth",
+      canonicalPath: "/auth",
+      ogTitle: "Zenin Capital | Account Access",
+      ogDescription: "Secure sign in, sign up, passkey enrollment, and account recovery for Zenin Capital.",
+      schema: []
+    });
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     zeninFetch("/auth/me")
       .then((res) => res.json().catch(() => ({})).then((data) => ({ ok: res.ok, data })))
@@ -337,10 +352,20 @@ export default function AuthPage() {
     await redirectToApp();
   });
 
-  const onOAuthMock = (provider) => runAction(async () => {
-    if (!ENABLE_OAUTH_MOCK) {
-      throw new Error("OAuth mock sign-in is disabled.");
+  const onOAuthStart = (provider) => runAction(async () => {
+    const res = await zeninFetch("/auth/oauth/start", {
+      method: "POST",
+      body: JSON.stringify({ provider })
+    });
+    const data = await readJson(res);
+    if (data.authorizationUrl) {
+      window.location.href = data.authorizationUrl;
+    } else {
+      throw new Error(data.message || "OAuth is not configured for this provider.");
     }
+  });
+
+  const onOAuthMock = (provider) => runAction(async () => {
     const res = await zeninFetch("/auth/oauth/mock", {
       method: "POST",
       body: JSON.stringify({ provider })
@@ -410,16 +435,35 @@ export default function AuthPage() {
                 <>
                   <div className="auth-v2-divider"><span>Or continue with</span></div>
                   <div className="auth-v2-oauth-row">
-                    {OAUTH_PROVIDERS.map((provider) => (
-                      <button key={provider.key} className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock(provider.key)}>
-                        <span className="provider-icon">{provider.icon}</span>
-                        <span>{provider.label}</span>
-                      </button>
-                    ))}
+                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
+                      <span className="provider-icon">G</span>
+                      <span>Google</span>
+                    </button>
+                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                      <span className="provider-icon"></span>
+                      <span>Apple</span>
+                    </button>
+                  </div>
+                  <div className="auth-v2-oauth-row" style={{ marginTop: '8px' }}>
+                    <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock("google")}>
+                      <span>Mock Google</span>
+                    </button>
                   </div>
                 </>
               ) : (
-                <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
+                <>
+                  <div className="auth-v2-divider"><span>Or continue with</span></div>
+                  <div className="auth-v2-oauth-row">
+                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
+                      <span className="provider-icon">G</span>
+                      <span>Google</span>
+                    </button>
+                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                      <span className="provider-icon"></span>
+                      <span>Apple</span>
+                    </button>
+                  </div>
+                </>
               )}
 
               <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSignupStep("passkey")}>Sign up with passkey</button>
@@ -612,20 +656,23 @@ export default function AuthPage() {
                     🔑 Sign in with Passkey
                   </button>
 
-                  {ENABLE_OAUTH_MOCK ? (
-                    <>
-                      <div className="auth-v2-divider"><span>Or continue with</span></div>
-                      <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked">
-                        {OAUTH_PROVIDERS.map((provider) => (
-                          <button key={provider.key} className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock(provider.key)}>
-                            <span className="provider-icon">{provider.icon}</span>
-                            <span>Continue with {provider.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
+                  <div className="auth-v2-divider"><span>Or continue with</span></div>
+                  <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked">
+                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
+                      <span className="provider-icon">G</span>
+                      <span>Continue with Google</span>
+                    </button>
+                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                      <span className="provider-icon"></span>
+                      <span>Continue with Apple</span>
+                    </button>
+                  </div>
+                  {ENABLE_OAUTH_MOCK && (
+                    <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked" style={{ marginTop: '8px' }}>
+                       <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock("google")}>
+                        <span>Mock Google Sign-In</span>
+                      </button>
+                    </div>
                   )}
                 </>
               )}

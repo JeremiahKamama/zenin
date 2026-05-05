@@ -703,6 +703,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           holding?.costBasis
         );
         if (!symbol || quantity <= 0 || !Number.isFinite(currentPrice) || !Number.isFinite(costBasis)) return null;
+        const _isLive = !!(spotPrices && spotPrices[symbol]);
         const unrealizedLoss = Math.max(0, (costBasis - currentPrice) * quantity);
         if (unrealizedLoss <= 1) return null;
         const offsetAmount = taxableGain > 0 ? Math.min(taxableGain, unrealizedLoss) : unrealizedLoss;
@@ -715,6 +716,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           costBasis,
           unrealizedLoss,
           offsetAmount,
+          _isLive,
           estimatedSaving,
         };
       })
@@ -948,6 +950,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
             {taxLossSuggestions.map((idea) => (
               <article className="tax-loss-card" key={idea.symbol}>
                 <div>
+                  {idea._isLive && <span className="live-badge" style={{ marginLeft: "8px", padding: "2px 6px", background: "rgba(34, 197, 94, 0.2)", color: "#22c55e", borderRadius: "4px", fontSize: "0.7rem", fontWeight: 600 }}>LIVE</span>}
                   <strong>{idea.symbol}</strong>
                   <span>{idea.name}</span>
                 </div>

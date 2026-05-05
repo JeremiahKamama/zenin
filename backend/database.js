@@ -1931,6 +1931,43 @@ const userAuth = {
     return mapAuthUserRow(result.rows[0]);
   },
 
+  upsertOAuthUser: async ({ email, displayName, authProvider }) => {
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const existingResult = await pool.query(`SELECT id FROM app_users WHERE email = $1`, [normalizedEmail]);
+
+    if (existingResult.rows[0]) {
+      const updateResult = await pool.query(`
+        UPDATE app_users
+        SET 
+          auth_provider = $2,
+          display_name = COALESCE(display_name, $3),
+          email_verified = TRUE,
+          updated_at = NOW()
+        WHERE email = $1
+        RETURNING
+          id, email, password_hash AS "passwordHash", display_name AS "displayName",
+          auth_provider AS "authProvider", email_verified AS "emailVerified",
+          pending_email AS "pendingEmail", pending_email_code_hash AS "pendingEmailCodeHash",
+          pending_email_requested_at AS "pendingEmailRequestedAt", password_changed_at AS "passwordChangedAt",
+          two_factor_enabled AS "twoFactorEnabled", two_factor_method AS "twoFactorMethod",
+          two_factor_secret_hash AS "twoFactorSecretHash", two_factor_provider AS "twoFactorProvider",
+          two_factor_target AS "twoFactorTarget", two_factor_enabled_at AS "twoFactorEnabledAt",
+          backup_codes_json AS "backupCodes", passkeys_json AS passkeys,
+          current_plan AS "currentPlan", current_billing_cycle AS "currentBillingCycle",
+          plan_updated_at AS "planUpdatedAt", created_at AS "createdAt";
+      `, [normalizedEmail, authProvider, displayName]);
+      return mapAuthUserRow(updateResult.rows[0]);
+    } else {
+      return await userAuth.createUser({
+        email: normalizedEmail,
+        passwordHash: "",
+        displayName,
+        authProvider,
+        emailVerified: true
+      });
+    }
+  },
+
   findUserByEmail: async (email) => {
     const result = await pool.query(`
       SELECT
@@ -3513,14 +3550,57 @@ async function closeDatabase() {
 const admin = {
   listAllUsers: async () => {
     const result = await pool.query(`
-      SELECT id, email, display_name AS name, current_plan AS plan, is_admin AS "isAdmin", created_at AS joined
+      SELECT
+        id,
+        email,
+        display_name AS name,
+        current_plan AS plan,
+        is_admin AS "isAdmin",
+        suspended_at AS "suspendedAt",
+        created_at AS joined
       FROM app_users
       ORDER BY created_at DESC
     `);
     return result.rows.map(r => ({
       ...r,
-      joined: toIsoString(r.joined)
+      joined: toIsoString(r.joined),
+      suspendedAt: toIsoString(r.suspendedAt)
     }));
+  },
+  createUser: async ({ email, displayName = null, plan = "starter", isAdmin = false, passwordHash = "" }) => {
+    const created = await userAuth.createUser({
+      email,
+      passwordHash,
+      displayName,
+      authProvider: "email",
+      emailVerified: true
+    });
+
+    await admin.updateUserPlan(created.id, plan);
+    await admin.updateUserAdminStatus(created.id, isAdmin);
+
+    const result = await pool.query(`
+      SELECT
+        id,
+        email,
+        display_name AS name,
+        current_plan AS plan,
+        is_admin AS "isAdmin",
+        suspended_at AS "suspendedAt",
+        created_at AS joined
+      FROM app_users
+      WHERE id = $1
+      LIMIT 1
+    `, [toUserId(created.id)]);
+
+    const row = result.rows[0];
+    if (!row) return null;
+
+    return {
+      ...row,
+      joined: toIsoString(row.joined),
+      suspendedAt: toIsoString(row.suspendedAt)
+    };
   },
   updateUserPlan: async (userId, plan) => {
     const validPlan = normalizePlanValue(plan);

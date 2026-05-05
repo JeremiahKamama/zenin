@@ -1,4 +1,5 @@
 import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "./styles.css";
 import { startRegistration } from "@simplewebauthn/browser";
 import { Watchlist } from "./components/Watchlist";
 import { AssetModal } from "./components/AssetModal";
@@ -19,6 +20,7 @@ import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
+import { applySeo } from "./utils/seo";
 
 function isStaleChunkError(error) {
   const message = String(error?.message || error || "");
@@ -306,6 +308,19 @@ const mapOptionHoldingToTrade = (holding) => {
 };
 
 function App() {
+  useEffect(() => {
+    applySeo({
+      title: "Zenin Capital App | Trading Dashboard",
+      description: "Zenin Capital app workspace for active market research, portfolio management, and trading workflows.",
+      robots: "noindex, nofollow, noarchive",
+      pathname: typeof window !== "undefined" ? window.location.pathname : "/app",
+      canonicalPath: "/app",
+      ogTitle: "Zenin Capital App | Trading Dashboard",
+      ogDescription: "Authenticated Zenin workspace for portfolio management and trading workflows.",
+      schema: []
+    });
+  }, []);
+
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
   const [activeCategory, setActiveCategory] = useState("stocks");

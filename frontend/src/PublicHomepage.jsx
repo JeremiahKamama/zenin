@@ -1,8 +1,9 @@
-import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import "./public.css";
 import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo, LineZMark } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
-import AuthModal from "./components/AuthModal";
+import { applySeo, buildAbsoluteUrl, SITE_URL } from "./utils/seo";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
 const VALID_BILLING_CYCLES = ["monthly", "yearly"];
@@ -12,6 +13,29 @@ const MONTHLY_PRICES = {
   pro: 29,
   desk: 99
 };
+
+const HOME_URL = `${SITE_URL}/`;
+const SOCIAL_IMAGE_URL = buildAbsoluteUrl("/og/zenin-capital-home.svg");
+const SEO_TITLE = "Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator";
+const SEO_DESCRIPTION = "Zenin Capital is a multi-asset market intelligence platform for portfolio tracking, stock research, options analysis, prediction-market monitoring, and tax estimation.";
+const FAQ_ITEMS = [
+  {
+    question: "What can you track in Zenin Capital?",
+    answer: "Zenin brings portfolio tracking, stock research, crypto monitoring, options analysis, prediction-market workflows, and tax estimation into one workspace."
+  },
+  {
+    question: "Does Zenin support stocks, crypto, options, and prediction markets?",
+    answer: "Yes. The platform is designed for cross-market workflows so investors and traders can move from research to execution without switching tools."
+  },
+  {
+    question: "Who is Zenin built for?",
+    answer: "Zenin is built for active investors, traders, and small desks that want deeper market context than a basic portfolio tracker without spreading their workflow across multiple apps."
+  },
+  {
+    question: "How does Zenin help with tax workflows?",
+    answer: "Zenin includes a tax estimator that helps users review capital-gains exposure across multiple jurisdictions alongside portfolio and trade activity."
+  }
+];
 
 function normalizePlan(plan) {
   const value = String(plan || "").trim().toLowerCase();
@@ -90,6 +114,7 @@ export default function PublicHomepage() {
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
   const [authModal, setAuthModal] = useState({ open: false, mode: "signup" });
+  const [AuthModalComponent, setAuthModalComponent] = useState(null);
   const [billingCycle, setBillingCycle] = useState(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("zenin_pricing_billing_cycle") : "";
     return normalizeBillingCycle(stored || "monthly");
@@ -112,7 +137,7 @@ export default function PublicHomepage() {
   );
   const hasAuthenticatedPlanContext = Boolean(authUser?.id);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const root = document.documentElement;
     const body = document.body;
     const prevRootColorScheme = root.style.colorScheme;
@@ -130,6 +155,75 @@ export default function PublicHomepage() {
       body.style.colorScheme = prevBodyColorScheme;
       root.classList.remove("page-dark-theme");
       body.classList.remove("page-dark-theme");
+    };
+  }, []);
+
+  useEffect(() => {
+    const schema = [
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        name: "Zenin Capital",
+        url: HOME_URL,
+        applicationCategory: "FinanceApplication",
+        operatingSystem: "Web",
+        description: SEO_DESCRIPTION,
+        offers: [
+          { "@type": "Offer", name: "Starter", price: "0", priceCurrency: "USD" },
+          { "@type": "Offer", name: "Pro", price: "29", priceCurrency: "USD" },
+          { "@type": "Offer", name: "Desk", price: "99", priceCurrency: "USD" }
+        ],
+        featureList: [
+          "Portfolio tracking",
+          "Stock research",
+          "Options analysis",
+          "Prediction-market monitoring",
+          "Tax estimation"
+        ]
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        name: "Zenin Capital",
+        url: HOME_URL,
+        logo: SOCIAL_IMAGE_URL
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        mainEntity: FAQ_ITEMS.map((item) => ({
+          "@type": "Question",
+          name: item.question,
+          acceptedAnswer: {
+            "@type": "Answer",
+            text: item.answer
+          }
+        }))
+      }
+    ];
+
+    applySeo({
+      title: SEO_TITLE,
+      description: SEO_DESCRIPTION,
+      robots: "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1",
+      pathname: "/",
+      canonicalPath: "/",
+      ogTitle: SEO_TITLE,
+      ogDescription: "Track portfolios, research stocks, model options, monitor prediction markets, and estimate taxes from one unified workspace.",
+      ogImage: SOCIAL_IMAGE_URL,
+      schema
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    import("./components/AuthModal")
+      .then((mod) => {
+        if (!cancelled) setAuthModalComponent(() => mod.default);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -283,15 +377,15 @@ export default function PublicHomepage() {
         <section className="hero">
           <div className="container hero-grid">
             <div>
-              <span className="eyebrow">All-in-one market intelligence</span>
+              <span className="eyebrow">Portfolio tracker and market intelligence</span>
               <h1>
-                Everything you need to <span className="gradient-text">analyze, trade,</span> and{" "}
-                <span className="gradient-text">outperform.</span>
+                Track portfolios, <span className="gradient-text">research stocks,</span> model{" "}
+                <span className="gradient-text">options,</span> and estimate taxes in one place.
               </h1>
               <p>
-                Zenin Capital is a complete market intelligence platform for investors and traders. Track portfolios,
-                discover opportunities, analyze companies, trade options, explore predictions, and estimate taxes — all
-                in one place.
+                Zenin Capital is a multi-asset market intelligence platform for investors and traders. Track portfolios,
+                research stocks, monitor crypto and prediction markets, analyze options, and estimate taxes without
+                splitting your workflow across multiple tools.
               </p>
               <div className="hero-actions">
                 <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
@@ -446,10 +540,11 @@ export default function PublicHomepage() {
             <section className="coverage-section" id="coverage">
               <div className="coverage-head">
                 <div className="section-tag">Coverage</div>
-                <h3>Cross-market coverage in one workflow</h3>
+                <h2>Cross-market coverage for stocks, crypto, options, and prediction markets</h2>
                 <p>
                   Zenin is built to let you move from macro to execution without context switching.
-                  Track crypto, equities, options, predictions, and tax workflows in one place.
+                  Track equities, crypto, options, prediction markets, and tax workflows in one place so research,
+                  execution, and review stay connected.
                 </p>
                 <div className="coverage-plan-refs">
                   {coveragePlanRefs.map((item) => (
@@ -503,8 +598,8 @@ export default function PublicHomepage() {
               <div className="pricing-head">
                 <div>
                   <div className="section-tag">Pricing</div>
-                  <h3>Pick your Zenin plan</h3>
-                  <p>Start free, then scale into pro workflows when you need institutional-grade depth.</p>
+                  <h2>Choose a plan for portfolio tracking and market research workflows</h2>
+                  <p>Start free, then scale into deeper analytics, options research, and team-ready workflows when you need more coverage.</p>
                 </div>
                 <div className="pricing-billing-pill" aria-label="Billing cycle">
                   <button
@@ -666,10 +761,30 @@ export default function PublicHomepage() {
               </div>
             </section>
 
+            <section className="faq-section" id="faq" aria-labelledby="faq-title">
+              <div className="about-head">
+                <div className="section-tag">FAQ</div>
+                <h2 id="faq-title">Questions investors and traders ask before switching platforms</h2>
+                <p>
+                  These are the most common questions around portfolio tracking, stock research, options analysis,
+                  and tax workflows inside Zenin.
+                </p>
+              </div>
+
+              <div className="faq-grid">
+                {FAQ_ITEMS.map((item) => (
+                  <article className="faq-card" key={item.question}>
+                    <h3>{item.question}</h3>
+                    <p>{item.answer}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
             <section className="about-section" id="about">
               <div className="about-head">
                 <div className="section-tag">About</div>
-                <h3>About Jeremiah Kamama</h3>
+                <h2>Built by Jeremiah Kamama</h2>
                 <p>
                   Autodidact focused on AI, crypto privacy, and DeFi research with practical work across machine learning,
                   policy, and on-the-ground ecosystem analysis.
@@ -719,43 +834,15 @@ export default function PublicHomepage() {
 
             <div className="bottom-cta">
               <div>
-                <h3>All the tools. One powerful platform.</h3>
+                <h2>One platform for market research, portfolio management, and tax review</h2>
                 <p>
-                  Whether you’re analyzing markets, building strategies, or optimizing taxes, Zenin brings it all together so you can focus on what matters — performance.
+                  Whether you are researching stocks, analyzing options, tracking portfolio risk, or reviewing taxes,
+                  Zenin keeps the workflow in one place so you can focus on better decisions.
                 </p>
                 <div className="cta-actions">
                   <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
                     {openAppChecking ? "Checking..." : "Open App →"}
                   </a>
-                  <a className="btn btn-secondary" href="#screens">See Screens</a>
-                </div>
-              </div>
-
-              <div className="device-preview">
-                <div className="laptop">
-                  <div className="laptop-screen">
-                    <div className="screen-label">Options</div>
-                    <div className="screen-options-grid">
-                      <div className="options-pill">Bull Call Spread</div>
-                      <div className="options-pill">Iron Condor</div>
-                      <div className="options-pill">Straddle</div>
-                    </div>
-                    <div className="screen-options-bars">
-                      <span style={{ width: "72%" }} />
-                      <span style={{ width: "54%" }} />
-                      <span style={{ width: "88%" }} />
-                    </div>
-                  </div>
-                </div>
-                <div className="phone">
-                  <div className="phone-screen">
-                    <div className="screen-label">Analytics</div>
-                    <div className="analytics-kpi-row">
-                      <div><small>Win Rate</small><b>62%</b></div>
-                      <div><small>Sharpe</small><b>1.38</b></div>
-                    </div>
-                    <div className="analytics-trend" />
-                  </div>
                 </div>
               </div>
             </div>
@@ -770,11 +857,13 @@ export default function PublicHomepage() {
 
       </footer>
       <SpeedInsights />
-      <AuthModal 
-        isOpen={authModal.open} 
-        initialMode={authModal.mode} 
-        onClose={() => setAuthModal({ ...authModal, open: false })} 
-      />
+      {AuthModalComponent ? (
+        <AuthModalComponent
+          isOpen={authModal.open}
+          initialMode={authModal.mode}
+          onClose={() => setAuthModal({ ...authModal, open: false })}
+        />
+      ) : null}
     </div>
   );
 }

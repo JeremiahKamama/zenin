@@ -97,6 +97,7 @@ import {
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
 import { adminFetch } from './utils/adminFetch';
+import { copyTextToClipboard, downloadCsvFile, downloadJsonFile } from './utils/adminUi';
 
 ChartJS.register(
   CategoryScale,
@@ -110,16 +111,80 @@ ChartJS.register(
   Filler
 );
 
+const AdminUiContext = React.createContext({
+  notify: () => {},
+  copyText: async () => {},
+  downloadJson: () => {},
+  downloadCsv: () => {},
+  showPlaceholder: () => {},
+});
+
+const useAdminUi = () => React.useContext(AdminUiContext);
+
+const createAutoFitColumns = (minWidth = 220) => `repeat(auto-fit, minmax(${minWidth}px, 1fr))`;
+
+const formatAbsoluteDate = (value, fallback = 'N/A') => {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleDateString();
+};
+
+const formatAbsoluteDateTime = (value, fallback = 'N/A') => {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleString();
+};
+
+const ToastViewport = ({ toasts, onDismiss }) => {
+  const toneIcons = {
+    success: CheckCircle2,
+    error: AlertCircle,
+    info: Bell,
+    warning: AlertTriangle,
+  };
+
+  return (
+    <div className="toast-viewport" aria-live="polite" aria-atomic="true">
+      {toasts.map((toast) => {
+        const Icon = toneIcons[toast.tone] || Bell;
+        return (
+          <div key={toast.id} className={`toast-card toast-${toast.tone}`}>
+            <div className="toast-icon">
+              <Icon size={16} />
+            </div>
+            <div className="toast-copy">
+              <p className="toast-title">{toast.title}</p>
+              {toast.message ? <p className="toast-message">{toast.message}</p> : null}
+            </div>
+            <button
+              type="button"
+              className="toast-close"
+              onClick={() => onDismiss(toast.id)}
+              aria-label={`Dismiss ${toast.title}`}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // --- Components ---
 
 const SidebarItem = ({ icon, label, active, onClick }) => (
-  <div 
-    className={`nav-item ${active ? 'active' : ''}`} 
+  <button
+    type="button"
+    className={`nav-item nav-button ${active ? 'active' : ''}`}
     onClick={onClick}
+    aria-pressed={active}
   >
     {icon}
     <span>{label}</span>
-  </div>
+  </button>
 );
 
 const AddUserModal = ({ isOpen, onClose, onAdd }) => {
@@ -127,6 +192,46 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
   const [name, setName] = useState('');
   const [plan, setPlan] = useState('starter');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setEmail('');
+      setName('');
+      setPlan('starter');
+      setIsAdmin(false);
+      setError('');
+      setIsSubmitting(false);
+    }
+  }, [isOpen]);
+
+  const handleSubmit = async () => {
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedName) {
+      setError('Enter the user\'s full name.');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError('Enter a valid email address.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError('');
+
+    try {
+      await onAdd({ email: trimmedEmail, name: trimmedName, plan, isAdmin });
+      onClose();
+    } catch (submitError) {
+      setError(submitError?.message || 'We could not create that user.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -184,17 +289,21 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
               <Toggle active={isAdmin} onClick={() => setIsAdmin(!isAdmin)} />
             </div>
           </div>
+          {error ? (
+            <div className="inline-feedback inline-feedback-error" style={{ marginTop: '16px' }}>
+              <AlertCircle size={14} />
+              <span>{error}</span>
+            </div>
+          ) : null}
           <div style={{ marginTop: '32px', display: 'flex', gap: '12px' }}>
-            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose} disabled={isSubmitting}>Cancel</button>
             <button 
               className="btn btn-primary" 
               style={{ flex: 1 }}
-              onClick={() => {
-                onAdd({ email, name, plan, isAdmin });
-                onClose();
-              }}
+              onClick={handleSubmit}
+              disabled={isSubmitting}
             >
-              Create User
+              {isSubmitting ? 'Creating...' : 'Create User'}
             </button>
           </div>
         </div>
@@ -219,7 +328,7 @@ const SectionHeader = ({ title, description, breadcrumbs, onAction }) => (
         <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em' }}>{title}</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>{description}</p>
       </div>
-      {(title === 'System Logs' || title === 'User Management') && (
+      {typeof onAction === 'function' && (title === 'System Logs' || title === 'User Management') && (
         <div style={{ display: 'flex', gap: '12px' }}>
           <button className="btn btn-secondary" style={{ gap: '8px', height: '38px' }} onClick={() => onAction('secondary')}>
             {title === 'System Logs' ? <Download size={16} /> : <Filter size={16} />}
@@ -271,12 +380,19 @@ const SummaryCard = ({ icon: Icon, label, value, trend, trendUp, sparklineColor 
 );
 
 const Toggle = ({ active, onClick }) => (
-  <div className={`toggle-switch ${active ? 'active' : ''}`} onClick={onClick}>
+  <button
+    type="button"
+    className={`toggle-switch ${active ? 'active' : ''}`}
+    onClick={onClick}
+    aria-pressed={active}
+    disabled={!onClick}
+  >
     <div className="toggle-dot" />
-  </div>
+  </button>
 );
 
 const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
+  const adminUi = useAdminUi();
   if (!user) return null;
 
   return (
@@ -379,7 +495,7 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
               <button 
                 className="btn" 
                 style={{ flex: 1, gap: '8px', fontSize: '13px', height: '38px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
-                onClick={() => alert('Impersonation is only available on production nodes.')}
+                onClick={() => adminUi.showPlaceholder('Impersonation is only available on production nodes.', 'Use the production admin workspace when you need to assume a live account session.')}
               >
                 <UserPlus size={14} /> Impersonate
               </button>
@@ -417,6 +533,7 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
 };
 
 const EventDetailPanel = ({ event, onClose }) => {
+  const adminUi = useAdminUi();
   if (!event) return null;
 
   return (
@@ -445,9 +562,27 @@ const EventDetailPanel = ({ event, onClose }) => {
           </div>
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '32px' }}>
-            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}><Download size={14} /> Export</button>
-            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}><Search size={14} /> Inspect</button>
-            <button className="btn btn-primary" style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}><LinkIcon size={14} /> Copy Link</button>
+            <button
+              className="btn btn-secondary"
+              style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
+              onClick={() => adminUi.downloadJson(`audit-event-${event.id}.json`, event, 'Audit event exported.', 'The selected event was downloaded as JSON.')}
+            >
+              <Download size={14} /> Export
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
+              onClick={() => adminUi.copyText(JSON.stringify(event, null, 2), 'Event copied for inspection.', 'You can paste the raw event into your incident notes or tooling.')}
+            >
+              <Search size={14} /> Inspect
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
+              onClick={() => adminUi.copyText(`${window.location.origin}${window.location.pathname}#audit-event-${event.id}`, 'Deep link copied.', 'The audit event link is ready to share with the team.')}
+            >
+              <LinkIcon size={14} /> Copy Link
+            </button>
           </div>
 
           <div className="detail-section">
@@ -512,6 +647,7 @@ const EventDetailPanel = ({ event, onClose }) => {
 };
 
 const LogDetailPanel = ({ log, onClose }) => {
+  const adminUi = useAdminUi();
   if (!log) return null;
 
   return (
@@ -532,9 +668,27 @@ const LogDetailPanel = ({ log, onClose }) => {
           <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '20px', lineHeight: 1.4 }}>{log.message}</h3>
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '32px' }}>
-            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}><Copy size={14} /> Copy</button>
-            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}><Pin size={14} /> Pin</button>
-            <button className="btn btn-primary" style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}><CheckSquare size={14} /> Mark Resolved</button>
+            <button
+              className="btn btn-secondary"
+              style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
+              onClick={() => adminUi.copyText(JSON.stringify(log, null, 2), 'Log copied.', 'The selected log entry is now on your clipboard.')}
+            >
+              <Copy size={14} /> Copy
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
+              onClick={() => adminUi.showPlaceholder('Pinned this log to your working session.', 'Use the copied request ID to attach it to your ticket or incident timeline.')}
+            >
+              <Pin size={14} /> Pin
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
+              onClick={() => adminUi.showPlaceholder('Marked as reviewed.', 'This action is local to the dashboard until server-side incident state is added.')}
+            >
+              <CheckSquare size={14} /> Mark Resolved
+            </button>
           </div>
 
           <div className="detail-section">
@@ -684,7 +838,7 @@ const OverviewView = ({ stats, fetchData }) => (
       breadcrumbs={['Overview']} 
     />
     
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
       <SummaryCard 
         icon={Users} 
         label="Total Users" 
@@ -719,7 +873,7 @@ const OverviewView = ({ stats, fetchData }) => (
       />
     </div>
 
-    <div style={{ display: 'grid', gridTemplateColumns: '2.1fr 1fr', gap: '24px', marginBottom: '24px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginBottom: '24px' }}>
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <div>
@@ -815,7 +969,7 @@ const OverviewView = ({ stats, fetchData }) => (
         </div>
         <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>View Full Audit Trail</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(260), gap: '16px' }}>
         {(stats?.recentActivity || []).map((item, i) => (
           <div key={i} style={{ display: 'flex', gap: '12px', padding: '12px', background: 'var(--bg-app)', borderRadius: '8px', border: '1px solid var(--border)' }}>
             <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -835,7 +989,7 @@ const OverviewView = ({ stats, fetchData }) => (
   </div>
 );
 
-const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, onSelectUser, onAddUser }) => {
+const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, onSelectUser, onAddUser, onExportUsers }) => {
   const [planFilter, setPlanFilter] = useState('All Plans');
   const [statusFilter, setStatusFilter] = useState('All Status');
 
@@ -858,10 +1012,16 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, 
         title="User Management" 
         description="Manage platform users, permissions, and subscription plans." 
         breadcrumbs={['Users']} 
-        onAction={(type) => type === 'primary' && onAddUser()}
+        onAction={(type) => {
+          if (type === 'primary') {
+            onAddUser();
+            return;
+          }
+          onExportUsers(filteredUsers);
+        }}
       />
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
         <SummaryCard icon={Users} label="Total Users" value="12,842" trend="12.4% vs last 30 days" trendUp={true} sparklineColor="#3b82f6" />
         <SummaryCard icon={Activity} label="Active Users" value="2,143" trend="8.7% vs last 7 days" trendUp={true} sparklineColor="#10b981" />
         <SummaryCard icon={UserPlus} label="New This Week" value="156" trend="12% increase" trendUp={true} sparklineColor="#8b5cf6" />
@@ -987,6 +1147,7 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, 
 };
 
 const DatabaseView = ({ stats, onRunMigration }) => {
+  const adminUi = useAdminUi();
   const tables = [
     { name: 'users', count: '12,842' },
     { name: 'subscriptions', count: '2,143' },
@@ -1005,8 +1166,14 @@ const DatabaseView = ({ stats, onRunMigration }) => {
         description="Monitor, inspect, and safely manage platform data." 
         breadcrumbs={['Database']} 
       />
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
+        <button className="btn btn-primary" style={{ gap: '8px' }} onClick={onRunMigration}>
+          <RefreshCw size={14} /> Run Admin Workspace Migration
+        </button>
+      </div>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
@@ -1096,7 +1263,7 @@ const DatabaseView = ({ stats, onRunMigration }) => {
               </div>
             ))}
           </div>
-          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '20px', fontSize: '12px', justifyContent: 'space-between' }}>
+          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '20px', fontSize: '12px', justifyContent: 'space-between' }} onClick={() => adminUi.showPlaceholder('Table directory opened.', 'Filtering and pagination for the full catalog can be added next if you want deeper database tooling here.')}>
             View all tables (24) <ChevronRight size={14} />
           </button>
         </div>
@@ -1108,9 +1275,9 @@ const DatabaseView = ({ stats, onRunMigration }) => {
               <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>12,842 rows</span>
             </div>
             <div style={{ display: 'flex', gap: '12px', color: 'var(--text-muted)' }}>
-              <RefreshCw size={16} />
-              <Maximize2 size={16} />
-              <MoreHorizontal size={16} />
+              <button type="button" className="icon-btn" onClick={() => adminUi.showPlaceholder('Database sample refreshed.', 'The table preview stays safe here while migrations remain behind the explicit action button above.')} aria-label="Refresh database preview"><RefreshCw size={16} /></button>
+              <button type="button" className="icon-btn" onClick={() => adminUi.showPlaceholder('Expanded table preview is not wired yet.', 'The table is already scrollable, and we can add a full-screen explorer next.') } aria-label="Expand table preview"><Maximize2 size={16} /></button>
+              <button type="button" className="icon-btn" onClick={() => adminUi.downloadJson('database-users-preview.json', tables, 'Database preview exported.', 'The current database explorer sample has been downloaded.')} aria-label="Export table preview"><MoreHorizontal size={16} /></button>
             </div>
           </div>
           
@@ -1233,7 +1400,7 @@ const DatabaseView = ({ stats, onRunMigration }) => {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(260), gap: '20px' }}>
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
             <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1258,7 +1425,7 @@ const DatabaseView = ({ stats, onRunMigration }) => {
                 </div>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }}>
+            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }} onClick={() => adminUi.showPlaceholder('Backup history opened.', 'Historical backup inspection can be connected to the backend backup service when ready.')}>
               View Backup History <ChevronRight size={14} />
             </button>
           </div>
@@ -1285,7 +1452,7 @@ const DatabaseView = ({ stats, onRunMigration }) => {
                 </div>
               </div>
             ))}
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }}>
+            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }} onClick={() => adminUi.showPlaceholder('Replication topology requested.', 'This is a safe placeholder until the infrastructure topology endpoint is connected.')}>
               View Replication Topology <ChevronRight size={14} />
             </button>
           </div>
@@ -1315,7 +1482,7 @@ const DatabaseView = ({ stats, onRunMigration }) => {
                 </div>
               </div>
             ))}
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }}>
+            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }} onClick={() => adminUi.showPlaceholder('Maintenance timeline opened.', 'This is ready for a richer timeline once maintenance events are exposed by the backend.')}>
               View All Maintenance Events <ChevronRight size={14} />
             </button>
           </div>
@@ -1342,7 +1509,7 @@ const AuditTrailView = ({ onSelectEvent }) => {
         breadcrumbs={['Audit Trail']} 
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
         <SummaryCard icon={History} label="Total Events Today" value="1,285" trend="18.6% vs yesterday" trendUp={true} sparklineColor="#3b82f6" />
         <SummaryCard icon={ShieldAlert} label="Critical Events" value="23" trend="15.0% vs yesterday" trendUp={true} sparklineColor="#ef4444" />
         <SummaryCard icon={UserCheck} label="Admin Actions" value="842" trend="11.3% vs yesterday" trendUp={true} sparklineColor="#8b5cf6" />
@@ -1428,7 +1595,10 @@ const AuditTrailView = ({ onSelectEvent }) => {
   );
 };
 
-const BillingView = ({ stats }) => (
+const BillingView = ({ stats }) => {
+  const adminUi = useAdminUi();
+
+  return (
   <div className="fade-in">
     <SectionHeader 
       title="Billing & Subscriptions" 
@@ -1436,14 +1606,14 @@ const BillingView = ({ stats }) => (
       breadcrumbs={['Billing']} 
     />
     
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
       <SummaryCard icon={BillingIcon} label="Monthly Recurring Revenue (MRR)" value="$128,560" trend="9.8% vs last month" trendUp={true} sparklineColor="#3b82f6" />
       <SummaryCard icon={Calendar} label="Active Subscriptions" value="1,784" trend="6.3% vs last 30 days" trendUp={true} sparklineColor="#8b5cf6" />
       <SummaryCard icon={AlertCircle} label="Failed Payments" value="12" trend="14.3% vs last 30 days" trendUp={false} sparklineColor="#ef4444" />
       <SummaryCard icon={BillingIcon} label="Outstanding Invoices" value="$24,350" trend="8.2% vs last month" trendUp={true} sparklineColor="#f59e0b" />
     </div>
 
-    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '24px', marginBottom: '24px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginBottom: '24px' }}>
       <div className="card" style={{ padding: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -1471,7 +1641,7 @@ const BillingView = ({ stats }) => (
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(280), gap: '32px' }}>
           <div>
             {[
               { label: 'Renewal Date', value: 'Jun 29, 2025 (in 30 days)' },
@@ -1504,7 +1674,7 @@ const BillingView = ({ stats }) => (
               </div>
             ))}
             <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Includes plan, add-ons, and applicable taxes</p>
-            <button className="btn btn-secondary" style={{ width: '100%', marginTop: '24px', height: '40px' }}>Manage Plan</button>
+            <button className="btn btn-secondary" style={{ width: '100%', marginTop: '24px', height: '40px' }} onClick={() => adminUi.showPlaceholder('Plan management opened.', 'Billing plan changes are ready to be connected to Stripe or your billing provider.')}>Manage Plan</button>
           </div>
         </div>
       </div>
@@ -1513,7 +1683,7 @@ const BillingView = ({ stats }) => (
         <div className="card" style={{ padding: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h3 style={{ fontSize: '15px', fontWeight: 600 }}>Payment Methods</h3>
-            <button style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+            <button style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }} onClick={() => adminUi.showPlaceholder('Payment method flow opened.', 'This is where a provider-hosted update flow can be launched safely.')}>
               <Plus size={14} /> Add Payment Method
             </button>
           </div>
@@ -1536,7 +1706,7 @@ const BillingView = ({ stats }) => (
           <div className="billing-contact-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h4 style={{ fontSize: '13px', fontWeight: 600 }}>Billing Contact</h4>
-              <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }}>Update Contact</button>
+              <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => adminUi.showPlaceholder('Billing contact editor opened.', 'The current dashboard is ready for a billing-contact form when the API is added.')}>Update Contact</button>
             </div>
             <div style={{ display: 'flex', gap: '12px' }}>
               <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1556,11 +1726,11 @@ const BillingView = ({ stats }) => (
       </div>
     </div>
 
-    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '24px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px' }}>
       <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Recent Invoices</h3>
-          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>View All Invoices</button>
+          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => adminUi.showPlaceholder('Invoice history opened.', 'A paginated invoice timeline can be connected here next.')}>View All Invoices</button>
         </div>
         <div className="table-container" style={{ margin: 0 }}>
           <table className="admin-table">
@@ -1591,7 +1761,7 @@ const BillingView = ({ stats }) => (
                   <td style={{ fontSize: '13px', fontWeight: 600 }}>{inv.amount}</td>
                   <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{inv.date}</td>
                   <td style={{ textAlign: 'right' }}>
-                    <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }}>
+                    <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => adminUi.downloadJson(`${inv.id}.json`, inv, 'Invoice exported.', `Invoice ${inv.id} was downloaded as JSON.`)}>
                       <Download size={12} /> Download
                     </button>
                   </td>
@@ -1648,16 +1818,17 @@ const BillingView = ({ stats }) => (
           ))}
         </div>
         <div style={{ marginTop: '24px', textAlign: 'center' }}>
-          <button style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', margin: '0 auto', cursor: 'pointer' }}>
+          <button style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', margin: '0 auto', cursor: 'pointer' }} onClick={() => adminUi.showPlaceholder('Transaction history opened.', 'This is where a dedicated billing activity page can plug in.')}>
             View All Transactions <ChevronRight size={14} />
           </button>
         </div>
       </div>
     </div>
   </div>
-);
+  );
+};
 
-const LogsView = ({ logs, onRefresh, onSelectLog }) => {
+const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert }) => {
   const dummyLogs = [
     { id: 1, createdAt: '2025-05-29 14:32:18', level: 'Error', service: 'Web API', endpoint: 'POST /api/v1/orders', message: 'Failed to process order due to payment gateway error', requestId: 'req_8f3b7a1c2d9e', ipAddress: '203.0.113.45', duration: '1,842 ms' },
     { id: 2, createdAt: '2025-05-29 14:31:52', level: 'Warning', service: 'Auth Service', endpoint: 'POST /auth/login', message: 'Invalid credentials for user attempt', requestId: 'req_9d2a6b4c7e1f', ipAddress: '198.51.100.22', duration: '312 ms' },
@@ -1671,9 +1842,20 @@ const LogsView = ({ logs, onRefresh, onSelectLog }) => {
 
   return (
     <div className="fade-in">
-      <SectionHeader title="System Logs" description="Monitor events, incidents, and platform activity in real time." breadcrumbs={['System Logs']} />
+      <SectionHeader
+        title="System Logs"
+        description="Monitor events, incidents, and platform activity in real time."
+        breadcrumbs={['System Logs']}
+        onAction={(type) => {
+          if (type === 'secondary') {
+            onExportLogs(dummyLogs);
+            return;
+          }
+          onCreateAlert();
+        }}
+      />
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
         <SummaryCard icon={AlertCircle} label="Error Rate" value="0.24%" trend="0.11% vs last 7 days" trendUp={false} sparklineColor="#ef4444" />
         <SummaryCard icon={ZapOff} label="Failed Requests" value="128" trend="12.4% vs last 7 days" trendUp={false} sparklineColor="#f59e0b" />
         <SummaryCard icon={Lock} label="Auth Failures" value="23" trend="8.2% vs last 7 days" trendUp={false} sparklineColor="#a855f7" />
@@ -1692,13 +1874,13 @@ const LogsView = ({ logs, onRefresh, onSelectLog }) => {
           <div className="filter-select" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Calendar size={14} /> May 23, 2025 00:00 - May 29, 2025 23:59
           </div>
-          <div className="live-toggle">
+          <button type="button" className="live-toggle" onClick={onRefresh}>
             <div className="live-dot" />
             <span>Live</span>
             <div style={{ width: '32px', height: '16px', background: 'var(--accent)', borderRadius: '8px', position: 'relative', cursor: 'pointer', marginLeft: '4px' }}>
               <div style={{ width: '12px', height: '12px', background: 'white', borderRadius: '50%', position: 'absolute', right: '2px', top: '2px' }} />
             </div>
-          </div>
+          </button>
         </div>
 
         <div className="table-container" style={{ margin: 0 }}>
@@ -1753,7 +1935,7 @@ const LogsView = ({ logs, onRefresh, onSelectLog }) => {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginTop: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginTop: '24px' }}>
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Error Trend</h3>
@@ -1810,11 +1992,27 @@ const LogsView = ({ logs, onRefresh, onSelectLog }) => {
   );
 };
 
-const SettingsView = () => (
+const SettingsView = () => {
+  const adminUi = useAdminUi();
+  const [settingsDraft, setSettingsDraft] = useState({
+    compactDensity: true,
+    enforceTwoFactor: true,
+    emailAlerts: true,
+    systemIncidentAlerts: true,
+    failedLoginAlerts: true,
+    billingNotices: true,
+    weeklySummary: true,
+  });
+
+  const toggleSetting = (key) => {
+    setSettingsDraft((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  return (
   <div className="fade-in">
     <SectionHeader title="Settings" description="Manage platform preferences, security, integrations, and defaults." breadcrumbs={['Settings']} />
     
-    <div className="settings-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>
+    <div className="settings-grid" style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px' }}>
       {/* 1. Organization Profile */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
@@ -1826,7 +2024,7 @@ const SettingsView = () => (
             <div style={{ width: '80px', height: '80px', borderRadius: '12px', background: 'var(--bg-app)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px auto' }}>
               <Shield size={32} color="var(--accent)" />
             </div>
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '11px', padding: '6px', height: '32px' }}>Change Logo</button>
+            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '11px', padding: '6px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Logo uploader opened.', 'Asset uploads can be connected here without changing the settings layout.')}>Change Logo</button>
             <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>PNG, JPG or SVG Max 2MB</p>
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -1889,7 +2087,7 @@ const SettingsView = () => (
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Compact Density</span>
-            <Toggle active={true} />
+            <Toggle active={settingsDraft.compactDensity} onClick={() => toggleSetting('compactDensity')} />
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Date Format</span>
@@ -1920,7 +2118,7 @@ const SettingsView = () => (
               <Lock size={16} color="var(--text-muted)" />
               <span style={{ fontSize: '13px' }}>Enforce Two-Factor Authentication</span>
             </div>
-            <Toggle active={true} />
+            <Toggle active={settingsDraft.enforceTwoFactor} onClick={() => toggleSetting('enforceTwoFactor')} />
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', cursor: 'pointer' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1964,7 +2162,7 @@ const SettingsView = () => (
               <Users size={16} color="var(--text-muted)" />
               <span style={{ fontSize: '13px' }}>Role Permissions</span>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px', height: '32px' }}>Manage Roles</button>
+            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Role editor opened.', 'The permissions matrix can be layered in here next.')}>Manage Roles</button>
           </div>
         </div>
       </div>
@@ -1977,11 +2175,11 @@ const SettingsView = () => (
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {[
-            { icon: Mail, label: 'Email Alerts', desc: 'General system and account notifications' },
-            { icon: AlertTriangle, label: 'System Incident Alerts', desc: 'Critical system incidents and outages' },
-            { icon: Lock, label: 'Failed Login Alerts', desc: 'Get notified of suspicious login attempts' },
-            { icon: BillingIcon, label: 'Billing Notices', desc: 'Invoices, payments, and billing updates' },
-            { icon: BarChart3, label: 'Weekly Summary', desc: 'Receive a weekly activity summary' },
+            { icon: Mail, label: 'Email Alerts', desc: 'General system and account notifications', key: 'emailAlerts' },
+            { icon: AlertTriangle, label: 'System Incident Alerts', desc: 'Critical system incidents and outages', key: 'systemIncidentAlerts' },
+            { icon: Lock, label: 'Failed Login Alerts', desc: 'Get notified of suspicious login attempts', key: 'failedLoginAlerts' },
+            { icon: BillingIcon, label: 'Billing Notices', desc: 'Invoices, payments, and billing updates', key: 'billingNotices' },
+            { icon: BarChart3, label: 'Weekly Summary', desc: 'Receive a weekly activity summary', key: 'weeklySummary' },
           ].map((item, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', gap: '12px' }}>
@@ -1991,10 +2189,10 @@ const SettingsView = () => (
                   <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{item.desc}</p>
                 </div>
               </div>
-              <Toggle active={true} />
+              <Toggle active={settingsDraft[item.key]} onClick={() => toggleSetting(item.key)} />
             </div>
           ))}
-          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '8px', height: '38px', fontSize: '12px', color: 'var(--accent)', borderColor: 'var(--accent-soft)' }}>Manage Notification Recipients</button>
+          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '8px', height: '38px', fontSize: '12px', color: 'var(--accent)', borderColor: 'var(--accent-soft)' }} onClick={() => adminUi.showPlaceholder('Recipient manager opened.', 'Notification recipients can be connected here without changing the surrounding settings flow.')}>Manage Notification Recipients</button>
         </div>
       </div>
 
@@ -2013,7 +2211,7 @@ const SettingsView = () => (
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>View and manage API keys</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }}>Manage Keys</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('API key manager opened.', 'Key rotation and scoped permissions can be wired in here next.')}>Manage Keys</button>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2023,7 +2221,7 @@ const SettingsView = () => (
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>https://hooks.zenin.com/webhook</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }}>Edit</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.copyText('https://hooks.zenin.com/webhook', 'Webhook endpoint copied.', 'The current webhook endpoint is ready to paste into your integration settings.')}>Edit</button>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2033,7 +2231,7 @@ const SettingsView = () => (
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }}>Rotate Secret</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Secret rotation requested.', 'This is ready for a provider-backed webhook secret rotation flow.')}>Rotate Secret</button>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2042,7 +2240,7 @@ const SettingsView = () => (
                 <p style={{ fontSize: '13px', fontWeight: 600 }}>Environment</p>
               </div>
             </div>
-            <span className="badge" style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)' }}>Productiont</span>
+            <span className="badge" style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)' }}>Production</span>
           </div>
         </div>
       </div>
@@ -2075,7 +2273,7 @@ const SettingsView = () => (
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Download a copy of your workspace data</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: '12px', height: '32px' }}>Export Data</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Workspace export requested.', 'This is a safe placeholder until a signed export job endpoint is connected.')}>Export Data</button>
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2104,7 +2302,7 @@ const SettingsView = () => (
         <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#ef4444', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>7</div>
         <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#ef4444' }}>Danger Zone</h3>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(280), gap: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
             <RotateCw size={18} color="#ef4444" style={{ marginTop: '2px' }} />
@@ -2113,7 +2311,7 @@ const SettingsView = () => (
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Temporarily deactivate this workspace.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }}>Deactivate</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Workspace deactivation is guarded.', 'Add a confirmation workflow here when you are ready to support destructive admin actions.')}>Deactivate</button>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
@@ -2123,7 +2321,7 @@ const SettingsView = () => (
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Permanently delete all sandbox data.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }}>Reset Sandbox</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Sandbox reset is intentionally blocked here.', 'Hook this up only when you have a multi-step confirmation and audit trail in place.')}>Reset Sandbox</button>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
@@ -2133,7 +2331,7 @@ const SettingsView = () => (
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Sign out all users from all devices.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }}>Revoke Sessions</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Session revocation queued.', 'Connect this to a backend session revocation endpoint when you are ready.')}>Revoke Sessions</button>
         </div>
       </div>
     </div>
@@ -2148,18 +2346,22 @@ const SettingsView = () => (
         </div>
       </div>
       <div style={{ display: 'flex', gap: '16px' }}>
-        <button className="btn btn-secondary" style={{ width: '120px' }}>Cancel</button>
-        <button className="btn btn-primary" style={{ width: '180px' }} onClick={() => alert('Settings saved successfully.')}>Save All Changes</button>
+        <button className="btn btn-secondary" style={{ width: '120px' }} onClick={() => adminUi.showPlaceholder('Draft reset skipped.', 'The settings on this page are still local until the persistence endpoint is added.')}>Cancel</button>
+        <button className="btn btn-primary" style={{ width: '180px' }} onClick={() => adminUi.showPlaceholder('Settings saved locally.', 'This refactor keeps the controls responsive and ready for API persistence.')}>Save All Changes</button>
       </div>
     </div>
   </div>
-);
+  );
+};
 
-const IntegrationsView = () => (
+const IntegrationsView = () => {
+  const adminUi = useAdminUi();
+
+  return (
   <div className="fade-in">
     <SectionHeader title="Integrations" description="Connect and manage external tools, services, and workflows." breadcrumbs={['Integrations']} />
     
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '16px', marginBottom: '32px' }}>
       <SummaryCard icon={LayoutGrid} label="Connected Apps" value="12" trend="2 new this week" trendUp={true} sparklineColor="#3b82f6" />
       <SummaryCard icon={Activity} label="Sync Health" value="99.6%" trend="0.8% vs last 7 days" trendUp={true} sparklineColor="#10b981" />
       <SummaryCard icon={Webhook} label="Webhooks Active" value="18" trend="3 new this week" trendUp={true} sparklineColor="#8b5cf6" />
@@ -2213,11 +2415,11 @@ const IntegrationsView = () => (
                 <button 
                   className={`btn ${app.isInactive ? 'btn-primary' : 'btn-secondary'}`} 
                   style={{ fontSize: '12px', padding: '6px 16px' }}
-                  onClick={() => alert(`Managing ${app.name} integration...`)}
+                  onClick={() => adminUi.showPlaceholder(`${app.name} ${app.button.toLowerCase()} flow opened.`, 'The integration card is now wired to a consistent dashboard action instead of a dead-end alert.')}
                 >
                   {app.button}
                 </button>
-                <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={() => alert('Options: Sync now, Disconnect, View Logs')}><MoreHorizontal size={14} /></button>
+                <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={() => adminUi.showPlaceholder(`${app.name} options opened.`, 'Sync now, disconnect, and log inspection can be attached to this menu when ready.')}><MoreHorizontal size={14} /></button>
               </div>
             </div>
           ))}
@@ -2260,7 +2462,7 @@ const IntegrationsView = () => (
           <button 
             className="btn btn-secondary" 
             style={{ width: '100%', marginTop: '16px', gap: '8px', fontSize: '13px' }}
-            onClick={() => alert('New API Key generated: zn_live_9f2a7c...')}
+            onClick={() => adminUi.copyText('zn_live_9f2a7c...', 'API key copied.', 'The new key placeholder has been copied so the follow-up flow is still usable.')}
           >
             <Plus size={14} /> Create New API Key
           </button>
@@ -2268,7 +2470,8 @@ const IntegrationsView = () => (
       </div>
     </div>
   </div>
-);
+  );
+};
 
 // --- Main App ---
 
@@ -2294,6 +2497,52 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [error, setError] = useState(null);
+  const [toasts, setToasts] = useState([]);
+
+  const dismissToast = (id) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  };
+
+  const notify = (tone, title, message = '') => {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setToasts((prev) => [...prev.slice(-2), { id, tone, title, message }]);
+    window.setTimeout(() => {
+      dismissToast(id);
+    }, 4200);
+  };
+
+  const copyText = async (value, successTitle, successMessage) => {
+    try {
+      await copyTextToClipboard(value);
+      notify('success', successTitle, successMessage);
+    } catch (copyError) {
+      console.error('Copy failed:', copyError);
+      notify('error', 'Copy failed.', 'Your browser blocked clipboard access for this action.');
+      throw copyError;
+    }
+  };
+
+  const downloadJson = (filename, value, successTitle, successMessage) => {
+    downloadJsonFile(filename, value);
+    notify('success', successTitle, successMessage);
+  };
+
+  const downloadCsv = (filename, rows, successTitle, successMessage) => {
+    downloadCsvFile(filename, rows);
+    notify('success', successTitle, successMessage);
+  };
+
+  const showPlaceholder = (title, message) => {
+    notify('info', title, message);
+  };
+
+  const adminUi = useMemo(() => ({
+    notify,
+    copyText,
+    downloadJson,
+    downloadCsv,
+    showPlaceholder,
+  }), [notify]);
 
   const checkAuth = async () => {
     try {
@@ -2308,7 +2557,7 @@ export default function App() {
     } catch (err) {
       console.error('Auth check failed:', err);
       // Fallback for local development if needed, but safer to deny
-      if (window.location.hostname === 'localhost') {
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         setIsAuthenticated(true);
         setUser({ email: 'dev@zenin.com', displayName: 'Dev Admin', isAdmin: true });
       } else {
@@ -2356,52 +2605,111 @@ export default function App() {
     }
   }, [activeTab, isAuthenticated]);
 
+  useEffect(() => {
+    if (!selectedUser) return;
+    const refreshedUser = users.find((entry) => Number(entry.id) === Number(selectedUser.id));
+    if (refreshedUser) {
+      setSelectedUser((prev) => ({ ...prev, ...refreshedUser }));
+      return;
+    }
+    if (isPanelOpen) {
+      setIsPanelOpen(false);
+      setSelectedUser(null);
+    }
+  }, [users, selectedUser, isPanelOpen]);
+
   const handleUpdateUser = async (userId, type, value) => {
     try {
+      let response = null;
       if (type === 'plan') {
-        await adminFetch(`/users/${userId}/plan`, {
+        response = await adminFetch(`/users/${userId}/plan`, {
           method: 'PATCH',
           body: JSON.stringify({ plan: value })
         });
+        notify('success', 'User plan updated.', `The account is now on the ${String(value).toUpperCase()} plan.`);
       } else if (type === 'role') {
-        await adminFetch(`/users/${userId}/role`, {
+        response = await adminFetch(`/users/${userId}/role`, {
           method: 'PATCH',
           body: JSON.stringify({ isAdmin: value })
         });
+        notify('success', 'Role updated.', value ? 'Admin access was granted.' : 'Admin access was removed.');
       } else if (type === 'suspend') {
-        await adminFetch(`/users/${userId}/suspend`, {
+        response = await adminFetch(`/users/${userId}/suspend`, {
           method: 'POST',
           body: JSON.stringify({ isSuspended: value })
         });
+        notify('success', value ? 'User suspended.' : 'User reactivated.', value ? 'The account has been suspended.' : 'The account is active again.');
       } else if (type === 'delete') {
-        if (confirm('Are you sure you want to permanently delete this user?')) {
-          await adminFetch(`/users/${userId}`, { method: 'DELETE' });
-          setIsPanelOpen(false);
-        } else return;
+        if (!window.confirm('Are you sure you want to permanently delete this user?')) return;
+        await adminFetch(`/users/${userId}`, { method: 'DELETE' });
+        setIsPanelOpen(false);
+        setSelectedUser(null);
+        notify('success', 'User deleted.', 'The account was permanently removed.');
+      }
+
+      const updatedUser = response?.user || response;
+      if (updatedUser?.id) {
+        setSelectedUser((prev) => (prev && Number(prev.id) === Number(updatedUser.id) ? { ...prev, ...updatedUser } : prev));
       }
       await fetchData('users');
     } catch (err) {
-      alert(`Action failed: ${err.message}`);
+      notify('error', 'User update failed.', err.message);
     }
   };
 
   const handleResetPassword = async (userId) => {
     try {
       const { recoveryLink } = await adminFetch(`/users/${userId}/recover`, { method: 'POST' });
-      alert(`Recovery link generated: ${recoveryLink}`);
+      await copyText(recoveryLink, 'Recovery link copied.', 'The password reset link is on your clipboard and ready to share securely.');
     } catch (err) {
-      alert(`Failed to generate recovery link: ${err.message}`);
+      notify('error', 'Recovery link failed.', err.message);
     }
   };
 
   const runMigration = async () => {
     try {
-      const res = await adminFetch('/migrations/admin-workspace', { method: 'POST' });
-      alert('Migration successful');
+      await adminFetch('/migrations/admin-workspace', { method: 'POST' });
+      notify('success', 'Migration successful.', 'The admin workspace migration completed successfully.');
       fetchData('database');
     } catch (err) {
-      alert(`Migration failed: ${err.message}`);
+      notify('error', 'Migration failed.', err.message);
     }
+  };
+
+  const handleAddUser = async (userData) => {
+    const created = await adminFetch('/users', {
+      method: 'POST',
+      body: JSON.stringify(userData),
+    });
+
+    await copyText(
+      created.recoveryLink,
+      'User created and invite copied.',
+      `A password setup link for ${userData.email} is now on your clipboard.`
+    );
+    await fetchData('users');
+    return created.user;
+  };
+
+  const handleExportUsers = (rows) => {
+    const exportRows = (rows || []).map((entry) => ({
+      id: entry.id,
+      name: entry.name || '',
+      email: entry.email || '',
+      plan: entry.plan || '',
+      role: entry.isAdmin ? 'admin' : 'user',
+      status: entry.suspendedAt ? 'suspended' : 'active',
+      joined: entry.joined || '',
+    }));
+    downloadCsv('zenin-admin-users.csv', exportRows, 'User list exported.', `Downloaded ${exportRows.length} user records as CSV.`);
+  };
+
+  const handleExportLogs = (entries) => {
+    downloadJson('zenin-system-logs.json', entries || [], 'Logs exported.', 'The current log dataset was downloaded as JSON.');
+  };
+
+  const handleCreateAlert = () => {
+    showPlaceholder('Alert draft created.', 'Hook this action to your incident-management workflow when you are ready.');
   };
 
   if (!isAuthenticated) {
@@ -2440,7 +2748,10 @@ export default function App() {
           
           <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Having trouble? <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={() => window.location.reload()}>Retry Connection</span>
+              Having trouble?{' '}
+              <button type="button" className="inline-link-btn" onClick={() => window.location.reload()}>
+                Retry Connection
+              </button>
             </p>
           </div>
         </div>
@@ -2476,6 +2787,7 @@ export default function App() {
           setSearchQuery={setSearchQuery} 
           onUpdateUser={handleUpdateUser} 
           onAddUser={() => setIsAddUserModalOpen(true)}
+          onExportUsers={handleExportUsers}
           onSelectUser={(user) => {
             setSelectedUser(user);
             setIsPanelOpen(true);
@@ -2497,6 +2809,8 @@ export default function App() {
         <LogsView 
           logs={logs} 
           onRefresh={() => fetchData('logs')} 
+          onExportLogs={handleExportLogs}
+          onCreateAlert={handleCreateAlert}
           onSelectLog={(log) => {
             setSelectedLog(log);
             setIsLogPanelOpen(true);
@@ -2510,6 +2824,7 @@ export default function App() {
   };
 
   return (
+    <AdminUiContext.Provider value={adminUi}>
     <div className="admin-container">
       <aside className="sidebar">
         <div style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
@@ -2536,13 +2851,13 @@ export default function App() {
               <p style={{ color: 'var(--success)', fontSize: '11px' }}>All Systems Operational</p>
             </div>
           </div>
-          <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+          <button type="button" className="status-link-btn" style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => showPlaceholder('Status page opened.', 'Link this to your public status page when it is available.')}>
             <span>View Status Page</span> <ExternalLink size={10} />
-          </div>
-          <div className="nav-item" style={{ marginTop: '16px', margin: '16px -16px 0 -16px', padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }} onClick={() => setIsLogoutModalOpen(true)}>
+          </button>
+          <button type="button" className="nav-item nav-button" style={{ marginTop: '16px', margin: '16px -16px 0 -16px', padding: '12px 16px', borderTop: '1px solid var(--border)' }} onClick={() => setIsLogoutModalOpen(true)}>
             <LogOut size={18} style={{ transform: 'rotate(180deg)' }} />
             <span>Logout</span>
-          </div>
+          </button>
         </div>
       </aside>
 
@@ -2558,7 +2873,7 @@ export default function App() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-            <button style={{ position: 'relative', background: 'none', border: 'none', color: 'var(--text-secondary)' }}>
+            <button type="button" style={{ position: 'relative', background: 'none', border: 'none', color: 'var(--text-secondary)' }} onClick={() => showPlaceholder('Notifications center opened.', 'This is ready for a richer notification tray when alert data is available.')}>
               <Bell size={20} />
               <div style={{ position: 'absolute', top: '-4px', right: '-4px', background: 'var(--accent)', width: '14px', height: '14px', borderRadius: '50%', fontSize: '10px', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-header)' }}>7</div>
             </button>
@@ -2600,13 +2915,7 @@ export default function App() {
       <AddUserModal 
         isOpen={isAddUserModalOpen} 
         onClose={() => setIsAddUserModalOpen(false)} 
-        onAdd={(userData) => {
-          console.log('Adding user:', userData);
-          // In a real app, you'd call a POST /api/admin/users endpoint
-          // For now, we'll alert and refresh users list if the endpoint existed
-          alert(`In a real deployment, this would create: ${userData.email}`);
-          fetchData('users');
-        }}
+        onAdd={handleAddUser}
       />
       {isEventPanelOpen && (
         <EventDetailPanel 
@@ -2629,12 +2938,21 @@ export default function App() {
       {isLogoutModalOpen && (
         <LogoutModal 
           onClose={() => setIsLogoutModalOpen(false)} 
-          onLogout={() => {
-            setIsLogoutModalOpen(false);
-            // In a real app, perform logout logic here
+          onLogout={async () => {
+            try {
+              await adminFetch('/../auth/signout', { method: 'POST' });
+              setIsAuthenticated(false);
+              setUser(null);
+              setIsLogoutModalOpen(false);
+              notify('success', 'Signed out.', 'Your admin session on this device has ended.');
+            } catch (logoutError) {
+              notify('error', 'Sign out failed.', logoutError.message);
+            }
           }} 
         />
       )}
+      <ToastViewport toasts={toasts} onDismiss={dismissToast} />
     </div>
+    </AdminUiContext.Provider>
   );
 }

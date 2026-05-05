@@ -17760,3 +17760,31 @@ body.light-theme-active .tax-v2-global-total strong {
   text-overflow: ellipsis;
   display: block;
 }
+
+/* Sidebar Collapsed Layout Guard */
+.app-layout.sidebar-is-collapsed {
+  padding-left: 0;
+}
+
+@media (max-width: 960px) {
+  .app-layout.sidebar-is-collapsed {
+    padding-left: 0;
+  }
+}
+
+/* Tax Loss Harvesting Card Enhancements */
+.tax-loss-card.is-live {
+  border-left: 2px solid var(--accent-green);
+}
+
+.tax-loss-card .live-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  animation: pulse-green 2s infinite;
+}
+
+@keyframes pulse-green {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; }
+  100% { opacity: 0.8; }
+}
