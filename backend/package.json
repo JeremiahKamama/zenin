@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "build": "bash setup_venv.sh",
     "telegram:session": "node scripts/telegram-session.js",
     "migrate:admin-workspace": "node scripts/run-admin-workspace-migration.js",
     "test:integration": "node --test test/integration/*.test.js"

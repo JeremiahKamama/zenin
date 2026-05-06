@@ -56,6 +56,21 @@ services:
         name: Cache-Control
         value: no-cache
 
+  # ── Admin Console (React / Vite static site) ──────────────────────────────
+  - type: web
+    name: portv1-admin
+    runtime: static
+    plan: free
+    rootDir: admin
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+
 databases:
   - name: portv1-db
     plan: free
