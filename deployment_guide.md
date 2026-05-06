@@ -67,3 +67,20 @@ To test the subdomain locally, add the following line to your `/etc/hosts` file:
 127.0.0.1 admin.localhost
 ```
 Then run the admin app with `npm run dev` and access it via `http://admin.localhost:4001`.
+
+---
+
+## 4. Vercel Monorepo / Services Config
+If you are deploying the entire repository to Vercel and encountering "Multiple frameworks detected" errors (due to JS and Python files co-existing in the `backend` folder), ensure you have a `vercel.json` in the root with explicit framework settings:
+
+```json
+{
+  "experimentalServices": {
+    "backend": { "framework": "express", "rootDir": "backend" },
+    "frontend": { "framework": "vite", "rootDir": "frontend" },
+    "admin": { "framework": "vite", "rootDir": "admin" }
+  }
+}
+```
+
+This tells Vercel to treat the `backend` folder as an Express application regardless of the Python scripts inside.

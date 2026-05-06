@@ -214,6 +214,8 @@ export function JournalModule({
           quantity: Number(trade?.quantity) || 0,
           price: Number(trade?.price) || 0,
           notional: Number(trade?.notional) || 0,
+          fees: Number(trade?.fee || 0),
+          slippage: Number(trade?.slippage || 0),
           marketType: String(trade?.marketType || ""),
           status: String(trade?.status || "Filled"),
           strategy: String(trade?.strategyName || trade?.name || ""),

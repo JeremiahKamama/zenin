@@ -5,13 +5,7 @@ import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
-
-const OAUTH_PROVIDERS = [
-  { key: "google", label: "Google", icon: "G" },
-  { key: "github", label: "GitHub", icon: "GH" },
-  { key: "apple", label: "Apple", icon: "A" }
-];
-const ENABLE_OAUTH_MOCK = String(import.meta.env.VITE_ENABLE_OAUTH_MOCK || "").trim().toLowerCase() === "true";
+import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "./utils/authRedirect";
 
 const PASSKEY_PROVIDERS = ["Platform Authenticator", "iCloud Keychain", "Google Password Manager", "1Password", "Bitwarden"];
 const VALID_PLANS = ["starter", "pro", "desk"];
@@ -24,12 +18,6 @@ function getModeFromLocation() {
   return ["signup", "signin", "forgot"].includes(mode) ? mode : "signup";
 }
 
-function sanitizeInternalPath(path, fallback = "/app") {
-  const value = String(path || "").trim();
-  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
-  return value;
-}
-
 function normalizePlan(plan) {
   const value = String(plan || "").trim().toLowerCase();
   return VALID_PLANS.includes(value) ? value : null;
@@ -38,16 +26,6 @@ function normalizePlan(plan) {
 function normalizeBillingCycle(billingCycle) {
   const value = String(billingCycle || "").trim().toLowerCase();
   return VALID_BILLING_CYCLES.includes(value) ? value : null;
-}
-
-function getPostAuthRedirectPath() {
-  let queryNext = null;
-  if (typeof window !== "undefined") {
-    const params = new URLSearchParams(window.location.search);
-    queryNext = sanitizeInternalPath(params.get("next"), "");
-  }
-  const storedNext = sanitizeInternalPath(localStorage.getItem("zenin_post_auth_next"), "");
-  return queryNext || storedNext || "/app";
 }
 
 function getRequestedPlan() {
@@ -194,6 +172,18 @@ export default function AuthPage() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get("next");
+    if (next) {
+      storePostAuthRedirect(next, "/app");
+    }
+    const oauthError = String(params.get("oauthError") || params.get("error") || "").trim();
+    if (oauthError) {
+      setError(oauthError);
+    }
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     zeninFetch("/auth/me")
       .then((res) => res.json().catch(() => ({})).then((data) => ({ ok: res.ok, data })))
@@ -203,7 +193,7 @@ export default function AuthPage() {
           localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
           if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
           const target = getPostAuthRedirectPath();
-          localStorage.removeItem("zenin_post_auth_next");
+          clearPostAuthRedirect();
           window.location.replace(target);
           return;
         }
@@ -233,6 +223,8 @@ export default function AuthPage() {
     setMode(nextMode);
     const url = new URL(window.location.href);
     url.searchParams.set("mode", nextMode);
+    url.searchParams.delete("oauthError");
+    url.searchParams.delete("error");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   };
 
@@ -252,7 +244,7 @@ export default function AuthPage() {
   const redirectToApp = async () => {
     await applyRequestedPlanIfAny();
     const target = getPostAuthRedirectPath();
-    localStorage.removeItem("zenin_post_auth_next");
+    clearPostAuthRedirect();
     window.location.href = target;
   };
 
@@ -355,7 +347,12 @@ export default function AuthPage() {
   const onOAuthStart = (provider) => runAction(async () => {
     const res = await zeninFetch("/auth/oauth/start", {
       method: "POST",
-      body: JSON.stringify({ provider })
+      body: JSON.stringify({
+        provider,
+        returnTo: getPostAuthRedirectPath(),
+        entryPath: "/auth",
+        authMode: mode
+      })
     });
     const data = await readJson(res);
     if (data.authorizationUrl) {
@@ -363,16 +360,6 @@ export default function AuthPage() {
     } else {
       throw new Error(data.message || "OAuth is not configured for this provider.");
     }
-  });
-
-  const onOAuthMock = (provider) => runAction(async () => {
-    const res = await zeninFetch("/auth/oauth/mock", {
-      method: "POST",
-      body: JSON.stringify({ provider })
-    });
-    const data = await readJson(res);
-    persistAuth(data);
-    await redirectToApp();
   });
 
   const onRegisterPasskey = () => runAction(async () => {
@@ -431,40 +418,17 @@ export default function AuthPage() {
                 {loading ? "Please wait..." : "Continue"}
               </button>
 
-              {ENABLE_OAUTH_MOCK ? (
-                <>
-                  <div className="auth-v2-divider"><span>Or continue with</span></div>
-                  <div className="auth-v2-oauth-row">
-                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
-                      <span className="provider-icon">G</span>
-                      <span>Google</span>
-                    </button>
-                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
-                      <span className="provider-icon"></span>
-                      <span>Apple</span>
-                    </button>
-                  </div>
-                  <div className="auth-v2-oauth-row" style={{ marginTop: '8px' }}>
-                    <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock("google")}>
-                      <span>Mock Google</span>
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="auth-v2-divider"><span>Or continue with</span></div>
-                  <div className="auth-v2-oauth-row">
-                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
-                      <span className="provider-icon">G</span>
-                      <span>Google</span>
-                    </button>
-                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
-                      <span className="provider-icon"></span>
-                      <span>Apple</span>
-                    </button>
-                  </div>
-                </>
-              )}
+              <div className="auth-v2-divider"><span>Or continue with</span></div>
+              <div className="auth-v2-oauth-row">
+                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
+                  <span className="provider-icon">G</span>
+                  <span>Google</span>
+                </button>
+                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                  <span className="provider-icon"></span>
+                  <span>Apple</span>
+                </button>
+              </div>
 
               <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSignupStep("passkey")}>Sign up with passkey</button>
               <p className="auth-v2-footnote">Use Face ID, Touch ID, Windows Hello, or your device passcode.</p>
@@ -518,21 +482,17 @@ export default function AuthPage() {
               <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onCreateAccount}>Create account</button>
               <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => setSignupStep("passkey")}>Use passkey instead</button>
 
-              {ENABLE_OAUTH_MOCK ? (
-                <>
-                  <div className="auth-v2-divider"><span>Or continue with</span></div>
-                  <div className="auth-v2-oauth-row">
-                    {OAUTH_PROVIDERS.map((provider) => (
-                      <button key={provider.key} className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock(provider.key)}>
-                        <span className="provider-icon">{provider.icon}</span>
-                        <span>{provider.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <p className="auth-v2-footnote">Social sign-in is not enabled in this environment yet.</p>
-              )}
+              <div className="auth-v2-divider"><span>Or continue with</span></div>
+              <div className="auth-v2-oauth-row">
+                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
+                  <span className="provider-icon">G</span>
+                  <span>Google</span>
+                </button>
+                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                  <span className="provider-icon"></span>
+                  <span>Apple</span>
+                </button>
+              </div>
 
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signin")}>Sign in</button></p>
             </>
@@ -667,13 +627,6 @@ export default function AuthPage() {
                       <span>Continue with Apple</span>
                     </button>
                   </div>
-                  {ENABLE_OAUTH_MOCK && (
-                    <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked" style={{ marginTop: '8px' }}>
-                       <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => onOAuthMock("google")}>
-                        <span>Mock Google Sign-In</span>
-                      </button>
-                    </div>
-                  )}
                 </>
               )}
 

@@ -1,0 +1,16 @@
+{
+  "experimentalServices": {
+    "backend": {
+      "framework": "express",
+      "rootDir": "backend"
+    },
+    "frontend": {
+      "framework": "vite",
+      "rootDir": "frontend"
+    },
+    "admin": {
+      "framework": "vite",
+      "rootDir": "admin"
+    }
+  }
+}

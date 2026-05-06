@@ -207,6 +207,9 @@ const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
   const price = Number(trade?.price);
   const notional = Number(trade?.notional);
+  const fee = Number(trade?.fee);
+  const slippage = Number(trade?.slippage);
+  const referencePrice = Number(trade?.referencePrice ?? trade?.reference_price);
   const balanceAfter = Number(trade?.balanceAfter ?? trade?.balance_after);
   const portfolioValueAfter = Number(trade?.portfolioValueAfter ?? trade?.portfolio_value_after);
   const accountEquityAfter = Number(trade?.accountEquityAfter ?? trade?.account_equity_after);
@@ -228,10 +231,14 @@ const normalizeTradeRecord = (trade, idx = 0) => {
     quantity: Number.isFinite(quantity) ? Math.abs(quantity) : 0,
     price: Number.isFinite(price) ? price : 0,
     notional: Number.isFinite(notional) ? Math.abs(notional) : 0,
+    fee: Number.isFinite(fee) ? Math.abs(fee) : 0,
+    slippage: Number.isFinite(slippage) ? Math.abs(slippage) : 0,
+    referencePrice: Number.isFinite(referencePrice) ? referencePrice : null,
     balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null,
     portfolioValueAfter: Number.isFinite(portfolioValueAfter) ? portfolioValueAfter : null,
     accountEquityAfter: Number.isFinite(accountEquityAfter) ? accountEquityAfter : null,
-    positionAfter: Number.isFinite(positionAfter) ? positionAfter : null
+    positionAfter: Number.isFinite(positionAfter) ? positionAfter : null,
+    executionMeta: trade?.executionMeta || trade?.execution_meta_json || {}
   };
 };
 
@@ -462,10 +469,14 @@ function App() {
       quantity: Number(trade.quantity) || 0,
       price: Number(trade.price) || 0,
       notional: Number(trade.notional) || 0,
+      fee: Number.isFinite(Number(trade.fee)) ? Number(trade.fee) : 0,
+      slippage: Number.isFinite(Number(trade.slippage)) ? Number(trade.slippage) : 0,
+      referencePrice: Number.isFinite(Number(trade.referencePrice)) ? Number(trade.referencePrice) : null,
       balanceAfter: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
       portfolioValueAfter: Number.isFinite(Number(trade.portfolioValueAfter)) ? Number(trade.portfolioValueAfter) : null,
       accountEquityAfter: Number.isFinite(Number(trade.accountEquityAfter)) ? Number(trade.accountEquityAfter) : null,
-      positionAfter: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null
+      positionAfter: Number.isFinite(Number(trade.positionAfter)) ? Number(trade.positionAfter) : null,
+      executionMeta: trade.executionMeta || {}
     }));
     localStorage.setItem("zenin_trades", JSON.stringify(persistedTrades));
   }, [trades]);
@@ -1121,6 +1132,216 @@ useEffect(() => {
     setPortfolio,
     setSelectedAsset,
   });
+
+  const fetchCashBalances = useCallback(async () => {
+    if (!hasAuthToken()) return null;
+    try {
+      const res = await zeninFetch("/db/cash");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `Cash balance refresh failed (${res.status})`);
+      }
+      const incomingBalances = Array.isArray(data?.balances) ? data.balances : [];
+      const nextCashBalances = {};
+      incomingBalances.forEach((row) => {
+        const currency = String(row?.currency || "").trim().toUpperCase();
+        const amount = Number(row?.balance);
+        if (!currency || !Number.isFinite(amount)) return;
+        nextCashBalances[currency] = amount;
+      });
+      setCashBalances(nextCashBalances);
+      if (nextCashBalances.USD != null) {
+        setBalance(nextCashBalances.USD);
+      }
+      return nextCashBalances;
+    } catch (error) {
+      console.warn("Cash balance refresh failed.", error);
+      return null;
+    }
+  }, []);
+
+  const refreshTradingWorkspaceState = useCallback(async () => {
+    if (!hasAuthToken()) return null;
+    const [cashRes, holdingsRes, tradesRes] = await Promise.all([
+      zeninFetch("/db/cash"),
+      zeninFetch("/db/portfolio"),
+      zeninFetch("/db/trades?limit=1000")
+    ]);
+
+    const [cashData, holdingsData, tradesData] = await Promise.all([
+      cashRes.json().catch(() => ({})),
+      holdingsRes.json().catch(() => ({})),
+      tradesRes.json().catch(() => ({}))
+    ]);
+
+    if (!cashRes.ok) {
+      throw new Error(cashData?.error || `Cash balance refresh failed (${cashRes.status})`);
+    }
+    if (!holdingsRes.ok) {
+      throw new Error(holdingsData?.error || `Holdings refresh failed (${holdingsRes.status})`);
+    }
+    if (!tradesRes.ok) {
+      throw new Error(tradesData?.error || `Trades refresh failed (${tradesRes.status})`);
+    }
+
+    const nextCashBalances = {};
+    const incomingBalances = Array.isArray(cashData?.balances) ? cashData.balances : [];
+    incomingBalances.forEach((row) => {
+      const currency = String(row?.currency || "").trim().toUpperCase();
+      const amount = Number(row?.balance);
+      if (!currency || !Number.isFinite(amount)) return;
+      nextCashBalances[currency] = amount;
+    });
+
+    const incomingHoldings = Array.isArray(holdingsData?.holdings) ? holdingsData.holdings : [];
+    const incomingTrades = Array.isArray(tradesData?.trades)
+      ? tradesData.trades.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0)
+      : [];
+
+    setCashBalances(nextCashBalances);
+    if (nextCashBalances.USD != null) {
+      setBalance(nextCashBalances.USD);
+    }
+    setPortfolio(incomingHoldings);
+    setActiveOptionsTrades(
+      incomingHoldings
+        .filter((holding) => holding && String(holding.marketType || "").toLowerCase() === "options")
+        .map(mapOptionHoldingToTrade)
+        .filter(Boolean)
+    );
+    setTrades(incomingTrades);
+
+    return {
+      balances: nextCashBalances,
+      holdings: incomingHoldings,
+      trades: incomingTrades
+    };
+  }, []);
+
+  const buildRebalanceTradePayload = useCallback((row, idx = 0) => {
+    const orderType = row?.action === "Trim" ? "sell" : "buy";
+    const symbol = normalizeSymbolKey(row?.symbol);
+    const marketType = String(row?.marketType || row?.type || "equity").toLowerCase();
+    return {
+      symbol,
+      name: row?.name || symbol,
+      type: String(row?.type || (marketType === "spot" ? "crypto" : "stock")).toLowerCase(),
+      marketType,
+      orderType,
+      quantity: Number(row?.tradeQuantity) || 0,
+      price: Number(row?.price) || 0,
+      clientId: `rebalance-${symbol}-${marketType}-${Date.now()}-${idx}`,
+      executedAt: new Date().toISOString(),
+      date: new Date().toISOString().slice(0, 10)
+    };
+  }, []);
+
+  const estimatePortfolioRebalance = useCallback(async (rows = []) => {
+    if (!hasAuthToken()) {
+      return { mode: "guest", estimates: [], summary: null };
+    }
+    const tradePayloads = (Array.isArray(rows) ? rows : [])
+      .filter((row) => row && row.action !== "Hold" && Number(row.tradeQuantity) > 0 && Number(row.price) > 0)
+      .map((row) => {
+        const payload = buildRebalanceTradePayload(row);
+        const { clientId, executedAt, date, ...estimatePayload } = payload;
+        return estimatePayload;
+      });
+    if (!tradePayloads.length) {
+      return { mode: "empty", estimates: [], summary: { tradeCount: 0, referenceNotional: 0, executedNotional: 0, fees: 0, slippage: 0, totalCostImpact: 0 } };
+    }
+    const res = await zeninFetch("/db/execute-trade/estimate", {
+      method: "POST",
+      body: JSON.stringify({ trades: tradePayloads })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || `Rebalance estimate failed (${res.status})`);
+    }
+    return {
+      mode: "signed_in",
+      estimates: Array.isArray(data?.estimates) ? data.estimates : [],
+      summary: data?.summary || null
+    };
+  }, [buildRebalanceTradePayload]);
+
+  const executePortfolioRebalance = useCallback(async (rows = []) => {
+    const actionableRows = (Array.isArray(rows) ? rows : [])
+      .filter((row) => row && row.action !== "Hold" && Number(row.tradeQuantity) > 0 && Number(row.price) > 0);
+
+    if (!actionableRows.length) {
+      return {
+        ok: false,
+        mode: "empty",
+        message: "There are no actionable rebalance trades right now."
+      };
+    }
+
+    if (!hasAuthToken()) {
+      return {
+        ok: false,
+        mode: "guest",
+        message: "Guest mode can only preview this rebalance. Sign in to place live trades through Zenin."
+      };
+    }
+
+    const orderedRows = [...actionableRows].sort((a, b) => {
+      if (a.action === b.action) return Math.abs(Number(b.tradeValue || 0)) - Math.abs(Number(a.tradeValue || 0));
+      return a.action === "Trim" ? -1 : 1;
+    });
+
+    const executedTrades = [];
+
+    try {
+      for (let index = 0; index < orderedRows.length; index += 1) {
+        const payload = buildRebalanceTradePayload(orderedRows[index], index);
+        const res = await zeninFetch("/db/execute-trade", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || `Rebalance trade failed for ${payload.symbol}`);
+        }
+        const savedTrade = data?.trade ? normalizeTradeRecord(data.trade, index) : null;
+        if (savedTrade) {
+          executedTrades.push(savedTrade);
+        }
+      }
+
+      const refreshed = await refreshTradingWorkspaceState();
+      const summary = executedTrades.reduce((acc, trade) => {
+        acc.tradeCount += 1;
+        acc.notional += Math.abs(Number(trade?.notional || 0));
+        acc.fees += Math.abs(Number(trade?.fee || 0));
+        acc.slippage += Math.abs(Number(trade?.slippage || 0));
+        return acc;
+      }, { tradeCount: 0, notional: 0, fees: 0, slippage: 0 });
+
+      return {
+        ok: true,
+        mode: "executed",
+        trades: executedTrades,
+        summary: {
+          ...summary,
+          totalCostImpact: Number((summary.fees + summary.slippage).toFixed(8))
+        },
+        refreshed
+      };
+    } catch (error) {
+      try {
+        await refreshTradingWorkspaceState();
+      } catch (refreshError) {
+        console.warn("Workspace refresh after rebalance failure did not complete.", refreshError);
+      }
+      return {
+        ok: false,
+        mode: executedTrades.length > 0 ? "partial" : "error",
+        trades: executedTrades,
+        message: error?.message || "Rebalance execution failed."
+      };
+    }
+  }, [buildRebalanceTradePayload, refreshTradingWorkspaceState]);
 
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy", options = {}) => {
   const { buyCurrency = "USD", notionalInBuyCurrency = null } = options;
@@ -3421,6 +3642,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                 setActiveOptionsTrades={setActiveOptionsTrades}
                 multiChainCache={multiChainCache}
                 spotPrices={spotPrices}
+                isSignedIn={hasAuthToken()}
+                onEstimateRebalance={estimatePortfolioRebalance}
+                onExecuteRebalance={executePortfolioRebalance}
                 onRemove={removeFromPortfolio}
                 onSelectAsset={(asset) => {
                   const enriched = {

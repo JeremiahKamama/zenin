@@ -27,6 +27,7 @@ const {
   forgotPasswordRequestSchema,
   forgotPasswordConfirmSchema,
   executeTradeSchema,
+  tradeEstimateBatchSchema,
   portfolioUpdateSchema,
   watchlistAssetSchema,
   workspaceDocSchema,
@@ -619,9 +620,106 @@ const ALLOW_DEV_AUTH_DEBUG =
 const ALLOW_OAUTH_MOCK =
   process.env.NODE_ENV !== "production" &&
   String(process.env.ENABLE_OAUTH_MOCK || "").trim().toLowerCase() === "true";
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function hashToken(token) {
   return crypto.createHmac("sha256", AUTH_HASH_KEY).update(String(token || "")).digest("hex");
+}
+
+function sanitizeInternalRedirectPath(pathValue, fallback = "/app") {
+  const value = String(pathValue || "").trim();
+  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
+  return value;
+}
+
+function sanitizeOAuthMode(mode, fallback = "signin") {
+  const value = String(mode || "").trim().toLowerCase();
+  return ["signup", "signin", "forgot"].includes(value) ? value : fallback;
+}
+
+function sanitizeOAuthEntryPath(entryPath) {
+  const value = String(entryPath || "").trim();
+  if (value === "/") return "/";
+  if (value.startsWith("/auth")) return "/auth";
+  return "/auth";
+}
+
+function createOAuthStateToken(payload) {
+  const encodedPayload = Buffer.from(JSON.stringify({
+    ...payload,
+    issuedAt: Date.now()
+  })).toString("base64url");
+  const signature = crypto.createHmac("sha256", AUTH_HASH_KEY).update(encodedPayload).digest("base64url");
+  return `${encodedPayload}.${signature}`;
+}
+
+function parseOAuthStateToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw.includes(".")) {
+    throw new Error("Invalid OAuth state.");
+  }
+
+  const [encodedPayload, providedSignature] = raw.split(".");
+  if (!encodedPayload || !providedSignature) {
+    throw new Error("Invalid OAuth state.");
+  }
+
+  const expectedSignature = crypto.createHmac("sha256", AUTH_HASH_KEY).update(encodedPayload).digest("base64url");
+  const providedBuffer = Buffer.from(providedSignature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  if (providedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+    throw new Error("Invalid OAuth state.");
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid OAuth state.");
+  }
+
+  const issuedAt = Number(payload?.issuedAt);
+  if (!Number.isFinite(issuedAt) || issuedAt + OAUTH_STATE_TTL_MS < Date.now()) {
+    throw new Error("OAuth session expired. Please try again.");
+  }
+
+  return {
+    provider: String(payload?.provider || "").trim().toLowerCase(),
+    returnTo: sanitizeInternalRedirectPath(payload?.returnTo, "/app"),
+    entryPath: sanitizeOAuthEntryPath(payload?.entryPath),
+    authMode: sanitizeOAuthMode(payload?.authMode, "signin")
+  };
+}
+
+function buildFrontendRedirectUrl(pathname, params = {}) {
+  const url = new URL(pathname, expectedOrigin.endsWith("/") ? expectedOrigin : `${expectedOrigin}/`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value == null || value === "") return;
+    url.searchParams.set(key, String(value));
+  });
+  return url.toString();
+}
+
+function buildOAuthFailureRedirect({ entryPath = "/auth", authMode = "signin", returnTo = "/app", errorMessage }) {
+  const sanitizedEntryPath = sanitizeOAuthEntryPath(entryPath);
+  const sanitizedReturnTo = sanitizeInternalRedirectPath(returnTo, "/app");
+  const sanitizedMode = sanitizeOAuthMode(authMode, "signin");
+  if (sanitizedEntryPath === "/") {
+    return buildFrontendRedirectUrl("/", {
+      auth: sanitizedMode,
+      next: sanitizedReturnTo,
+      oauthError: errorMessage || "Sign-in failed. Please try again."
+    });
+  }
+  return buildFrontendRedirectUrl("/auth", {
+    mode: sanitizedMode,
+    next: sanitizedReturnTo,
+    oauthError: errorMessage || "Sign-in failed. Please try again."
+  });
+}
+
+function buildOAuthSuccessRedirect(returnTo) {
+  return buildFrontendRedirectUrl(sanitizeInternalRedirectPath(returnTo, "/app"));
 }
 
 // Encrypt/decrypt TOTP secrets at rest with AES-256-GCM (#2)
@@ -3419,6 +3517,15 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
     return res.status(400).json({ error: "Unsupported provider." });
   }
 
+  const returnTo = sanitizeInternalRedirectPath(req.body?.returnTo, "/app");
+  const entryPath = sanitizeOAuthEntryPath(req.body?.entryPath);
+  const authMode = sanitizeOAuthMode(req.body?.authMode, "signin");
+  const state = createOAuthStateToken({
+    provider,
+    returnTo,
+    entryPath,
+    authMode
+  });
   const redirectUriBase = process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host");
 
   if (provider === "google") {
@@ -3430,7 +3537,8 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
     const authUrl = client.generateAuthUrl({
       access_type: "offline",
       scope: ["https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"],
-      redirect_uri: redirectUri
+      redirect_uri: redirectUri,
+      state
     });
     return res.json({ provider, configured: true, authorizationUrl: authUrl });
   }
@@ -3445,6 +3553,7 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
       redirectURI: redirectUri,
       scope: "name email",
       responseMode: "form_post",
+      state,
     });
     return res.json({ provider, configured: true, authorizationUrl: authUrl });
   }
@@ -3458,8 +3567,31 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
 });
 
 app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
-  const code = req.query.code;
-  if (!code) return res.redirect(`${expectedOrigin}/auth?error=No+code+provided`);
+  let oauthState;
+  try {
+    oauthState = parseOAuthStateToken(req.query.state);
+  } catch (error) {
+    return res.redirect(buildOAuthFailureRedirect({
+      entryPath: "/auth",
+      authMode: "signin",
+      returnTo: "/app",
+      errorMessage: error.message || "Google sign-in session expired. Please try again."
+    }));
+  }
+
+  const code = String(req.query.code || "").trim();
+  if (!code) {
+    return res.redirect(buildOAuthFailureRedirect({
+      ...oauthState,
+      errorMessage: "Google sign-in did not return an authorization code."
+    }));
+  }
+  if (oauthState.provider !== "google") {
+    return res.redirect(buildOAuthFailureRedirect({
+      ...oauthState,
+      errorMessage: "Google sign-in session was invalid. Please try again."
+    }));
+  }
 
   try {
     const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -3485,16 +3617,44 @@ app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
     const session = await issueSessionForUser(user.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: true });
 
-    return res.redirect(`${expectedOrigin}/app`);
+    return res.redirect(buildOAuthSuccessRedirect(oauthState.returnTo));
   } catch (error) {
     console.error("[Google OAuth] Callback failed:", error);
-    return res.redirect(`${expectedOrigin}/auth?error=Google+sign-in+failed`);
+    return res.redirect(buildOAuthFailureRedirect({
+      ...oauthState,
+      errorMessage: "Google sign-in failed. Please try again."
+    }));
   }
 });
 
 app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ extended: true }), async (req, res) => {
-  const { code, id_token, user: userJson } = req.body;
-  
+  let oauthState;
+  try {
+    oauthState = parseOAuthStateToken(req.body?.state);
+  } catch (error) {
+    return res.redirect(buildOAuthFailureRedirect({
+      entryPath: "/auth",
+      authMode: "signin",
+      returnTo: "/app",
+      errorMessage: error.message || "Apple sign-in session expired. Please try again."
+    }));
+  }
+
+  const code = String(req.body?.code || "").trim();
+  const userJson = req.body?.user;
+  if (!code) {
+    return res.redirect(buildOAuthFailureRedirect({
+      ...oauthState,
+      errorMessage: "Apple sign-in did not return an authorization code."
+    }));
+  }
+  if (oauthState.provider !== "apple") {
+    return res.redirect(buildOAuthFailureRedirect({
+      ...oauthState,
+      errorMessage: "Apple sign-in session was invalid. Please try again."
+    }));
+  }
+
   try {
     const clientId = process.env.APPLE_CLIENT_ID;
     const teamId = process.env.APPLE_TEAM_ID;
@@ -3532,10 +3692,13 @@ app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ ext
     const session = await issueSessionForUser(user.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: true });
 
-    return res.redirect(`${expectedOrigin}/app`);
+    return res.redirect(buildOAuthSuccessRedirect(oauthState.returnTo));
   } catch (error) {
     console.error("[Apple OAuth] Callback failed:", error);
-    return res.redirect(`${expectedOrigin}/auth?error=Apple+sign-in+failed`);
+    return res.redirect(buildOAuthFailureRedirect({
+      ...oauthState,
+      errorMessage: "Apple sign-in failed. Please try again."
+    }));
   }
 });
 
@@ -8629,6 +8792,16 @@ app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validate(execut
       return res.status(400).json({ error: error.message });
     }
     handleServerError(res, "Atomic trade execution failed", error);
+  }
+});
+
+app.post("/api/db/execute-trade/estimate", requireSignedIn, writeLimiter, validate(tradeEstimateBatchSchema), async (req, res) => {
+  try {
+    const payloads = Array.isArray(req.body?.trades) ? req.body.trades : [];
+    const estimate = await userWorkspace.trading.estimateTrades(payloads);
+    res.json(estimate);
+  } catch (error) {
+    handleServerError(res, "Trade execution estimate failed", error);
   }
 });
 

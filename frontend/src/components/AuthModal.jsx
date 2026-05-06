@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { zeninFetch } from "../utils/zeninFetch";
 import { ZeninLogo } from "./Branding";
+import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
 
 function writeStoredAuthUser(user, expiresAt = null) {
   if (user) {
@@ -13,14 +14,6 @@ function writeStoredAuthUser(user, expiresAt = null) {
   } else {
     localStorage.removeItem("zenin_auth_expires_at");
   }
-}
-
-function getPostAuthRedirectPath() {
-  const stored = String(localStorage.getItem("zenin_post_auth_next") || "").trim();
-  if (stored.startsWith("/") && !stored.startsWith("//")) {
-    return stored;
-  }
-  return "/app";
 }
 
 async function readJson(res) {
@@ -35,7 +28,7 @@ async function readJson(res) {
  * AuthModal provides a Sign In / Sign Up flow as a modal.
  * Includes a "Continue as Guest" option.
  */
-export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
+export default function AuthModal({ isOpen, initialMode = "signup", initialError = "", returnTo = "/app", onClose }) {
   const [mode, setMode] = useState(initialMode); // 'signin', 'signup', 'forgot', 'forgot_success', 'mfa'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -50,23 +43,22 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
   useEffect(() => {
     if (isOpen) {
       setMode(initialMode);
-      setError("");
+      setError(initialError || "");
+      storePostAuthRedirect(returnTo, "/app");
     }
-  }, [isOpen, initialMode]);
+  }, [initialError, initialMode, isOpen, returnTo]);
 
   if (!isOpen) return null;
 
   const redirectToApp = () => {
     const target = getPostAuthRedirectPath();
-    localStorage.removeItem("zenin_post_auth_next");
-    console.log("Redirecting to:", target);
+    clearPostAuthRedirect();
     window.location.href = target;
   };
 
   const handleGuestEntry = () => {
-    console.log("Entering as guest...");
     localStorage.removeItem("zenin_auth_user");
-    window.location.href = "/app";
+    window.location.href = getPostAuthRedirectPath();
   };
 
   const handleSignin = async (e, overrideCode) => {
@@ -159,7 +151,12 @@ export default function AuthModal({ isOpen, initialMode = "signup", onClose }) {
     try {
       const res = await zeninFetch("/auth/oauth/start", {
         method: "POST",
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({
+          provider,
+          returnTo: getPostAuthRedirectPath(),
+          entryPath: "/",
+          authMode: mode
+        }),
       });
       const data = await readJson(res);
       if (data.authorizationUrl) {

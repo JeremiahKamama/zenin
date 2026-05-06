@@ -10,6 +10,7 @@ const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
 const PORTFOLIO_ALERTS_KEY = "zenin_portfolio_alerts";
 const PORTFOLIO_REBALANCE_QUEUE_KEY = "zenin_portfolio_rebalance_queue";
+const PORTFOLIO_REBALANCE_HISTORY_KEY = "zenin_portfolio_rebalance_history";
 const PORTFOLIO_EXPORTS_KEY = "zenin_portfolio_exports";
 const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
 
@@ -39,6 +40,9 @@ export function PortfolioModule({
   activeOptionsTrades = [],
   multiChainCache = {},
   spotPrices = {},
+  isSignedIn = false,
+  onEstimateRebalance = null,
+  onExecuteRebalance = null,
   onRemove,
   onSellAsset,
   onSelectAsset,
@@ -64,6 +68,8 @@ export function PortfolioModule({
   const [showConnectionsModal, setShowConnectionsModal] = useState(false);
   const [exchangeKeys, setExchangeKeys] = useState([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
+  const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
   const prefsHydratedRef = useRef(false);
   const G7_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
   const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
@@ -678,35 +684,87 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const targetBase = 100 / holdings.length;
 
     return holdings.map((row) => {
+      const assetPrice = Number(row?.row?.price || 0);
+      const ownedQuantity = Number(row?.row?.quantity || 0);
       const current = (Number(row.positionValue || 0) / total) * 100;
       const drift = current - targetBase;
       const action = drift > 2 ? "Trim" : drift < -2 ? "Add" : "Hold";
       const tradeValue = Math.abs(drift / 100) * total;
+      const rawTradeQuantity = assetPrice > 0 ? tradeValue / assetPrice : 0;
+      const tradeQuantity = action === "Trim"
+        ? Math.min(ownedQuantity, rawTradeQuantity)
+        : rawTradeQuantity;
 
       return {
         symbol: row.row?.symbol || row.row?.asset || "—",
+        name: row.row?.name || row.row?.symbol || row.row?.asset || "—",
+        type: String(row.row?.type || "stock").toLowerCase(),
+        marketType: String(row.row?.marketType || row.row?.type || "equity").toLowerCase(),
+        quantity: ownedQuantity,
+        price: assetPrice,
         current,
         target: targetBase,
         drift,
         action,
-        tradeValue
+        tradeValue,
+        tradeQuantity: Number.isFinite(tradeQuantity) ? Number(tradeQuantity.toFixed(8)) : 0
       };
     }).sort((a, b) => Math.abs(b.drift) - Math.abs(a.drift));
   }, [sortedHoldings]);
 
   const rebalanceMetrics = useMemo(() => {
-    const trades = rebalanceSuggestions.filter(s => s.action !== "Hold");
+    const trades = rebalanceSuggestions.filter((s) => s.action !== "Hold" && Number(s.tradeQuantity) > 0 && Number(s.price) > 0);
     const totalDrift = rebalanceSuggestions.reduce((sum, s) => sum + Math.abs(s.drift), 0) / 2;
-    const estFees = trades.length * 9.99; // Mock fee
     const tradeVolume = trades.reduce((sum, s) => sum + s.tradeValue, 0);
 
     return {
       tradesRequired: trades.length,
       totalDrift,
-      estFees,
-      tradeVolume
+      tradeVolume,
+      estimatedFees: Number(rebalanceEstimate?.summary?.fees || 0),
+      estimatedSlippage: Number(rebalanceEstimate?.summary?.slippage || 0),
+      estimatedCostImpact: Number(rebalanceEstimate?.summary?.totalCostImpact || 0)
     };
-  }, [rebalanceSuggestions]);
+  }, [rebalanceEstimate, rebalanceSuggestions]);
+
+  const actionableRebalanceRows = useMemo(
+    () => rebalanceSuggestions.filter((row) => row.action !== "Hold" && Number(row.tradeQuantity) > 0 && Number(row.price) > 0),
+    [rebalanceSuggestions]
+  );
+
+  useEffect(() => {
+    if (activeInsightFlow !== "rebalancing") return;
+    if (!actionableRebalanceRows.length) {
+      setRebalanceEstimate(null);
+      setRebalanceEstimateStatus("empty");
+      return;
+    }
+    if (!isSignedIn || typeof onEstimateRebalance !== "function") {
+      setRebalanceEstimate(null);
+      setRebalanceEstimateStatus(isSignedIn ? "idle" : "guest");
+      return;
+    }
+
+    let cancelled = false;
+    setRebalanceEstimateStatus("loading");
+
+    onEstimateRebalance(actionableRebalanceRows)
+      .then((result) => {
+        if (cancelled) return;
+        setRebalanceEstimate(result);
+        setRebalanceEstimateStatus("ready");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("Rebalance estimate unavailable.", error);
+        setRebalanceEstimate(null);
+        setRebalanceEstimateStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeInsightFlow, actionableRebalanceRows, isSignedIn, onEstimateRebalance]);
 
   const formatMoney = (value, currency = "USD") => {
     return formatCurrency(value, currency);
@@ -966,6 +1024,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
     setFlowBusy(false);
     setFlowActionLabel("");
     setFlowOutcome({ title: "", message: "", tone: "success" });
+    if (flow !== "rebalancing") {
+      setRebalanceEstimate(null);
+      setRebalanceEstimateStatus("idle");
+    }
   };
 
   const closeInsightFlow = () => {
@@ -975,6 +1037,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
     setFlowBusy(false);
     setFlowActionLabel("");
     setFlowOutcome({ title: "", message: "", tone: "success" });
+    setRebalanceEstimate(null);
+    setRebalanceEstimateStatus("idle");
   };
 
   const openRelatedHoldingFromInsight = (selection = null) => {
@@ -1137,12 +1201,86 @@ const isProfitable = currentAccountEquity >= initialBalance;
       id: `portfolio-rebalance-${Date.now()}`,
       createdAt: new Date().toISOString(),
       context,
+      executionStatus: "preview_only",
       tradesRequired: rebalanceMetrics.tradesRequired,
       totalDrift: Number(rebalanceMetrics.totalDrift || 0),
-      estFees: Number(rebalanceMetrics.estFees || 0),
-      suggestions: rebalanceSuggestions.filter((row) => row.action !== "Hold")
+      fees: Number(rebalanceMetrics.estimatedFees || 0),
+      slippage: Number(rebalanceMetrics.estimatedSlippage || 0),
+      totalCostImpact: Number(rebalanceMetrics.estimatedCostImpact || 0),
+      suggestions: actionableRebalanceRows
     }, 20);
     syncPortfolioCollection("portfolio:rebalance_queue", nextQueue, 20);
+  };
+
+  const recordRebalanceExecution = (result) => {
+    const nextHistory = appendStoredRecord(PORTFOLIO_REBALANCE_HISTORY_KEY, {
+      id: `portfolio-rebalance-history-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      status: result?.mode || (result?.ok ? "executed" : "error"),
+      summary: result?.summary || null,
+      trades: Array.isArray(result?.trades) ? result.trades : []
+    }, 30);
+    syncPortfolioCollection("portfolio:rebalance_history", nextHistory, 30);
+  };
+
+  const handleConfirmRebalance = async () => {
+    if (!actionableRebalanceRows.length) {
+      setFlowOutcome({
+        title: "No rebalance needed",
+        message: "There are no actionable trades to submit right now.",
+        tone: "warning"
+      });
+      setInsightFlowStep(5);
+      return;
+    }
+
+    if (!isSignedIn || typeof onExecuteRebalance !== "function") {
+      queuePortfolioRebalance("guest-preview");
+      setFlowOutcome({
+        title: "Guest preview only",
+        message: "No trades were executed. Sign in to submit this rebalance through Zenin.",
+        tone: "warning"
+      });
+      setInsightFlowStep(5);
+      return;
+    }
+
+    setFlowBusy(true);
+    setFlowActionLabel("Submitting authenticated rebalance orders...");
+
+    try {
+      const result = await onExecuteRebalance(actionableRebalanceRows);
+      recordRebalanceExecution(result);
+
+      if (result?.ok) {
+        setFlowOutcome({
+          title: "Rebalance executed",
+          message: `Submitted ${result?.summary?.tradeCount || actionableRebalanceRows.length} trades. Platform fees ${formatMoney(result?.summary?.fees || 0)} and slippage ${formatMoney(result?.summary?.slippage || 0)} were recorded in trade history.`,
+          tone: "success"
+        });
+      } else if (result?.mode === "partial") {
+        setFlowOutcome({
+          title: "Rebalance partially completed",
+          message: `${result?.trades?.length || 0} trades were filled before execution stopped. Your portfolio and trade history were refreshed from the latest saved state.`,
+          tone: "warning"
+        });
+      } else {
+        setFlowOutcome({
+          title: "Rebalance not completed",
+          message: result?.message || "Zenin could not complete the rebalance.",
+          tone: "warning"
+        });
+      }
+    } catch (error) {
+      setFlowOutcome({
+        title: "Rebalance failed",
+        message: error?.message || "Zenin could not submit the rebalance.",
+        tone: "error"
+      });
+    } finally {
+      setFlowBusy(false);
+      setInsightFlowStep(5);
+    }
   };
 
   const renderInsightFlow = () => {
@@ -1511,14 +1649,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <span>{activeSector?.name || "Sector"}</span>
             </div>
             <div className="portfolio-v2-flow-list stacked">
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving rebalance response...", 5, () => {
-                queuePortfolioRebalance("exposure-response");
-                setFlowOutcome({
-                  title: "Rebalance plan queued",
-                  message: "The response was saved to your Zenin workspace for later execution.",
-                  tone: "success"
-                });
-              })}>
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => openInsightFlow("rebalancing", actionableRebalanceRows[0] || null)}>
                 <strong>Rebalance portfolio</strong><span>Adjust allocations</span>
               </button>
               <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving exposure alert...", 5, () => {
@@ -1554,7 +1685,23 @@ const isProfitable = currentAccountEquity >= initialBalance;
         );
       }
     } else if (activeInsightFlow === "rebalancing") {
-      const { tradesRequired, totalDrift, estFees, tradeVolume } = rebalanceMetrics;
+      const {
+        tradesRequired,
+        totalDrift,
+        tradeVolume,
+        estimatedFees,
+        estimatedSlippage,
+        estimatedCostImpact
+      } = rebalanceMetrics;
+      const trimCount = actionableRebalanceRows.filter((s) => s.action === "Trim").length;
+      const addCount = actionableRebalanceRows.filter((s) => s.action === "Add").length;
+      const costStatusLabel = !isSignedIn
+        ? "Sign in to preview API execution costs."
+        : rebalanceEstimateStatus === "loading"
+          ? "Fetching execution costs..."
+          : rebalanceEstimateStatus === "error"
+            ? "Execution cost preview unavailable."
+            : null;
 
       if (insightFlowStep === 1) {
         // This is usually reached by clicking "Action" in the table
@@ -1615,15 +1762,27 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <strong style={{ fontSize: '18px' }}>{tradesRequired}</strong>
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
-                  <span style={{ fontSize: '10px' }}>Est. Cost</span>
-                  <strong style={{ fontSize: '18px' }}>{formatMoney(estFees)}</strong>
+                  <span style={{ fontSize: '10px' }}>Platform Fees</span>
+                  <strong style={{ fontSize: '18px' }}>{formatMoney(estimatedFees)}</strong>
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
-                  <span style={{ fontSize: '10px' }}>Cash Impact</span>
-                  <strong style={{ fontSize: '18px', color: '#38bdf8' }}>Neutral</strong>
+                  <span style={{ fontSize: '10px' }}>Expected Slippage</span>
+                  <strong style={{ fontSize: '18px', color: '#38bdf8' }}>{formatMoney(estimatedSlippage)}</strong>
                 </div>
               </div>
             </div>
+
+            {costStatusLabel ? (
+              <div className="portfolio-v2-flow-status-inline warning" style={{ marginTop: '14px' }}>
+                <span>!</span>
+                <div><strong>Execution cost preview</strong><small>{costStatusLabel}</small></div>
+              </div>
+            ) : (
+              <div className="portfolio-v2-flow-status-inline success" style={{ marginTop: '14px' }}>
+                <span>✓</span>
+                <div><strong>Total execution cost impact</strong><small>{formatMoney(estimatedCostImpact)} across {formatMoney(tradeVolume)} of turnover.</small></div>
+              </div>
+            )}
 
             <div className="portfolio-v2-flow-actions">
               <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(3)}>Generate Plan</button>
@@ -1639,7 +1798,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <span>Inspect individual trade suggestions</span>
             </div>
             <div className="portfolio-v2-flow-list stacked" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-              {rebalanceSuggestions.filter(s => s.action !== "Hold").map((s) => (
+              {actionableRebalanceRows.map((s) => (
                 <div key={s.symbol} className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <div className="portfolio-v2-activity-dot" style={{
@@ -1656,6 +1815,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                    <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Sell" : "Buy"}</div>
                       <div style={{ fontSize: '12px', color: '#f8fafc' }}>{formatMoney(s.tradeValue)}</div>
+                      <div style={{ fontSize: '11px', color: '#94a3b8' }}>{Number(s.tradeQuantity || 0).toFixed(6)} {s.symbol}</div>
                    </div>
                 </div>
               ))}
@@ -1677,31 +1837,36 @@ const isProfitable = currentAccountEquity >= initialBalance;
                <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <div style={{ fontSize: '20px' }}>🛒</div>
-                    <div><strong>{tradesRequired} total trades</strong><span>{rebalanceSuggestions.filter(s => s.action === "Trim").length} Sell, {rebalanceSuggestions.filter(s => s.action === "Add").length} Buy</span></div>
+                    <div><strong>{tradesRequired} total trades</strong><span>{trimCount} Sell, {addCount} Buy</span></div>
                   </div>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <div style={{ fontSize: '20px' }}>💰</div>
-                    <div><strong>Estimated fees</strong><span>{formatMoney(estFees)}</span></div>
+                    <div><strong>Platform fees</strong><span>{formatMoney(estimatedFees)}</span></div>
+                  </div>
+               </div>
+               <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <div style={{ fontSize: '20px' }}>↔</div>
+                    <div><strong>Expected slippage</strong><span>{formatMoney(estimatedSlippage)}</span></div>
                   </div>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <div style={{ fontSize: '20px' }}>🎯</div>
-                    <div><strong>New projected drift</strong><span className="positive">0.0%</span></div>
+                    <div><strong>Total execution cost</strong><span>{formatMoney(estimatedCostImpact)}</span></div>
                   </div>
                </div>
             </div>
+            {costStatusLabel ? (
+              <div className="portfolio-v2-flow-status-inline warning">
+                <span>!</span>
+                <div><strong>Cost estimate note</strong><small>{costStatusLabel}</small></div>
+              </div>
+            ) : null}
             <div className="portfolio-v2-flow-actions">
-              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => runFlowProcessing(5, "Saving rebalance queue...", 4, () => {
-                queuePortfolioRebalance("rebalance-confirm");
-                setFlowOutcome({
-                  title: "Rebalance queued",
-                  message: "This plan was saved in your Zenin workspace and is ready for manual execution.",
-                  tone: "success"
-                });
-              })}>Confirm</button>
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={handleConfirmRebalance}>Confirm</button>
               <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(3)}>Back</button>
             </div>
           </div>
@@ -1715,10 +1880,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
         ) : (
           <div className="portfolio-v2-flow-card" style={{ alignItems: 'center', textAlign: 'center' }}>
             <div className="portfolio-v2-flow-status-inline success" style={{ flexDirection: 'column', padding: '20px', gap: '16px' }}>
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(34,197,94,0.15)', color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>✓</div>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: flowOutcome.tone === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>{flowOutcome.tone === 'success' ? '✓' : '!'}</div>
               <div style={{ textAlign: 'center' }}>
-                <h3 style={{ fontSize: '20px', color: '#f8fafc', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance submitted"}</h3>
-                <p style={{ color: '#94a3b8', fontSize: '14px' }}>{flowOutcome.message || "Your trades have been submitted successfully."}</p>
+                <h3 style={{ fontSize: '20px', color: '#f8fafc', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance update"}</h3>
+                <p style={{ color: '#94a3b8', fontSize: '14px' }}>{flowOutcome.message || "Zenin completed the rebalance workflow."}</p>
               </div>
             </div>
 
@@ -1727,10 +1892,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <span>Projected Drift</span><strong className="positive">0.0%</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Status</span><strong style={{ color: '#f59e0b' }}>Queued Locally</strong>
+                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b' }}>{flowOutcome.tone === 'success' ? 'Executed' : 'Preview / Partial'}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Next Review</span><strong>30 days</strong>
+                  <span>Platform Fees</span><strong>{formatMoney(Number(rebalanceEstimate?.summary?.fees || 0))}</strong>
+               </div>
+               <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
+                  <span>Slippage</span><strong>{formatMoney(Number(rebalanceEstimate?.summary?.slippage || 0))}</strong>
                </div>
             </div>
 

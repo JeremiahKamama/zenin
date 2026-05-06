@@ -4,6 +4,9 @@ const assert = require('node:assert/strict');
 process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.PORT = process.env.PORT || '4110';
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+process.env.EXPECTED_ORIGIN = process.env.EXPECTED_ORIGIN || process.env.FRONTEND_URL;
+process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || 'test-google-client-id';
+process.env.APPLE_CLIENT_ID = process.env.APPLE_CLIENT_ID || 'test-apple-client-id';
 
 const BASE_URL = `http://127.0.0.1:${process.env.PORT}`;
 const { startServer, stopServer } = require('../../index');
@@ -29,6 +32,15 @@ async function requestJson(path, { method = 'GET', token = null, body = null } =
     data = {};
   }
   return { res, data };
+}
+
+async function requestRaw(path, { method = 'GET', headers = {}, body = undefined } = {}) {
+  return fetch(`${BASE_URL}${path}`, {
+    method,
+    headers,
+    body,
+    redirect: 'manual'
+  });
 }
 
 function uniqueEmail(prefix) {
@@ -223,4 +235,82 @@ test('balance updates remain user-scoped', async (t) => {
 
   assert.equal(Number(aAfter.data.balance), Number(aBefore.data.balance) + depositAmount);
   assert.equal(Number(bAfter.data.balance), Number(bBefore.data.balance));
+});
+
+test('google oauth preserves return-to state on callback failure', async (t) => {
+  if (!serverReady) {
+    t.skip(`Server did not start for integration tests: ${serverStartError?.message || 'unknown error'}`);
+    return;
+  }
+
+  const start = await requestJson('/api/auth/oauth/start', {
+    method: 'POST',
+    body: {
+      provider: 'google',
+      returnTo: '/app/company/NVDA',
+      entryPath: '/auth',
+      authMode: 'signup'
+    }
+  });
+
+  assert.equal(start.res.status, 200);
+  assert.ok(start.data.authorizationUrl);
+
+  const authUrl = new URL(start.data.authorizationUrl);
+  const state = authUrl.searchParams.get('state');
+  assert.ok(state, 'Expected OAuth state in Google authorization URL');
+
+  const callback = await requestRaw(`/api/auth/oauth/google/callback?state=${encodeURIComponent(state)}`);
+  assert.equal(callback.status, 302);
+
+  const location = callback.headers.get('location');
+  assert.ok(location);
+  const redirectUrl = new URL(location);
+  assert.equal(redirectUrl.origin, process.env.EXPECTED_ORIGIN);
+  assert.equal(redirectUrl.pathname, '/auth');
+  assert.equal(redirectUrl.searchParams.get('mode'), 'signup');
+  assert.equal(redirectUrl.searchParams.get('next'), '/app/company/NVDA');
+  assert.match(String(redirectUrl.searchParams.get('oauthError') || ''), /authorization code/i);
+});
+
+test('apple oauth failure returns users to homepage auth entry with preserved next', async (t) => {
+  if (!serverReady) {
+    t.skip(`Server did not start for integration tests: ${serverStartError?.message || 'unknown error'}`);
+    return;
+  }
+
+  const start = await requestJson('/api/auth/oauth/start', {
+    method: 'POST',
+    body: {
+      provider: 'apple',
+      returnTo: '/app/company/AAPL',
+      entryPath: '/',
+      authMode: 'signin'
+    }
+  });
+
+  assert.equal(start.res.status, 200);
+  assert.ok(start.data.authorizationUrl);
+
+  const authUrl = new URL(start.data.authorizationUrl);
+  const state = authUrl.searchParams.get('state');
+  assert.ok(state, 'Expected OAuth state in Apple authorization URL');
+
+  const callback = await requestRaw('/api/auth/oauth/apple/callback', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ state }).toString()
+  });
+  assert.equal(callback.status, 302);
+
+  const location = callback.headers.get('location');
+  assert.ok(location);
+  const redirectUrl = new URL(location);
+  assert.equal(redirectUrl.origin, process.env.EXPECTED_ORIGIN);
+  assert.equal(redirectUrl.pathname, '/');
+  assert.equal(redirectUrl.searchParams.get('auth'), 'signin');
+  assert.equal(redirectUrl.searchParams.get('next'), '/app/company/AAPL');
+  assert.match(String(redirectUrl.searchParams.get('oauthError') || ''), /authorization code/i);
 });

@@ -165,6 +165,9 @@ function mapTradeRow(row) {
     quantity: toNumber(row.quantity),
     price: toNumber(row.price),
     notional: toNumber(row.notional),
+    fee: row.fee == null ? 0 : toNumber(row.fee),
+    slippage: row.slippage == null ? 0 : toNumber(row.slippage),
+    referencePrice: row.referencePrice == null ? null : toNumber(row.referencePrice),
     balanceAfter: row.balanceAfter == null ? null : toNumber(row.balanceAfter),
     balance_after: row.balanceAfter == null ? null : toNumber(row.balanceAfter),
     portfolioValueAfter: row.portfolioValueAfter == null ? null : toNumber(row.portfolioValueAfter),
@@ -174,7 +177,8 @@ function mapTradeRow(row) {
     positionAfter: row.positionAfter == null ? null : toNumber(row.positionAfter),
     position_after: row.positionAfter == null ? null : toNumber(row.positionAfter),
     strategyName: row.strategyName || row.strategy_name || null,
-    legsJson: parseJsonPayload(row.legsJson || row.legs_json)
+    legsJson: parseJsonPayload(row.legsJson || row.legs_json),
+    executionMeta: parseJsonPayload(row.executionMeta || row.execution_meta_json, {})
   };
 }
 
@@ -184,6 +188,63 @@ function normalizeMarketType(type, marketType) {
     return String(marketType).trim().toLowerCase();
   }
   return cleanType === "crypto" ? "spot" : "equity";
+}
+
+function roundMoney(value) {
+  return Number(toNumber(value, 0).toFixed(8));
+}
+
+function getExecutionCostProfile(type, marketType) {
+  const resolvedType = String(type || "").trim().toLowerCase();
+  const resolvedMarketType = String(marketType || "").trim().toLowerCase();
+  const marketKey = resolvedMarketType || resolvedType;
+
+  if (marketKey.includes("option") || resolvedType === "options") {
+    return { feeBps: 18, minFee: 1.25, baseSlippageBps: 14, sizeSlippageBps: 4.5, maxExtraSlippageBps: 22, label: "options" };
+  }
+  if (marketKey.includes("crypto") || marketKey === "spot" || resolvedType === "crypto") {
+    return { feeBps: 14, minFee: 0.75, baseSlippageBps: 10, sizeSlippageBps: 3.5, maxExtraSlippageBps: 18, label: "crypto" };
+  }
+  if (marketKey.includes("commodity") || marketKey.includes("future") || resolvedType === "commodity") {
+    return { feeBps: 10, minFee: 1, baseSlippageBps: 8, sizeSlippageBps: 2.5, maxExtraSlippageBps: 14, label: "commodity" };
+  }
+  if (marketKey.includes("bond") || resolvedType === "bond") {
+    return { feeBps: 7, minFee: 1, baseSlippageBps: 5, sizeSlippageBps: 2, maxExtraSlippageBps: 10, label: "bond" };
+  }
+  return { feeBps: 8, minFee: 0.5, baseSlippageBps: 4, sizeSlippageBps: 1.75, maxExtraSlippageBps: 9, label: "equity" };
+}
+
+function buildExecutionCostEstimate({ type, marketType, orderType, quantity, price }) {
+  const safeQuantity = Math.abs(toNumber(quantity));
+  const referencePrice = toNumber(price);
+  const normalizedOrderType = String(orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+  const referenceNotional = roundMoney(referencePrice * safeQuantity);
+  const profile = getExecutionCostProfile(type, marketType);
+  const extraSlippageBps = Math.min(
+    profile.maxExtraSlippageBps,
+    Math.log10(Math.max(referenceNotional, 1) + 1) * profile.sizeSlippageBps
+  );
+  const slippageBps = profile.baseSlippageBps + extraSlippageBps;
+  const priceDirection = normalizedOrderType === "buy" ? 1 : -1;
+  const executedPrice = roundMoney(referencePrice * (1 + ((slippageBps / 10000) * priceDirection)));
+  const executedNotional = roundMoney(executedPrice * safeQuantity);
+  const slippage = roundMoney(Math.abs(executedNotional - referenceNotional));
+  const fee = roundMoney(Math.max(profile.minFee, executedNotional * (profile.feeBps / 10000)));
+
+  return {
+    referencePrice,
+    executedPrice,
+    executedNotional,
+    referenceNotional,
+    fee,
+    slippage,
+    totalCostImpact: roundMoney(fee + slippage),
+    executionMeta: {
+      profile: profile.label,
+      feeBps: profile.feeBps,
+      slippageBps: roundMoney(slippageBps),
+    }
+  };
 }
 
 function toUserId(userId) {
@@ -528,6 +589,10 @@ async function initializeDatabase() {
         quantity DOUBLE PRECISION NOT NULL,
         price DOUBLE PRECISION NOT NULL,
         notional DOUBLE PRECISION NOT NULL,
+        fee DOUBLE PRECISION,
+        slippage DOUBLE PRECISION,
+        reference_price DOUBLE PRECISION,
+        execution_meta_json JSONB,
         balance_after DOUBLE PRECISION,
         portfolio_value_after DOUBLE PRECISION,
         account_equity_after DOUBLE PRECISION,
@@ -545,6 +610,14 @@ async function initializeDatabase() {
     await client.query(`
       ALTER TABLE trade_executions
       ADD COLUMN IF NOT EXISTS legs_json JSONB;
+    `);
+
+    await client.query(`
+      ALTER TABLE trade_executions
+      ADD COLUMN IF NOT EXISTS fee DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS slippage DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS reference_price DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS execution_meta_json JSONB;
     `);
 
     await client.query(`
@@ -769,6 +842,10 @@ async function initializeDatabase() {
         quantity DOUBLE PRECISION NOT NULL,
         price DOUBLE PRECISION NOT NULL,
         notional DOUBLE PRECISION NOT NULL,
+        fee DOUBLE PRECISION,
+        slippage DOUBLE PRECISION,
+        reference_price DOUBLE PRECISION,
+        execution_meta_json JSONB,
         balance_after DOUBLE PRECISION,
         portfolio_value_after DOUBLE PRECISION,
         account_equity_after DOUBLE PRECISION,
@@ -796,6 +873,14 @@ async function initializeDatabase() {
         legs_json TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_trades
+      ADD COLUMN IF NOT EXISTS fee DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS slippage DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS reference_price DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS execution_meta_json JSONB;
     `);
 
     await client.query(`
@@ -1373,6 +1458,10 @@ const tradeExecutions = {
           quantity,
           price,
           notional,
+          fee,
+          slippage,
+          reference_price AS "referencePrice",
+          execution_meta_json AS "executionMeta",
           balance_after AS "balanceAfter",
           portfolio_value_after AS "portfolioValueAfter",
           account_equity_after AS "accountEquityAfter",
@@ -1585,6 +1674,10 @@ const trading = {
           quantity,
           price,
           notional,
+          fee,
+          slippage,
+          reference_price AS "referencePrice",
+          execution_meta_json AS "executionMeta",
           balance_after AS "balanceAfter",
           portfolio_value_after AS "portfolioValueAfter",
           account_equity_after AS "accountEquityAfter",
@@ -2837,6 +2930,10 @@ const userWorkspace = {
           quantity,
           price,
           notional,
+          fee,
+          slippage,
+          reference_price AS "referencePrice",
+          execution_meta_json AS "executionMeta",
           balance_after AS "balanceAfter",
           portfolio_value_after AS "portfolioValueAfter",
           account_equity_after AS "accountEquityAfter",
@@ -2856,13 +2953,19 @@ const userWorkspace = {
         await pool.query(`
           INSERT INTO user_workspace_trades (
             user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
-            quantity, price, notional, strategy_name, legs_json
+            quantity, price, notional, fee, slippage, reference_price, execution_meta_json, strategy_name, legs_json
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
           ON CONFLICT (user_id, client_id) DO NOTHING;
         `, [
           resolvedUserId, t.clientId, t.date, t.executedAt, t.asset, t.name, t.type, t.side,
-          t.marketType, t.status, t.quantity, t.price, t.notional, t.strategyName, JSON.stringify(t.legsJson || {})
+          t.marketType, t.status, t.quantity, t.price, t.notional,
+          Number.isFinite(Number(t.fee)) ? Number(t.fee) : null,
+          Number.isFinite(Number(t.slippage)) ? Number(t.slippage) : null,
+          Number.isFinite(Number(t.referencePrice)) ? Number(t.referencePrice) : null,
+          JSON.stringify(t.executionMeta || {}),
+          t.strategyName,
+          JSON.stringify(t.legsJson || {})
         ]);
       }
     },
@@ -2882,6 +2985,10 @@ const userWorkspace = {
         quantity: Math.abs(toNumber(trade.quantity)),
         price: toNumber(trade.price),
         notional: Math.abs(toNumber(trade.notional)),
+        fee: Number.isFinite(Number(trade.fee)) ? Number(trade.fee) : 0,
+        slippage: Number.isFinite(Number(trade.slippage)) ? Number(trade.slippage) : 0,
+        reference_price: Number.isFinite(Number(trade.referencePrice)) ? Number(trade.referencePrice) : null,
+        execution_meta_json: parseJsonPayload(trade.executionMeta || trade.execution_meta_json, {}),
         balance_after: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
         portfolio_value_after: Number.isFinite(Number(trade.portfolioValueAfter)) ? Number(trade.portfolioValueAfter) : null,
         account_equity_after: Number.isFinite(Number(trade.accountEquityAfter)) ? Number(trade.accountEquityAfter) : null,
@@ -2894,10 +3001,11 @@ const userWorkspace = {
         const result = await pool.query(`
           INSERT INTO user_workspace_trades (
             user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
-            quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after,
+            quantity, price, notional, fee, slippage, reference_price, execution_meta_json,
+            balance_after, portfolio_value_after, account_equity_after, position_after,
             strategy_name, legs_json
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
           RETURNING
             id,
             client_id AS "clientId",
@@ -2912,6 +3020,10 @@ const userWorkspace = {
             quantity,
             price,
             notional,
+            fee,
+            slippage,
+            reference_price AS "referencePrice",
+            execution_meta_json AS "executionMeta",
             balance_after AS "balanceAfter",
             portfolio_value_after AS "portfolioValueAfter",
             account_equity_after AS "accountEquityAfter",
@@ -2932,6 +3044,10 @@ const userWorkspace = {
           normalized.quantity,
           normalized.price,
           normalized.notional,
+          normalized.fee,
+          normalized.slippage,
+          normalized.reference_price,
+          JSON.stringify(normalized.execution_meta_json || {}),
           normalized.balance_after,
           normalized.portfolio_value_after,
           normalized.account_equity_after,
@@ -2957,6 +3073,10 @@ const userWorkspace = {
               quantity,
               price,
               notional,
+              fee,
+              slippage,
+              reference_price AS "referencePrice",
+              execution_meta_json AS "executionMeta",
               balance_after AS "balanceAfter",
               portfolio_value_after AS "portfolioValueAfter",
               account_equity_after AS "accountEquityAfter",
@@ -3234,6 +3354,52 @@ const userWorkspace = {
   },
 
   trading: {
+    estimateTrade: async (payload) => {
+      const symbol = String(payload.symbol || "").trim().toUpperCase();
+      const name = String(payload.name || symbol || "UNKNOWN");
+      const type = String(payload.type || "stock").trim().toLowerCase();
+      const marketType = normalizeMarketType(type, payload.marketType);
+      const orderType = String(payload.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+      const quantity = Math.abs(toNumber(payload.quantity));
+      const price = toNumber(payload.price);
+
+      if (!symbol) throw new Error("Invalid symbol");
+      if (!Number.isFinite(quantity) || quantity <= QTY_EPSILON) throw new Error("Invalid quantity");
+      if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
+
+      return {
+        symbol,
+        name,
+        type,
+        marketType,
+        orderType,
+        quantity,
+        ...buildExecutionCostEstimate({ type, marketType, orderType, quantity, price })
+      };
+    },
+
+    estimateTrades: async (payloads = []) => {
+      const estimates = (Array.isArray(payloads) ? payloads : []).map((payload) => userWorkspace.trading.estimateTrade(payload));
+      const resolvedEstimates = await Promise.all(estimates);
+      const summary = resolvedEstimates.reduce((acc, estimate) => {
+        acc.tradeCount += 1;
+        acc.referenceNotional = roundMoney(acc.referenceNotional + toNumber(estimate.referenceNotional));
+        acc.executedNotional = roundMoney(acc.executedNotional + toNumber(estimate.executedNotional));
+        acc.fees = roundMoney(acc.fees + toNumber(estimate.fee));
+        acc.slippage = roundMoney(acc.slippage + toNumber(estimate.slippage));
+        acc.totalCostImpact = roundMoney(acc.totalCostImpact + toNumber(estimate.totalCostImpact));
+        return acc;
+      }, {
+        tradeCount: 0,
+        referenceNotional: 0,
+        executedNotional: 0,
+        fees: 0,
+        slippage: 0,
+        totalCostImpact: 0
+      });
+      return { estimates: resolvedEstimates, summary };
+    },
+
     executeTrade: async (userId, payload) => {
       const resolvedUserId = toUserId(userId);
       const symbol = String(payload.symbol || "").trim().toUpperCase();
@@ -3242,8 +3408,7 @@ const userWorkspace = {
       const marketType = normalizeMarketType(type, payload.marketType);
       const orderType = String(payload.orderType || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
       const quantity = Math.abs(toNumber(payload.quantity));
-      const price = toNumber(payload.price);
-      const notional = Number((price * quantity).toFixed(8));
+      const quotedPrice = toNumber(payload.price);
       const dateAdded = payload.date_added || new Date().toISOString();
       const executionTimestamp = payload.executedAt || new Date().toISOString();
       const executionDate = toDateString(payload.date || executionTimestamp) || new Date().toISOString().slice(0, 10);
@@ -3253,12 +3418,26 @@ const userWorkspace = {
 
       if (!symbol) throw new Error("Invalid symbol");
       if (!Number.isFinite(quantity) || quantity <= QTY_EPSILON) throw new Error("Invalid quantity");
-      if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
+      if (!Number.isFinite(quotedPrice) || quotedPrice < 0) throw new Error("Invalid price");
       if (!clientId) {
         const err = new Error("clientId is required");
         err.code = "INVALID_CLIENT_ID";
         throw err;
       }
+
+      const executionEstimate = buildExecutionCostEstimate({
+        type,
+        marketType,
+        orderType,
+        quantity,
+        price: quotedPrice
+      });
+      const executedPrice = executionEstimate.executedPrice;
+      const notional = executionEstimate.executedNotional;
+      const fee = executionEstimate.fee;
+      const slippage = executionEstimate.slippage;
+      const referencePrice = executionEstimate.referencePrice;
+      const executionMeta = executionEstimate.executionMeta;
 
       const client = await pool.connect();
       try {
@@ -3279,6 +3458,10 @@ const userWorkspace = {
             quantity,
             price,
             notional,
+            fee,
+            slippage,
+            reference_price AS "referencePrice",
+            execution_meta_json AS "executionMeta",
             balance_after AS "balanceAfter",
             portfolio_value_after AS "portfolioValueAfter",
             account_equity_after AS "accountEquityAfter",
@@ -3322,6 +3505,12 @@ const userWorkspace = {
             balance: toNumber(balanceSnapshot.rows[0]?.balance, DEFAULT_BALANCE),
             holdings: holdingsSnapshot.rows.map(mapPortfolioRow),
             trade: mapTradeRow(existingTradeResult.rows[0]),
+            executionCost: {
+              fee: toNumber(existingTradeResult.rows[0]?.fee, 0),
+              slippage: toNumber(existingTradeResult.rows[0]?.slippage, 0),
+              referencePrice: existingTradeResult.rows[0]?.referencePrice == null ? null : toNumber(existingTradeResult.rows[0]?.referencePrice),
+              executionMeta: parseJsonPayload(existingTradeResult.rows[0]?.executionMeta, {})
+            },
             idempotentReplay: true
           };
         }
@@ -3363,7 +3552,10 @@ const userWorkspace = {
            notionalInBuyCurrency = toNumber(payload.notionalInBuyCurrency, notional);
         }
 
-        const nextCashBalance = orderType === "buy" ? current - notionalInBuyCurrency : current + notionalInBuyCurrency;
+        const feeInBuyCurrency = fee;
+        const nextCashBalance = orderType === "buy"
+          ? current - notionalInBuyCurrency - feeInBuyCurrency
+          : current + notionalInBuyCurrency - feeInBuyCurrency;
 
         if (nextCashBalance < 0) {
           const err = new Error(`Insufficient ${buyCurrency} balance`);
@@ -3415,14 +3607,14 @@ const userWorkspace = {
               : Number(existing.price);
             const nextEntryPrice = orderType === "sell"
               ? existingEntry
-              : ((existingEntry * existing.quantity) + (price * quantity)) / Math.max(nextQuantity, QTY_EPSILON);
+              : ((existingEntry * existing.quantity) + (executedPrice * quantity)) / Math.max(nextQuantity, QTY_EPSILON);
             const nextOpenedAt = existing.openedAt || executionTimestamp || dateAdded;
             const updated = await client.query(`
               UPDATE user_workspace_portfolio
               SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
               WHERE id = $10 AND user_id = $11
               RETURNING quantity;
-            `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedUserId]);
+            `, [nextQuantity, executedPrice, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedUserId]);
             positionAfter = toNumber(updated.rows[0]?.quantity, 0);
           }
         } else {
@@ -3435,7 +3627,7 @@ const userWorkspace = {
             INSERT INTO user_workspace_portfolio (user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING quantity;
-          `, [resolvedUserId, symbol, name, price, quantity, price, executionTimestamp, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
+          `, [resolvedUserId, symbol, name, executedPrice, quantity, executedPrice, executionTimestamp, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
           positionAfter = toNumber(inserted.rows[0]?.quantity, 0);
         }
 
@@ -3475,10 +3667,11 @@ const userWorkspace = {
         const tradeResult = await client.query(`
           INSERT INTO user_workspace_trades (
             user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
-            quantity, price, notional, balance_after, portfolio_value_after, account_equity_after, position_after,
+            quantity, price, notional, fee, slippage, reference_price, execution_meta_json,
+            balance_after, portfolio_value_after, account_equity_after, position_after,
             strategy_name, legs_json
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
           RETURNING
             id,
             client_id AS "clientId",
@@ -3493,6 +3686,10 @@ const userWorkspace = {
             quantity,
             price,
             notional,
+            fee,
+            slippage,
+            reference_price AS "referencePrice",
+            execution_meta_json AS "executionMeta",
             balance_after AS "balanceAfter",
             portfolio_value_after AS "portfolioValueAfter",
             account_equity_after AS "accountEquityAfter",
@@ -3511,8 +3708,12 @@ const userWorkspace = {
           marketType,
           "Filled",
           quantity,
-          price,
+          executedPrice,
           Math.abs(notional),
+          fee,
+          slippage,
+          referencePrice,
+          JSON.stringify(executionMeta || {}),
           nextCashBalance,
           portfolioValueAfter,
           nextCashBalance + portfolioValueAfter,
@@ -3525,7 +3726,13 @@ const userWorkspace = {
         return {
           balance: nextCashBalance,
           holdings,
-          trade: mapTradeRow(tradeResult.rows[0])
+          trade: mapTradeRow(tradeResult.rows[0]),
+          executionCost: {
+            fee,
+            slippage,
+            referencePrice,
+            executionMeta
+          }
         };
       } catch (error) {
         await client.query("ROLLBACK");

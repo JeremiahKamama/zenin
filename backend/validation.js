@@ -30,7 +30,7 @@ const forgotPasswordConfirmSchema = z.object({
   password: passwordSchema,
 });
 
-const executeTradeSchema = z.object({
+const tradeExecutionInputSchema = z.object({
   symbol: symbolSchema,
   name: nameSchema,
   price: z.number().finite(),
@@ -38,9 +38,25 @@ const executeTradeSchema = z.object({
   type: z.enum(["stock", "crypto", "bond", "commodity", "etf", "options"]),
   marketType: z.string().max(50).toLowerCase().trim().optional(),
   orderType: z.enum(["buy", "sell"]),
+  buyCurrency: z.string().max(10).toUpperCase().trim().optional(),
+  currency: z.string().max(10).toUpperCase().trim().optional(),
+  notionalInBuyCurrency: z.number().finite().nonnegative().optional().nullable(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  executedAt: z.string().datetime().optional(),
+  date_added: z.string().datetime().optional(),
   clientId: z.string().min(1).max(120),
   strategyName: z.string().max(100).optional().nullable(),
   legsJson: z.union([z.array(z.any()), z.record(z.any())]).optional().nullable(),
+});
+
+const executeTradeSchema = tradeExecutionInputSchema;
+
+const tradeEstimateInputSchema = tradeExecutionInputSchema.omit({
+  clientId: true,
+});
+
+const tradeEstimateBatchSchema = z.object({
+  trades: z.array(tradeEstimateInputSchema).min(1).max(50),
 });
 
 const portfolioUpdateSchema = z.object({
@@ -191,6 +207,7 @@ module.exports = {
   forgotPasswordRequestSchema,
   forgotPasswordConfirmSchema,
   executeTradeSchema,
+  tradeEstimateBatchSchema,
   portfolioUpdateSchema,
   watchlistAssetSchema,
   workspaceDocSchema,

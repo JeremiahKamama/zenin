@@ -4,6 +4,7 @@ import { zeninFetch } from "./utils/zeninFetch";
 import { ZeninLogo, LineZMark } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo, buildAbsoluteUrl, SITE_URL } from "./utils/seo";
+import { clearPostAuthRedirect, getPostAuthRedirectPath, sanitizeInternalPath, storePostAuthRedirect } from "./utils/authRedirect";
 
 const VALID_PLANS = ["starter", "pro", "desk"];
 const VALID_BILLING_CYCLES = ["monthly", "yearly"];
@@ -81,12 +82,6 @@ function getPlanPrice(plan, cycle) {
   };
 }
 
-function sanitizeInternalPath(path, fallback = "/app") {
-  const value = String(path || "").trim();
-  if (!value.startsWith("/") || value.startsWith("//")) return fallback;
-  return value;
-}
-
 function readStoredAuthUser() {
   try {
     const raw = localStorage.getItem("zenin_auth_user");
@@ -113,7 +108,7 @@ export default function PublicHomepage() {
   const [openAppChecking, setOpenAppChecking] = useState(false);
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
-  const [authModal, setAuthModal] = useState({ open: false, mode: "signup" });
+  const [authModal, setAuthModal] = useState({ open: false, mode: "signup", error: "" });
   const [AuthModalComponent, setAuthModalComponent] = useState(null);
   const [billingCycle, setBillingCycle] = useState(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("zenin_pricing_billing_cycle") : "";
@@ -121,10 +116,7 @@ export default function PublicHomepage() {
   });
   const [postPlanTarget] = useState(() => {
     if (typeof window === "undefined") return "/app";
-    const search = new URLSearchParams(window.location.search);
-    const queryNext = sanitizeInternalPath(search.get("next"), "");
-    const storedNext = sanitizeInternalPath(localStorage.getItem("zenin_post_auth_next"), "");
-    return queryNext || storedNext || "/app";
+    return getPostAuthRedirectPath({ fallback: "/app" });
   });
 
   const activePlan = useMemo(
@@ -156,6 +148,25 @@ export default function PublicHomepage() {
       root.classList.remove("page-dark-theme");
       body.classList.remove("page-dark-theme");
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const queryNext = sanitizeInternalPath(params.get("next"), "");
+    if (queryNext) {
+      storePostAuthRedirect(queryNext, "/app");
+    }
+    const requestedMode = String(params.get("auth") || "").trim().toLowerCase();
+    const initialMode = ["signup", "signin", "forgot"].includes(requestedMode) ? requestedMode : "";
+    const oauthError = String(params.get("oauthError") || params.get("error") || "").trim();
+    if (initialMode || oauthError) {
+      setAuthModal({
+        open: true,
+        mode: initialMode || "signin",
+        error: oauthError
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -278,7 +289,7 @@ export default function PublicHomepage() {
         setAuthUser(data.user);
         saveAuthUser(data.user);
       }
-      localStorage.removeItem("zenin_post_auth_next");
+      clearPostAuthRedirect();
       window.location.href = postPlanTarget;
     } catch (error) {
       setPricingError(error?.message || "Could not connect plan to your account.");
@@ -326,10 +337,26 @@ export default function PublicHomepage() {
   const handleOpenAppClick = async (event) => {
     event.preventDefault();
     if (authUser) {
-      window.location.href = "/app";
+      window.location.href = postPlanTarget;
     } else {
-      setAuthModal({ open: true, mode: "signup" });
+      storePostAuthRedirect(postPlanTarget, "/app");
+      setAuthModal({ open: true, mode: "signup", error: "" });
     }
+  };
+
+  const openAuthModal = (mode) => {
+    storePostAuthRedirect(postPlanTarget, "/app");
+    setAuthModal({ open: true, mode, error: "" });
+  };
+
+  const closeAuthModal = () => {
+    setAuthModal((prev) => ({ ...prev, open: false, error: "" }));
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("auth");
+    url.searchParams.delete("oauthError");
+    url.searchParams.delete("error");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   };
 
   return (
@@ -353,7 +380,7 @@ export default function PublicHomepage() {
               <button 
                 className="btn btn-secondary" 
                 style={{ background: 'transparent', border: 'none', padding: '0 10px', boxShadow: 'none' }}
-                onClick={(e) => { e.preventDefault(); setAuthModal({ open: true, mode: 'signin' }); }}
+                onClick={(e) => { e.preventDefault(); openAuthModal("signin"); }}
               >
                 Sign In
               </button>
@@ -861,7 +888,9 @@ export default function PublicHomepage() {
         <AuthModalComponent
           isOpen={authModal.open}
           initialMode={authModal.mode}
-          onClose={() => setAuthModal({ ...authModal, open: false })}
+          initialError={authModal.error}
+          returnTo={postPlanTarget}
+          onClose={closeAuthModal}
         />
       ) : null}
     </div>
