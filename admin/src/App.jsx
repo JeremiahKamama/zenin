@@ -137,6 +137,66 @@ const formatAbsoluteDateTime = (value, fallback = 'N/A') => {
   return date.toLocaleString();
 };
 
+const formatRelativeTime = (value, fallback = 'N/A') => {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  const diffMs = Date.now() - date.getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return 'Just now';
+  if (diffMs < hour) return `${Math.max(1, Math.round(diffMs / minute))}m ago`;
+  if (diffMs < day) return `${Math.max(1, Math.round(diffMs / hour))}h ago`;
+  return `${Math.max(1, Math.round(diffMs / day))}d ago`;
+};
+
+const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency,
+  maximumFractionDigits: 0,
+}).format(Number(value || 0));
+
+const formatMetricNumber = (value) => Number(value || 0).toLocaleString();
+
+const formatAdminRoleLabel = (role) => {
+  const value = String(role || 'user').trim().toLowerCase();
+  if (value === 'super_admin') return 'Super Admin';
+  if (value === 'support_admin') return 'Support Admin';
+  if (value === 'billing_admin') return 'Billing Admin';
+  if (value === 'ops_admin') return 'Ops Admin';
+  return 'User';
+};
+
+const normalizeLogLevel = (level) => String(level || 'info').trim().toLowerCase();
+
+const getMainAppUrl = () => {
+  if (typeof window === 'undefined') return 'http://localhost:3000';
+  const hostname = window.location.hostname.toLowerCase();
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return window.location.origin.replace(':4001', ':3000');
+  }
+  if (hostname === 'admin.zenin.capital') {
+    return 'https://zenin.capital';
+  }
+  return window.location.origin.replace('admin.', '');
+};
+
+const parseStoredJson = (key, fallback) => {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const persistStoredJson = (key, value) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(key, JSON.stringify(value));
+};
+
 const ToastViewport = ({ toasts, onDismiss }) => {
   const toneIcons = {
     success: CheckCircle2,
@@ -173,6 +233,92 @@ const ToastViewport = ({ toasts, onDismiss }) => {
   );
 };
 
+const CommandPalette = ({ open, query, onQueryChange, results, onClose, onNavigate, loading }) => {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const sections = [
+    { key: 'users', label: 'Users', rows: results?.users || [] },
+    { key: 'audit', label: 'Audit', rows: results?.audit || [] },
+    { key: 'logs', label: 'Logs', rows: results?.logs || [] },
+    { key: 'tables', label: 'Tables', rows: results?.tables || [] },
+  ];
+
+  return (
+    <div className="modal-overlay" onClick={onClose} style={{ backdropFilter: 'blur(12px)', background: 'rgba(0, 0, 0, 0.78)' }}>
+      <div className="modal-container" onClick={(event) => event.stopPropagation()} style={{ width: '760px', maxWidth: 'calc(100vw - 32px)', padding: '24px', borderRadius: '20px', background: 'var(--bg-header)', border: '1px solid var(--border)' }}>
+        <div className="search-input-wrapper" style={{ marginBottom: '20px' }}>
+          <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={18} />
+          <input
+            autoFocus
+            type="text"
+            className="search-input"
+            placeholder="Jump to a user, request ID, audit action, or table..."
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            style={{ paddingLeft: '42px', height: '48px', fontSize: '15px' }}
+          />
+        </div>
+
+        {loading ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>Searching the admin workspace…</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '16px' }}>
+            {sections.map((section) => (
+              <div key={section.key} className="card" style={{ padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700 }}>{section.label}</h4>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{section.rows.length}</span>
+                </div>
+                {section.rows.length === 0 ? (
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No matches yet.</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {section.rows.map((row, index) => (
+                      <button
+                        key={`${section.key}-${row.id || row.name || index}`}
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ justifyContent: 'flex-start', textAlign: 'left', padding: '10px 12px', height: 'auto' }}
+                        onClick={() => onNavigate(section.key, row)}
+                      >
+                        <div>
+                          <div style={{ fontSize: '13px', fontWeight: 600 }}>
+                            {section.key === 'users' && (row.name || row.email)}
+                            {section.key === 'audit' && row.action}
+                            {section.key === 'logs' && (row.requestId || row.message)}
+                            {section.key === 'tables' && row.name}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {section.key === 'users' && `${row.email} • ${formatAdminRoleLabel(row.adminRole)}`}
+                            {section.key === 'audit' && `${row.actor || row.adminEmail || 'System'} • ${row.target || row.targetEmail || 'workspace'}`}
+                            {section.key === 'logs' && `${row.service || 'Service'} • ${row.endpoint || 'Endpoint'}`}
+                            {section.key === 'tables' && `${formatMetricNumber(row.rows)} rows`}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // --- Components ---
 
 const SidebarItem = ({ icon, label, active, onClick }) => (
@@ -191,7 +337,7 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [plan, setPlan] = useState('starter');
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminRole, setAdminRole] = useState('user');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -200,7 +346,7 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
       setEmail('');
       setName('');
       setPlan('starter');
-      setIsAdmin(false);
+      setAdminRole('user');
       setError('');
       setIsSubmitting(false);
     }
@@ -224,7 +370,7 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
     setError('');
 
     try {
-      await onAdd({ email: trimmedEmail, name: trimmedName, plan, isAdmin });
+      await onAdd({ email: trimmedEmail, name: trimmedName, plan, adminRole });
       onClose();
     } catch (submitError) {
       setError(submitError?.message || 'We could not create that user.');
@@ -281,12 +427,15 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
                 <option value="desk">Desk ($99/mo)</option>
               </select>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: 'var(--bg-app)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-              <div>
-                <p style={{ fontSize: '13px', fontWeight: 600 }}>Administrator Privileges</p>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Grant access to this admin console</p>
-              </div>
-              <Toggle active={isAdmin} onClick={() => setIsAdmin(!isAdmin)} />
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Initial Role</label>
+              <select className="filter-select" style={{ width: '100%', height: '40px' }} value={adminRole} onChange={(e) => setAdminRole(e.target.value)}>
+                <option value="user">User</option>
+                <option value="support_admin">Support Admin</option>
+                <option value="billing_admin">Billing Admin</option>
+                <option value="ops_admin">Ops Admin</option>
+                <option value="super_admin">Super Admin</option>
+              </select>
             </div>
           </div>
           {error ? (
@@ -391,9 +540,16 @@ const Toggle = ({ active, onClick }) => (
   </button>
 );
 
-const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
+const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, onRevokeSessions, onOpenRelated }) => {
   const adminUi = useAdminUi();
-  if (!user) return null;
+  const resolvedUser = details?.user || user;
+  if (!resolvedUser) return null;
+
+  const sessions = details?.sessions || [];
+  const recentAudit = details?.recentAudit || [];
+  const recentActivity = details?.recentActivity || [];
+
+  const requestReason = (label) => window.prompt(`Reason for ${label.toLowerCase()}:`, '')?.trim();
 
   return (
     <div className="detail-panel-overlay" onClick={onClose}>
@@ -401,14 +557,14 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
         <div className="detail-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 700, color: 'var(--accent)' }}>
-              {user.name?.charAt(0) || user.email?.charAt(0)}
+              {resolvedUser.name?.charAt(0) || resolvedUser.email?.charAt(0)}
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <h2 style={{ fontSize: '18px', fontWeight: 600 }}>{user.name || 'No Name'}</h2>
-                {user.isAdmin && <span className="badge badge-pro" style={{ fontSize: '10px' }}>ADMIN</span>}
+                <h2 style={{ fontSize: '18px', fontWeight: 600 }}>{resolvedUser.name || 'No Name'}</h2>
+                {resolvedUser.adminRole !== 'user' && <span className="badge badge-pro" style={{ fontSize: '10px' }}>{formatAdminRoleLabel(resolvedUser.adminRole)}</span>}
               </div>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{user.email}</p>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{resolvedUser.email}</p>
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -417,21 +573,31 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
         </div>
 
         <div className="detail-content">
-          <div style={{ display: 'flex', gap: '24px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
-            <div style={{ padding: '8px 0', color: 'var(--accent)', borderBottom: '2px solid var(--accent)', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Overview</div>
-            <div style={{ padding: '8px 0', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}>Activity</div>
-            <div style={{ padding: '8px 0', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}>Security</div>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '24px' }}>
+            <button className="btn btn-secondary" style={{ height: '34px', fontSize: '12px' }} onClick={() => onOpenRelated('audit', resolvedUser)}>
+              View Audit Trail
+            </button>
+            <button className="btn btn-secondary" style={{ height: '34px', fontSize: '12px' }} onClick={() => onOpenRelated('logs', resolvedUser)}>
+              View System Activity
+            </button>
+            <button className="btn btn-secondary" style={{ height: '34px', fontSize: '12px' }} onClick={() => onOpenRelated('users', resolvedUser)}>
+              Back to Users
+            </button>
           </div>
 
           <div className="detail-section">
-            <h4 className="detail-section-title">Account Status & Plan</h4>
+            <h4 className="detail-section-title">Account Control</h4>
             <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Current Plan</span>
                 <select 
                   className="filter-select" 
-                  value={user.plan?.toLowerCase()} 
-                  onChange={(e) => onUpdate(user.id, 'plan', e.target.value)}
+                  value={resolvedUser.plan?.toLowerCase()} 
+                  onChange={(e) => {
+                    const reason = requestReason(`changing ${resolvedUser.email} plan`);
+                    if (!reason) return;
+                    onUpdate(resolvedUser.id, 'plan', e.target.value, reason);
+                  }}
                   style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '6px', fontSize: '12px' }}
                 >
                   <option value="starter">Starter</option>
@@ -439,15 +605,34 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
                   <option value="desk">Desk</option>
                 </select>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Administrative Access</span>
-                <button 
-                  className={`btn ${user.isAdmin ? 'btn-secondary' : 'btn-primary'}`} 
-                  style={{ fontSize: '11px', padding: '4px 10px', height: '28px' }}
-                  onClick={() => onUpdate(user.id, 'role', !user.isAdmin)}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Admin Role</span>
+                <select
+                  className="filter-select"
+                  value={resolvedUser.adminRole || 'user'}
+                  onChange={(e) => {
+                    const reason = requestReason(`updating ${resolvedUser.email} role`);
+                    if (!reason) return;
+                    onUpdate(resolvedUser.id, 'role', e.target.value, reason);
+                  }}
+                  style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '6px', fontSize: '12px' }}
                 >
-                  {user.isAdmin ? 'Demote to User' : 'Promote to Admin'}
-                </button>
+                  <option value="user">User</option>
+                  <option value="support_admin">Support Admin</option>
+                  <option value="billing_admin">Billing Admin</option>
+                  <option value="ops_admin">Ops Admin</option>
+                  <option value="super_admin">Super Admin</option>
+                </select>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Active Sessions</p>
+                  <p style={{ fontSize: '16px', fontWeight: 700 }}>{formatMetricNumber(resolvedUser.activeSessionCount || sessions.filter((entry) => entry.isActive).length)}</p>
+                </div>
+                <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Last Seen</p>
+                  <p style={{ fontSize: '16px', fontWeight: 700 }}>{formatRelativeTime(resolvedUser.lastSeenAt || sessions[0]?.createdAt, 'No sessions')}</p>
+                </div>
               </div>
             </div>
           </div>
@@ -457,13 +642,21 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
                 <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Member Since</p>
-                <p style={{ fontSize: '14px', fontWeight: 600 }}>{new Date(user.joined).toLocaleDateString()}</p>
+                <p style={{ fontSize: '14px', fontWeight: 600 }}>{formatAbsoluteDate(resolvedUser.joined)}</p>
               </div>
               <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
                 <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Status</p>
-                <p style={{ fontSize: '14px', fontWeight: 600, color: user.suspendedAt ? 'var(--danger)' : 'var(--success)' }}>
-                  {user.suspendedAt ? 'Suspended' : 'Active'}
+                <p style={{ fontSize: '14px', fontWeight: 600, color: resolvedUser.suspendedAt ? 'var(--danger)' : 'var(--success)' }}>
+                  {resolvedUser.suspendedAt ? 'Suspended' : 'Active'}
                 </p>
+              </div>
+              <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Security</p>
+                <p style={{ fontSize: '14px', fontWeight: 600 }}>{resolvedUser.twoFactorEnabled ? '2FA Enabled' : 'Password Only'}</p>
+              </div>
+              <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Password Changed</p>
+                <p style={{ fontSize: '14px', fontWeight: 600 }}>{formatRelativeTime(resolvedUser.passwordChangedAt, 'Unknown')}</p>
               </div>
             </div>
           </div>
@@ -473,13 +666,82 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div className="detail-row">
                 <div className="detail-label"><Mail size={14} /> Email</div>
-                <div className="detail-value">{user.email}</div>
+                <div className="detail-value">{resolvedUser.email}</div>
               </div>
               <div className="detail-row">
                 <div className="detail-label"><Clock size={14} /> ID</div>
-                <div className="detail-value" style={{ fontFamily: 'monospace', fontSize: '12px' }}>{user.id}</div>
+                <div className="detail-value" style={{ fontFamily: 'monospace', fontSize: '12px' }}>{resolvedUser.id}</div>
+              </div>
+              <div className="detail-row">
+                <div className="detail-label"><ShieldCheck size={14} /> Auth Provider</div>
+                <div className="detail-value">{resolvedUser.authProvider || 'email'}</div>
+              </div>
+              <div className="detail-row">
+                <div className="detail-label"><Activity size={14} /> Billing Cycle</div>
+                <div className="detail-value">{resolvedUser.billingCycle || 'monthly'}</div>
               </div>
             </div>
+          </div>
+
+          <div className="detail-section">
+            <h4 className="detail-section-title">Sessions & Devices</h4>
+            {sessions.length === 0 ? (
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No active or historical sessions were found for this user.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {sessions.slice(0, 5).map((session) => (
+                  <div key={session.id} style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <div>
+                        <p style={{ fontSize: '13px', fontWeight: 600 }}>{session.deviceLabel} • {session.browserLabel}</p>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{session.ipAddress || 'Unknown IP'} • {formatRelativeTime(session.createdAt)}</p>
+                      </div>
+                      <span className={`badge ${session.isActive ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '10px' }}>
+                        {session.isActive ? 'Active' : 'Ended'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="detail-section">
+            <h4 className="detail-section-title">Recent Audit</h4>
+            {recentAudit.length === 0 ? (
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No admin actions are recorded for this user yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {recentAudit.slice(0, 4).map((event) => (
+                  <button key={event.id} type="button" className="btn btn-secondary" style={{ justifyContent: 'space-between', height: 'auto', padding: '12px 14px' }} onClick={() => onOpenRelated('audit', resolvedUser)}>
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{event.action}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{event.actor} • {formatRelativeTime(event.createdAt)}</div>
+                    </div>
+                    <ChevronRight size={14} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="detail-section">
+            <h4 className="detail-section-title">Recent System Activity</h4>
+            {recentActivity.length === 0 ? (
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No recent request activity is available for this user.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {recentActivity.slice(0, 4).map((event) => (
+                  <button key={event.id} type="button" className="btn btn-secondary" style={{ justifyContent: 'space-between', height: 'auto', padding: '12px 14px' }} onClick={() => onOpenRelated('logs', resolvedUser)}>
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{event.endpoint || event.message}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{event.service || 'Service'} • {formatRelativeTime(event.createdAt)}</div>
+                    </div>
+                    <ChevronRight size={14} />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="detail-section" style={{ marginTop: 'auto', marginBottom: 0 }}>
@@ -488,16 +750,24 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
               <button 
                 className="btn btn-secondary" 
                 style={{ flex: 1, gap: '8px', fontSize: '13px', height: '38px' }}
-                onClick={() => onResetPassword(user.id)}
+                onClick={() => {
+                  const reason = requestReason(`resetting password for ${resolvedUser.email}`);
+                  if (!reason) return;
+                  onResetPassword(resolvedUser.id, reason);
+                }}
               >
                 <Lock size={14} /> Reset Password
               </button>
               <button 
-                className="btn" 
-                style={{ flex: 1, gap: '8px', fontSize: '13px', height: '38px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
-                onClick={() => adminUi.showPlaceholder('Impersonation is only available on production nodes.', 'Use the production admin workspace when you need to assume a live account session.')}
+                className="btn btn-secondary" 
+                style={{ flex: 1, gap: '8px', fontSize: '13px', height: '38px' }}
+                onClick={() => {
+                  const reason = requestReason(`revoking all sessions for ${resolvedUser.email}`);
+                  if (!reason) return;
+                  onRevokeSessions(resolvedUser.id, reason);
+                }}
               >
-                <UserPlus size={14} /> Impersonate
+                <RotateCcw size={14} /> Revoke Sessions
               </button>
             </div>
             <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
@@ -508,19 +778,27 @@ const UserDetailPanel = ({ user, onClose, onUpdate, onResetPassword }) => {
                   gap: '8px', 
                   height: '38px', 
                   fontSize: '13px',
-                  background: user.suspendedAt ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', 
-                  border: user.suspendedAt ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(239, 68, 68, 0.2)', 
-                  color: user.suspendedAt ? 'var(--success)' : '#ef4444' 
+                  background: resolvedUser.suspendedAt ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', 
+                  border: resolvedUser.suspendedAt ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(239, 68, 68, 0.2)', 
+                  color: resolvedUser.suspendedAt ? 'var(--success)' : '#ef4444' 
                 }}
-                onClick={() => onUpdate(user.id, 'suspend', !user.suspendedAt)}
+                onClick={() => {
+                  const reason = requestReason(`${resolvedUser.suspendedAt ? 'reactivating' : 'suspending'} ${resolvedUser.email}`);
+                  if (!reason) return;
+                  onUpdate(resolvedUser.id, 'suspend', !resolvedUser.suspendedAt, reason);
+                }}
               >
-                {user.suspendedAt ? <CheckCircle2 size={14} /> : <ZapOff size={14} />}
-                {user.suspendedAt ? 'Activate User' : 'Suspend Account'}
+                {resolvedUser.suspendedAt ? <CheckCircle2 size={14} /> : <ZapOff size={14} />}
+                {resolvedUser.suspendedAt ? 'Activate User' : 'Suspend Account'}
               </button>
               <button 
                 className="btn btn-danger" 
                 style={{ flex: 0.5, gap: '8px', height: '38px', fontSize: '13px' }}
-                onClick={() => onUpdate(user.id, 'delete')}
+                onClick={() => {
+                  const reason = requestReason(`deleting ${resolvedUser.email}`);
+                  if (!reason) return;
+                  onUpdate(resolvedUser.id, 'delete', true, reason);
+                }}
               >
                 <Trash2 size={14} /> Delete
               </button>
@@ -536,13 +814,17 @@ const EventDetailPanel = ({ event, onClose }) => {
   const adminUi = useAdminUi();
   if (!event) return null;
 
+  const diffEntries = event.diff && typeof event.diff === 'object'
+    ? Object.entries(event.diff)
+    : [];
+
   return (
     <div className="detail-panel-overlay" onClick={onClose}>
       <div className="detail-panel" style={{ width: '480px' }} onClick={e => e.stopPropagation()}>
         <div className="detail-header" style={{ borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: 600 }}>Event Details</h2>
-            <span className={`badge badge-${event.severity.toLowerCase()}`}>{event.severity.toUpperCase()}</span>
+            <span className={`badge badge-${String(event.severity || 'info').toLowerCase()}`}>{String(event.severity || 'info').toUpperCase()}</span>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
             <X size={18} />
@@ -556,8 +838,8 @@ const EventDetailPanel = ({ event, onClose }) => {
             </div>
             <div>
               <h3 style={{ fontSize: '15px', fontWeight: 600 }}>{event.action}</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Role changed for user sarah.chen</p>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>May 29, 2025 14:32:18 (2 minutes ago)</p>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{event.summary || `${event.actor || event.adminEmail || 'System'} acted on ${event.target || event.targetEmail || 'workspace'}`}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{formatAbsoluteDateTime(event.createdAt)} ({formatRelativeTime(event.createdAt)})</p>
             </div>
           </div>
 
@@ -588,19 +870,17 @@ const EventDetailPanel = ({ event, onClose }) => {
           <div className="detail-section">
             <h4 className="detail-section-title">Event Metadata</h4>
             {[
-              { label: 'Event ID', value: 'evt_8f3b7a1c2d9e', copy: true },
-              { label: 'Actor', value: 'Super Admin (super@zenin.com)' },
-              { label: 'Actor Type', value: 'Admin' },
-              { label: 'Target Type', value: 'User' },
-              { label: 'Source IP', value: '203.0.113.45 \ud83c\uddfa\ud83c\uddf8' },
-              { label: 'User Agent', value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...' },
-              { label: 'Session ID', value: 'sess_f7a3c2b1e8d4' },
-              { label: 'Request ID', value: 'req_8f3b7a1c2d9e' }
+              { label: 'Event ID', value: event.id, copy: true },
+              { label: 'Actor', value: `${event.actor || event.adminEmail || 'System'} (${formatAdminRoleLabel(event.actorRole)})` },
+              { label: 'Target', value: event.target || event.targetEmail || 'Workspace' },
+              { label: 'Target User ID', value: event.targetUserId || 'N/A' },
+              { label: 'Source IP', value: event.ipAddress || 'N/A' },
+              { label: 'Request ID', value: event.requestId || 'N/A' }
             ].map((item, idx) => (
               <div key={idx} className="detail-row">
                 <div className="detail-label">{item.label}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-primary)' }}>
-                  {item.value} {item.copy && <Copy size={12} style={{ color: 'var(--text-muted)', cursor: 'pointer' }} />}
+                  {item.value} {item.copy && <Copy size={12} style={{ color: 'var(--text-muted)', cursor: 'pointer' }} onClick={() => adminUi.copyText(String(item.value), 'Value copied.', 'The event identifier is ready to paste elsewhere.')} />}
                 </div>
               </div>
             ))}
@@ -609,30 +889,33 @@ const EventDetailPanel = ({ event, onClose }) => {
           <div className="detail-section">
             <h4 className="detail-section-title">Change Summary</h4>
             <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
-              <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, background: 'var(--bg-hover)' }}>Path: role</div>
-              <div style={{ padding: '12px' }}>
-                <div style={{ display: 'flex', gap: '10px', fontSize: '12px', marginBottom: '8px' }}>
-                  <span style={{ color: '#ef4444' }}>- Old Value</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>Member</span>
-                </div>
-                <div style={{ display: 'flex', gap: '10px', fontSize: '12px' }}>
-                  <span style={{ color: '#10b981' }}>+ New Value</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>Pro Plan</span>
-                </div>
-              </div>
-              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
-                Full Diff (3 changes) <ChevronRight size={14} />
-              </div>
+              {diffEntries.length === 0 ? (
+                <div style={{ padding: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>No structured before/after diff was attached to this event.</div>
+              ) : (
+                diffEntries.map(([key, value]) => (
+                  <div key={key} style={{ padding: '12px', borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>{key}</div>
+                    <div style={{ display: 'flex', gap: '10px', fontSize: '12px', marginBottom: '6px' }}>
+                      <span style={{ color: '#ef4444' }}>Before</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{JSON.stringify(value?.before ?? null)}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', fontSize: '12px' }}>
+                      <span style={{ color: '#10b981' }}>After</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{JSON.stringify(value?.after ?? null)}</span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
           <div className="detail-section" style={{ marginBottom: 0 }}>
             <h4 className="detail-section-title">Additional Context</h4>
             {[
-              { label: 'Reason', value: 'Promoted to Pro Plan' },
-              { label: 'IP Location', value: 'San Francisco, CA, United States' },
-              { label: 'Device', value: 'MacBook Pro' },
-              { label: 'MFA Used', value: 'Yes', color: 'var(--success)' }
+              { label: 'Reason', value: event.reason || 'No reason recorded' },
+              { label: 'Status', value: event.status || 'success', color: 'var(--success)' },
+              { label: 'Correlation', value: event.requestId || 'N/A' },
+              { label: 'Raw Details', value: JSON.stringify(event.details || {}, null, 2) }
             ].map((item, idx) => (
               <div key={idx} className="detail-row">
                 <div className="detail-label">{item.label}</div>
@@ -646,7 +929,7 @@ const EventDetailPanel = ({ event, onClose }) => {
   );
 };
 
-const LogDetailPanel = ({ log, onClose }) => {
+const LogDetailPanel = ({ log, onClose, onCreateIncident }) => {
   const adminUi = useAdminUi();
   if (!log) return null;
 
@@ -664,7 +947,7 @@ const LogDetailPanel = ({ log, onClose }) => {
         </div>
 
         <div className="detail-content" style={{ padding: '24px' }}>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>{new Date(log.createdAt).toLocaleString()} (2 minutes ago)</p>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>{formatAbsoluteDateTime(log.createdAt)} ({formatRelativeTime(log.createdAt)})</p>
           <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '20px', lineHeight: 1.4 }}>{log.message}</h3>
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '32px' }}>
@@ -678,68 +961,58 @@ const LogDetailPanel = ({ log, onClose }) => {
             <button
               className="btn btn-secondary"
               style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
-              onClick={() => adminUi.showPlaceholder('Pinned this log to your working session.', 'Use the copied request ID to attach it to your ticket or incident timeline.')}
+              onClick={() => adminUi.copyText(log.requestId || String(log.id), 'Identifier copied.', 'The request or log identifier is ready to share in an incident thread.')}
             >
               <Pin size={14} /> Pin
             </button>
             <button
               className="btn btn-primary"
               style={{ flex: 1, fontSize: '13px', gap: '8px', height: '38px' }}
-              onClick={() => adminUi.showPlaceholder('Marked as reviewed.', 'This action is local to the dashboard until server-side incident state is added.')}
+              onClick={() => onCreateIncident?.(log)}
             >
-              <CheckSquare size={14} /> Mark Resolved
+              <CheckSquare size={14} /> Create Incident
             </button>
           </div>
 
           <div className="detail-section">
             <h4 className="detail-section-title">Message</h4>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              An error occurred while processing the order payment. The payment gateway returned a 502 Bad Gateway response.
+              {log.message}
             </p>
           </div>
 
           <div className="detail-section">
-            <h4 className="detail-section-title">Stack Trace (Preview)</h4>
-            <div className="stack-trace-preview">
-              <span className="stack-trace-line">PaymentGatewayException: 502 Bad Gateway</span>
-              <span className="stack-trace-line">  at PaymentGatewayClient.processPayment</span>
-              <span className="stack-trace-line highlight">(PaymentGatewayClient.java:237)</span>
-              <span className="stack-trace-line">  at OrderService.processOrder</span>
-              <span className="stack-trace-line">(OrderService.java:164)</span>
-              <span className="stack-trace-line">  at OrderController.createOrder</span>
-              <span className="stack-trace-line">(OrderController.java:89)</span>
-              <span className="stack-trace-line">at ... 12 more frames</span>
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--accent)', marginTop: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              View full stack trace <ExternalLink size={12} />
-            </div>
+            <h4 className="detail-section-title">Structured Context</h4>
+            <pre className="stack-trace-preview" style={{ whiteSpace: 'pre-wrap' }}>
+              {JSON.stringify(log.context || {}, null, 2)}
+            </pre>
           </div>
 
           <div className="detail-section">
             <h4 className="detail-section-title">Request Metadata</h4>
             <div className="log-prop-list">
-              <div className="log-prop-item"><span className="log-prop-label">Request ID</span><span className="log-prop-value">{log.requestId || 'req_8f3b7a1c2d9e'}</span></div>
-              <div className="log-prop-item"><span className="log-prop-label">Endpoint</span><span className="log-prop-value">POST /api/v1/orders</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Request ID</span><span className="log-prop-value">{log.requestId || 'N/A'}</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Endpoint</span><span className="log-prop-value">{log.endpoint || 'N/A'}</span></div>
               <div className="log-prop-item"><span className="log-prop-label">IP Address</span><span className="log-prop-value">{log.ipAddress}</span></div>
-              <div className="log-prop-item"><span className="log-prop-label">User Agent</span><span className="log-prop-value">Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Service</span><span className="log-prop-value">{log.service || 'N/A'}</span></div>
             </div>
           </div>
 
           <div className="detail-section">
             <h4 className="detail-section-title">User / Session</h4>
             <div className="log-prop-list">
-              <div className="log-prop-item"><span className="log-prop-label">User ID</span><span className="log-prop-value">user_12a4f8b9</span></div>
-              <div className="log-prop-item"><span className="log-prop-label">Email</span><span className="log-prop-value">{log.targetEmail || 'john.doe@acme.com'}</span></div>
-              <div className="log-prop-item"><span className="log-prop-label">Session ID</span><span className="log-prop-value">sess_f7a3c2b1e8d4</span></div>
-              <div className="log-prop-item"><span className="log-prop-label">Role</span><span className="log-prop-value">Customer</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">User ID</span><span className="log-prop-value">{log.userId || 'N/A'}</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Session ID</span><span className="log-prop-value">{log.sessionId || 'N/A'}</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Actor Type</span><span className="log-prop-value">{log.actorType || 'N/A'}</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Environment</span><span className="log-prop-value">{log.environment || 'N/A'}</span></div>
             </div>
           </div>
 
           <div className="detail-section" style={{ marginBottom: 0 }}>
             <h4 className="detail-section-title">Performance</h4>
             <div className="log-prop-list">
-              <div className="log-prop-item"><span className="log-prop-label">Duration</span><span className="log-prop-value" style={{ color: '#ef4444', fontWeight: 600 }}>1,842 ms</span></div>
-              <div className="log-prop-item"><span className="log-prop-label">Status Code</span><span className="log-prop-value">502 Bad Gateway</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Duration</span><span className="log-prop-value" style={{ color: log.durationMs > 2000 ? '#ef4444' : 'inherit', fontWeight: 600 }}>{log.durationMs == null ? 'N/A' : `${log.durationMs} ms`}</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Status Code</span><span className="log-prop-value">{log.statusCode || 'N/A'}</span></div>
             </div>
           </div>
         </div>
@@ -830,7 +1103,7 @@ const ServiceStatusGrid = ({ health }) => (
   </div>
 );
 
-const OverviewView = ({ stats, fetchData }) => (
+const OverviewView = ({ stats, onOpenAudit }) => (
   <div className="fade-in">
     <SectionHeader 
       title="System Overview" 
@@ -880,10 +1153,10 @@ const OverviewView = ({ stats, fetchData }) => (
             <h3 style={{ fontSize: '16px', fontWeight: 600 }}>User Growth & Engagement</h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Historical trends over the last 30 days</p>
           </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>7D</button>
-            <button className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>30D</button>
-          </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>7D</button>
+          <button className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>30D</button>
+        </div>
         </div>
         <div style={{ height: '350px' }}>
           <Line 
@@ -957,6 +1230,19 @@ const OverviewView = ({ stats, fetchData }) => (
             </div>
             <ServiceStatusGrid health={stats?.systemHealth} />
           </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ padding: '16px', background: 'var(--bg-app)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Active Alerts</p>
+              <p style={{ fontSize: '20px', fontWeight: 700 }}>{formatMetricNumber(stats?.activeAlerts || 0)}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Open monitoring thresholds</p>
+            </div>
+            <div style={{ padding: '16px', background: 'var(--bg-app)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Open Incidents</p>
+              <p style={{ fontSize: '20px', fontWeight: 700 }}>{formatMetricNumber(stats?.openIncidents || 0)}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Tracked operator escalations</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -967,7 +1253,7 @@ const OverviewView = ({ stats, fetchData }) => (
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Live Platform Activity</h3>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Latest events from users and infrastructure</p>
         </div>
-        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>View Full Audit Trail</button>
+        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={onOpenAudit}>View Full Audit Trail</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(260), gap: '16px' }}>
         {(stats?.recentActivity || []).map((item, i) => (
@@ -986,32 +1272,95 @@ const OverviewView = ({ stats, fetchData }) => (
         ))}
       </div>
     </div>
+
+    <div className="card" style={{ marginTop: '24px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div>
+          <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Recent Deploy Markers</h3>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Recent admin migrations and release-adjacent operational changes</p>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {(stats?.recentDeployments || []).length ? stats.recentDeployments.map((deployment, index) => (
+          <div key={`${deployment.createdAt}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', padding: '14px 16px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+            <div>
+              <p style={{ fontSize: '13px', fontWeight: 600 }}>{deployment.force ? 'Forced admin migration' : 'Admin workspace migration'}</p>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{deployment.reason}</p>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <p style={{ fontSize: '12px', fontWeight: 600 }}>{deployment.actor}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{formatRelativeTime(deployment.createdAt)}</p>
+            </div>
+          </div>
+        )) : (
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No recent deploy markers were found in the audit store.</p>
+        )}
+      </div>
+    </div>
   </div>
 );
 
-const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, onSelectUser, onAddUser, onExportUsers }) => {
-  const [planFilter, setPlanFilter] = useState('All Plans');
-  const [statusFilter, setStatusFilter] = useState('All Status');
+const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, onAddUser, onExportUsers, onBulkAction }) => {
+  const savedViewsKey = 'zenin_admin_user_views';
+  const [planFilter, setPlanFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [savedViews, setSavedViews] = useState(() => parseStoredJson(savedViewsKey, []));
 
-  const filteredUsers = (users || []).filter(u => {
-    const matchesSearch = (u.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         (u.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         String(u.id).includes(searchQuery);
-    
-    const matchesPlan = planFilter === 'All Plans' || u.plan?.toLowerCase() === planFilter.toLowerCase();
-    const matchesStatus = statusFilter === 'All Status' || 
-                          (statusFilter === 'Active' && !u.suspendedAt) || 
-                          (statusFilter === 'Suspended' && u.suspendedAt);
-    
-    return matchesSearch && matchesPlan && matchesStatus;
+  useEffect(() => {
+    persistStoredJson(savedViewsKey, savedViews);
+  }, [savedViews]);
+
+  const filteredUsers = (users || []).filter((entry) => {
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = !query
+      || (entry.name || '').toLowerCase().includes(query)
+      || (entry.email || '').toLowerCase().includes(query)
+      || String(entry.id).includes(query);
+    const matchesPlan = planFilter === 'all' || entry.plan?.toLowerCase() === planFilter;
+    const matchesStatus = statusFilter === 'all'
+      || (statusFilter === 'active' && !entry.suspendedAt)
+      || (statusFilter === 'suspended' && !!entry.suspendedAt);
+    const matchesRole = roleFilter === 'all' || (entry.adminRole || 'user') === roleFilter;
+    return matchesSearch && matchesPlan && matchesStatus && matchesRole;
   });
+
+  const activeUsers = (users || []).filter((entry) => !entry.suspendedAt).length;
+  const newThisWeek = (users || []).filter((entry) => entry.joined && Date.now() - new Date(entry.joined).getTime() < 7 * 24 * 60 * 60 * 1000).length;
+  const adminCount = (users || []).filter((entry) => (entry.adminRole || 'user') !== 'user').length;
+
+  const toggleSelection = (userId) => {
+    setSelectedIds((prev) => prev.includes(userId) ? prev.filter((entry) => entry !== userId) : [...prev, userId]);
+  };
+
+  const saveCurrentView = () => {
+    const name = window.prompt('Name this saved user view:', '');
+    if (!name) return;
+    setSavedViews((prev) => [...prev.filter((entry) => entry.name !== name), { name, searchQuery, planFilter, statusFilter, roleFilter }]);
+  };
+
+  const applyView = (view) => {
+    setSearchQuery(view.searchQuery || '');
+    setPlanFilter(view.planFilter || 'all');
+    setStatusFilter(view.statusFilter || 'all');
+    setRoleFilter(view.roleFilter || 'all');
+  };
+
+  const runBulkAction = (action, value = null) => {
+    if (!selectedIds.length) return;
+    const reason = window.prompt(`Reason for ${action.replace(/_/g, ' ')} on ${selectedIds.length} selected user(s):`, '');
+    if (!reason) return;
+    onBulkAction({ action, userIds: selectedIds, value, reason });
+    setSelectedIds([]);
+  };
 
   return (
     <div className="fade-in">
-      <SectionHeader 
-        title="User Management" 
-        description="Manage platform users, permissions, and subscription plans." 
-        breadcrumbs={['Users']} 
+      <SectionHeader
+        title="User Management"
+        description="Manage platform users, subscription access, admin roles, and session state."
+        breadcrumbs={['Users']}
         onAction={(type) => {
           if (type === 'primary') {
             onAddUser();
@@ -1020,51 +1369,86 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, 
           onExportUsers(filteredUsers);
         }}
       />
-      
+
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={Users} label="Total Users" value="12,842" trend="12.4% vs last 30 days" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={Activity} label="Active Users" value="2,143" trend="8.7% vs last 7 days" trendUp={true} sparklineColor="#10b981" />
-        <SummaryCard icon={UserPlus} label="New This Week" value="156" trend="12% increase" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={ArrowDownRight} label="Churn Rate" value="2.4%" trend="0.5% vs last month" trendUp={false} sparklineColor="#ef4444" />
+        <SummaryCard icon={Users} label="Total Users" value={formatMetricNumber(users.length)} trend="Live directory" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={Activity} label="Active Users" value={formatMetricNumber(activeUsers)} trend={`${Math.max(users.length - activeUsers, 0)} suspended`} trendUp={true} sparklineColor="#10b981" />
+        <SummaryCard icon={UserPlus} label="New This Week" value={formatMetricNumber(newThisWeek)} trend="Recent signups" trendUp={true} sparklineColor="#8b5cf6" />
+        <SummaryCard icon={ShieldCheck} label="Admins" value={formatMetricNumber(adminCount)} trend="Role-separated access" trendUp={true} sparklineColor="#f59e0b" />
       </div>
 
       <div className="card">
-        <div className="filter-bar">
-          <div className="search-input-wrapper" style={{ flex: 1, maxWidth: 'none' }}>
+        <div className="filter-bar" style={{ gap: '12px', flexWrap: 'wrap' }}>
+          <div className="search-input-wrapper" style={{ flex: 1, maxWidth: 'none', minWidth: '240px' }}>
             <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={16} />
-            <input 
-              type="text" 
-              className="search-input" 
-              placeholder="Search by name, email, or ID..." 
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search by name, email, or ID..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event) => setSearchQuery(event.target.value)}
               style={{ paddingLeft: '40px' }}
             />
           </div>
-          <select className="filter-select" value={planFilter} onChange={e => setPlanFilter(e.target.value)}>
-            <option>All Plans</option>
-            <option>Starter</option>
-            <option>Pro</option>
-            <option>Desk</option>
+          <select className="filter-select" value={planFilter} onChange={(event) => setPlanFilter(event.target.value)}>
+            <option value="all">All Plans</option>
+            <option value="starter">Starter</option>
+            <option value="pro">Pro</option>
+            <option value="desk">Desk</option>
           </select>
-          <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option>All Status</option>
-            <option>Active</option>
-            <option>Suspended</option>
+          <select className="filter-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="suspended">Suspended</option>
           </select>
-          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '13px', gap: '8px' }}>
-            <Filter size={14} /> More Filters
-          </button>
+          <select className="filter-select" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+            <option value="all">All Roles</option>
+            <option value="user">User</option>
+            <option value="support_admin">Support Admin</option>
+            <option value="billing_admin">Billing Admin</option>
+            <option value="ops_admin">Ops Admin</option>
+            <option value="super_admin">Super Admin</option>
+          </select>
+          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={saveCurrentView}>Save View</button>
         </div>
+
+        {savedViews.length ? (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '0 24px 16px 24px' }}>
+            {savedViews.map((view) => (
+              <button key={view.name} type="button" className="btn btn-secondary" style={{ height: '30px', fontSize: '11px' }} onClick={() => applyView(view)}>
+                {view.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {selectedIds.length ? (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '0 24px 16px 24px' }}>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)', alignSelf: 'center' }}>{selectedIds.length} selected</span>
+            <button className="btn btn-secondary" style={{ height: '32px', fontSize: '12px' }} onClick={() => runBulkAction('suspend')}>Suspend</button>
+            <button className="btn btn-secondary" style={{ height: '32px', fontSize: '12px' }} onClick={() => runBulkAction('reactivate')}>Reactivate</button>
+            <button className="btn btn-secondary" style={{ height: '32px', fontSize: '12px' }} onClick={() => runBulkAction('plan', 'pro')}>Move to Pro</button>
+            <button className="btn btn-secondary" style={{ height: '32px', fontSize: '12px' }} onClick={() => runBulkAction('role', 'support_admin')}>Make Support Admin</button>
+            <button className="btn btn-secondary" style={{ height: '32px', fontSize: '12px' }} onClick={() => runBulkAction('revoke_sessions')}>Revoke Sessions</button>
+          </div>
+        ) : null}
 
         <div className="table-container">
           <table className="admin-table">
             <thead>
               <tr>
+                <th style={{ width: '44px' }}>
+                  <input
+                    type="checkbox"
+                    checked={filteredUsers.length > 0 && selectedIds.length === filteredUsers.length}
+                    onChange={(event) => setSelectedIds(event.target.checked ? filteredUsers.map((entry) => entry.id) : [])}
+                  />
+                </th>
                 <th>User</th>
                 <th>Status</th>
                 <th>Plan</th>
                 <th>Role</th>
+                <th>Sessions</th>
                 <th>Joined</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
@@ -1072,48 +1456,37 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, 
             <tbody>
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                    No users found matching your criteria.
-                  </td>
+                  <td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>No users found matching your criteria.</td>
                 </tr>
               ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.id} onClick={() => onSelectUser(user)} style={{ cursor: 'pointer' }}>
+                filteredUsers.map((entry) => (
+                  <tr key={entry.id} onClick={() => onSelectUser(entry)} style={{ cursor: 'pointer' }}>
+                    <td onClick={(event) => event.stopPropagation()}>
+                      <input type="checkbox" checked={selectedIds.includes(entry.id)} onChange={() => toggleSelection(entry.id)} />
+                    </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'var(--accent)' }}>
-                          {user.name?.charAt(0) || user.email?.charAt(0)}
+                          {entry.name?.charAt(0) || entry.email?.charAt(0)}
                         </div>
                         <div>
-                          <p style={{ fontWeight: 600, fontSize: '14px' }}>{user.name || 'No Name'}</p>
-                          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{user.email}</p>
+                          <p style={{ fontWeight: 600, fontSize: '14px' }}>{entry.name || 'No Name'}</p>
+                          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{entry.email}</p>
                         </div>
                       </div>
                     </td>
                     <td>
-                      <span className={`status-badge ${user.suspendedAt ? 'status-inactive' : 'status-active'}`} style={{ 
-                        background: user.suspendedAt ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', 
-                        color: user.suspendedAt ? 'var(--danger)' : 'var(--success)' 
-                      }}>
-                        <div className={`dot ${user.suspendedAt ? 'dot-inactive' : 'dot-active'}`} /> {user.suspendedAt ? 'Suspended' : 'Active'}
+                      <span className={`status-badge ${entry.suspendedAt ? 'status-inactive' : 'status-active'}`} style={{ background: entry.suspendedAt ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', color: entry.suspendedAt ? 'var(--danger)' : 'var(--success)' }}>
+                        <div className={`dot ${entry.suspendedAt ? 'dot-inactive' : 'dot-active'}`} /> {entry.suspendedAt ? 'Suspended' : 'Active'}
                       </span>
                     </td>
-                    <td>
-                      <span className={`badge badge-${user.plan?.toLowerCase()}`} style={{ fontSize: '11px', textTransform: 'uppercase' }}>
-                        {user.plan}
-                      </span>
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: user.isAdmin ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                        {user.isAdmin ? 'ADMIN' : 'USER'}
-                      </span>
-                    </td>
-                    <td style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-                      {user.joined ? new Date(user.joined).toLocaleDateString() : 'N/A'}
-                    </td>
+                    <td><span className={`badge badge-${entry.plan?.toLowerCase()}`} style={{ fontSize: '11px', textTransform: 'uppercase' }}>{entry.plan}</span></td>
+                    <td><span style={{ fontSize: '11px', fontWeight: 700, color: (entry.adminRole || 'user') !== 'user' ? 'var(--accent)' : 'var(--text-secondary)' }}>{formatAdminRoleLabel(entry.adminRole)}</span></td>
+                    <td style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{formatMetricNumber(entry.activeSessionCount || 0)}</td>
+                    <td style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{formatAbsoluteDate(entry.joined)}</td>
                     <td>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                        <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={(e) => { e.stopPropagation(); onSelectUser(user); }}>
+                        <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={(event) => { event.stopPropagation(); onSelectUser(entry); }}>
                           <Activity size={14} /> Manage
                         </button>
                       </div>
@@ -1126,275 +1499,164 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onUpdateUser, 
         </div>
 
         <div className="pagination">
-          <div>Showing 1 to {Math.min(10, filteredUsers.length)} of {filteredUsers.length} users</div>
+          <div>Showing 1 to {filteredUsers.length} of {users.length} users</div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
             <button className="pagination-btn active">1</button>
-            <button className="pagination-btn">2</button>
-            <button className="pagination-btn">3</button>
-            <span>...</span>
-            <button className="pagination-btn">129</button>
-            <button className="pagination-btn"><ChevronRight size={16} /></button>
+            <button className="pagination-btn" disabled><ChevronRight size={16} /></button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>10 per page</span>
-            <ChevronDown size={14} />
-          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Directory is fully loaded</div>
         </div>
       </div>
     </div>
   );
 };
 
-const DatabaseView = ({ stats, onRunMigration }) => {
-  const adminUi = useAdminUi();
-  const tables = [
-    { name: 'users', count: '12,842' },
-    { name: 'subscriptions', count: '2,143' },
-    { name: 'portfolios', count: '7,891' },
-    { name: 'watchlists', count: '3,567' },
-    { name: 'journal_entries', count: '9,234' },
-    { name: 'option_trades', count: '15,672' },
-    { name: 'logs', count: '128,451' },
-    { name: 'payments', count: '6,321' },
-  ];
+const DatabaseView = ({ stats, onRunMigration, onSelectTable, onChangePage }) => {
+  const selectedTable = stats?.selectedTable;
+  const previewColumns = selectedTable?.columns?.map((column) => column.name) || [];
+  const previewRows = selectedTable?.previewRows || [];
 
   return (
     <div className="fade-in">
-      <SectionHeader 
-        title="Database Explorer" 
-        description="Monitor, inspect, and safely manage platform data." 
-        breadcrumbs={['Database']} 
-      />
+      <SectionHeader title="Database Explorer" description="Read-only schema, row preview, and maintenance visibility for production tables." breadcrumbs={['Database']} />
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
         <button className="btn btn-primary" style={{ gap: '8px' }} onClick={onRunMigration}>
           <RefreshCw size={14} /> Run Admin Workspace Migration
         </button>
       </div>
-      
+
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '4px' }}>Connection Status</p>
-              <span className="badge badge-success" style={{ padding: '4px 10px' }}>Healthy</span>
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px' }}>Primary Database</p>
-              <p style={{ fontSize: '13px', fontWeight: 600 }}>PostgreSQL 15.4</p>
-            </div>
-            <div style={{ width: '80px', height: '40px' }}>
-              <div style={{ height: '100%', display: 'flex', alignItems: 'flex-end', gap: '2px' }}>
-                {[4, 6, 4, 8, 5, 7, 6, 9].map((h, i) => (
-                  <div key={i} style={{ flex: 1, height: `${h * 10}%`, background: 'var(--success)', borderRadius: '1px', opacity: 0.5 }} />
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '4px' }}>Tables</p>
-              <h3 style={{ fontSize: '24px', fontWeight: 700 }}>24</h3>
-              <p style={{ fontSize: '12px', color: 'var(--accent)', marginTop: '4px' }}>+ 2 new this week</p>
-            </div>
-            <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Table size={20} color="var(--text-muted)" />
-            </div>
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '4px' }}>Storage Used</p>
-              <h3 style={{ fontSize: '24px', fontWeight: 700 }}>18.6 GB</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>of 100 GB (18.6%)</p>
-            </div>
-            <div className="donut-chart">
-              <svg viewBox="0 0 36 36">
-                <circle className="circle-bg" cx="18" cy="18" r="15.915" />
-                <circle className="circle-progress" cx="18" cy="18" r="15.915" strokeDasharray="18.6 100" />
-              </svg>
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <HardDrive size={14} color="var(--text-muted)" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '4px' }}>Avg Query Latency</p>
-              <h3 style={{ fontSize: '24px', fontWeight: 700 }}>42 <span style={{ fontSize: '14px', fontWeight: 400, color: 'var(--text-muted)' }}>ms</span></h3>
-              <p style={{ fontSize: '12px', color: 'var(--success)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <ArrowDownRight size={14} /> 12% vs last 7 days
-              </p>
-            </div>
-            <div style={{ width: '80px', height: '40px' }}>
-              <div style={{ height: '100%', borderBottom: '1px solid var(--border)', position: 'relative' }}>
-                <svg viewBox="0 0 100 40" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-                  <path d="M0 35 L10 32 L20 38 L30 30 L40 33 L50 25 L60 28 L70 15 L80 18 L90 10 L100 12" fill="none" stroke="var(--accent)" strokeWidth="2" />
-                </svg>
-              </div>
-            </div>
-          </div>
-        </div>
+        <SummaryCard icon={Database} label="Tables" value={formatMetricNumber(stats?.summary?.totalTables || 0)} trend="Catalog size" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={HardDrive} label="Storage Used" value={stats?.summary?.totalSize || '0 B'} trend="Current database size" trendUp={true} sparklineColor="#10b981" />
+        <SummaryCard icon={ActivityIcon} label="Avg Query Latency" value={`${formatMetricNumber(stats?.summary?.avgQueryLatencyMs || 0)} ms`} trend="Recent request profile" trendUp={true} sparklineColor="#8b5cf6" />
+        <SummaryCard icon={Server} label="Connections" value={formatMetricNumber(stats?.summary?.activeConnections || 0)} trend="Current sessions" trendUp={true} sparklineColor="#f59e0b" />
       </div>
 
       <div className="db-grid">
         <div className="card" style={{ padding: '20px' }}>
           <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Tables</h4>
-          <div className="search-input-wrapper" style={{ marginBottom: '16px' }}>
-            <Search style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={14} />
-            <input type="text" className="search-input" placeholder="Search tables..." style={{ fontSize: '12px' }} />
-            <Filter size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {tables.map((table) => (
-              <div key={table.name} className={`db-list-item ${table.name === 'users' ? 'active' : ''}`}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {(stats?.tables || []).map((table) => (
+              <button
+                key={table.name}
+                type="button"
+                className={`db-list-item ${selectedTable?.name === table.name ? 'active' : ''}`}
+                onClick={() => onSelectTable(table.name)}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Layers size={14} />
                   <span>{table.name}</span>
                 </div>
-                <span style={{ fontSize: '11px', opacity: 0.6 }}>{table.count}</span>
-              </div>
+                <span style={{ fontSize: '11px', opacity: 0.7 }}>{formatMetricNumber(table.rows)}</span>
+              </button>
             ))}
           </div>
-          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '20px', fontSize: '12px', justifyContent: 'space-between' }} onClick={() => adminUi.showPlaceholder('Table directory opened.', 'Filtering and pagination for the full catalog can be added next if you want deeper database tooling here.')}>
-            View all tables (24) <ChevronRight size={14} />
-          </button>
         </div>
 
-        <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: 600 }}>users</h3>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>12,842 rows</span>
+            <div>
+              <h3 style={{ fontSize: '16px', fontWeight: 600 }}>{selectedTable?.name || 'Select a table'}</h3>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{selectedTable ? `${formatMetricNumber(selectedTable.rows)} rows • ${selectedTable.schemaSummary?.tableSize || 'Unknown size'}` : 'Choose a table from the list to inspect schema and rows.'}</p>
             </div>
-            <div style={{ display: 'flex', gap: '12px', color: 'var(--text-muted)' }}>
-              <button type="button" className="icon-btn" onClick={() => adminUi.showPlaceholder('Database sample refreshed.', 'The table preview stays safe here while migrations remain behind the explicit action button above.')} aria-label="Refresh database preview"><RefreshCw size={16} /></button>
-              <button type="button" className="icon-btn" onClick={() => adminUi.showPlaceholder('Expanded table preview is not wired yet.', 'The table is already scrollable, and we can add a full-screen explorer next.') } aria-label="Expand table preview"><Maximize2 size={16} /></button>
-              <button type="button" className="icon-btn" onClick={() => adminUi.downloadJson('database-users-preview.json', tables, 'Database preview exported.', 'The current database explorer sample has been downloaded.')} aria-label="Export table preview"><MoreHorizontal size={16} /></button>
-            </div>
+            {selectedTable ? (
+              <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={() => navigator.clipboard?.writeText(selectedTable.queryPreview || '')}>
+                Copy Query
+              </button>
+            ) : null}
           </div>
-          
-          <div style={{ padding: '0 20px' }}>
+
+          <div style={{ padding: '0 20px 20px 20px' }}>
             <div className="db-tabs">
               <div className="db-tab active">Data</div>
               <div className="db-tab">Schema</div>
               <div className="db-tab">Indexes</div>
-              <div className="db-tab">Queries</div>
+              <div className="db-tab">Query Preview</div>
             </div>
 
             <div className="table-container" style={{ margin: '0 -20px' }}>
               <table className="admin-table">
                 <thead>
                   <tr>
-                    <th>user_id</th>
-                    <th>name</th>
-                    <th>email</th>
-                    <th>plan</th>
-                    <th>status</th>
-                    <th>joined_at</th>
-                    <th>last_login</th>
+                    {previewColumns.map((column) => <th key={column}>{column}</th>)}
                   </tr>
                 </thead>
                 <tbody>
-                  {[
-                    { id: 1, name: 'Super Admin', email: 'super@zenin.com', plan: 'Enterprise', status: 'Active', joined: '2025-01-01 09:12:33', login: '2025-05-29 14:22:11' },
-                    { id: 2, name: 'John Doe', email: 'john.doe@example.com', plan: 'Pro', status: 'Active', joined: '2025-01-05 11:02:10', login: '2025-05-29 13:48:22' },
-                    { id: 3, name: 'Jane Smith', email: 'jane.smith@example.com', plan: 'Pro', status: 'Active', joined: '2025-01-07 08:33:41', login: '2025-05-29 12:11:09' },
-                    { id: 4, name: 'Michael Lee', email: 'michael.lee@example.com', plan: 'Basic', status: 'Active', joined: '2025-01-11 15:45:12', login: '2025-05-29 09:54:33' },
-                    { id: 5, name: 'Emily Johnson', email: 'emily.j@example.com', plan: 'Pro', status: 'Inactive', joined: '2025-01-12 10:23:56', login: '2025-05-20 16:22:18' },
-                    { id: 6, name: 'David Brown', email: 'david.brown@example.com', plan: 'Basic', status: 'Active', joined: '2025-01-14 13:17:25', login: '2025-05-28 21:44:02' },
-                  ].map((row) => (
-                    <tr key={row.id}>
-                      <td style={{ color: 'var(--text-muted)' }}>{row.id}</td>
-                      <td style={{ fontWeight: 500 }}>{row.name}</td>
-                      <td style={{ color: 'var(--text-secondary)' }}>{row.email}</td>
-                      <td><span style={{ fontSize: '12px' }}>{row.plan}</span></td>
-                      <td>
-                        <span className={`status-badge ${row.status === 'Active' ? 'status-active' : 'status-inactive'}`} style={{ padding: '2px 8px', fontSize: '11px' }}>
-                          {row.status}
-                        </span>
-                      </td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{row.joined}</td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{row.login}</td>
+                  {previewRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={Math.max(previewColumns.length, 1)} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>No preview rows returned for this table.</td>
                     </tr>
-                  ))}
+                  ) : (
+                    previewRows.map((row, index) => (
+                      <tr key={`${selectedTable?.name}-${index}`}>
+                        {previewColumns.map((column) => (
+                          <td key={`${selectedTable?.name}-${index}-${column}`} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            {typeof row[column] === 'object' && row[column] !== null ? JSON.stringify(row[column]) : String(row[column] ?? '')}
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
 
-            <div className="pagination" style={{ borderTop: '1px solid var(--border)', margin: '0 -20px', padding: '16px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Rows per page</span>
-                <select className="search-input" style={{ width: '60px', padding: '4px' }}><option>10</option></select>
+            {selectedTable ? (
+              <div className="pagination" style={{ borderTop: '1px solid var(--border)', margin: '0 -20px', padding: '16px 20px' }}>
+                <div>{selectedTable.queryPreview}</div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button className="pagination-btn" disabled={selectedTable.page <= 1} onClick={() => onChangePage(Math.max(1, selectedTable.page - 1))}><ChevronLeft size={16} /></button>
+                  <button className="pagination-btn active">{selectedTable.page}</button>
+                  <button className="pagination-btn" disabled={selectedTable.page >= selectedTable.totalPages} onClick={() => onChangePage(Math.min(selectedTable.totalPages, selectedTable.page + 1))}><ChevronRight size={16} /></button>
+                </div>
+                <div>{formatMetricNumber(selectedTable.rows)} total rows</div>
               </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button className="pagination-btn" disabled><ChevronFirst size={16} /></button>
-                <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
-                <button className="pagination-btn active">1</button>
-                <button className="pagination-btn">2</button>
-                <button className="pagination-btn">3</button>
-                <button className="pagination-btn">4</button>
-                <button className="pagination-btn">5</button>
-                <button className="pagination-btn"><ChevronRight size={16} /></button>
-                <button className="pagination-btn"><ChevronLast size={16} /></button>
-              </div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>1-10 of 12,842</div>
-            </div>
+            ) : null}
           </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h4 style={{ fontSize: '14px', fontWeight: 600 }}>Row Details</h4>
-              <span className="badge badge-success" style={{ fontSize: '10px', gap: '4px', background: 'rgba(16, 185, 129, 0.05)' }}><Lock size={10} /> Read-only</span>
-            </div>
+            <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Schema Summary</h4>
             <div className="prop-list">
               {[
-                { label: 'user_id', value: '1' },
-                { label: 'name', value: 'Super Admin' },
-                { label: 'email', value: 'super@zenin.com' },
-                { label: 'plan', value: 'Enterprise' },
-                { label: 'status', value: 'Active', color: 'var(--success)' },
-                { label: 'joined_at', value: '2025-01-01 09:12:33' },
-                { label: 'last_login', value: '2025-05-29 14:22:11' },
-                { label: 'is_verified', value: 'true' },
-                { label: 'two_factor_enabled', value: 'true' },
-                { label: 'created_at', value: '2025-01-01 09:12:33' },
-                { label: 'updated_at', value: '2025-05-29 14:22:11' },
-              ].map((prop) => (
-                <div key={prop.label} className="prop-item">
-                  <span className="prop-label">{prop.label}</span>
-                  <span className="prop-value" style={prop.color ? { color: prop.color } : {}}>{prop.value}</span>
+                { label: 'Primary Key', value: selectedTable?.schemaSummary?.primaryKey || 'N/A' },
+                { label: 'Indexes', value: selectedTable?.schemaSummary?.indexCount || 0 },
+                { label: 'Foreign Keys', value: selectedTable?.schemaSummary?.foreignKeys || 0 },
+                { label: 'Row Count', value: formatMetricNumber(selectedTable?.schemaSummary?.rowCount || 0) },
+                { label: 'Table Size', value: selectedTable?.schemaSummary?.tableSize || 'N/A' },
+              ].map((item) => (
+                <div key={item.label} className="prop-item">
+                  <span className="prop-label">{item.label}</span>
+                  <span className="prop-value">{item.value}</span>
                 </div>
               ))}
             </div>
           </div>
 
           <div className="card" style={{ padding: '20px' }}>
-            <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Table size={16} color="var(--accent)" /> Schema Summary
-            </h4>
+            <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Columns</h4>
             <div className="prop-list">
-              {[
-                { label: 'Primary Key', value: 'user_id (bigint)' },
-                { label: 'Indexes', value: '5' },
-                { label: 'Foreign Keys', value: '3' },
-                { label: 'Row Count', value: '12,842' },
-                { label: 'Table Size', value: '156 MB' },
-              ].map((prop) => (
-                <div key={prop.label} className="prop-item">
-                  <span className="prop-label">{prop.label}</span>
-                  <span className="prop-value">{prop.value}</span>
+              {(selectedTable?.columns || []).slice(0, 8).map((column) => (
+                <div key={column.name} className="prop-item">
+                  <span className="prop-label">{column.name}</span>
+                  <span className="prop-value">{column.dataType}{column.isNullable === 'NO' ? ' • required' : ''}</span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: '20px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Indexes</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {(selectedTable?.indexes || []).length ? selectedTable.indexes.map((index) => (
+                <div key={index.name} style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600 }}>{index.name}</p>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{index.definition}</p>
+                </div>
+              )) : <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No index data available.</p>}
             </div>
           </div>
         </div>
@@ -1402,89 +1664,51 @@ const DatabaseView = ({ stats, onRunMigration }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(260), gap: '20px' }}>
         <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <CheckCircle2 size={18} color="var(--success)" />
-            </div>
-            <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Backup Status</h4>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Last Backup</span>
-              <div style={{ textAlign: 'right' }}>
-                <p style={{ fontSize: '13px', fontWeight: 500 }}>May 29, 2025 02:15 AM</p>
-                <span className="badge badge-success" style={{ fontSize: '10px', marginTop: '4px' }}>Successful</span>
-              </div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Next Backup</span>
-              <div style={{ textAlign: 'right' }}>
-                <p style={{ fontSize: '13px', fontWeight: 500 }}>May 29, 2025 08:15 AM</p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)', justifyContent: 'flex-end', marginTop: '4px' }}>
-                  <History size={12} /> <span style={{ fontSize: '10px' }}>Scheduled</span>
-                </div>
-              </div>
-            </div>
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }} onClick={() => adminUi.showPlaceholder('Backup history opened.', 'Historical backup inspection can be connected to the backend backup service when ready.')}>
-              View Backup History <ChevronRight size={14} />
-            </button>
+          <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '16px' }}>Backup Window</h4>
+          <div className="prop-list">
+            <div className="prop-item"><span className="prop-label">Last Backup</span><span className="prop-value">{formatAbsoluteDateTime(stats?.summary?.lastBackup)}</span></div>
+            <div className="prop-item"><span className="prop-label">Next Backup</span><span className="prop-value">{formatAbsoluteDateTime(stats?.summary?.nextBackup)}</span></div>
+            <div className="prop-item"><span className="prop-label">Availability</span><span className="prop-value">{stats?.summary?.uptime || 'N/A'}</span></div>
           </div>
         </div>
 
         <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Server size={18} color="var(--accent)" />
-            </div>
-            <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Replication Status</h4>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {[
-              { label: 'Primary', value: 'us-east-1 (This DB)', status: 'Primary', color: 'var(--accent)' },
-              { label: 'Replica 1', value: 'us-east-1b', status: 'Healthy', color: 'var(--success)' },
-              { label: 'Replica 2', value: 'us-west-2', status: 'Healthy', color: 'var(--success)' },
-            ].map((node) => (
-              <div key={node.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{node.label}</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{node.value}</span>
-                  <span style={{ fontSize: '10px', fontWeight: 600, color: node.color }}>{node.status}</span>
-                </div>
+          <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '16px' }}>Replication</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {(stats?.replication || []).map((node) => (
+              <div key={node.label} className="prop-item">
+                <span className="prop-label">{node.label}</span>
+                <span className="prop-value">{node.value} • {node.status}</span>
               </div>
             ))}
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }} onClick={() => adminUi.showPlaceholder('Replication topology requested.', 'This is a safe placeholder until the infrastructure topology endpoint is connected.')}>
-              View Replication Topology <ChevronRight size={14} />
-            </button>
           </div>
         </div>
 
         <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(139, 92, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Zap size={18} color="#8b5cf6" />
-            </div>
-            <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Recent Maintenance</h4>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {[
-              { task: 'Vacuum Analyze', time: 'May 28, 2025 11:32 PM' },
-              { task: 'Index Rebuild', time: 'May 27, 2025 03:14 AM' },
-              { task: 'Statistics Update', time: 'May 26, 2025 01:08 AM' },
-            ].map((item) => (
-              <div key={item.task} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)' }} />
-                  <span style={{ fontSize: '13px' }}>{item.task}</span>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{item.time}</p>
-                  <span style={{ fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>Completed</span>
-                </div>
+          <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '16px' }}>Recent Maintenance</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {(stats?.maintenance || []).map((event) => (
+              <div key={`${event.task}-${event.time}`} className="prop-item">
+                <span className="prop-label">{event.task}</span>
+                <span className="prop-value">{formatRelativeTime(event.time)} • {event.status}</span>
               </div>
             ))}
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '12px', justifyContent: 'space-between', marginTop: '12px' }} onClick={() => adminUi.showPlaceholder('Maintenance timeline opened.', 'This is ready for a richer timeline once maintenance events are exposed by the backend.')}>
-              View All Maintenance Events <ChevronRight size={14} />
-            </button>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '20px' }}>
+          <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '16px' }}>Migration History</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {(stats?.migrationHistory || []).length ? stats.migrationHistory.map((event, index) => (
+              <div key={`${event.createdAt}-${index}`} style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600 }}>{event.force ? 'Forced admin migration' : 'Admin migration'}</p>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{formatRelativeTime(event.createdAt)}</span>
+                </div>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{event.reason}</p>
+                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>Triggered by {event.actor}</p>
+              </div>
+            )) : <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No recent migrations recorded.</p>}
           </div>
         </div>
       </div>
@@ -1492,103 +1716,131 @@ const DatabaseView = ({ stats, onRunMigration }) => {
   );
 };
 
-const AuditTrailView = ({ onSelectEvent }) => {
-  const auditEvents = [
-    { id: 1, timestamp: 'May 29, 2025 14:32:18', actor: 'Super Admin', actorEmail: 'super@zenin.com', action: 'Updated User Role', target: 'user: sarah.chen', ip: '203.0.113.45', severity: 'High', status: 'Success' },
-    { id: 2, timestamp: 'May 29, 2025 14:31:52', actor: 'Michael Rodriguez', actorEmail: 'michael@zenin.com', action: 'Created Database Backup', target: 'db: prod_main', ip: '198.51.100.22', severity: 'Medium', status: 'Success' },
-    { id: 3, timestamp: 'May 29, 2025 14:30:45', actor: 'Emily Johnson', actorEmail: 'emily@zenin.com', action: 'Deleted User', target: 'user: john.doe', ip: '203.0.113.78', severity: 'Critical', status: 'Success' },
-    { id: 4, timestamp: 'May 29, 2025 14:29:37', actor: 'David Kim', actorEmail: 'david@zenin.com', action: 'Updated Plan', target: 'plan: enterprise', ip: '198.51.100.99', severity: 'Medium', status: 'Success' },
-    { id: 5, timestamp: 'May 29, 2025 14:28:16', actor: 'API Key: deploy-bot', actorEmail: 'bot@zenin.com', action: 'API Key Used', target: 'endpoint: /api/v1/deploy', ip: '203.0.113.12', severity: 'Low', status: 'Success' },
-  ];
+const AuditTrailView = ({ auditData, onSelectEvent, onOpenUser, seedQuery = '' }) => {
+  const savedViewsKey = 'zenin_admin_audit_views';
+  const [query, setQuery] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('all');
+  const [savedViews, setSavedViews] = useState(() => parseStoredJson(savedViewsKey, []));
+
+  useEffect(() => {
+    persistStoredJson(savedViewsKey, savedViews);
+  }, [savedViews]);
+
+  useEffect(() => {
+    if (seedQuery) {
+      setQuery(seedQuery);
+    }
+  }, [seedQuery]);
+
+  const rows = auditData?.rows || [];
+  const filteredRows = rows.filter((entry) => {
+    const search = query.toLowerCase();
+    const matchesSearch = !search
+      || String(entry.action || '').toLowerCase().includes(search)
+      || String(entry.target || entry.targetEmail || '').toLowerCase().includes(search)
+      || String(entry.actor || entry.adminEmail || '').toLowerCase().includes(search)
+      || String(entry.requestId || '').toLowerCase().includes(search);
+    const matchesSeverity = severityFilter === 'all' || String(entry.severity || '').toLowerCase() === severityFilter;
+    return matchesSearch && matchesSeverity;
+  });
+
+  const saveCurrentView = () => {
+    const name = window.prompt('Name this saved audit view:', '');
+    if (!name) return;
+    setSavedViews((prev) => [...prev.filter((entry) => entry.name !== name), { name, query, severityFilter }]);
+  };
+
+  const applyView = (view) => {
+    setQuery(view.query || '');
+    setSeverityFilter(view.severityFilter || 'all');
+  };
 
   return (
     <div className="fade-in">
-      <SectionHeader 
-        title="Audit Trail" 
-        description="Monitor all administrative actions, configuration changes, and security-sensitive events." 
-        breadcrumbs={['Audit Trail']} 
-      />
+      <SectionHeader title="Audit Trail" description="Reasoned, request-correlated history for sensitive admin actions." breadcrumbs={['Audit Trail']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={History} label="Total Events Today" value="1,285" trend="18.6% vs yesterday" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={ShieldAlert} label="Critical Events" value="23" trend="15.0% vs yesterday" trendUp={true} sparklineColor="#ef4444" />
-        <SummaryCard icon={UserCheck} label="Admin Actions" value="842" trend="11.3% vs yesterday" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={Download} label="Exported Logs" value="16" trend="6.7% vs yesterday" trendUp={true} sparklineColor="#10b981" />
+        <SummaryCard icon={History} label="Loaded Events" value={formatMetricNumber(auditData?.total || filteredRows.length)} trend="Current audit window" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={ShieldAlert} label="Critical Events" value={formatMetricNumber(filteredRows.filter((entry) => entry.severity === 'critical').length)} trend="Suspensions and deletions" trendUp={true} sparklineColor="#ef4444" />
+        <SummaryCard icon={UserCheck} label="Role Changes" value={formatMetricNumber(filteredRows.filter((entry) => /ROLE/.test(entry.action)).length)} trend="Governance changes" trendUp={true} sparklineColor="#8b5cf6" />
+        <SummaryCard icon={Download} label="Reasoned Actions" value={formatMetricNumber(filteredRows.filter((entry) => entry.reason).length)} trend="Captured intent" trendUp={true} sparklineColor="#10b981" />
       </div>
 
       <div className="card">
-        <div className="filter-bar">
-          <div className="filter-select" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar size={14} /> May 23, 2025 00:00 - May 29, 2025 23:59
-          </div>
-          <select className="filter-select"><option>All Actors</option></select>
-          <select className="filter-select"><option>All Categories</option></select>
-          <select className="filter-select"><option>All Severities</option></select>
-          <div className="search-input-wrapper" style={{ flex: 1, maxWidth: 'none' }}>
+        <div className="filter-bar" style={{ gap: '12px', flexWrap: 'wrap' }}>
+          <div className="search-input-wrapper" style={{ flex: 1, minWidth: '240px', maxWidth: 'none' }}>
             <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={16} />
-            <input type="text" className="search-input" placeholder="Search actions, targets..." style={{ paddingLeft: '40px' }} />
+            <input type="text" className="search-input" placeholder="Search actions, targets, request IDs..." value={query} onChange={(event) => setQuery(event.target.value)} style={{ paddingLeft: '40px' }} />
           </div>
-          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '13px', gap: '8px' }}>
-            <Filter size={14} /> Filters
-          </button>
+          <select className="filter-select" value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)}>
+            <option value="all">All Severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={saveCurrentView}>Save View</button>
         </div>
+
+        {savedViews.length ? (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '0 24px 16px 24px' }}>
+            {savedViews.map((view) => (
+              <button key={view.name} type="button" className="btn btn-secondary" style={{ height: '30px', fontSize: '11px' }} onClick={() => applyView(view)}>
+                {view.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="table-container">
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Timestamp <ChevronDown size={12} style={{ display: 'inline' }} /></th>
+                <th>Timestamp</th>
                 <th>Actor</th>
                 <th>Action</th>
                 <th>Target</th>
-                <th>Source IP</th>
+                <th>Reason</th>
                 <th>Severity</th>
-                <th>Status</th>
-                <th style={{ textAlign: 'right' }}></th>
+                <th>Request</th>
               </tr>
             </thead>
             <tbody>
-              {auditEvents.map((event) => (
-                <tr key={event.id} onClick={() => onSelectEvent(event)} style={{ cursor: 'pointer' }}>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{event.timestamp}</td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600 }}>{event.actor.charAt(0)}</div>
-                      <span style={{ fontSize: '13px' }}>{event.actor}</span>
-                      <CheckCircle2 size={12} style={{ color: 'var(--accent)' }} />
-                    </div>
-                  </td>
-                  <td style={{ fontWeight: 500, fontSize: '13px' }}>{event.action}</td>
-                  <td style={{ color: 'var(--accent)', fontSize: '13px' }}>{event.target}</td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{event.ip}</td>
-                  <td><span className={`badge badge-${event.severity.toLowerCase()}`}>{event.severity}</span></td>
-                  <td>
-                    <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)' }}>
-                      <div className="dot dot-active" /> {event.status}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}><MoreVertical size={14} color="var(--text-muted)" /></td>
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>No audit events matched this filter.</td>
                 </tr>
-              ))}
+              ) : (
+                filteredRows.map((event) => (
+                  <tr key={event.id} onClick={() => onSelectEvent(event)} style={{ cursor: 'pointer' }}>
+                    <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{formatAbsoluteDateTime(event.createdAt)}</td>
+                    <td style={{ fontSize: '13px' }}>{event.actor || event.adminEmail || 'System'}</td>
+                    <td style={{ fontWeight: 500, fontSize: '13px' }}>{event.action}</td>
+                    <td style={{ fontSize: '13px' }}>
+                      {event.targetUserId ? (
+                        <button type="button" className="inline-link-btn" onClick={(clickEvent) => { clickEvent.stopPropagation(); onOpenUser(event.targetUserId); }}>
+                          {event.target || event.targetEmail || `User ${event.targetUserId}`}
+                        </button>
+                      ) : (event.target || event.targetEmail || 'Workspace')}
+                    </td>
+                    <td style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>{event.reason || 'No reason recorded'}</td>
+                    <td><span className={`badge badge-${String(event.severity || 'low').toLowerCase()}`}>{String(event.severity || 'low').toUpperCase()}</span></td>
+                    <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{event.requestId || 'N/A'}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
 
         <div className="pagination">
-          <div>Showing 1 to 10 of 1,285 events</div>
+          <div>Showing {filteredRows.length} of {auditData?.total || filteredRows.length} audit events</div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
             <button className="pagination-btn active">1</button>
-            <button className="pagination-btn">2</button>
-            <button className="pagination-btn">3</button>
-            <span>...</span>
-            <button className="pagination-btn">129</button>
-            <button className="pagination-btn"><ChevronRight size={16} /></button>
+            <button className="pagination-btn" disabled><ChevronRight size={16} /></button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>10 per page</span>
-            <ChevronDown size={14} />
-          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loaded from the live audit store</div>
         </div>
       </div>
     </div>
@@ -1597,248 +1849,194 @@ const AuditTrailView = ({ onSelectEvent }) => {
 
 const BillingView = ({ stats }) => {
   const adminUi = useAdminUi();
+  const summary = stats?.summary || {};
+  const providerStatus = stats?.providerStatus || {};
 
   return (
-  <div className="fade-in">
-    <SectionHeader 
-      title="Billing & Subscriptions" 
-      description="Manage your workspace plan, payment methods, invoices, and billing activity." 
-      breadcrumbs={['Billing']} 
-    />
-    
-    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-      <SummaryCard icon={BillingIcon} label="Monthly Recurring Revenue (MRR)" value="$128,560" trend="9.8% vs last month" trendUp={true} sparklineColor="#3b82f6" />
-      <SummaryCard icon={Calendar} label="Active Subscriptions" value="1,784" trend="6.3% vs last 30 days" trendUp={true} sparklineColor="#8b5cf6" />
-      <SummaryCard icon={AlertCircle} label="Failed Payments" value="12" trend="14.3% vs last 30 days" trendUp={false} sparklineColor="#ef4444" />
-      <SummaryCard icon={BillingIcon} label="Outstanding Invoices" value="$24,350" trend="8.2% vs last month" trendUp={true} sparklineColor="#f59e0b" />
-    </div>
+    <div className="fade-in">
+      <SectionHeader title="Billing & Subscriptions" description="Derived revenue, invoice, and provider health from the current production workspace." breadcrumbs={['Billing']} />
 
-    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginBottom: '24px' }}>
-      <div className="card" style={{ padding: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(59, 130, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Box size={24} color="var(--accent)" />
-            </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <h3 style={{ fontSize: '18px', fontWeight: 600 }}>Enterprise Plan</h3>
-                <span className="badge badge-success" style={{ fontSize: '10px' }}>Active</span>
-              </div>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>For high-growth teams and advanced operations</p>
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                <span className="badge" style={{ background: 'rgba(139, 92, 246, 0.1)', color: '#8b5cf6', fontSize: '10px' }}>Annual Billing</span>
-                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Save 20% with annual billing</span>
-              </div>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Billing Cycle</p>
-            <div className="billing-cycle-toggle">
-              <button className="billing-cycle-btn">Monthly</button>
-              <button className="billing-cycle-btn active">Annual <span style={{ color: 'var(--accent)', marginLeft: '4px' }}>-20%</span></button>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(280), gap: '32px' }}>
-          <div>
-            {[
-              { label: 'Renewal Date', value: 'Jun 29, 2025 (in 30 days)' },
-              { label: 'Included Seats', value: '250 seats' },
-            ].map(item => (
-              <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '13px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>{item.label}</span>
-                <span style={{ fontWeight: 500 }}>{item.value}</span>
-              </div>
-            ))}
-            <div style={{ marginTop: '16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Current Usage</span>
-                <span style={{ fontWeight: 500 }}>184 of 250 seats used</span>
-              </div>
-              <div className="usage-bar-container">
-                <div className="usage-bar" style={{ width: '74%' }} />
-              </div>
-              <div style={{ textAlign: 'right', fontSize: '11px', color: 'var(--text-muted)' }}>74%</div>
-            </div>
-          </div>
-          <div style={{ borderLeft: '1px solid var(--border)', paddingLeft: '32px' }}>
-            {[
-              { label: 'Next Renewal', value: 'Jun 29, 2025' },
-              { label: 'Next Billing Amount', value: '$154,272.00 USD' },
-            ].map(item => (
-              <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '13px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>{item.label}</span>
-                <span style={{ fontWeight: 600 }}>{item.value}</span>
-              </div>
-            ))}
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Includes plan, add-ons, and applicable taxes</p>
-            <button className="btn btn-secondary" style={{ width: '100%', marginTop: '24px', height: '40px' }} onClick={() => adminUi.showPlaceholder('Plan management opened.', 'Billing plan changes are ready to be connected to Stripe or your billing provider.')}>Manage Plan</button>
-          </div>
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
+        <SummaryCard icon={BillingIcon} label="MRR" value={formatCurrency(summary.mrr || 0)} trend="Current plan revenue" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={Calendar} label="Active Subscriptions" value={formatMetricNumber(summary.activeSubscriptions || 0)} trend="Paid workspaces" trendUp={true} sparklineColor="#8b5cf6" />
+        <SummaryCard icon={AlertCircle} label="Failed Payments" value={formatMetricNumber(summary.failedPayments || 0)} trend="Needs follow-up" trendUp={false} sparklineColor="#ef4444" />
+        <SummaryCard icon={BillingIcon} label="Outstanding" value={formatCurrency(summary.outstandingAmount || 0)} trend="Open invoice balance" trendUp={true} sparklineColor="#f59e0b" />
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginBottom: '24px' }}>
         <div className="card" style={{ padding: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: 600 }}>Payment Methods</h3>
-            <button style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }} onClick={() => adminUi.showPlaceholder('Payment method flow opened.', 'This is where a provider-hosted update flow can be launched safely.')}>
-              <Plus size={14} /> Add Payment Method
-            </button>
-          </div>
-          <div className="payment-method-card">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div className="card-icon" style={{ background: '#1a1f24' }}>VISA</div>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <p style={{ fontSize: '14px', fontWeight: 500 }}>Visa ending in 4242</p>
-                  <span className="badge badge-success" style={{ fontSize: '10px', padding: '2px 6px' }}>Default</span>
-                </div>
-              </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+            <div>
+              <h3 style={{ fontSize: '18px', fontWeight: 600 }}>{providerStatus.name || 'Billing Provider'}</h3>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>{providerStatus.note || 'No provider metadata available.'}</p>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Expires 04/27</span>
-              <MoreVertical size={16} color="var(--text-muted)" style={{ cursor: 'pointer' }} />
-            </div>
+            <span className={`badge badge-${providerStatus.status === 'connected' || providerStatus.status === 'active' ? 'success' : 'warning'}`}>{String(providerStatus.status || 'unknown').toUpperCase()}</span>
           </div>
-
-          <div className="billing-contact-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h4 style={{ fontSize: '13px', fontWeight: 600 }}>Billing Contact</h4>
-              <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => adminUi.showPlaceholder('Billing contact editor opened.', 'The current dashboard is ready for a billing-contact form when the API is added.')}>Update Contact</button>
-            </div>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Users size={16} color="var(--text-muted)" />
-              </div>
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: '13px', fontWeight: 600 }}>Sarah Chen</p>
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>sarah.chen@acme.com</p>
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>+1 (415) 555-0198</p>
-              </div>
-            </div>
+          <div className="prop-list">
+            <div className="prop-item"><span className="prop-label">Total Customers</span><span className="prop-value">{formatMetricNumber(summary.totalCustomers || 0)}</span></div>
+            <div className="prop-item"><span className="prop-label">Average Revenue Per User</span><span className="prop-value">{formatCurrency(summary.avgRevenuePerUser || 0)}</span></div>
+            <div className="prop-item"><span className="prop-label">Last Sync</span><span className="prop-value">{formatAbsoluteDateTime(providerStatus.lastSyncAt)}</span></div>
           </div>
-          <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
-            <Lock size={12} /> Your payment information is encrypted and secure.
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px' }}>
-      <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Recent Invoices</h3>
-          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => adminUi.showPlaceholder('Invoice history opened.', 'A paginated invoice timeline can be connected here next.')}>View All Invoices</button>
-        </div>
-        <div className="table-container" style={{ margin: 0 }}>
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>Invoice ID</th>
-                <th>Customer / Workspace</th>
-                <th>Status</th>
-                <th>Amount</th>
-                <th>Date</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                { id: 'INV-2025-0529-1842', customer: 'Acme Corp', status: 'Paid', amount: '$154,272.00', date: 'May 29, 2025' },
-                { id: 'INV-2025-0429-1721', customer: 'Acme Corp', status: 'Paid', amount: '$154,272.00', date: 'Apr 29, 2025' },
-                { id: 'INV-2025-0329-1604', customer: 'Acme Corp', status: 'Paid', amount: '$154,272.00', date: 'Mar 29, 2025' },
-                { id: 'INV-2025-0227-1488', customer: 'Acme Corp', status: 'Pending', amount: '$154,272.00', date: 'Feb 27, 2025' },
-                { id: 'INV-2025-0129-1360', customer: 'Acme Corp', status: 'Failed', amount: '$154,272.00', date: 'Jan 29, 2025' },
-              ].map((inv) => (
-                <tr key={inv.id}>
-                  <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{inv.id}</td>
-                  <td style={{ fontSize: '13px', fontWeight: 500 }}>{inv.customer}</td>
-                  <td>
-                    <span className={`badge badge-${inv.status.toLowerCase()}`} style={{ fontSize: '10px' }}>{inv.status}</span>
-                  </td>
-                  <td style={{ fontSize: '13px', fontWeight: 600 }}>{inv.amount}</td>
-                  <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{inv.date}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => adminUi.downloadJson(`${inv.id}.json`, inv, 'Invoice exported.', `Invoice ${inv.id} was downloaded as JSON.`)}>
-                      <Download size={12} /> Download
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="pagination" style={{ padding: '16px 24px', borderTop: '1px solid var(--border)' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Showing 1 to 5 of 42 invoices</div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
-            <button className="pagination-btn active">1</button>
-            <button className="pagination-btn">2</button>
-            <button className="pagination-btn">3</button>
-            <span>...</span>
-            <button className="pagination-btn">9</button>
-            <button className="pagination-btn"><ChevronRight size={16} /></button>
-          </div>
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: '24px' }}>
-        <div style={{ display: 'flex', gap: '24px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
-          <div style={{ paddingBottom: '12px', borderBottom: '2px solid var(--accent)', color: 'var(--accent)', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Recent Transactions</div>
-          <div style={{ paddingBottom: '12px', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
-            Dunning Alerts <span className="dunning-badge">3</span>
-          </div>
-        </div>
-
-        <div className="transaction-list">
-          {[
-            { id: 'INV-2025-0529-1842', amount: '$154,272.00', date: 'May 29, 2025 02:15 AM', type: 'received', statusColor: 'var(--success)' },
-            { id: 'INV-2025-0429-1721', amount: '$154,272.00', date: 'Apr 29, 2025 02:14 AM', type: 'received', statusColor: 'var(--success)' },
-            { id: 'INV-2025-0129-1360', amount: '$154,272.00', date: 'Jan 29, 2025 02:11 AM', type: 'failed', statusColor: 'var(--danger)' },
-            { id: 'INV-2024-1231-0987', amount: '-$2,500.00', date: 'Dec 31, 2024 11:45 PM', type: 'refund', statusColor: '#f59e0b' },
-            { id: 'INV-2024-1231-0987', amount: '$151,772.00', date: 'Dec 31, 2024 11:42 PM', type: 'received', statusColor: 'var(--success)' },
-          ].map((tx, i) => (
-            <div key={i} className="transaction-item">
-              <div style={{ width: '24px', height: '24px', borderRadius: '50%', border: `1px solid ${tx.statusColor}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {tx.type === 'received' && <CheckCircle2 size={14} color={tx.statusColor} />}
-                {tx.type === 'failed' && <X size={14} color={tx.statusColor} />}
-                {tx.type === 'refund' && <AlertCircle size={14} color={tx.statusColor} />}
-              </div>
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: '13px', fontWeight: 500 }}>Payment {tx.type}</p>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{tx.id}</p>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <p style={{ fontSize: '13px', fontWeight: 600 }}>{tx.amount}</p>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{tx.date}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{ marginTop: '24px', textAlign: 'center' }}>
-          <button style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', margin: '0 auto', cursor: 'pointer' }} onClick={() => adminUi.showPlaceholder('Transaction history opened.', 'This is where a dedicated billing activity page can plug in.')}>
-            View All Transactions <ChevronRight size={14} />
+          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '20px', height: '40px' }} onClick={() => adminUi.downloadJson('zenin-billing-provider.json', providerStatus, 'Provider snapshot exported.', 'The current billing provider state was downloaded as JSON.')}>
+            Export Provider State
           </button>
         </div>
+
+        <div className="card" style={{ padding: '24px' }}>
+          <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '16px' }}>Plan Mix</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {Object.entries(stats?.plans || {}).map(([plan, count]) => {
+              const total = summary.totalCustomers || 1;
+              const percent = Math.round((Number(count || 0) / total) * 100);
+              return (
+                <div key={plan}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                    <span>{plan}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{formatMetricNumber(count)} • {percent}%</span>
+                  </div>
+                  <div className="usage-bar-container">
+                    <div className="usage-bar" style={{ width: `${percent}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px' }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Recent Invoices</h3>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => adminUi.downloadJson('zenin-billing-invoices.json', stats?.invoices || [], 'Invoices exported.', 'The current invoice ledger was downloaded as JSON.')}>
+              Export
+            </button>
+          </div>
+          <div className="table-container" style={{ margin: 0 }}>
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Invoice</th>
+                  <th>Customer</th>
+                  <th>Status</th>
+                  <th>Amount</th>
+                  <th>Issued</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stats?.invoices || []).slice(0, 8).map((invoice) => (
+                  <tr key={invoice.id}>
+                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{invoice.id}</td>
+                    <td style={{ fontSize: '13px', fontWeight: 500 }}>{invoice.customer}</td>
+                    <td><span className={`badge badge-${String(invoice.status || 'pending').toLowerCase()}`}>{String(invoice.status || 'pending').toUpperCase()}</span></td>
+                    <td style={{ fontSize: '13px', fontWeight: 600 }}>{formatCurrency(invoice.amount)}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{formatAbsoluteDate(invoice.issuedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', gap: '24px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
+            <div style={{ paddingBottom: '12px', borderBottom: '2px solid var(--accent)', color: 'var(--accent)', fontSize: '14px', fontWeight: 600 }}>Transactions</div>
+            <div style={{ paddingBottom: '12px', color: 'var(--text-muted)', fontSize: '14px', display: 'flex', alignItems: 'center' }}>
+              Dunning Alerts <span className="dunning-badge">{(stats?.dunningAlerts || []).length}</span>
+            </div>
+          </div>
+
+          <div className="transaction-list">
+            {(stats?.transactions || []).map((tx) => (
+              <div key={tx.id} className="transaction-item">
+                <div style={{ width: '24px', height: '24px', borderRadius: '50%', border: `1px solid ${tx.status === 'received' ? 'var(--success)' : '#ef4444'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {tx.status === 'received' ? <CheckCircle2 size={14} color="var(--success)" /> : <AlertCircle size={14} color="#ef4444" />}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: '13px', fontWeight: 500 }}>{tx.customer}</p>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{tx.invoiceId}</p>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ fontSize: '13px', fontWeight: 600 }}>{formatCurrency(tx.amount)}</p>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{formatRelativeTime(tx.createdAt)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: '24px', marginTop: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Recent Subscription Changes</h3>
+          <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={() => adminUi.downloadJson('zenin-subscription-changes.json', stats?.subscriptionChanges || [], 'Subscription changes exported.', 'The latest billing change history was downloaded as JSON.')}>
+            Export
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {(stats?.subscriptionChanges || []).length ? stats.subscriptionChanges.map((change) => (
+            <div key={change.id} style={{ padding: '14px 16px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--bg-app)', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+              <div>
+                <p style={{ fontSize: '13px', fontWeight: 600 }}>{change.customer}</p>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {String(change.oldPlan || 'starter').toUpperCase()} to {String(change.newPlan || 'starter').toUpperCase()}
+                </p>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{change.reason || 'No reason recorded'}</p>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <p style={{ fontSize: '12px', fontWeight: 600 }}>{change.actor}</p>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{formatRelativeTime(change.createdAt)}</p>
+              </div>
+            </div>
+          )) : (
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No recent subscription changes were recorded.</p>
+          )}
+        </div>
       </div>
     </div>
-  </div>
   );
 };
 
-const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert }) => {
-  const dummyLogs = [
-    { id: 1, createdAt: '2025-05-29 14:32:18', level: 'Error', service: 'Web API', endpoint: 'POST /api/v1/orders', message: 'Failed to process order due to payment gateway error', requestId: 'req_8f3b7a1c2d9e', ipAddress: '203.0.113.45', duration: '1,842 ms' },
-    { id: 2, createdAt: '2025-05-29 14:31:52', level: 'Warning', service: 'Auth Service', endpoint: 'POST /auth/login', message: 'Invalid credentials for user attempt', requestId: 'req_9d2a6b4c7e1f', ipAddress: '198.51.100.22', duration: '312 ms' },
-    { id: 3, createdAt: '2025-05-29 14:31:08', level: 'Info', service: 'Web API', endpoint: 'GET /api/v1/products', message: 'Fetched 25 products successfully', requestId: 'req_7c1d2e3f4a6b', ipAddress: '203.0.113.45', duration: '156 ms' },
-    { id: 4, createdAt: '2025-05-29 14:30:45', level: 'Error', service: 'Database', endpoint: 'SELECT * FROM orders', message: 'Database query timeout after 5000ms', requestId: 'req_3b8c6d1e9f2a', ipAddress: 'system', duration: '5,023 ms' },
-    { id: 5, createdAt: '2025-05-29 14:29:37', level: 'Info', service: 'Billing Service', endpoint: 'POST /api/v1/invoices', message: 'Invoice created successfully', requestId: 'req_1e9f3a6b2c7d', ipAddress: 'user_55b2c1d3', duration: '428 ms' },
-    { id: 6, createdAt: '2025-05-29 14:28:18', level: 'Critical', service: 'Payment Service', endpoint: 'POST /payments/charge', message: 'Payment gateway unavailable', requestId: 'req_6d4c8b2f1a9e', ipAddress: 'user_55b2c1d3', duration: '10,231 ms' },
-    { id: 7, createdAt: '2025-05-29 14:27:03', level: 'Warning', service: 'Storage Service', endpoint: 'PUT /storage/upload', message: 'High latency detected for file upload', requestId: 'req_2a1f9e3b7c6d', ipAddress: 'user_12a4f8b9', duration: '3,124 ms' },
-    { id: 8, createdAt: '2025-05-29 14:26:22', level: 'Info', service: 'Auth Service', endpoint: 'POST /auth/refresh', message: 'Token refreshed successfully', requestId: 'req_4f6a2d9b8c1e', ipAddress: 'user_8c7d9f12', duration: '189 ms' },
-  ];
+const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAlert, onResolveAlert, seedQuery = '' }) => {
+  const savedViewsKey = 'zenin_admin_log_views';
+  const [query, setQuery] = useState('');
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [serviceFilter, setServiceFilter] = useState('all');
+  const [savedViews, setSavedViews] = useState(() => parseStoredJson(savedViewsKey, []));
+
+  useEffect(() => {
+    persistStoredJson(savedViewsKey, savedViews);
+  }, [savedViews]);
+
+  useEffect(() => {
+    if (seedQuery) {
+      setQuery(seedQuery);
+    }
+  }, [seedQuery]);
+
+  const rows = logsData?.rows || [];
+  const filteredRows = rows.filter((row) => {
+    const search = query.toLowerCase();
+    const matchesSearch = !search
+      || String(row.message || '').toLowerCase().includes(search)
+      || String(row.endpoint || '').toLowerCase().includes(search)
+      || String(row.requestId || '').toLowerCase().includes(search);
+    const matchesLevel = levelFilter === 'all' || normalizeLogLevel(row.level) === levelFilter;
+    const matchesService = serviceFilter === 'all' || String(row.service || '') === serviceFilter;
+    return matchesSearch && matchesLevel && matchesService;
+  });
+
+  const saveCurrentView = () => {
+    const name = window.prompt('Name this saved log view:', '');
+    if (!name) return;
+    setSavedViews((prev) => [...prev.filter((entry) => entry.name !== name), { name, query, levelFilter, serviceFilter }]);
+  };
+
+  const applyView = (view) => {
+    setQuery(view.query || '');
+    setLevelFilter(view.levelFilter || 'all');
+    setServiceFilter(view.serviceFilter || 'all');
+  };
 
   return (
     <div className="fade-in">
@@ -1848,7 +2046,7 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
         breadcrumbs={['System Logs']}
         onAction={(type) => {
           if (type === 'secondary') {
-            onExportLogs(dummyLogs);
+            onExportLogs(filteredRows);
             return;
           }
           onCreateAlert();
@@ -1856,24 +2054,30 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
       />
       
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={AlertCircle} label="Error Rate" value="0.24%" trend="0.11% vs last 7 days" trendUp={false} sparklineColor="#ef4444" />
-        <SummaryCard icon={ZapOff} label="Failed Requests" value="128" trend="12.4% vs last 7 days" trendUp={false} sparklineColor="#f59e0b" />
-        <SummaryCard icon={Lock} label="Auth Failures" value="23" trend="8.2% vs last 7 days" trendUp={false} sparklineColor="#a855f7" />
-        <SummaryCard icon={ActivityIcon} label="Avg Latency" value="212 ms" trend="5.6% vs last 7 days" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={AlertCircle} label="Error Rate" value={`${logsData?.metrics?.errorRate || 0}%`} trend="Last 7 days" trendUp={false} sparklineColor="#ef4444" />
+        <SummaryCard icon={ZapOff} label="Failed Requests" value={formatMetricNumber(logsData?.metrics?.failedRequests || 0)} trend="Status >= 400" trendUp={false} sparklineColor="#f59e0b" />
+        <SummaryCard icon={Lock} label="Auth Failures" value={formatMetricNumber(logsData?.metrics?.authFailures || 0)} trend="Auth service failures" trendUp={false} sparklineColor="#a855f7" />
+        <SummaryCard icon={ActivityIcon} label="p95 Latency" value={`${formatMetricNumber(logsData?.metrics?.p95LatencyMs || 0)} ms`} trend="Observed requests" trendUp={true} sparklineColor="#3b82f6" />
       </div>
 
       <div className="card">
-        <div className="filter-bar">
+        <div className="filter-bar" style={{ gap: '12px', flexWrap: 'wrap' }}>
           <div className="search-input-wrapper" style={{ flex: 1 }}>
             <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={16} />
-            <input type="text" className="search-input" placeholder="Search logs..." style={{ paddingLeft: '40px' }} />
+            <input type="text" className="search-input" placeholder="Search logs..." value={query} onChange={(event) => setQuery(event.target.value)} style={{ paddingLeft: '40px' }} />
           </div>
-          <select className="filter-select"><option>Level (All)</option><option>Error</option><option>Warning</option><option>Info</option></select>
-          <select className="filter-select"><option>Service (All)</option><option>Web API</option><option>Auth Service</option></select>
-          <select className="filter-select"><option>Environment (All)</option><option>Production</option><option>Staging</option></select>
-          <div className="filter-select" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar size={14} /> May 23, 2025 00:00 - May 29, 2025 23:59
-          </div>
+          <select className="filter-select" value={levelFilter} onChange={(event) => setLevelFilter(event.target.value)}>
+            <option value="all">Level (All)</option>
+            <option value="critical">Critical</option>
+            <option value="error">Error</option>
+            <option value="warning">Warning</option>
+            <option value="info">Info</option>
+          </select>
+          <select className="filter-select" value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)}>
+            <option value="all">Service (All)</option>
+            {(logsData?.services || []).map((service) => <option key={service} value={service}>{service}</option>)}
+          </select>
+          <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={saveCurrentView}>Save View</button>
           <button type="button" className="live-toggle" onClick={onRefresh}>
             <div className="live-dot" />
             <span>Live</span>
@@ -1882,6 +2086,16 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
             </div>
           </button>
         </div>
+
+        {savedViews.length ? (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '0 24px 16px 24px' }}>
+            {savedViews.map((view) => (
+              <button key={view.name} type="button" className="btn btn-secondary" style={{ height: '30px', fontSize: '11px' }} onClick={() => applyView(view)}>
+                {view.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="table-container" style={{ margin: 0 }}>
           <table className="admin-table">
@@ -1899,16 +2113,16 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
               </tr>
             </thead>
             <tbody>
-              {dummyLogs.map((log) => (
+              {filteredRows.map((log) => (
                 <tr key={log.id} onClick={() => onSelectLog(log)} style={{ cursor: 'pointer' }}>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{log.createdAt}</td>
-                  <td><span className={`badge badge-${log.level.toLowerCase()}`} style={{ fontSize: '11px', padding: '2px 8px' }}>{log.level.toUpperCase()}</span></td>
+                  <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{formatAbsoluteDateTime(log.createdAt)}</td>
+                  <td><span className={`badge badge-${normalizeLogLevel(log.level)}`} style={{ fontSize: '11px', padding: '2px 8px' }}>{String(log.level || 'info').toUpperCase()}</span></td>
                   <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{log.service}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--text-muted)' }}>{log.endpoint}</td>
                   <td style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>{log.message}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{log.requestId}</td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{log.ipAddress}</td>
-                  <td style={{ fontWeight: 500, fontSize: '12px', color: log.level === 'Error' || log.level === 'Critical' ? '#ef4444' : 'inherit' }}>{log.duration}</td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{log.userId || log.ipAddress}</td>
+                  <td style={{ fontWeight: 500, fontSize: '12px', color: normalizeLogLevel(log.level) === 'error' ? '#ef4444' : 'inherit' }}>{log.durationMs == null ? 'N/A' : `${log.durationMs} ms`}</td>
                   <td><MoreVertical size={14} color="var(--text-muted)" /></td>
                 </tr>
               ))}
@@ -1917,21 +2131,13 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
         </div>
 
         <div className="pagination">
-          <div>Showing 1 to 8 of 12,842 logs</div>
+          <div>Showing {filteredRows.length} of {logsData?.total || filteredRows.length} logs</div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
             <button className="pagination-btn active">1</button>
-            <button className="pagination-btn">2</button>
-            <button className="pagination-btn">3</button>
-            <span>...</span>
-            <button className="pagination-btn">1285</button>
-            <button className="pagination-btn"><ChevronRight size={16} /></button>
-            <button className="pagination-btn"><ChevronLast size={16} /></button>
+            <button className="pagination-btn" disabled><ChevronRight size={16} /></button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>10 per page</span>
-            <ChevronDown size={14} />
-          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Live request feed</div>
         </div>
       </div>
 
@@ -1944,10 +2150,10 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
           <div style={{ height: '280px' }}>
             <Line 
               data={{
-                labels: ['May 23', 'May 24', 'May 25', 'May 26', 'May 27', 'May 28', 'May 29'],
+                labels: (logsData?.errorTrend || []).map((item) => item.label),
                 datasets: [{
                   label: 'Errors',
-                  data: [12, 10, 15, 12, 14, 18, 14],
+                  data: (logsData?.errorTrend || []).map((item) => item.errorCount),
                   borderColor: '#ef4444',
                   backgroundColor: 'rgba(239, 68, 68, 0.1)',
                   fill: true,
@@ -1957,6 +2163,15 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
               options={{ maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' } } } }}
             />
           </div>
+          {(logsData?.deployMarkers || []).length ? (
+            <div style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {logsData.deployMarkers.map((marker, index) => (
+                <span key={`${marker.createdAt}-${index}`} className="badge badge-info" style={{ fontSize: '10px' }}>
+                  {formatAbsoluteDate(marker.createdAt)} • {marker.actor}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="card">
@@ -1965,19 +2180,13 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
             <select className="search-input" style={{ width: '120px', padding: '4px' }}><option>Last 24 hours</option></select>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {[
-              { endpoint: 'POST /api/v1/reports/generate', avg: '3,842 ms', p95: '8,921 ms', pct: 85 },
-              { endpoint: 'POST /payments/charge', avg: '2,158 ms', p95: '6,231 ms', pct: 65 },
-              { endpoint: 'PUT /storage/upload', avg: '1,782 ms', p95: '4,512 ms', pct: 55 },
-              { endpoint: 'GET /api/v1/analytics/dashboard', avg: '1,245 ms', p95: '3,112 ms', pct: 45 },
-              { endpoint: 'POST /api/v1/orders', avg: '1,103 ms', p95: '2,864 ms', pct: 40 },
-            ].map((item, i) => (
-              <div key={i}>
+            {(logsData?.slowEndpoints || []).map((item) => (
+              <div key={item.endpoint}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
                   <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)' }}>{item.endpoint}</span>
                   <div style={{ display: 'flex', gap: '16px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Avg: {item.avg}</span>
-                    <span style={{ fontWeight: 600 }}>95th: {item.p95}</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>Avg: {item.avgMs} ms</span>
+                    <span style={{ fontWeight: 600 }}>95th: {item.p95Ms} ms</span>
                   </div>
                 </div>
                 <div className="performance-bar-container">
@@ -1988,11 +2197,67 @@ const LogsView = ({ logs, onRefresh, onSelectLog, onExportLogs, onCreateAlert })
           </div>
         </div>
       </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginTop: '24px' }}>
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Active Alerts</h3>
+            <span className="badge badge-warning">{formatMetricNumber((logsData?.alerts || []).length)}</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {(logsData?.alerts || []).length ? logsData.alerts.map((alert) => (
+              <div key={alert.id} style={{ padding: '14px 16px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                  <div>
+                    <p style={{ fontSize: '13px', fontWeight: 600 }}>{alert.title}</p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{alert.query || alert.service || 'No query configured'}</p>
+                  </div>
+                  <span className={`badge badge-${normalizeLogLevel(alert.severity)}`}>{String(alert.severity || 'warning').toUpperCase()}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Triggered {formatRelativeTime(alert.lastTriggeredAt || alert.createdAt)}</span>
+                  <button className="btn btn-secondary" style={{ fontSize: '11px', height: '30px' }} onClick={() => onResolveAlert?.(alert)}>
+                    Mark Resolved
+                  </button>
+                </div>
+              </div>
+            )) : (
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No active alert rules are currently open.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Open Incidents</h3>
+            <span className="badge badge-critical">{formatMetricNumber((logsData?.incidents || []).length)}</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {(logsData?.incidents || []).length ? logsData.incidents.map((incident) => (
+              <div key={incident.id} style={{ padding: '14px 16px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                  <div>
+                    <p style={{ fontSize: '13px', fontWeight: 600 }}>{incident.title}</p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{incident.requestId || 'No request correlation recorded'}</p>
+                  </div>
+                  <span className={`badge badge-${normalizeLogLevel(incident.severity)}`}>{String(incident.severity || 'warning').toUpperCase()}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Opened {formatRelativeTime(incident.createdAt)}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{incident.createdBy || 'System'}</span>
+                </div>
+              </div>
+            )) : (
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No open incidents are currently tracked.</p>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
 
-const SettingsView = () => {
+const SettingsView = ({ onRevokeAllSessions }) => {
   const adminUi = useAdminUi();
   const [settingsDraft, setSettingsDraft] = useState({
     compactDensity: true,
@@ -2331,7 +2596,7 @@ const SettingsView = () => {
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Sign out all users from all devices.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Session revocation queued.', 'Connect this to a backend session revocation endpoint when you are ready.')}>Revoke Sessions</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={onRevokeAllSessions}>Revoke Sessions</button>
         </div>
       </div>
     </div>
@@ -2354,122 +2619,96 @@ const SettingsView = () => {
   );
 };
 
-const IntegrationsView = () => {
+const IntegrationsView = ({ data, onRetryIntegration }) => {
   const adminUi = useAdminUi();
+  const summary = data?.summary || {};
+  const items = data?.items || [];
 
   return (
-  <div className="fade-in">
-    <SectionHeader title="Integrations" description="Connect and manage external tools, services, and workflows." breadcrumbs={['Integrations']} />
-    
-    <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '16px', marginBottom: '32px' }}>
-      <SummaryCard icon={LayoutGrid} label="Connected Apps" value="12" trend="2 new this week" trendUp={true} sparklineColor="#3b82f6" />
-      <SummaryCard icon={Activity} label="Sync Health" value="99.6%" trend="0.8% vs last 7 days" trendUp={true} sparklineColor="#10b981" />
-      <SummaryCard icon={Webhook} label="Webhooks Active" value="18" trend="3 new this week" trendUp={true} sparklineColor="#8b5cf6" />
-      <SummaryCard icon={AlertTriangle} label="Failed Syncs" value="7" trend="3 vs last 7 days" trendUp={false} sparklineColor="#ef4444" />
-    </div>
+    <div className="fade-in">
+      <SectionHeader title="Integrations" description="Live provider configuration and health across billing, auth, messaging, and data systems." breadcrumbs={['Integrations']} />
 
-    <div className="integrations-main-grid">
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: 600 }}>All Integrations</h3>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <div className="search-input-wrapper" style={{ width: '240px' }}>
-              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input type="text" className="search-input" placeholder="Search integrations..." style={{ paddingLeft: '32px', fontSize: '12px' }} />
-            </div>
-            <select className="search-input" style={{ width: '140px', fontSize: '12px' }}><option>All Categories</option></select>
-            <select className="search-input" style={{ width: '120px', fontSize: '12px' }}><option>All Statuses</option></select>
-            <div style={{ display: 'flex', background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '8px', padding: '2px' }}>
-              <div style={{ padding: '6px', borderRadius: '6px', background: 'var(--accent)', color: 'white' }}><LayoutGrid size={16} /></div>
-              <div style={{ padding: '6px', borderRadius: '6px', color: 'var(--text-muted)' }}><List size={16} /></div>
-            </div>
-          </div>
-        </div>
-
-        <div className="integration-card-grid">
-          {[
-            { name: 'Stripe', category: 'Payments', icon: CreditCard, color: '#6366f1', status: 'Active', sync: '2 minutes ago', button: 'Manage' },
-            { name: 'Webhooks', category: 'Developer', icon: Webhook, color: '#8b5cf6', status: 'Active', sync: '30 seconds ago', button: 'Manage' },
-            { name: 'Slack', category: 'Communication', icon: MessageSquare, color: '#10b981', status: 'Active', sync: '1 minute ago', button: 'Manage' },
-            { name: 'Analytics', category: 'Analytics', icon: BarChart, color: '#f59e0b', status: 'Active', sync: '5 minutes ago', button: 'Manage' },
-            { name: 'Email Service', category: 'Marketing', icon: Mail, color: '#3b82f6', status: 'Active', sync: '3 minutes ago', button: 'Manage' },
-            { name: 'CRM', category: 'Sales', icon: Users, color: '#10b981', status: 'Warning', sync: '2 days ago', button: 'Reconnect', isWarning: true },
-            { name: 'Storage', category: 'File Storage', icon: HardDrive, color: '#8b5cf6', status: 'Active', sync: '10 minutes ago', button: 'Manage' },
-            { name: 'Custom API', category: 'Developer', icon: Code, color: 'var(--text-muted)', status: 'Inactive', sync: 'Never connected', button: 'Connect', isInactive: true },
-          ].map((app, i) => (
-            <div key={i} className="integration-card">
-              <div style={{ display: 'flex', gap: '16px' }}>
-                <div className="integration-icon-wrapper" style={{ background: `${app.color}15` }}>
-                  <app.icon size={24} color={app.color} />
-                </div>
-                <div>
-                  <h4 style={{ fontSize: '15px', fontWeight: 600 }}>{app.name}</h4>
-                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{app.category}</p>
-                  <div className="sync-status">
-                    <div className="sync-dot" style={{ background: app.isInactive ? 'var(--text-muted)' : app.isWarning ? '#f59e0b' : 'var(--success)' }} />
-                    Last sync: {app.sync}
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <button 
-                  className={`btn ${app.isInactive ? 'btn-primary' : 'btn-secondary'}`} 
-                  style={{ fontSize: '12px', padding: '6px 16px' }}
-                  onClick={() => adminUi.showPlaceholder(`${app.name} ${app.button.toLowerCase()} flow opened.`, 'The integration card is now wired to a consistent dashboard action instead of a dead-end alert.')}
-                >
-                  {app.button}
-                </button>
-                <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={() => adminUi.showPlaceholder(`${app.name} options opened.`, 'Sync now, disconnect, and log inspection can be attached to this menu when ready.')}><MoreHorizontal size={14} /></button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="pagination" style={{ marginTop: '32px' }}>
-          <div>Showing 1 to 8 of 12 integrations</div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
-            <button className="pagination-btn active">1</button>
-            <button className="pagination-btn">2</button>
-            <button className="pagination-btn"><ChevronRight size={16} /></button>
-          </div>
-          <select className="search-input" style={{ width: '100px', fontSize: '12px' }}><option>8 per page</option></select>
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '16px', marginBottom: '32px' }}>
+        <SummaryCard icon={LayoutGrid} label="Connected Apps" value={formatMetricNumber(summary.connectedApps || 0)} trend="Configured providers" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={Activity} label="Sync Health" value={`${summary.syncHealth || 0}%`} trend="Configuration health" trendUp={true} sparklineColor="#10b981" />
+        <SummaryCard icon={Webhook} label="Webhooks Active" value={formatMetricNumber(summary.webhooksActive || 0)} trend="Developer surfaces" trendUp={true} sparklineColor="#8b5cf6" />
+        <SummaryCard icon={AlertTriangle} label="Needs Attention" value={formatMetricNumber(summary.failedSyncs || 0)} trend="Missing or degraded" trendUp={false} sparklineColor="#ef4444" />
       </div>
 
-      <div style={{ paddingTop: '56px' }}>
-        <div className="integration-side-section">
-          <div className="integration-side-header">
-            <h4 style={{ fontSize: '14px', fontWeight: 600 }}>API Keys</h4>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', cursor: 'pointer' }}>View All</span>
+      <div className="integrations-main-grid">
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 600 }}>All Integrations</h3>
+            <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={() => adminUi.downloadJson('zenin-integrations-health.json', items, 'Integrations exported.', 'The current integration health snapshot was downloaded as JSON.')}>
+              Export Snapshot
+            </button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {[
-              { name: 'Default API Key', value: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022abcd', status: 'Active', date: 'May 20, 2025' },
-              { name: 'Read Only Key', value: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022efgh', status: 'Active', date: 'May 18, 2025' },
-              { name: 'Webhook Key', value: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022ijkl', status: 'Active', date: 'May 15, 2025' },
-            ].map((key, i) => (
-              <div key={i} className="integration-side-item">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600 }}>{key.name}</span>
-                  <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', padding: '2px 6px', fontSize: '10px' }}>{key.status}</span>
+
+          <div className="integration-card-grid">
+            {items.map((app) => (
+              <div key={app.name} className="integration-card">
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <div className="integration-icon-wrapper" style={{ background: 'rgba(59, 130, 246, 0.12)' }}>
+                    <Code size={24} color="var(--accent)" />
+                  </div>
+                  <div>
+                    <h4 style={{ fontSize: '15px', fontWeight: 600 }}>{app.name}</h4>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{app.category}</p>
+                    <div className="sync-status">
+                      <div className="sync-dot" style={{ background: app.status === 'active' || app.status === 'connected' ? 'var(--success)' : app.status === 'degraded' ? '#f59e0b' : 'var(--text-muted)' }} />
+                      Last sync: {formatRelativeTime(app.lastSyncAt, 'Unknown')}
+                    </div>
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px' }}>{app.note}</p>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Credentials: {app.credentialStatus || 'unknown'}</span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Sync lag: {formatMetricNumber(app.syncLagMinutes || 0)}m</span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Failures 24h: {formatMetricNumber(app.webhookFailures || 0)}</span>
+                    </div>
+                  </div>
                 </div>
-                <p style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{key.value}</p>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Created {key.date}</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    className={`btn ${app.status === 'inactive' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '12px', padding: '6px 16px' }}
+                    onClick={() => {
+                      if (app.retryable) {
+                        onRetryIntegration?.(app.name);
+                        return;
+                      }
+                      adminUi.copyText(JSON.stringify(app, null, 2), `${app.name} details copied.`, 'The current integration snapshot is ready to share or inspect.');
+                    }}
+                  >
+                    {app.actionLabel || 'Inspect'}
+                  </button>
+                  <span className={`badge badge-${app.status === 'active' || app.status === 'connected' ? 'success' : app.status === 'degraded' ? 'warning' : 'inactive'}`}>
+                    {String(app.status || 'unknown').toUpperCase()}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
-          <button 
-            className="btn btn-secondary" 
-            style={{ width: '100%', marginTop: '16px', gap: '8px', fontSize: '13px' }}
-            onClick={() => adminUi.copyText('zn_live_9f2a7c...', 'API key copied.', 'The new key placeholder has been copied so the follow-up flow is still usable.')}
-          >
-            <Plus size={14} /> Create New API Key
-          </button>
+        </div>
+
+        <div style={{ paddingTop: '56px' }}>
+          <div className="integration-side-section">
+            <div className="integration-side-header">
+              <h4 style={{ fontSize: '14px', fontWeight: 600 }}>Operational Notes</h4>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {items.filter((app) => app.status !== 'active' && app.status !== 'connected').map((app) => (
+                <div key={`${app.name}-note`} className="integration-side-item">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 600 }}>{app.name}</span>
+                    <span className="status-badge" style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', padding: '2px 6px', fontSize: '10px' }}>{app.status}</span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{app.note}</p>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  </div>
   );
 };
 
@@ -2480,7 +2719,14 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [commandQuery, setCommandQuery] = useState('');
+  const [commandResults, setCommandResults] = useState({ users: [], audit: [], logs: [], tables: [] });
+  const [commandLoading, setCommandLoading] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [auditSeedQuery, setAuditSeedQuery] = useState('');
+  const [logSeedQuery, setLogSeedQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedUserDetails, setSelectedUserDetails] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedLog, setSelectedLog] = useState(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
@@ -2488,14 +2734,16 @@ export default function App() {
   const [isLogPanelOpen, setIsLogPanelOpen] = useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
+  const [databaseParams, setDatabaseParams] = useState({ table: null, page: 1, pageSize: 10 });
   
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState(null);
   const [dbStats, setDbStats] = useState(null);
   const [billingStats, setBillingStats] = useState(null);
+  const [integrationsData, setIntegrationsData] = useState(null);
   const [users, setUsers] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [auditLogs, setAuditLogs] = useState([]);
+  const [logsData, setLogsData] = useState({ rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
+  const [auditData, setAuditData] = useState({ rows: [], total: 0 });
   const [error, setError] = useState(null);
   const [toasts, setToasts] = useState([]);
 
@@ -2542,11 +2790,11 @@ export default function App() {
     downloadJson,
     downloadCsv,
     showPlaceholder,
-  }), [notify]);
+  }), [notify, copyText, downloadJson, downloadCsv]);
 
   const checkAuth = async () => {
     try {
-      const data = await adminFetch('/../auth/me'); // Go up one level to standard auth
+      const data = await adminFetch('/../auth/me');
       if (data.authenticated && data.user?.isAdmin) {
         setIsAuthenticated(true);
         setUser(data.user);
@@ -2556,14 +2804,19 @@ export default function App() {
       }
     } catch (err) {
       console.error('Auth check failed:', err);
-      // Fallback for local development if needed, but safer to deny
       if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         setIsAuthenticated(true);
-        setUser({ email: 'dev@zenin.com', displayName: 'Dev Admin', isAdmin: true });
+        setUser({ email: 'dev@zenin.com', displayName: 'Dev Admin', isAdmin: true, adminRole: 'super_admin' });
       } else {
         setIsAuthenticated(false);
       }
     }
+  };
+
+  const fetchSelectedUserDetails = async (userId) => {
+    const details = await adminFetch(`/users/${userId}`);
+    setSelectedUserDetails(details);
+    return details;
   };
 
   const fetchData = async (tab = activeTab) => {
@@ -2576,15 +2829,22 @@ export default function App() {
         const data = await adminFetch('/users');
         setUsers(data);
       } else if (tab === 'database') {
-        const data = await adminFetch('/database');
+        const params = new URLSearchParams();
+        if (databaseParams.table) params.set('table', databaseParams.table);
+        params.set('page', String(databaseParams.page || 1));
+        params.set('pageSize', String(databaseParams.pageSize || 10));
+        const data = await adminFetch(`/database?${params.toString()}`);
         setDbStats(data);
       } else if (tab === 'billing') {
         const data = await adminFetch('/billing');
         setBillingStats(data);
+      } else if (tab === 'integrations') {
+        const data = await adminFetch('/integrations');
+        setIntegrationsData(data);
       } else if (tab === 'logs' || tab === 'audit') {
         const { auditLogs, systemLogs } = await adminFetch('/logs');
-        setLogs(systemLogs || []);
-        setAuditLogs(auditLogs || []);
+        setLogsData(systemLogs || { rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
+        setAuditData(auditLogs || { rows: [], total: 0 });
       }
       setError(null);
     } catch (err) {
@@ -2601,49 +2861,92 @@ export default function App() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      fetchData();
+      fetchData(activeTab);
     }
-  }, [activeTab, isAuthenticated]);
+  }, [activeTab, isAuthenticated, databaseParams.table, databaseParams.page]);
 
   useEffect(() => {
     if (!selectedUser) return;
     const refreshedUser = users.find((entry) => Number(entry.id) === Number(selectedUser.id));
     if (refreshedUser) {
       setSelectedUser((prev) => ({ ...prev, ...refreshedUser }));
-      return;
+      setSelectedUserDetails((prev) => prev ? { ...prev, user: { ...prev.user, ...refreshedUser } } : prev);
     }
     if (isPanelOpen) {
-      setIsPanelOpen(false);
-      setSelectedUser(null);
+      fetchSelectedUserDetails(selectedUser.id).catch(() => {});
     }
   }, [users, selectedUser, isPanelOpen]);
 
-  const handleUpdateUser = async (userId, type, value) => {
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setIsCommandPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !isCommandPaletteOpen) return undefined;
+    const trimmed = commandQuery.trim();
+    if (!trimmed) {
+      setCommandResults({ users: [], audit: [], logs: [], tables: [] });
+      return undefined;
+    }
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setCommandLoading(true);
+        const results = await adminFetch(`/search?query=${encodeURIComponent(trimmed)}`);
+        setCommandResults(results);
+      } catch (searchError) {
+        console.error('Command palette search failed:', searchError);
+      } finally {
+        setCommandLoading(false);
+      }
+    }, 180);
+    return () => window.clearTimeout(timeoutId);
+  }, [commandQuery, isAuthenticated, isCommandPaletteOpen]);
+
+  const openUserPanel = async (selected) => {
+    setSelectedUser(selected);
+    setSelectedUserDetails(null);
+    setIsPanelOpen(true);
+    try {
+      await fetchSelectedUserDetails(selected.id);
+    } catch (detailError) {
+      notify('error', 'User details failed.', detailError.message);
+    }
+  };
+
+  const handleUpdateUser = async (userId, type, value, reason = '') => {
     try {
       let response = null;
       if (type === 'plan') {
         response = await adminFetch(`/users/${userId}/plan`, {
           method: 'PATCH',
-          body: JSON.stringify({ plan: value })
+          body: JSON.stringify({ plan: value, reason })
         });
         notify('success', 'User plan updated.', `The account is now on the ${String(value).toUpperCase()} plan.`);
       } else if (type === 'role') {
         response = await adminFetch(`/users/${userId}/role`, {
           method: 'PATCH',
-          body: JSON.stringify({ isAdmin: value })
+          body: JSON.stringify({ adminRole: value, reason })
         });
-        notify('success', 'Role updated.', value ? 'Admin access was granted.' : 'Admin access was removed.');
+        notify('success', 'Role updated.', `${formatAdminRoleLabel(value)} access is now applied.`);
       } else if (type === 'suspend') {
         response = await adminFetch(`/users/${userId}/suspend`, {
           method: 'POST',
-          body: JSON.stringify({ isSuspended: value })
+          body: JSON.stringify({ isSuspended: value, reason })
         });
         notify('success', value ? 'User suspended.' : 'User reactivated.', value ? 'The account has been suspended.' : 'The account is active again.');
       } else if (type === 'delete') {
         if (!window.confirm('Are you sure you want to permanently delete this user?')) return;
-        await adminFetch(`/users/${userId}`, { method: 'DELETE' });
+        await adminFetch(`/users/${userId}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
         setIsPanelOpen(false);
         setSelectedUser(null);
+        setSelectedUserDetails(null);
         notify('success', 'User deleted.', 'The account was permanently removed.');
       }
 
@@ -2652,23 +2955,42 @@ export default function App() {
         setSelectedUser((prev) => (prev && Number(prev.id) === Number(updatedUser.id) ? { ...prev, ...updatedUser } : prev));
       }
       await fetchData('users');
+      if (isPanelOpen && selectedUser && Number(selectedUser.id) === Number(userId) && type !== 'delete') {
+        await fetchSelectedUserDetails(userId);
+      }
     } catch (err) {
       notify('error', 'User update failed.', err.message);
     }
   };
 
-  const handleResetPassword = async (userId) => {
+  const handleResetPassword = async (userId, reason = '') => {
     try {
-      const { recoveryLink } = await adminFetch(`/users/${userId}/recover`, { method: 'POST' });
+      const { recoveryLink } = await adminFetch(`/users/${userId}/recover`, { method: 'POST', body: JSON.stringify({ reason }) });
       await copyText(recoveryLink, 'Recovery link copied.', 'The password reset link is on your clipboard and ready to share securely.');
     } catch (err) {
       notify('error', 'Recovery link failed.', err.message);
     }
   };
 
+  const handleRevokeSessions = async (userId, reason = '') => {
+    try {
+      await adminFetch(`/users/${userId}/sessions/revoke`, {
+        method: 'POST',
+        body: JSON.stringify({ reason })
+      });
+      notify('success', 'Sessions revoked.', 'All active sessions for this user have been revoked.');
+      await fetchData('users');
+      await fetchSelectedUserDetails(userId);
+    } catch (err) {
+      notify('error', 'Session revoke failed.', err.message);
+    }
+  };
+
   const runMigration = async () => {
     try {
-      await adminFetch('/migrations/admin-workspace', { method: 'POST' });
+      const reason = window.prompt('Reason for running the admin workspace migration:', '')?.trim();
+      if (!reason) return;
+      await adminFetch('/migrations/admin-workspace', { method: 'POST', body: JSON.stringify({ reason }) });
       notify('success', 'Migration successful.', 'The admin workspace migration completed successfully.');
       fetchData('database');
     } catch (err) {
@@ -2677,9 +2999,13 @@ export default function App() {
   };
 
   const handleAddUser = async (userData) => {
+    const reason = window.prompt(`Reason for creating ${userData.email}:`, '')?.trim();
+    if (!reason) {
+      throw new Error('Creation reason is required.');
+    }
     const created = await adminFetch('/users', {
       method: 'POST',
-      body: JSON.stringify(userData),
+      body: JSON.stringify({ ...userData, reason }),
     });
 
     await copyText(
@@ -2697,8 +3023,9 @@ export default function App() {
       name: entry.name || '',
       email: entry.email || '',
       plan: entry.plan || '',
-      role: entry.isAdmin ? 'admin' : 'user',
+      role: entry.adminRole || 'user',
       status: entry.suspendedAt ? 'suspended' : 'active',
+      activeSessions: entry.activeSessionCount || 0,
       joined: entry.joined || '',
     }));
     downloadCsv('zenin-admin-users.csv', exportRows, 'User list exported.', `Downloaded ${exportRows.length} user records as CSV.`);
@@ -2708,8 +3035,176 @@ export default function App() {
     downloadJson('zenin-system-logs.json', entries || [], 'Logs exported.', 'The current log dataset was downloaded as JSON.');
   };
 
-  const handleCreateAlert = () => {
-    showPlaceholder('Alert draft created.', 'Hook this action to your incident-management workflow when you are ready.');
+  const handleBulkAction = async ({ action, userIds, value, reason }) => {
+    try {
+      await adminFetch('/users/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ action, userIds, value, reason })
+      });
+      notify('success', 'Bulk action completed.', `${action.replace(/_/g, ' ')} ran for ${userIds.length} users.`);
+      await fetchData('users');
+    } catch (err) {
+      notify('error', 'Bulk action failed.', err.message);
+    }
+  };
+
+  const handleCreateAlert = async () => {
+    const title = window.prompt('Alert title:', '')?.trim();
+    if (!title) return;
+    try {
+      await adminFetch('/alerts', {
+        method: 'POST',
+        body: JSON.stringify({ title, query: commandQuery || searchQuery || '', severity: 'warning' })
+      });
+      notify('success', 'Alert draft created.', 'The alert definition was recorded in the audit trail.');
+      await fetchData('logs');
+    } catch (err) {
+      notify('error', 'Alert creation failed.', err.message);
+    }
+  };
+
+  const handleResolveAlert = async (alert) => {
+    if (!alert?.id) return;
+    const reason = window.prompt(`Reason for resolving alert "${alert.title}":`, '')?.trim();
+    if (!reason) return;
+    try {
+      await adminFetch(`/alerts/${alert.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'resolved', reason })
+      });
+      notify('success', 'Alert resolved.', `${alert.title} was marked as resolved.`);
+      await fetchData('logs');
+    } catch (err) {
+      notify('error', 'Alert resolution failed.', err.message);
+    }
+  };
+
+  const handleCreateIncidentFromLog = async (log) => {
+    if (!log) return;
+    const title = window.prompt('Incident title:', `Investigate ${log.service || 'system'} issue`)?.trim();
+    if (!title) return;
+    const reason = window.prompt('Reason for creating this incident:', log.message || '')?.trim();
+    if (!reason) return;
+    try {
+      await adminFetch('/incidents', {
+        method: 'POST',
+        body: JSON.stringify({
+          title,
+          severity: normalizeLogLevel(log.level || 'warning'),
+          requestId: log.requestId || null,
+          sourceLogId: log.id,
+          reason,
+          details: {
+            message: log.message,
+            endpoint: log.endpoint,
+            service: log.service
+          }
+        })
+      });
+      notify('success', 'Incident created.', 'The log was escalated into the incident queue.');
+      await fetchData('logs');
+      setIsLogPanelOpen(false);
+      setSelectedLog(null);
+    } catch (err) {
+      notify('error', 'Incident creation failed.', err.message);
+    }
+  };
+
+  const handleRetryIntegration = async (integrationName) => {
+    const reason = window.prompt(`Reason for retrying ${integrationName}:`, '')?.trim();
+    if (!reason) return;
+    try {
+      await adminFetch(`/integrations/${encodeURIComponent(integrationName)}/retry`, {
+        method: 'POST',
+        body: JSON.stringify({ reason })
+      });
+      notify('success', 'Retry recorded.', `${integrationName} was queued for operator follow-up.`);
+      await fetchData('integrations');
+      await fetchData('logs');
+    } catch (err) {
+      notify('error', 'Retry request failed.', err.message);
+    }
+  };
+
+  const handleRevokeAllSessions = async () => {
+    const reason = window.prompt('Reason for revoking all active sessions:', '')?.trim();
+    if (!reason) return;
+    const excludeCurrentAdmin = !window.confirm('Include your current admin session in the revoke? Choose Cancel to keep your current session active.');
+    try {
+      const result = await adminFetch('/sessions/revoke-all', {
+        method: 'POST',
+        body: JSON.stringify({ reason, excludeCurrentAdmin })
+      });
+      notify('success', 'Sessions revoked.', `${formatMetricNumber(result.revokedCount || 0)} sessions were revoked.`);
+      await fetchData('users');
+      await fetchData('logs');
+    } catch (err) {
+      notify('error', 'Global revoke failed.', err.message);
+    }
+  };
+
+  const openAuditTrail = async () => {
+    setActiveTab('audit');
+    await fetchData('audit');
+  };
+
+  const jumpToUser = async (userId) => {
+    setActiveTab('users');
+    const directory = await adminFetch('/users');
+    setUsers(directory);
+    const userRecord = directory.find((entry) => Number(entry.id) === Number(userId));
+    if (userRecord) {
+      openUserPanel(userRecord);
+    } else {
+      const details = await fetchSelectedUserDetails(userId);
+      if (details?.user) {
+        openUserPanel(details.user);
+      }
+    }
+  };
+
+  const openRelatedFromUser = async (tab, selected) => {
+    if (tab === 'users') {
+      setActiveTab('users');
+      return;
+    }
+    if (tab === 'audit') {
+      setAuditSeedQuery(selected.email || '');
+      setActiveTab('audit');
+      await fetchData('audit');
+      return;
+    }
+    if (tab === 'logs') {
+      setLogSeedQuery(selected.email || '');
+      setActiveTab('logs');
+      await fetchData('logs');
+    }
+  };
+
+  const handleCommandNavigate = async (section, row) => {
+    setIsCommandPaletteOpen(false);
+    setCommandQuery('');
+    if (section === 'users') {
+      await openUserPanel(row);
+      setActiveTab('users');
+      return;
+    }
+    if (section === 'audit') {
+      setActiveTab('audit');
+      setSelectedEvent(row);
+      setIsEventPanelOpen(true);
+      return;
+    }
+    if (section === 'logs') {
+      setActiveTab('logs');
+      setSelectedLog(row);
+      setIsLogPanelOpen(true);
+      return;
+    }
+    if (section === 'tables') {
+      setDatabaseParams((prev) => ({ ...prev, table: row.name, page: 1 }));
+      setActiveTab('database');
+    }
   };
 
   if (!isAuthenticated) {
@@ -2727,20 +3222,8 @@ export default function App() {
             className="btn btn-primary" 
             style={{ width: '100%', height: '44px', fontSize: '15px', fontWeight: 600 }}
             onClick={() => {
-              // Redirect to main Zenin Web App login
-              const hostname = window.location.hostname.toLowerCase();
-              let mainAppUrl;
-              
-              if (hostname === 'localhost' || hostname === '127.0.0.1') {
-                mainAppUrl = window.location.origin.replace(':4001', ':3000');
-              } else if (hostname === 'admin.zenin.capital') {
-                mainAppUrl = 'https://zenin.capital';
-              } else {
-                // Fallback for other environments (e.g., preview)
-                mainAppUrl = window.location.origin.replace('admin.', '');
-              }
-              
-              window.location.href = `${mainAppUrl}/login?redirect=${encodeURIComponent(window.location.href)}`;
+              const mainAppUrl = getMainAppUrl();
+              window.location.href = `${mainAppUrl}/auth?mode=signin&next=${encodeURIComponent(window.location.href)}`;
             }}
           >
             Authenticate with Zenin
@@ -2760,7 +3243,7 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (loading && !stats && !dbStats && !billingStats && users.length === 0 && logs.length === 0) {
+    if (loading && !stats && !dbStats && !billingStats && users.length === 0 && (logsData?.rows || []).length === 0) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <div className="animate-pulse" style={{ color: 'var(--accent)' }}>Syncing with Infrastructure...</div>
@@ -2779,47 +3262,52 @@ export default function App() {
     }
 
     switch (activeTab) {
-      case 'overview': return <OverviewView stats={stats} fetchData={() => fetchData('overview')} />;
+      case 'overview': return <OverviewView stats={stats} onOpenAudit={openAuditTrail} />;
       case 'users': return (
         <UserManagementView 
           users={users} 
           searchQuery={searchQuery} 
           setSearchQuery={setSearchQuery} 
-          onUpdateUser={handleUpdateUser} 
           onAddUser={() => setIsAddUserModalOpen(true)}
           onExportUsers={handleExportUsers}
-          onSelectUser={(user) => {
-            setSelectedUser(user);
-            setIsPanelOpen(true);
-          }}
+          onBulkAction={handleBulkAction}
+          onSelectUser={openUserPanel}
         />
       );
       case 'audit': return (
         <AuditTrailView 
-          auditLogs={auditLogs}
-          onSelectEvent={(event) => {
-            setSelectedEvent(event);
-            setIsEventPanelOpen(true);
-          }} 
+          auditData={auditData}
+          onOpenUser={jumpToUser}
+          seedQuery={auditSeedQuery}
+          onSelectEvent={(event) => { setSelectedEvent(event); setIsEventPanelOpen(true); }} 
         />
       );
-      case 'database': return <DatabaseView stats={dbStats} onRunMigration={runMigration} />;
+      case 'database': return (
+        <DatabaseView
+          stats={dbStats}
+          onRunMigration={runMigration}
+          onSelectTable={(table) => setDatabaseParams((prev) => ({ ...prev, table, page: 1 }))}
+          onChangePage={(page) => setDatabaseParams((prev) => ({ ...prev, page }))}
+        />
+      );
       case 'billing': return <BillingView stats={billingStats} />;
       case 'logs': return (
         <LogsView 
-          logs={logs} 
+          logsData={logsData} 
+          seedQuery={logSeedQuery}
           onRefresh={() => fetchData('logs')} 
           onExportLogs={handleExportLogs}
           onCreateAlert={handleCreateAlert}
+          onResolveAlert={handleResolveAlert}
           onSelectLog={(log) => {
             setSelectedLog(log);
             setIsLogPanelOpen(true);
           }}
         />
       );
-      case 'settings': return <SettingsView />;
-      case 'integrations': return <IntegrationsView />;
-      default: return <OverviewView stats={stats} fetchData={() => fetchData('overview')} />;
+      case 'settings': return <SettingsView onRevokeAllSessions={handleRevokeAllSessions} />;
+      case 'integrations': return <IntegrationsView data={integrationsData} onRetryIntegration={handleRetryIntegration} />;
+      default: return <OverviewView stats={stats} onOpenAudit={openAuditTrail} />;
     }
   };
 
@@ -2865,7 +3353,17 @@ export default function App() {
         <header className="top-nav">
           <div className="search-input-wrapper">
             <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={16} />
-            <input type="text" className="search-input" placeholder="Search users, logs, databases..." />
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Jump to users, request IDs, tables..."
+              value={commandQuery}
+              onFocus={() => setIsCommandPaletteOpen(true)}
+              onChange={(event) => {
+                setCommandQuery(event.target.value);
+                setIsCommandPaletteOpen(true);
+              }}
+            />
             <div className="search-shortcut">
               <span style={{ fontSize: '12px' }}>⌘</span>
               <span>K</span>
@@ -2904,11 +3402,15 @@ export default function App() {
       {isPanelOpen && (
         <UserDetailPanel 
           user={selectedUser} 
+          details={selectedUserDetails}
           onUpdate={handleUpdateUser}
           onResetPassword={handleResetPassword}
+          onRevokeSessions={handleRevokeSessions}
+          onOpenRelated={openRelatedFromUser}
           onClose={() => {
             setIsPanelOpen(false);
             setSelectedUser(null);
+            setSelectedUserDetails(null);
           }} 
         />
       )}
@@ -2929,6 +3431,7 @@ export default function App() {
       {isLogPanelOpen && (
         <LogDetailPanel 
           log={selectedLog} 
+          onCreateIncident={handleCreateIncidentFromLog}
           onClose={() => {
             setIsLogPanelOpen(false);
             setSelectedLog(null);
@@ -2951,6 +3454,15 @@ export default function App() {
           }} 
         />
       )}
+      <CommandPalette
+        open={isCommandPaletteOpen}
+        query={commandQuery}
+        onQueryChange={setCommandQuery}
+        results={commandResults}
+        loading={commandLoading}
+        onNavigate={handleCommandNavigate}
+        onClose={() => setIsCommandPaletteOpen(false)}
+      />
       <ToastViewport toasts={toasts} onDismiss={dismissToast} />
     </div>
     </AdminUiContext.Provider>

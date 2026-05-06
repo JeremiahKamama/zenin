@@ -203,6 +203,34 @@ function isAdminUser(user) {
   return Boolean(email && email === ADMIN_EMAIL) || authProvider === "admin";
 }
 
+const FEE_SOURCE_EXCHANGE_REPORTED = "exchange_reported";
+const FEE_SOURCE_CHEAPEST_AVENUE = "cheapest_avenue";
+
+const normalizeFeeSourceValue = (value, fallback = FEE_SOURCE_EXCHANGE_REPORTED) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (!normalized) return fallback;
+  if (["exchange_reported", "exchange", "reported", "venue_reported", "broker_reported"].includes(normalized)) {
+    return FEE_SOURCE_EXCHANGE_REPORTED;
+  }
+  if ([
+    "cheapest_avenue",
+    "cheapest",
+    "best_avenue",
+    "best_venue",
+    "internal",
+    "estimated",
+    "internal_estimate",
+    "zenin_estimated",
+    "zenin"
+  ].includes(normalized)) {
+    return FEE_SOURCE_CHEAPEST_AVENUE;
+  }
+  return normalized;
+};
+
 const normalizeTradeRecord = (trade, idx = 0) => {
   const quantity = Number(trade?.quantity);
   const price = Number(trade?.price);
@@ -216,6 +244,8 @@ const normalizeTradeRecord = (trade, idx = 0) => {
   const positionAfter = Number(trade?.positionAfter ?? trade?.position_after);
   const fallbackDate = new Date().toISOString().split("T")[0];
   const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+  const platform = String(trade?.platform || trade?.exchange || "zenin").toLowerCase();
+  const feeSourceFallback = platform === "zenin" ? FEE_SOURCE_CHEAPEST_AVENUE : FEE_SOURCE_EXCHANGE_REPORTED;
 
   return {
     id: Number.isFinite(Number(trade?.id)) ? Number(trade.id) : Date.now() + idx,
@@ -227,11 +257,14 @@ const normalizeTradeRecord = (trade, idx = 0) => {
     type: side === "sell" ? "SELL" : "BUY",
     side,
     marketType: String(trade?.marketType || "spot").toLowerCase(),
+    platform,
     status: trade?.status || "Filled",
     quantity: Number.isFinite(quantity) ? Math.abs(quantity) : 0,
     price: Number.isFinite(price) ? price : 0,
     notional: Number.isFinite(notional) ? Math.abs(notional) : 0,
     fee: Number.isFinite(fee) ? Math.abs(fee) : 0,
+    feeCurrency: String(trade?.feeCurrency || trade?.fee_currency || trade?.currency || "USD").toUpperCase(),
+    feeSource: normalizeFeeSourceValue(trade?.feeSource || trade?.fee_source, feeSourceFallback),
     slippage: Number.isFinite(slippage) ? Math.abs(slippage) : 0,
     referencePrice: Number.isFinite(referencePrice) ? referencePrice : null,
     balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : null,
@@ -433,6 +466,7 @@ function App() {
     return Number.isFinite(stored) && stored >= 0 ? stored : 10000;
   });
   const [cashBalances, setCashBalances] = useState({});
+  const [tradeFeeSummary, setTradeFeeSummary] = useState(null);
 
   useEffect(() => {
     localStorage.setItem("zenin_balance", balance.toString());
@@ -465,11 +499,17 @@ function App() {
       type: trade.type,
       side: trade.side || (trade.type === "SELL" ? "sell" : "buy"),
       marketType: trade.marketType || "spot",
+      platform: trade.platform || "zenin",
       status: trade.status || "Filled",
       quantity: Number(trade.quantity) || 0,
       price: Number(trade.price) || 0,
       notional: Number(trade.notional) || 0,
       fee: Number.isFinite(Number(trade.fee)) ? Number(trade.fee) : 0,
+      feeCurrency: trade.feeCurrency || "USD",
+      feeSource: normalizeFeeSourceValue(
+        trade.feeSource,
+        String(trade.platform || "zenin").toLowerCase() === "zenin" ? FEE_SOURCE_CHEAPEST_AVENUE : FEE_SOURCE_EXCHANGE_REPORTED
+      ),
       slippage: Number.isFinite(Number(trade.slippage)) ? Number(trade.slippage) : 0,
       referencePrice: Number.isFinite(Number(trade.referencePrice)) ? Number(trade.referencePrice) : null,
       balanceAfter: Number.isFinite(Number(trade.balanceAfter)) ? Number(trade.balanceAfter) : null,
@@ -1162,16 +1202,18 @@ useEffect(() => {
 
   const refreshTradingWorkspaceState = useCallback(async () => {
     if (!hasAuthToken()) return null;
-    const [cashRes, holdingsRes, tradesRes] = await Promise.all([
+    const [cashRes, holdingsRes, tradesRes, feeSummaryRes] = await Promise.all([
       zeninFetch("/db/cash"),
       zeninFetch("/db/portfolio"),
-      zeninFetch("/db/trades?limit=1000")
+      zeninFetch("/db/trades?limit=1000"),
+      zeninFetch("/db/trade-fees/summary")
     ]);
 
-    const [cashData, holdingsData, tradesData] = await Promise.all([
+    const [cashData, holdingsData, tradesData, feeSummaryData] = await Promise.all([
       cashRes.json().catch(() => ({})),
       holdingsRes.json().catch(() => ({})),
-      tradesRes.json().catch(() => ({}))
+      tradesRes.json().catch(() => ({})),
+      feeSummaryRes.json().catch(() => ({}))
     ]);
 
     if (!cashRes.ok) {
@@ -1182,6 +1224,9 @@ useEffect(() => {
     }
     if (!tradesRes.ok) {
       throw new Error(tradesData?.error || `Trades refresh failed (${tradesRes.status})`);
+    }
+    if (!feeSummaryRes.ok) {
+      throw new Error(feeSummaryData?.error || `Trade fee summary refresh failed (${feeSummaryRes.status})`);
     }
 
     const nextCashBalances = {};
@@ -1210,11 +1255,13 @@ useEffect(() => {
         .filter(Boolean)
     );
     setTrades(incomingTrades);
+    setTradeFeeSummary(feeSummaryData?.summary || null);
 
     return {
       balances: nextCashBalances,
       holdings: incomingHoldings,
-      trades: incomingTrades
+      trades: incomingTrades,
+      feeSummary: feeSummaryData?.summary || null
     };
   }, []);
 
@@ -2492,6 +2539,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       );
       setWatchlistAssets((prev) => mergeAssetPrices(mergedWatchlist, prev));
       setTrades(incomingTrades);
+      setTradeFeeSummary(bootstrapData?.feeSummary || null);
       setCategories(
         Array.isArray(bootstrapData?.categories) && bootstrapData.categories.length
           ? bootstrapData.categories
@@ -3640,6 +3688,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 calculatePortfolioGain={calculatePortfolioGain}
                 activeOptionsTrades={activeOptionsTrades}
                 setActiveOptionsTrades={setActiveOptionsTrades}
+                tradeFeeSummary={tradeFeeSummary}
                 multiChainCache={multiChainCache}
                 spotPrices={spotPrices}
                 isSignedIn={hasAuthToken()}

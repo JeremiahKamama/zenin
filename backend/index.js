@@ -817,10 +817,14 @@ function sanitizeAuthUser(user = null) {
   const passkeys = Array.isArray(user.passkeys) ? user.passkeys : [];
   return {
     id: Number(user.id),
+    sessionId: user.sessionId == null ? null : Number(user.sessionId),
     email: String(user.email || "").toLowerCase(),
     displayName: user.displayName || null,
     authProvider: user.authProvider || "email",
     emailVerified: Boolean(user.emailVerified),
+    isAdmin: Boolean(user.isAdmin),
+    adminRole: String(user.adminRole || (user.isAdmin ? "super_admin" : "user")).trim().toLowerCase(),
+    suspendedAt: user.suspendedAt || null,
     pendingEmail: user.pendingEmail || null,
     pendingEmailRequestedAt: user.pendingEmailRequestedAt || null,
     passwordChangedAt: user.passwordChangedAt || null,
@@ -990,6 +994,57 @@ app.use(async (req, _res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+function inferServiceLabel(req) {
+  const path = String(req.path || "");
+  if (path.startsWith("/api/auth")) return "Auth";
+  if (path.startsWith("/api/admin")) return "Admin";
+  if (path.startsWith("/api/prices") || path.startsWith("/api/history") || path.startsWith("/api/search")) return "Market Data";
+  if (path.startsWith("/api/account")) return "Account";
+  return "Web API";
+}
+
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  const requestId = String(req.headers["x-request-id"] || crypto.randomUUID()).slice(0, 64);
+  req.requestId = requestId;
+  res.setHeader("x-request-id", requestId);
+
+  res.on("finish", () => {
+    if (!String(req.path || "").startsWith("/api/")) return;
+    const statusCode = Number(res.statusCode || 0);
+    const durationMs = Date.now() - startedAt;
+    const level = statusCode >= 500
+      ? "error"
+      : statusCode >= 400
+        ? "warning"
+        : "info";
+
+    admin.recordSystemLog({
+      level,
+      message: `${req.method} ${req.path} -> ${statusCode}`,
+      context: {
+        method: req.method,
+        path: req.path,
+        statusCode,
+        query: req.query || {}
+      },
+      requestId,
+      ipAddress: resolveClientIp(req),
+      service: inferServiceLabel(req),
+      endpoint: `${req.method} ${req.path}`,
+      durationMs,
+      statusCode,
+      userId: req.auth?.userId || null,
+      sessionId: req.auth?.user?.sessionId || null,
+      actorType: req.auth?.isGuest ? "guest" : (req.auth?.user?.adminRole && req.auth.user.adminRole !== "user" ? "admin" : "user")
+    }).catch((error) => {
+      console.error("[Admin] Failed to persist system log:", error?.message || error);
+    });
+  });
+
+  next();
 });
 
 function requireSignedIn(req, res, next) {
@@ -2378,12 +2433,13 @@ async function searchYahooFinance(query, type = "tradfi") {
 
 async function buildUserBootstrapPayload(userId, options = {}) {
   const tradeLimit = Math.max(200, Math.min(2000, Number(options.tradeLimit) || 1000));
-  const [balances, usdBalance, holdings, watchlistAssets, trades] = await Promise.all([
+  const [balances, usdBalance, holdings, watchlistAssets, trades, feeSummary] = await Promise.all([
     userWorkspace.cash.getAll(userId),
     userWorkspace.balance.get(userId),
     userWorkspace.portfolio.getAll(userId),
     userWorkspace.watchlist.getAll(userId),
-    userWorkspace.trades.getAll(userId, tradeLimit)
+    userWorkspace.trades.getAll(userId, tradeLimit),
+    userWorkspace.tradeFills.getSummary(userId)
   ]);
 
   const normalizedBalances = Array.isArray(balances) ? balances.slice() : [];
@@ -2400,6 +2456,7 @@ async function buildUserBootstrapPayload(userId, options = {}) {
     holdings: Array.isArray(holdings) ? holdings : [],
     watchlistAssets: Array.isArray(watchlistAssets) ? watchlistAssets : [],
     trades: Array.isArray(trades) ? trades : [],
+    feeSummary: feeSummary || null,
     categories: Object.keys(watchlistData),
     updatedAt: new Date().toISOString()
   };
@@ -2631,30 +2688,38 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, requirePlan("pro"), write
     const apiSecret = decryptWorkspaceData(keyRecord.apiSecret);
     const extraDataStr = decryptWorkspaceData(keyRecord.extraData);
     const extraData = extraDataStr ? JSON.parse(extraDataStr) : {};
+    const syncContext = {
+      knownSymbols: await userWorkspace.tradeFills.getKnownSymbols(req.auth.userId, keyRecord.exchange)
+    };
 
     let result;
     if (keyRecord.exchange === "hyperliquid") {
-      result = await syncHyperliquid(apiKey, extraData);
+      result = await syncHyperliquid(apiKey, extraData, syncContext);
     } else if (keyRecord.exchange === "binance") {
-      result = await syncBinance(apiKey, apiSecret);
+      result = await syncBinance(apiKey, apiSecret, syncContext);
     } else if (keyRecord.exchange === "bybit") {
-      result = await syncBybit(apiKey, apiSecret);
+      result = await syncBybit(apiKey, apiSecret, syncContext);
     } else {
       return res.status(400).json({ error: "Unsupported exchange" });
     }
 
     if (result) {
       await userWorkspace.portfolio.sync(req.auth.userId, keyRecord.exchange, result.holdings);
+      if (Array.isArray(result.tradeFills) && result.tradeFills.length) {
+        await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills);
+      }
       await userWorkspace.trades.sync(req.auth.userId, result.trades);
       if (result.currency && result.cashBalance != null) {
         await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance);
       }
+      invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     }
 
     res.json({
       success: true,
       holdingsCount: result?.holdings?.length || 0,
       tradesCount: result?.trades?.length || 0,
+      tradeFillCount: result?.tradeFills?.length || 0,
       cashBalance: result?.cashBalance,
       currency: result?.currency
     });
@@ -2788,11 +2853,59 @@ app.use("/api/admin/*", adminRateLimit);
 
 app.get("/api/admin/users", requireAdmin, async (req, res) => {
   try {
-    const users = await admin.listAllUsers();
+    const users = await admin.listAllUsers({
+      query: req.query?.query || "",
+      plan: req.query?.plan || "",
+      status: req.query?.status || "",
+      role: req.query?.role || ""
+    });
     return res.json(users);
   } catch (error) {
     console.error("[Admin] Failed to list users:", error);
     return handleServerError(res, "Failed to list users", error);
+  }
+});
+
+function normalizeAdminRoleInput(value, fallback = "user") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["user", "support_admin", "billing_admin", "ops_admin", "super_admin"].includes(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function resolveRequestedAdminRole(body = {}) {
+  if (body.adminRole != null) {
+    return normalizeAdminRoleInput(body.adminRole, "user");
+  }
+  if (typeof body.isAdmin === "boolean") {
+    return body.isAdmin ? "support_admin" : "user";
+  }
+  return "user";
+}
+
+function buildAuditDiff(before = {}, after = {}) {
+  const keys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})]));
+  const diff = {};
+  keys.forEach((key) => {
+    const previous = before?.[key] ?? null;
+    const next = after?.[key] ?? null;
+    if (JSON.stringify(previous) !== JSON.stringify(next)) {
+      diff[key] = { before: previous, after: next };
+    }
+  });
+  return diff;
+}
+
+app.get("/api/admin/users/:id", requireAdmin, async (req, res) => {
+  try {
+    const details = await admin.getUserById(req.params.id);
+    if (!details) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    return res.json(details);
+  } catch (error) {
+    return handleServerError(res, "Failed to fetch user details", error);
   }
 });
 
@@ -2801,7 +2914,8 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => 
     const email = String(req.body?.email || "").trim().toLowerCase();
     const displayName = String(req.body?.name || "").trim();
     const requestedPlan = normalizePlanInput(req.body?.plan) || "starter";
-    const isAdmin = Boolean(req.body?.isAdmin);
+    const adminRole = resolveRequestedAdminRole(req.body);
+    const reason = String(req.body?.reason || "Created by admin dashboard").trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Enter a valid email address." });
@@ -2823,7 +2937,7 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => 
       email,
       displayName,
       plan: requestedPlan,
-      isAdmin,
+      adminRole,
       passwordHash: hash
     });
 
@@ -2838,7 +2952,14 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => 
       adminId: req.auth?.user?.id || 0,
       targetUserId: createdUser.id,
       action: "CREATE_USER",
-      details: { email, plan: requestedPlan, isAdmin },
+      details: {
+        email,
+        plan: requestedPlan,
+        adminRole,
+        reason,
+        requestId: req.requestId,
+        diff: buildAuditDiff({}, createdUser)
+      },
       ipAddress: resolveClientIp(req)
     });
 
@@ -2860,7 +2981,11 @@ app.get("/api/admin/stats", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/database", requireAdmin, async (req, res) => {
   try {
-    const stats = await admin.getDatabaseStats();
+    const stats = await admin.getDatabaseStats({
+      table: req.query?.table || null,
+      page: req.query?.page || 1,
+      pageSize: req.query?.pageSize || 10
+    });
     res.json(stats);
   } catch (error) {
     handleServerError(res, "getDatabaseStats", error);
@@ -2878,11 +3003,53 @@ app.get("/api/admin/billing", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/logs", requireAdmin, async (req, res) => {
   try {
-    const auditLogs = await admin.getAdminLogs();
-    const systemLogs = await admin.getSystemLogs();
+    const [auditLogs, systemLogs] = await Promise.all([
+      admin.getAdminLogs({
+        query: req.query?.auditQuery || "",
+        targetUserId: req.query?.targetUserId || null,
+        page: req.query?.auditPage || 1,
+        pageSize: req.query?.auditPageSize || 25
+      }),
+      admin.getSystemLogs({
+        query: req.query?.query || "",
+        level: req.query?.level || "",
+        service: req.query?.service || "",
+        page: req.query?.page || 1,
+        pageSize: req.query?.pageSize || 25
+      })
+    ]);
     res.json({ auditLogs, systemLogs });
   } catch (error) {
     handleServerError(res, "getAdminLogs", error);
+  }
+});
+
+app.get("/api/admin/integrations", requireAdmin, async (_req, res) => {
+  try {
+    const integrations = await admin.getIntegrationsStatus();
+    return res.json(integrations);
+  } catch (error) {
+    return handleServerError(res, "Failed to fetch integrations", error);
+  }
+});
+
+app.get("/api/admin/alerts", requireAdmin, async (req, res) => {
+  try {
+    const status = String(req.query?.status || "").trim().toLowerCase() || null;
+    const alerts = await admin.listAlertRules({ status, limit: req.query?.limit || 25 });
+    const incidents = await admin.listIncidents({ status: "open", limit: 25 });
+    return res.json({ alerts, incidents });
+  } catch (error) {
+    return handleServerError(res, "Failed to fetch alerts", error);
+  }
+});
+
+app.get("/api/admin/search", requireAdmin, async (req, res) => {
+  try {
+    const results = await admin.searchAdminWorkspace(req.query?.query || "");
+    return res.json(results);
+  } catch (error) {
+    return handleServerError(res, "Failed to search admin workspace", error);
   }
 });
 
@@ -2890,15 +3057,22 @@ app.patch("/api/admin/users/:id/plan", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { plan } = req.body;
+    const reason = String(req.body?.reason || "Updated from admin dashboard").trim();
+    const before = await admin.getUserSummary(id);
     const updatedUser = await admin.updateUserPlan(id, plan);
     if (!updatedUser) return res.status(404).json({ error: "User not found" });
 
-    // Audit Logging
     await admin.logAdminAction({
-      adminId: req.auth?.user?.id || 0, // 0 for bypass mode
+      adminId: req.auth?.user?.id || 0,
       targetUserId: id,
       action: "UPDATE_PLAN",
-      details: { oldPlan: "unknown", newPlan: plan },
+      details: {
+        reason,
+        requestId: req.requestId,
+        oldPlan: before?.plan || null,
+        newPlan: updatedUser.plan,
+        diff: buildAuditDiff(before, updatedUser)
+      },
       ipAddress: resolveClientIp(req)
     });
 
@@ -2911,16 +3085,23 @@ app.patch("/api/admin/users/:id/plan", requireAdmin, async (req, res) => {
 app.patch("/api/admin/users/:id/role", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { isAdmin } = req.body;
-    const updatedUser = await admin.updateUserAdminStatus(id, isAdmin);
+    const reason = String(req.body?.reason || "Updated from admin dashboard").trim();
+    const requestedRole = resolveRequestedAdminRole(req.body);
+    const before = await admin.getUserSummary(id);
+    const updatedUser = await admin.updateUserAdminStatus(id, requestedRole);
     if (!updatedUser) return res.status(404).json({ error: "User not found" });
 
-    // Audit Logging
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
       targetUserId: id,
       action: "UPDATE_ROLE",
-      details: { isAdmin },
+      details: {
+        reason,
+        requestId: req.requestId,
+        oldRole: before?.adminRole || "user",
+        newRole: updatedUser.adminRole,
+        diff: buildAuditDiff(before, updatedUser)
+      },
       ipAddress: resolveClientIp(req)
     });
 
@@ -2933,15 +3114,19 @@ app.patch("/api/admin/users/:id/role", requireAdmin, async (req, res) => {
 app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const reason = String(req.body?.reason || "Recovery link generated from admin dashboard").trim();
     const token = await admin.createPasswordResetToken(id);
     const recoveryLink = buildAdminRecoveryLink(token);
 
-    // Audit Logging
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
       targetUserId: id,
       action: "GENERATE_RECOVERY_LINK",
-      details: { note: "Recovery link generated via dashboard" },
+      details: {
+        reason,
+        requestId: req.requestId,
+        note: "Recovery link generated via dashboard"
+      },
       ipAddress: resolveClientIp(req)
     });
 
@@ -2955,13 +3140,20 @@ app.post("/api/admin/users/:id/suspend", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { isSuspended } = req.body;
+    const reason = String(req.body?.reason || (isSuspended ? "Suspended from admin dashboard" : "Reactivated from admin dashboard")).trim();
+    const before = await admin.getUserSummary(id);
     const result = await admin.suspendUser(id, isSuspended);
     
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
       targetUserId: id,
       action: isSuspended ? "SUSPEND_USER" : "UNSUSPEND_USER",
-      details: { isSuspended },
+      details: {
+        reason,
+        requestId: req.requestId,
+        isSuspended,
+        diff: buildAuditDiff(before, result)
+      },
       ipAddress: resolveClientIp(req)
     });
 
@@ -2974,13 +3166,22 @@ app.post("/api/admin/users/:id/suspend", requireAdmin, async (req, res) => {
 app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const reason = String(req.body?.reason || "Deleted from admin dashboard").trim();
     const result = await admin.deleteUser(id);
+    if (!result) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
       targetUserId: id,
       action: "DELETE_USER",
-      details: { email: result?.email },
+      details: {
+        reason,
+        requestId: req.requestId,
+        email: result?.email,
+        diff: buildAuditDiff(result, {})
+      },
       ipAddress: resolveClientIp(req)
     });
 
@@ -2990,13 +3191,267 @@ app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
+app.post("/api/admin/users/:id/sessions/revoke", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reason = String(req.body?.reason || "Revoked by admin dashboard").trim();
+    const result = await admin.revokeUserSessions(id);
+    const updatedUser = await admin.getUserSummary(id);
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: id,
+      action: "REVOKE_SESSIONS",
+      details: {
+        reason,
+        requestId: req.requestId,
+        revokedCount: result.revokedCount
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, revokedCount: result.revokedCount, user: updatedUser });
+  } catch (error) {
+    return handleServerError(res, "Failed to revoke sessions", error);
+  }
+});
+
+app.post("/api/admin/sessions/revoke-all", requireAdmin, async (req, res) => {
+  try {
+    const reason = String(req.body?.reason || "Global session revocation from admin dashboard").trim();
+    const excludeCurrentAdmin = Boolean(req.body?.excludeCurrentAdmin);
+    const result = await admin.revokeAllSessions({
+      excludeUserId: excludeCurrentAdmin ? req.auth?.user?.id : null
+    });
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: "REVOKE_ALL_SESSIONS",
+      details: {
+        reason,
+        requestId: req.requestId,
+        revokedCount: result.revokedCount,
+        excludeCurrentAdmin
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, revokedCount: result.revokedCount });
+  } catch (error) {
+    return handleServerError(res, "Failed to revoke all sessions", error);
+  }
+});
+
+app.post("/api/admin/users/bulk", requireAdmin, async (req, res) => {
+  try {
+    const action = String(req.body?.action || "").trim().toLowerCase();
+    const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
+    const value = req.body?.value ?? null;
+    const reason = String(req.body?.reason || "Bulk action from admin dashboard").trim();
+
+    if (!userIds.length) {
+      return res.status(400).json({ error: "Select at least one user." });
+    }
+
+    const allowedActions = new Set(["suspend", "reactivate", "plan", "role", "revoke_sessions"]);
+    if (!allowedActions.has(action)) {
+      return res.status(400).json({ error: "Unsupported bulk action." });
+    }
+
+    const normalizedValue = action === "role"
+      ? resolveRequestedAdminRole({ adminRole: value })
+      : value;
+
+    const updatedUsers = await admin.bulkUpdateUsers({
+      userIds,
+      action,
+      value: normalizedValue
+    });
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: "BULK_USER_ACTION",
+      details: {
+        reason,
+        requestId: req.requestId,
+        action,
+        value: normalizedValue,
+        userIds
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, users: updatedUsers });
+  } catch (error) {
+    return handleServerError(res, "Failed to apply bulk action", error);
+  }
+});
+
+app.post("/api/admin/alerts", requireAdmin, async (req, res) => {
+  try {
+    const title = String(req.body?.title || "Admin alert").trim();
+    const query = String(req.body?.query || "").trim();
+    const service = String(req.body?.service || "").trim();
+    const severity = String(req.body?.severity || "warning").trim().toLowerCase();
+    const threshold = req.body?.threshold ?? null;
+
+    const alert = await admin.createAlertRule({
+      title,
+      query,
+      service,
+      severity,
+      createdByUserId: req.auth?.user?.id || null,
+      details: {
+        threshold,
+        requestId: req.requestId
+      }
+    });
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: "CREATE_ALERT",
+      details: {
+        title,
+        query,
+        service,
+        severity,
+        threshold,
+        alertId: alert.id,
+        requestId: req.requestId
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.status(201).json({ success: true, alert });
+  } catch (error) {
+    return handleServerError(res, "Failed to create alert", error);
+  }
+});
+
+app.patch("/api/admin/alerts/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const status = String(req.body?.status || "resolved").trim().toLowerCase();
+    if (!["active", "resolved"].includes(status)) {
+      return res.status(400).json({ error: "status must be active or resolved" });
+    }
+    const reason = String(req.body?.reason || `Alert marked ${status} from admin dashboard`).trim();
+    const updated = await admin.updateAlertRuleStatus({
+      alertId: id,
+      status,
+      acknowledgedByUserId: req.auth?.user?.id || null
+    });
+    if (!updated) {
+      return res.status(404).json({ error: "Alert not found" });
+    }
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: status === "resolved" ? "RESOLVE_ALERT" : "REOPEN_ALERT",
+      details: {
+        reason,
+        requestId: req.requestId,
+        alertId: updated.id,
+        title: updated.title,
+        severity: updated.severity
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({ success: true, alert: updated });
+  } catch (error) {
+    return handleServerError(res, "Failed to update alert", error);
+  }
+});
+
+app.post("/api/admin/incidents", requireAdmin, async (req, res) => {
+  try {
+    const title = String(req.body?.title || "Admin incident").trim();
+    const severity = String(req.body?.severity || "warning").trim().toLowerCase();
+    const requestId = String(req.body?.requestId || "").trim() || null;
+    const sourceLogId = req.body?.sourceLogId ?? null;
+    const reason = String(req.body?.reason || "Created from admin dashboard").trim();
+    const details = req.body?.details && typeof req.body.details === "object" ? req.body.details : {};
+
+    const incident = await admin.createIncident({
+      title,
+      severity,
+      requestId,
+      sourceLogId,
+      details,
+      createdByUserId: req.auth?.user?.id || null
+    });
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: "CREATE_INCIDENT",
+      details: {
+        reason,
+        requestId: req.requestId,
+        incidentId: incident.id,
+        sourceLogId,
+        severity,
+        title
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.status(201).json({ success: true, incident });
+  } catch (error) {
+    return handleServerError(res, "Failed to create incident", error);
+  }
+});
+
+app.post("/api/admin/integrations/:name/retry", requireAdmin, async (req, res) => {
+  try {
+    const integrationName = String(req.params?.name || "").trim();
+    if (!integrationName) {
+      return res.status(400).json({ error: "Integration name is required." });
+    }
+    const reason = String(req.body?.reason || `Retry requested for ${integrationName}`).trim();
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: "RETRY_INTEGRATION",
+      details: {
+        integrationName,
+        reason,
+        requestId: req.requestId
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({
+      success: true,
+      integration: {
+        name: integrationName,
+        retriedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to retry integration", error);
+  }
+});
+
 app.post("/api/admin/migrations/admin-workspace", requireSignedIn, requireAdmin, async (req, res) => {
   try {
     if (!isSignedInAdmin(req) && !hasValidMigrationKey(req)) {
       return res.status(403).json({ error: "Admin privileges or valid migration key required." });
     }
     const force = Boolean(req.body?.force) || String(req.query?.force || "").toLowerCase() === "true";
+    const reason = String(req.body?.reason || "Triggered from admin dashboard").trim();
     const result = await runAdminWorkspaceMigration({ force });
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      action: "RUN_ADMIN_MIGRATION",
+      details: {
+        force,
+        reason,
+        requestId: req.requestId,
+        migration: result
+      },
+      ipAddress: resolveClientIp(req)
+    });
     return res.json({ success: true, migration: result });
   } catch (error) {
     return handleServerError(res, "Admin workspace migration failed", error);
@@ -7354,6 +7809,15 @@ app.get("/api/db/trades", requireSignedIn, async (req, res) => {
     res.json({ trades });
   } catch (error) {
     handleServerError(res, "Trades read failed", error);
+  }
+});
+
+app.get("/api/db/trade-fees/summary", requireSignedIn, async (req, res) => {
+  try {
+    const summary = await userWorkspace.tradeFills.getSummary(req.auth.userId);
+    res.json({ summary });
+  } catch (error) {
+    handleServerError(res, "Trade fee summary failed", error);
   }
 });
 

@@ -5,10 +5,12 @@
       "routePrefix": "/api"
     },
     "frontend": {
-      "framework": "vite"
+      "framework": "vite",
+      "mount": "/"
     },
     "admin": {
-      "framework": "vite"
+      "framework": "vite",
+      "subdomain": "admin"
     }
   }
 }

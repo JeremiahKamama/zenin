@@ -3,7 +3,7 @@ import ReactApexChart from "react-apexcharts";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD } from "../utils/currencyUtils";
+import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
 import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
@@ -13,6 +13,44 @@ const PORTFOLIO_REBALANCE_QUEUE_KEY = "zenin_portfolio_rebalance_queue";
 const PORTFOLIO_REBALANCE_HISTORY_KEY = "zenin_portfolio_rebalance_history";
 const PORTFOLIO_EXPORTS_KEY = "zenin_portfolio_exports";
 const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
+const FEE_SOURCE_EXCHANGE_REPORTED = "exchange_reported";
+const FEE_SOURCE_CHEAPEST_AVENUE = "cheapest_avenue";
+
+function normalizeFeeSourceValue(value, fallback = FEE_SOURCE_EXCHANGE_REPORTED) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (!normalized) return fallback;
+  if (["exchange_reported", "exchange", "reported", "venue_reported", "broker_reported"].includes(normalized)) {
+    return FEE_SOURCE_EXCHANGE_REPORTED;
+  }
+  if ([
+    "cheapest_avenue",
+    "cheapest",
+    "best_avenue",
+    "best_venue",
+    "internal",
+    "estimated",
+    "internal_estimate",
+    "zenin_estimated",
+    "zenin"
+  ].includes(normalized)) {
+    return FEE_SOURCE_CHEAPEST_AVENUE;
+  }
+  return normalized;
+}
+
+function formatFeeSourceLabel(value) {
+  const normalized = normalizeFeeSourceValue(value);
+  if (normalized === FEE_SOURCE_EXCHANGE_REPORTED) return "Exchange Reported";
+  if (normalized === FEE_SOURCE_CHEAPEST_AVENUE) return "Cheapest Avenue";
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
 
 function readStoredJson(key, fallback) {
   try {
@@ -38,6 +76,7 @@ export function PortfolioModule({
   calculatePortfolioValue,
   calculatePortfolioGain,
   activeOptionsTrades = [],
+  tradeFeeSummary = null,
   multiChainCache = {},
   spotPrices = {},
   isSignedIn = false,
@@ -878,6 +917,191 @@ const isProfitable = currentAccountEquity >= initialBalance;
       return { ...row, when };
     });
   }, [trades]);
+
+  const feeDashboard = useMemo(() => {
+    const normalizeSummary = (summary) => {
+      if (!summary || typeof summary !== "object") return null;
+      return {
+        tradeCount: Number(summary.tradeCount || 0),
+        fillCount: Number(summary.fillCount || 0),
+        totalFeesByCurrency: Array.isArray(summary.totalFeesByCurrency) ? summary.totalFeesByCurrency : [],
+        platforms: Array.isArray(summary.platforms)
+          ? summary.platforms.map((row) => ({
+            ...row,
+            feeSources: Array.isArray(row?.feeSources) ? row.feeSources.map((source) => normalizeFeeSourceValue(source)) : [],
+            feesByCurrency: Array.isArray(row?.feesByCurrency) ? row.feesByCurrency : []
+          }))
+          : [],
+        sources: Array.isArray(summary.sources)
+          ? summary.sources.map((row) => ({
+            ...row,
+            source: normalizeFeeSourceValue(row?.source),
+            feesByCurrency: Array.isArray(row?.feesByCurrency) ? row.feesByCurrency : []
+          }))
+          : [],
+        comparison: summary.comparison && typeof summary.comparison === "object"
+          ? {
+            benchmarkEligibleFillCount: Number(summary.comparison.benchmarkEligibleFillCount || 0),
+            exchangeReported: summary.comparison.exchangeReported || null,
+            cheapestAvenueObserved: summary.comparison.cheapestAvenueObserved || null,
+            cheapestAvenueBenchmark: summary.comparison.cheapestAvenueBenchmark || null
+          }
+          : null,
+        updatedAt: summary.updatedAt || null
+      };
+    };
+
+    const fallbackSummary = (() => {
+      const feeTrades = (Array.isArray(trades) ? trades : []).filter((trade) => Number(trade?.fee || 0) > 0);
+      const currencyMap = new Map();
+      const platformMap = new Map();
+      const sourceMap = new Map();
+      feeTrades.forEach((trade) => {
+        const platform = String(trade?.platform || trade?.exchange || "zenin").toLowerCase();
+        const currency = String(trade?.feeCurrency || trade?.currency || "USD").toUpperCase();
+        const source = normalizeFeeSourceValue(
+          trade?.feeSource,
+          platform === "zenin" ? FEE_SOURCE_CHEAPEST_AVENUE : FEE_SOURCE_EXCHANGE_REPORTED
+        );
+        const amount = Math.abs(Number(trade?.fee || 0));
+        currencyMap.set(currency, (currencyMap.get(currency) || 0) + amount);
+        const platformRow = platformMap.get(platform) || { platform, tradeCount: 0, fillCount: 0, feesByCurrency: new Map(), feeSources: new Set(), lastExecutedAt: null };
+        platformRow.tradeCount += 1;
+        platformRow.fillCount += 1;
+        platformRow.feesByCurrency.set(currency, (platformRow.feesByCurrency.get(currency) || 0) + amount);
+        platformRow.feeSources.add(source);
+        const executedAt = trade?.executedAt || trade?.date || null;
+        if (!platformRow.lastExecutedAt || (executedAt && executedAt > platformRow.lastExecutedAt)) {
+          platformRow.lastExecutedAt = executedAt;
+        }
+        platformMap.set(platform, platformRow);
+        const sourceRow = sourceMap.get(source) || { source, tradeCount: 0, fillCount: 0, feesByCurrency: new Map(), lastExecutedAt: null };
+        sourceRow.tradeCount += 1;
+        sourceRow.fillCount += 1;
+        sourceRow.feesByCurrency.set(currency, (sourceRow.feesByCurrency.get(currency) || 0) + amount);
+        if (!sourceRow.lastExecutedAt || (executedAt && executedAt > sourceRow.lastExecutedAt)) {
+          sourceRow.lastExecutedAt = executedAt;
+        }
+        sourceMap.set(source, sourceRow);
+      });
+      return {
+        tradeCount: feeTrades.length,
+        fillCount: feeTrades.length,
+        totalFeesByCurrency: [...currencyMap.entries()].map(([currency, amount]) => ({ currency, amount })),
+        platforms: [...platformMap.values()].map((row) => ({
+          platform: row.platform,
+          tradeCount: row.tradeCount,
+          fillCount: row.fillCount,
+          feeSources: [...row.feeSources],
+          feesByCurrency: [...row.feesByCurrency.entries()].map(([currency, amount]) => ({ currency, amount })),
+          lastExecutedAt: row.lastExecutedAt
+        })),
+        sources: [...sourceMap.values()].map((row) => ({
+          source: row.source,
+          tradeCount: row.tradeCount,
+          fillCount: row.fillCount,
+          feesByCurrency: [...row.feesByCurrency.entries()].map(([currency, amount]) => ({ currency, amount })),
+          lastExecutedAt: row.lastExecutedAt
+        })),
+        comparison: null,
+        updatedAt: null
+      };
+    })();
+
+    const remoteSummary = normalizeSummary(tradeFeeSummary);
+    const summary = remoteSummary && (
+      remoteSummary.tradeCount > 0 ||
+      remoteSummary.fillCount > 0 ||
+      remoteSummary.totalFeesByCurrency.length > 0
+    )
+      ? remoteSummary
+      : fallbackSummary;
+    const estimateCurrencyUsd = (amount, currency) => {
+      const normalizedCurrency = String(currency || "USD").toUpperCase();
+      const numericAmount = Math.abs(Number(amount || 0));
+      if (!Number.isFinite(numericAmount) || numericAmount <= 0) return { value: 0, convertible: true };
+      if (["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"].includes(normalizedCurrency)) {
+        return { value: numericAmount, convertible: true };
+      }
+      if (Number.isFinite(Number(spotPrices?.[normalizedCurrency])) && Number(spotPrices[normalizedCurrency]) > 0) {
+        return { value: numericAmount * Number(spotPrices[normalizedCurrency]), convertible: true };
+      }
+      if (Number.isFinite(Number(DEFAULT_FX_RATES?.[normalizedCurrency])) && Number(DEFAULT_FX_RATES[normalizedCurrency]) > 0) {
+        return { value: numericAmount * Number(DEFAULT_FX_RATES[normalizedCurrency]), convertible: true };
+      }
+      return { value: 0, convertible: false };
+    };
+
+    const decorateBreakdown = (rows) => {
+      const unknown = [];
+      const totalUsd = (Array.isArray(rows) ? rows : []).reduce((sum, row) => {
+        const estimate = estimateCurrencyUsd(row?.amount, row?.currency);
+        if (!estimate.convertible) unknown.push(String(row?.currency || "UNK").toUpperCase());
+        return sum + estimate.value;
+      }, 0);
+      const breakdown = (Array.isArray(rows) ? rows : [])
+        .map((row) => `${formatCurrency(row?.amount || 0, row?.currency || "USD")} ${String(row?.currency || "USD").toUpperCase()}`)
+        .join(" · ");
+      return {
+        estimatedUsd: totalUsd,
+        unknownCurrencies: unknown,
+        breakdown: breakdown || "No fees recorded"
+      };
+    };
+
+    const decorateSummaryBucket = (bucket, fallbackSource = null) => {
+      const normalizedBucket = bucket && typeof bucket === "object" ? bucket : {};
+      const decorated = decorateBreakdown(normalizedBucket.feesByCurrency || []);
+      return {
+        source: fallbackSource ? normalizeFeeSourceValue(fallbackSource) : normalizeFeeSourceValue(normalizedBucket.source),
+        tradeCount: Number(normalizedBucket.tradeCount || 0),
+        fillCount: Number(normalizedBucket.fillCount || 0),
+        lastExecutedAt: normalizedBucket.lastExecutedAt || null,
+        ...decorated
+      };
+    };
+
+    const total = decorateBreakdown(summary.totalFeesByCurrency);
+    const platforms = (summary.platforms || []).map((row) => ({
+      ...row,
+      label: String(row?.platform || "zenin")
+        .split(/[_\s-]+/)
+        .filter(Boolean)
+        .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+        .join(" "),
+      ...decorateBreakdown(row?.feesByCurrency || [])
+    })).sort((a, b) => b.estimatedUsd - a.estimatedUsd);
+
+    const sources = (summary.sources || []).map((row) => ({
+      ...row,
+      label: formatFeeSourceLabel(row?.source),
+      ...decorateBreakdown(row?.feesByCurrency || [])
+    })).sort((a, b) => b.estimatedUsd - a.estimatedUsd);
+
+    const comparison = summary.comparison
+      ? {
+        benchmarkEligibleFillCount: Number(summary.comparison.benchmarkEligibleFillCount || 0),
+        exchangeReported: decorateSummaryBucket(summary.comparison.exchangeReported, FEE_SOURCE_EXCHANGE_REPORTED),
+        cheapestAvenueObserved: decorateSummaryBucket(summary.comparison.cheapestAvenueObserved, FEE_SOURCE_CHEAPEST_AVENUE),
+        cheapestAvenueBenchmark: decorateSummaryBucket(summary.comparison.cheapestAvenueBenchmark, FEE_SOURCE_CHEAPEST_AVENUE)
+      }
+      : null;
+
+    const comparisonDeltaUsd = comparison
+      ? comparison.exchangeReported.estimatedUsd - comparison.cheapestAvenueBenchmark.estimatedUsd
+      : 0;
+
+    return {
+      ...summary,
+      estimatedUsd: total.estimatedUsd,
+      breakdown: total.breakdown,
+      unknownCurrencies: total.unknownCurrencies,
+      platforms,
+      sources,
+      comparison,
+      comparisonDeltaUsd
+    };
+  }, [tradeFeeSummary, trades, spotPrices]);
 
   const totalGainLoss = Number(calculatePortfolioGain?.() || 0);
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
@@ -2381,6 +2605,95 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 </div>
               ))}
             </div>
+          </section>
+
+          <section className="watchlist-panel glass portfolio-v2-panel">
+            <div className="section-header">
+              <div>
+                <h2>Fees Paid</h2>
+                <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
+                  Historical execution fees across connected venues and cheapest-avenue executions
+                </p>
+              </div>
+            </div>
+            {feeDashboard.tradeCount > 0 ? (
+              <>
+                <div className="portfolio-v2-metric-list" style={{ marginBottom: "12px" }}>
+                  <div className="portfolio-v2-metric-row">
+                    <span>Total Paid</span>
+                    <strong>{formatMoney(feeDashboard.estimatedUsd)}</strong>
+                  </div>
+                  <div className="portfolio-v2-metric-row">
+                    <span>Charged Trades</span>
+                    <strong>{feeDashboard.tradeCount}</strong>
+                  </div>
+                  <div className="portfolio-v2-metric-row">
+                    <span>Recorded Fills</span>
+                    <strong>{feeDashboard.fillCount}</strong>
+                  </div>
+                </div>
+                <div className="portfolio-v2-activity-list">
+                  {feeDashboard.platforms.slice(0, 5).map((row) => (
+                    <div key={`fee-platform-${row.platform}`} className="portfolio-v2-activity-row" style={{ alignItems: "flex-start" }}>
+                      <div className="portfolio-v2-activity-main">
+                        <strong>{row.label}</strong>
+                        <span>{row.breakdown}</span>
+                      </div>
+                      <div style={{ textAlign: "right", display: "flex", flexDirection: "column", gap: "4px" }}>
+                        <strong>{formatMoney(row.estimatedUsd)}</strong>
+                        <span style={{ color: "var(--color-text-secondary)", fontSize: "11px" }}>{row.tradeCount} trades</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="portfolio-v2-empty" style={{ padding: "12px 0 0", textAlign: "left" }}>
+                  <p style={{ margin: 0 }}>
+                    Breakdown: {feeDashboard.breakdown}
+                  </p>
+                  {feeDashboard.comparison && feeDashboard.comparison.benchmarkEligibleFillCount > 0 ? (
+                    <>
+                      <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                        Comparison on synced venue fills:
+                      </p>
+                      <p style={{ margin: "6px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                        {formatFeeSourceLabel(FEE_SOURCE_EXCHANGE_REPORTED)}: {formatMoney(feeDashboard.comparison.exchangeReported.estimatedUsd)} across {feeDashboard.comparison.exchangeReported.fillCount} fills
+                      </p>
+                      <p style={{ margin: "4px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                        {formatFeeSourceLabel(FEE_SOURCE_CHEAPEST_AVENUE)} benchmark: {formatMoney(feeDashboard.comparison.cheapestAvenueBenchmark.estimatedUsd)} across {feeDashboard.comparison.benchmarkEligibleFillCount} comparable fills
+                      </p>
+                      <p style={{ margin: "4px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                        {feeDashboard.comparisonDeltaUsd > 0
+                          ? `Potential savings versus the cheapest avenue benchmark: ${formatMoney(feeDashboard.comparisonDeltaUsd)}.`
+                          : feeDashboard.comparisonDeltaUsd < 0
+                            ? `Exchange-reported fees came in ${formatMoney(Math.abs(feeDashboard.comparisonDeltaUsd))} below the cheapest avenue benchmark.`
+                            : "Exchange-reported fees are aligned with the cheapest avenue benchmark."}
+                      </p>
+                    </>
+                  ) : null}
+                  {feeDashboard.comparison?.cheapestAvenueObserved?.fillCount > 0 ? (
+                    <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                      Cheapest avenue executions recorded: {formatMoney(feeDashboard.comparison.cheapestAvenueObserved.estimatedUsd)} across {feeDashboard.comparison.cheapestAvenueObserved.fillCount} fills.
+                    </p>
+                  ) : null}
+                  {Array.isArray(feeDashboard.sources) && feeDashboard.sources.length > 0 ? (
+                    <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                      Sources: {feeDashboard.sources.map((row) => `${formatFeeSourceLabel(row.source)} (${row.fillCount})`).join(" · ")}
+                    </p>
+                  ) : null}
+                  {feeDashboard.unknownCurrencies.length > 0 ? (
+                    <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                      Some fee assets were kept in native units: {feeDashboard.unknownCurrencies.join(", ")}.
+                    </p>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="portfolio-v2-empty">
+                <div className="portfolio-v2-empty-icon">%</div>
+                <h3>No recorded fees yet</h3>
+                <p>Sync a connected exchange or execute trades through the portfolio flow to populate your fee history.</p>
+              </div>
+            )}
           </section>
 
           <section className="watchlist-panel glass portfolio-v2-panel">
