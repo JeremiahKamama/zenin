@@ -1,7 +1,8 @@
 {
   "experimentalServices": {
     "backend": {
-      "framework": "express"
+      "framework": "express",
+      "routePrefix": "/api"
     },
     "frontend": {
       "framework": "vite"

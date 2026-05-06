@@ -76,7 +76,7 @@ If you are deploying the entire repository to Vercel and encountering "Multiple 
 ```json
 {
   "experimentalServices": {
-    "backend": { "framework": "express" },
+    "backend": { "framework": "express", "routePrefix": "/api" },
     "frontend": { "framework": "vite" },
     "admin": { "framework": "vite" }
   }
