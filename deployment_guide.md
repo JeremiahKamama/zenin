@@ -77,7 +77,7 @@ If you are deploying the entire repository to Vercel and encountering "Multiple 
 {
   "experimentalServices": {
     "backend": { "framework": "express", "routePrefix": "/api" },
-    "frontend": { "framework": "vite", "mount": "/" },
+    "frontend": { "framework": "vite", "routePrefix": "/" },
     "admin": { "framework": "vite", "subdomain": "admin" }
   }
 }

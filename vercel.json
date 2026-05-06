@@ -6,7 +6,7 @@
     },
     "frontend": {
       "framework": "vite",
-      "mount": "/"
+      "routePrefix": "/"
     },
     "admin": {
       "framework": "vite",
