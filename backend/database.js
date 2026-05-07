@@ -1339,6 +1339,19 @@ async function initializeDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS etf_inflows (
+        id SERIAL PRIMARY KEY,
+        date DATE NOT NULL,
+        asset VARCHAR(10) NOT NULL,
+        manager VARCHAR(100) NOT NULL,
+        ticker VARCHAR(20) NOT NULL,
+        net_usd NUMERIC NOT NULL,
+        period VARCHAR(20) DEFAULT 'daily',
+        source VARCHAR(50) DEFAULT 'Farside',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(date, asset, ticker)
+      );
     `);
 
     await client.query(`
@@ -2395,6 +2408,22 @@ const serviceSnapshots = {
       payload: parseJsonPayload(row.payload, null),
       updatedAt: toIsoString(row.updatedAt)
     };
+  }
+};
+
+const analytics = {
+  getEtfInflows: async (limit = 100) => {
+    const res = await pool.query(`
+      SELECT date, asset, manager, ticker, net_usd as "netUsd", period, source
+      FROM etf_inflows
+      ORDER BY date DESC, asset ASC, ticker ASC
+      LIMIT $1
+    `, [limit]);
+    return res.rows.map(row => ({
+      ...row,
+      date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : toDateString(row.date),
+      netUsd: Number(row.netUsd)
+    }));
   }
 };
 
@@ -5753,6 +5782,7 @@ module.exports = {
   tradeExecutions,
   trading,
   admin,
+  analytics,
   clearAllData,
   closeDatabase
 };

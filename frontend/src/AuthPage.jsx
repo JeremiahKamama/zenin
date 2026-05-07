@@ -10,6 +10,7 @@ import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect }
 const PASSKEY_PROVIDERS = ["Platform Authenticator", "iCloud Keychain", "Google Password Manager", "1Password", "Bitwarden"];
 const VALID_PLANS = ["starter", "pro", "desk"];
 const VALID_BILLING_CYCLES = ["monthly", "yearly"];
+const ENABLE_APPLE_OAUTH = false;
 
 function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
@@ -424,10 +425,12 @@ export default function AuthPage() {
                   <span className="provider-icon">G</span>
                   <span>Google</span>
                 </button>
-                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
-                  <span className="provider-icon"></span>
-                  <span>Apple</span>
-                </button>
+                {ENABLE_APPLE_OAUTH ? (
+                  <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                    <span className="provider-icon"></span>
+                    <span>Apple</span>
+                  </button>
+                ) : null}
               </div>
 
               <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSignupStep("passkey")}>Sign up with passkey</button>
@@ -488,10 +491,12 @@ export default function AuthPage() {
                   <span className="provider-icon">G</span>
                   <span>Google</span>
                 </button>
-                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
-                  <span className="provider-icon"></span>
-                  <span>Apple</span>
-                </button>
+                {ENABLE_APPLE_OAUTH ? (
+                  <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                    <span className="provider-icon"></span>
+                    <span>Apple</span>
+                  </button>
+                ) : null}
               </div>
 
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signin")}>Sign in</button></p>
@@ -622,10 +627,12 @@ export default function AuthPage() {
                       <span className="provider-icon">G</span>
                       <span>Continue with Google</span>
                     </button>
-                    <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
-                      <span className="provider-icon"></span>
-                      <span>Continue with Apple</span>
-                    </button>
+                    {ENABLE_APPLE_OAUTH ? (
+                      <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
+                        <span className="provider-icon"></span>
+                        <span>Continue with Apple</span>
+                      </button>
+                    ) : null}
                   </div>
                 </>
               )}

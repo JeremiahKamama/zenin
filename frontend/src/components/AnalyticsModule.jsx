@@ -1,11 +1,12 @@
 // src/components/AnalyticsModule.jsx
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
+import { loadWorkspaceCollection, saveWorkspaceCollection } from "../utils/workspacePersistence";
 import { AssetModal } from "./AssetModal";
 
 const CATEGORY_TABS = [
-  { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Bybit, Binance + Dune analytics" },
+  { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
   { id: "options", label: "Options", icon: "O", description: "Binance + Deribit options data" },
   { id: "equities", label: "Equities", icon: "E", description: "Asset Classes, Industries, Regions" },
   { id: "macro", label: "Macro", icon: "M", description: "Macro indicators, FX and risk context" },
@@ -173,6 +174,12 @@ function formatPercent(value, digits = 2) {
   return `${amount >= 0 ? "+" : ""}${amount.toFixed(digits)}%`;
 }
 
+function formatFixed(value, digits = 2, suffix = "") {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `${amount.toFixed(digits)}${suffix}`;
+}
+
 function formatDateTime(value) {
   if (!value) return "—";
   const parsed = new Date(value);
@@ -183,6 +190,27 @@ function formatDateTime(value) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function formatSignedValue(value, digits = 2) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return `${numeric > 0 ? "+" : ""}${numeric.toFixed(digits)}`;
+}
+
+function describeMacroOverviewRow(row) {
+  const previous = Number(row?.previous);
+  const change = Number(row?.change);
+  const unit = String(row?.unit || "").trim();
+  if (Number.isFinite(previous) && Number.isFinite(change)) {
+    const previousText = previous.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const changeText = formatSignedValue(change, 2);
+    return `Previous ${previousText}${unit ? ` ${unit}` : ""} • Change ${changeText}${unit === "%" ? " pts" : unit ? ` ${unit}` : ""}`;
+  }
+  if (row?.asOf) {
+    return `Latest sourced release: ${formatDateTime(row.asOf)}`;
+  }
+  return "Latest available sourced release.";
 }
 
 function MiniSparkline({ points = [], width = 92, height = 24, color = "#38bdf8" }) {
@@ -368,7 +396,11 @@ export function AnalyticsModule({ backendUrl }) {
   const [macroData, setMacroData] = useState(EMPTY_MACRO);
   const [commoditiesData, setCommoditiesData] = useState(EMPTY_COMMODITIES);
   const [loading, setLoading] = useState({ crypto: false, options: false, equities: false, macro: false, commodities: false });
+  const [refreshing, setRefreshing] = useState({ crypto: false, options: false, equities: false, macro: false, commodities: false });
   const [errors, setErrors] = useState({ crypto: "", options: "", equities: "", macro: "", commodities: "" });
+  const [loadedTabs, setLoadedTabs] = useState({ crypto: false, options: false, equities: false, macro: false, commodities: false });
+  const loadedTabsRef = useRef({ crypto: false, options: false, equities: false, macro: false, commodities: false });
+  const [retryNonce, setRetryNonce] = useState(0);
   
   const [etfAssetToggle, setEtfAssetToggle] = useState("All");
   const [etfPeriodToggle, setEtfPeriodToggle] = useState("daily");
@@ -461,8 +493,98 @@ export function AnalyticsModule({ backendUrl }) {
   const COMMODITY_ASSETS_PAGE_SIZE = 5;
   const COMMODITY_PRICE_SERIES_PAGE_SIZE = 10;
   const COMMODITY_SEASONALITY_PAGE_SIZE = 6;
+  const analyticsWorkspaceHydratedRef = useRef(false);
+
+  const markTabLoaded = (tabId) => {
+    if (!tabId || loadedTabsRef.current[tabId]) return;
+    loadedTabsRef.current = { ...loadedTabsRef.current, [tabId]: true };
+    setLoadedTabs((prev) => ({ ...prev, [tabId]: true }));
+  };
+
+  const persistAnalyticsCollection = (namespace, items, limit = 100) => {
+    saveWorkspaceCollection(namespace, items, limit).catch((error) => {
+      console.warn(`Analytics workspace sync skipped for ${namespace}.`, error);
+    });
+  };
 
   const macroGeoTypePath = selectedGeoType === "Country" ? "country" : selectedGeoType === "Region" ? "region" : "global";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateAnalyticsWorkspace = async () => {
+      try {
+        const [savedViewsResult, equitiesAlertsResult, macroAlertsResult, commodityAlertsResult, favoriteGeosResult, recentGeosResult] = await Promise.all([
+          loadWorkspaceCollection("analytics:equities_saved_views", []),
+          loadWorkspaceCollection("analytics:equities_alerts", []),
+          loadWorkspaceCollection("analytics:macro_alert_rules", []),
+          loadWorkspaceCollection("analytics:commodity_alert_rules", []),
+          loadWorkspaceCollection("analytics:macro_favorite_geos", []),
+          loadWorkspaceCollection("analytics:macro_recent_geos", ["USA"]),
+        ]);
+        if (cancelled) return;
+        setEquitiesSavedViews(Array.isArray(savedViewsResult?.items) ? savedViewsResult.items : []);
+        setEquitiesAlerts(Array.isArray(equitiesAlertsResult?.items) ? equitiesAlertsResult.items : []);
+        setAlertRules(Array.isArray(macroAlertsResult?.items) ? macroAlertsResult.items : []);
+        setCommodityAlertRules(Array.isArray(commodityAlertsResult?.items) ? commodityAlertsResult.items : []);
+        setFavoriteGeoCodes(
+          (Array.isArray(favoriteGeosResult?.items) ? favoriteGeosResult.items : [])
+            .map((value) => String(value || "").trim().toUpperCase())
+            .filter(Boolean)
+        );
+        setRecentGeoCodes(
+          (Array.isArray(recentGeosResult?.items) ? recentGeosResult.items : ["USA"])
+            .map((value) => String(value || "").trim().toUpperCase())
+            .filter(Boolean)
+            .slice(0, 8)
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Analytics workspace hydration skipped.", error);
+        }
+      } finally {
+        if (!cancelled) {
+          analyticsWorkspaceHydratedRef.current = true;
+        }
+      }
+    };
+
+    hydrateAnalyticsWorkspace();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!analyticsWorkspaceHydratedRef.current) return;
+    persistAnalyticsCollection("analytics:equities_saved_views", equitiesSavedViews, 50);
+  }, [equitiesSavedViews]);
+
+  useEffect(() => {
+    if (!analyticsWorkspaceHydratedRef.current) return;
+    persistAnalyticsCollection("analytics:equities_alerts", equitiesAlerts, 50);
+  }, [equitiesAlerts]);
+
+  useEffect(() => {
+    if (!analyticsWorkspaceHydratedRef.current) return;
+    persistAnalyticsCollection("analytics:macro_alert_rules", alertRules, 100);
+  }, [alertRules]);
+
+  useEffect(() => {
+    if (!analyticsWorkspaceHydratedRef.current) return;
+    persistAnalyticsCollection("analytics:commodity_alert_rules", commodityAlertRules, 100);
+  }, [commodityAlertRules]);
+
+  useEffect(() => {
+    if (!analyticsWorkspaceHydratedRef.current) return;
+    persistAnalyticsCollection("analytics:macro_favorite_geos", favoriteGeoCodes, 50);
+  }, [favoriteGeoCodes]);
+
+  useEffect(() => {
+    if (!analyticsWorkspaceHydratedRef.current) return;
+    persistAnalyticsCollection("analytics:macro_recent_geos", recentGeoCodes, 20);
+  }, [recentGeoCodes]);
 
   const filteredMacroIndicators = useMemo(() => {
     const scoped = (macroIndicators || []).filter((row) => String(row?.category || "").toLowerCase() === String(selectedCategory || "").toLowerCase());
@@ -511,7 +633,7 @@ export function AnalyticsModule({ backendUrl }) {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, backendUrl]);
+  }, [activeTab, backendUrl, retryNonce]);
 
   useEffect(() => {
     if (activeTab !== "macro") return;
@@ -576,7 +698,7 @@ export function AnalyticsModule({ backendUrl }) {
         fetchJson(`/macro/forecast?geo=${encodeURIComponent(selectedGeoCode)}&indicator=${encodeURIComponent(selectedIndicator)}`),
         fetchJson(`/macro/source/${encodeURIComponent(selectedIndicator)}`),
         fetchJson(`/macro/regime?geo=${encodeURIComponent(selectedGeoCode)}&mode=${encodeURIComponent(globalTrendMode)}`),
-        fetchJson(`/macro/correlation?indicator=${encodeURIComponent(selectedIndicator)}&asset=${encodeURIComponent(selectedMacroAsset)}&window=${encodeURIComponent(correlationWindow)}`),
+        fetchJson(`/macro/correlation?geo=${encodeURIComponent(selectedGeoCode)}&indicator=${encodeURIComponent(selectedIndicator)}&asset=${encodeURIComponent(selectedMacroAsset)}&window=${encodeURIComponent(correlationWindow)}`),
       ]);
 
       if (cancelled) return;
@@ -640,33 +762,6 @@ export function AnalyticsModule({ backendUrl }) {
     macroGeoTypePath,
     macroData.macroData
   ]);
-
-  useEffect(() => {
-    const current = Number((macroOverview || [])[0]?.value);
-    const inflation = (macroOverview || []).find((row) => String(row?.indicator || "").toLowerCase().includes("inflation"));
-    const inflationVal = Number(inflation?.value);
-    if (Number.isFinite(inflationVal) && inflationVal > 4) {
-      setRegimeLabel("inflationary");
-      setRegimeScore(35);
-      setRegimeExplain("Inflation indicators are elevated relative to trend.");
-    } else if (Number.isFinite(current) && current < 0) {
-      setRegimeLabel("recession risk");
-      setRegimeScore(20);
-      setRegimeExplain("Composite growth proxy is negative.");
-    } else if (Number.isFinite(current) && current < 1) {
-      setRegimeLabel("slowdown");
-      setRegimeScore(45);
-      setRegimeExplain("Growth is positive but below long-term trend.");
-    } else if (Number.isFinite(current) && current > 3) {
-      setRegimeLabel("expansion");
-      setRegimeScore(75);
-      setRegimeExplain("Growth and macro momentum are in expansionary territory.");
-    } else {
-      setRegimeLabel("easing");
-      setRegimeScore(58);
-      setRegimeExplain("Macro prints are mixed with easing pressure.");
-    }
-  }, [macroOverview]);
 
   useEffect(() => {
     setMacroTimeseriesPageIndex(0);
@@ -742,6 +837,7 @@ export function AnalyticsModule({ backendUrl }) {
         correlation: rowsFrom(correlationRes, "rows").length ? rowsFrom(correlationRes, "rows") : rowsFrom(correlationRes, "correlation"),
       }));
       setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items")));
+      markTabLoaded("commodities");
     };
 
     loadCommodities();
@@ -760,6 +856,7 @@ export function AnalyticsModule({ backendUrl }) {
     selectedCommodityRegion,
     selectedCommoditySymbol,
     selectedCommodityTimeRange,
+    retryNonce,
   ]);
 
   useEffect(() => {
@@ -810,9 +907,12 @@ export function AnalyticsModule({ backendUrl }) {
       if (activeTab === "commodities") {
         setErrors((prev) => ({ ...prev, commodities: "" }));
         setLoading((prev) => ({ ...prev, commodities: false }));
+        setRefreshing((prev) => ({ ...prev, commodities: false }));
         return;
       }
-      setLoading((prev) => ({ ...prev, [activeTab]: true }));
+      const shouldBlockRender = !loadedTabsRef.current[activeTab];
+      setLoading((prev) => ({ ...prev, [activeTab]: shouldBlockRender }));
+      setRefreshing((prev) => ({ ...prev, [activeTab]: !shouldBlockRender }));
       setErrors((prev) => ({ ...prev, [activeTab]: "" }));
       const endpointTab = activeTab === "macro" ? "equities" : activeTab;
 
@@ -826,17 +926,20 @@ export function AnalyticsModule({ backendUrl }) {
         const payload = await res.json();
         if (cancelled) return;
 
-        if (activeTab === "crypto") {
-          setCryptoData(normalizeCryptoPayload(payload));
-        } else if (activeTab === "options") {
-          setOptionsData(normalizeOptionsPayload(payload));
-        } else if (activeTab === "equities") {
-          setEquitiesData(normalizeEquitiesPayload(payload));
-        } else if (activeTab === "macro") {
-          setMacroData(normalizeMacroPayload(payload));
-        } else if (activeTab === "commodities") {
-          setCommoditiesData(normalizeCommoditiesPayload(payload));
-        }
+        startTransition(() => {
+          if (activeTab === "crypto") {
+            setCryptoData(normalizeCryptoPayload(payload));
+          } else if (activeTab === "options") {
+            setOptionsData(normalizeOptionsPayload(payload));
+          } else if (activeTab === "equities") {
+            setEquitiesData(normalizeEquitiesPayload(payload));
+          } else if (activeTab === "macro") {
+            setMacroData(normalizeMacroPayload(payload));
+          } else if (activeTab === "commodities") {
+            setCommoditiesData(normalizeCommoditiesPayload(payload));
+          }
+        });
+        markTabLoaded(activeTab);
       } catch (err) {
         if (cancelled || err?.name === "AbortError") return;
         setErrors((prev) => ({
@@ -847,6 +950,7 @@ export function AnalyticsModule({ backendUrl }) {
       } finally {
         if (!cancelled) {
           setLoading((prev) => ({ ...prev, [activeTab]: false }));
+          setRefreshing((prev) => ({ ...prev, [activeTab]: false }));
         }
       }
     }
@@ -859,7 +963,7 @@ export function AnalyticsModule({ backendUrl }) {
       window.clearInterval(timer);
       controller.abort();
     };
-  }, [activeTab, backendUrl]);
+  }, [activeTab, backendUrl, retryNonce]);
 
   useEffect(() => {
     if (activeTab !== "equities") return;
@@ -967,18 +1071,11 @@ export function AnalyticsModule({ backendUrl }) {
     const currentMetrics = (cryptoData.perpMetrics || []).filter(
       (m) => m && m.exchange === selectedPerpExchange
     );
-    const bySymbol = new Map(
-      currentMetrics.map((row) => [
-        String(row?.symbol || "").toUpperCase(),
-        row,
-      ])
-    );
-    return preferredOrder
-      .map((symbol) => {
-        const row = bySymbol.get(symbol);
-        if (!row) return null;
+    return currentMetrics
+      .map((row) => {
+        const symbol = String(row?.symbol || "").toUpperCase();
         return {
-          id: `${selectedPerpExchange}-${symbol}`,
+          id: `${selectedPerpExchange}-${symbol || "unknown"}`,
           symbol,
           openInterestUsd:
             row?.openInterestUsd ?? row?.oiUsd ?? row?.openInterest ?? null,
@@ -986,7 +1083,17 @@ export function AnalyticsModule({ backendUrl }) {
           exchange: row?.exchange || selectedPerpExchange,
         };
       })
-      .filter((row) => row !== null);
+      .filter((row) => row.symbol)
+      .sort((a, b) => {
+        const aIndex = preferredOrder.indexOf(a.symbol);
+        const bIndex = preferredOrder.indexOf(b.symbol);
+        if (aIndex !== -1 || bIndex !== -1) {
+          if (aIndex === -1) return 1;
+          if (bIndex === -1) return -1;
+          if (aIndex !== bIndex) return aIndex - bIndex;
+        }
+        return a.symbol.localeCompare(b.symbol);
+      });
   }, [cryptoData, selectedPerpExchange]);
 
   const cryptoTotalOi = useMemo(
@@ -1162,6 +1269,40 @@ export function AnalyticsModule({ backendUrl }) {
     ];
   }, [macroData.forexMovers]);
 
+  const equitiesHubInsight = useMemo(() => {
+    const topSector = [...(filteredEquities.sectorPerformance || [])]
+      .filter((row) => Number.isFinite(Number(row?.[rangeKey])))
+      .sort((a, b) => Number(b?.[rangeKey]) - Number(a?.[rangeKey]))[0];
+    const topRegion = [...(filteredEquities.regionalPerformance || [])]
+      .filter((row) => Number.isFinite(Number(row?.[rangeKey])))
+      .sort((a, b) => Number(b?.[rangeKey]) - Number(a?.[rangeKey]))[0];
+    const breadth = equitiesSpecData.marketBreadth || equitiesData.marketBreadth;
+    const insightParts = [];
+    if (topSector) {
+      insightParts.push(`${topSector.sector || topSector.name || "Leading sector"} leads the ${timeRange} view at ${formatPercent(topSector?.[rangeKey])}.`);
+    }
+    if (topRegion) {
+      insightParts.push(`${topRegion.region || topRegion.name || "Leading region"} is the strongest regional pocket at ${formatPercent(topRegion?.[rangeKey])}.`);
+    }
+    if (breadth && Number.isFinite(Number(breadth?.newLows)) && Number.isFinite(Number(breadth?.newHighs))) {
+      insightParts.push(`Breadth shows ${breadth.newHighs} new highs versus ${breadth.newLows} new lows.`);
+    }
+    return insightParts.join(" ") || "Review sector, region, and breadth tables for the latest sourced market context.";
+  }, [equitiesData.marketBreadth, equitiesSpecData.marketBreadth, filteredEquities.regionalPerformance, filteredEquities.sectorPerformance, rangeKey, timeRange]);
+
+  const selectedCommodityRow = useMemo(
+    () =>
+      (commoditiesData.list || []).find((row) => String(row?.symbol || "").trim().toUpperCase() === String(selectedCommoditySymbol || "").trim().toUpperCase()) || null,
+    [commoditiesData.list, selectedCommoditySymbol]
+  );
+
+  const selectedCommodityLatestPrice = useMemo(() => {
+    const latestSeriesValue = Number((commoditiesData.priceSeries || []).at(-1)?.value);
+    if (Number.isFinite(latestSeriesValue)) return latestSeriesValue;
+    const rowPrice = Number(selectedCommodityRow?.latestPrice);
+    return Number.isFinite(rowPrice) ? rowPrice : null;
+  }, [commoditiesData.priceSeries, selectedCommodityRow]);
+
   const openFxAsset = (row) => {
     const pair = String(row?.pair || "").trim();
     const symbol = String(row?.symbol || pair.replace("/", "") || "").toUpperCase();
@@ -1195,6 +1336,9 @@ export function AnalyticsModule({ backendUrl }) {
       : equitiesData.updatedAt;
   const currentError = errors[activeTab];
   const currentLoading = loading[activeTab];
+  const currentRefreshing = refreshing[activeTab];
+  const currentHasLoaded = loadedTabs[activeTab];
+  const currentBlockingLoad = currentLoading && !currentHasLoaded;
 
   return (
     <AnalyticsLayout
@@ -1202,19 +1346,28 @@ export function AnalyticsModule({ backendUrl }) {
       title="Cross-market dashboards"
       description="Switch between Crypto, Options, Equities, Macro, and Commodities analytics."
       updatedAt={currentUpdatedAt}
+      isRefreshing={currentRefreshing}
       activeTab={activeTab}
       onTabChange={setActiveTab}
     >
 
       {/* Loading / error */}
-      {currentLoading && <LoadingSkeleton label={`Loading ${activeTab} analytics...`} />}
+      {currentBlockingLoad && <LoadingSkeleton label={`Loading ${activeTab} analytics...`} />}
 
-      {currentError && !currentLoading && (
-        <ErrorState title={`Couldn't load ${activeTab} analytics`} description={currentError} onRetry={() => setActiveTab(activeTab)} />
+      {currentError && !currentHasLoaded && !currentBlockingLoad && (
+        <ErrorState title={`Couldn't load ${activeTab} analytics`} description={currentError} onRetry={() => setRetryNonce((value) => value + 1)} />
       )}
 
+      {currentError && currentHasLoaded ? (
+        <div className="analytics-card analytics-error-state" style={{ marginBottom: 14 }}>
+          <div className="analytics-empty-title">Background refresh failed</div>
+          <div className="analytics-empty-description">{currentError}</div>
+          <button type="button" className="analytics-btn warning" onClick={() => setRetryNonce((value) => value + 1)}>Retry refresh</button>
+        </div>
+      ) : null}
+
       {/* Content */}
-      {!currentLoading && !currentError && (
+      {!currentBlockingLoad && !(currentError && !currentHasLoaded) && (
         <>
           {activeTab === "crypto" ? (
             <>
@@ -1277,7 +1430,7 @@ export function AnalyticsModule({ backendUrl }) {
                   emptyText={`No ${selectedPerpExchange} perp context rows returned yet.`}
                   headerExtra={
                     <div style={{ display: "flex", gap: 4 }}>
-                      {["Hyperliquid", "Binance", "Bybit"].map((ex) => (
+                      {["Hyperliquid", "Aster", "Lighter"].map((ex) => (
                         <button
                           key={ex}
                           onClick={() => setSelectedPerpExchange(ex)}
@@ -1840,15 +1993,19 @@ export function AnalyticsModule({ backendUrl }) {
                 {selectedMainCategory === "hub" ? (
                   <div style={{ display: "grid", gap: 16 }}>
                     <InsightCard tone="info">
-                      Equity returns are concentrated in technology and US benchmarks, while breadth stress remains elevated. Review sector exposure and downside alerts.
+                      {equitiesHubInsight}
                     </InsightCard>
+                    <div className="analytics-card" style={{ display: "grid", gap: 10 }}>
+                      <div className="analytics-section-title">Explore datasets</div>
+                      <div className="analytics-card-subtitle">These cards are navigation shortcuts into the sourced equity datasets below.</div>
+                    </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
                       {[
-                        { key: "stocks", title: "Stock Metrics", body: "Screener, benchmark, risk and valuation views.", cta: "Open screener" },
-                        { key: "funds", title: "Funds", body: "Directory, AUM, fee structure, and fund links.", cta: "View funds" },
-                        { key: "mmf", title: "MMF", body: "Money market yields and short-duration cash views.", cta: "View yields" },
-                        { key: "reits", title: "REITs", body: "Income, FFO/AFFO, occupancy and property exposure.", cta: "View REITs" },
-                        { key: "market", title: "General Market", body: "Sector, region, breadth, flows and actions.", cta: "Open market view" },
+                        { key: "stocks", title: "Stock Metrics", body: "Jump to sourced stock screens, benchmarks, risk, and valuation tables.", cta: "Open screener" },
+                        { key: "funds", title: "Funds", body: "Jump to fund directory, AUM, fee structure, holdings, and compare views.", cta: "View funds" },
+                        { key: "mmf", title: "MMF", body: "Jump to money market fund yields, liquidity, and composition data.", cta: "View yields" },
+                        { key: "reits", title: "REITs", body: "Jump to REIT income, FFO/AFFO, occupancy, and exposure datasets.", cta: "View REITs" },
+                        { key: "market", title: "General Market", body: "Jump to sector, regional, breadth, flow, and corporate-action datasets.", cta: "Open market view" },
                       ].map((card) => (
                         <button
                           key={card.key}
@@ -1919,8 +2076,8 @@ export function AnalyticsModule({ backendUrl }) {
                         },
                         { key: "name", label: "Name" },
                         { key: "marketCap", label: "Mkt Cap", align: "right", render: (v) => formatCompactMoney(v) },
-                        { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(2) },
-                        { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(2) },
+                        { key: "pe", label: "P/E", align: "right", render: (v) => formatFixed(v, 2) },
+                        { key: "pb", label: "P/B", align: "right", render: (v) => formatFixed(v, 2) },
                         {
                           key: "compare",
                           label: "Compare",
@@ -1996,10 +2153,10 @@ export function AnalyticsModule({ backendUrl }) {
                         emptyText="No volatility metrics."
                         columns={[
                           { key: "asset", label: "Asset" },
-                          { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                          { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => `${Number(v).toFixed(2)}%` },
-                          { key: "sharpe", label: "Sharpe", align: "right", render: (v) => Number(v).toFixed(2) },
-                          { key: "sortino", label: "Sortino", align: "right", render: (v) => Number(v).toFixed(2) },
+                          { key: "annualizedVolatility", label: "Vol (Ann.)", align: "right", render: (v) => formatFixed(v, 2, "%") },
+                          { key: "maxDrawdown", label: "Max DD", align: "right", render: (v) => formatFixed(v, 2, "%") },
+                          { key: "sharpe", label: "Sharpe", align: "right", render: (v) => formatFixed(v, 2) },
+                          { key: "sortino", label: "Sortino", align: "right", render: (v) => formatFixed(v, 2) },
                         ]}
                         rows={(filteredEquities.volatilityMetrics || []).map((row, idx) => ({ id: `vol-${idx}`, ...row }))}
                       />
@@ -2011,11 +2168,11 @@ export function AnalyticsModule({ backendUrl }) {
                       emptyText="No valuation rows."
                       columns={[
                         { key: "scope", label: "Scope" },
-                        { key: "pe", label: "P/E", align: "right", render: (v) => Number(v).toFixed(1) },
-                        { key: "pb", label: "P/B", align: "right", render: (v) => Number(v).toFixed(1) },
-                        { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => Number(v).toFixed(1) },
-                        { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
-                        { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => `${Number(v).toFixed(1)}%` },
+                        { key: "pe", label: "P/E", align: "right", render: (v) => formatFixed(v, 1) },
+                        { key: "pb", label: "P/B", align: "right", render: (v) => formatFixed(v, 1) },
+                        { key: "evEbitda", label: "EV/EBITDA", align: "right", render: (v) => formatFixed(v, 1) },
+                        { key: "dividendYield", label: "Div. Yield", align: "right", render: (v) => formatFixed(v, 1, "%") },
+                        { key: "fcfYield", label: "FCF Yield", align: "right", render: (v) => formatFixed(v, 1, "%") },
                       ]}
                       rows={(filteredEquities.valuationData || []).map((row, idx) => ({ id: `val-${idx}`, ...row }))}
                     />
@@ -2541,8 +2698,12 @@ export function AnalyticsModule({ backendUrl }) {
                     <div className="analytics-card-subtitle">Track country, regional, and global indicators across growth, inflation, rates, labor, FX, and liquidity.</div>
                   </div>
                   <div className="analytics-pill-group">
-                    <StatusPill tone="positive">Regime: {regimeLabel || "Expansion"}</StatusPill>
-                    <StatusPill tone="info">Score: {Number.isFinite(Number(regimeScore)) ? Number(regimeScore).toFixed(0) : "75"}</StatusPill>
+                    <StatusPill tone={String(regimeLabel || "").includes("risk") || regimeLabel === "inflationary" ? "warning" : regimeLabel === "expansion" ? "positive" : "neutral"}>
+                      Regime: {regimeLabel || "Unavailable"}
+                    </StatusPill>
+                    {Number.isFinite(Number(regimeScore)) ? (
+                      <StatusPill tone="info">Score: {Number(regimeScore).toFixed(0)}</StatusPill>
+                    ) : null}
                     <StatusPill tone="neutral">Country: {selectedGeoCode}</StatusPill>
                     <StatusPill tone="purple">{chartRange}</StatusPill>
                   </div>
@@ -2615,16 +2776,9 @@ export function AnalyticsModule({ backendUrl }) {
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
-                  {(overviewLoading ? [] : (macroOverview || []).slice(0, 5)).map((row, idx) => {
-                    const trend = row?.trend || (idx % 3 === 0 ? "Flat" : idx % 3 === 1 ? "Down" : "Up");
+                  {(macroOverview || []).slice(0, 5).map((row, idx) => {
+                    const trend = row?.trend || "Unavailable";
                     const label = row?.indicator || row?.name || row?.indicatorCode || "Indicator";
-                    const interpretation = String(label).toLowerCase().includes("pmi")
-                      ? "Manufacturing is in expansion."
-                      : String(label).toLowerCase().includes("cpi")
-                      ? "Inflation trend is easing."
-                      : String(label).toLowerCase().includes("rate")
-                      ? "Policy rate remains restrictive."
-                      : "Macro impulse is being monitored.";
                     return (
                       <button
                         key={row.id || `ovc-${idx}`}
@@ -2649,15 +2803,15 @@ export function AnalyticsModule({ backendUrl }) {
                           })()}
                           {row?.unit && !["B", "M", "T"].includes(row.unit) ? <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 4 }}>{row.unit}</span> : null}
                         </div>
-                        <div style={{ marginTop: 8 }}><StatusPill tone={getTrendTone(trend)}>{trend}</StatusPill></div>
-                        <div className="analytics-card-subtitle">{interpretation}</div>
+                        <div style={{ marginTop: 8 }}><StatusPill tone={trend === "Unavailable" ? "neutral" : getTrendTone(trend)}>{trend}</StatusPill></div>
+                        <div className="analytics-card-subtitle">{describeMacroOverviewRow(row)}</div>
                       </button>
                     );
                   })}
                 </div>
 
                 <InsightCard>
-                  Growth momentum is expansionary, inflation is easing, and liquidity conditions are tightening. Monitor rate volatility and the US 10Y Treasury for cross-asset risk.
+                  {regimeExplain || "Using the latest available sourced macro releases for the selected geography."}
                 </InsightCard>
               </div>
 
@@ -3046,7 +3200,7 @@ export function AnalyticsModule({ backendUrl }) {
               {(alertRules || []).length ? (
                 <AnalyticsTableCard
                   title="Saved Alert Rules"
-                  subtitle="Threshold and event-based macro alerts"
+                  subtitle="Your saved workspace macro alert rules"
                   emptyText="No macro alert rules yet"
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -3095,9 +3249,9 @@ export function AnalyticsModule({ backendUrl }) {
                 />
               ) : (
                 <div className="analytics-card analytics-alert-empty">
-                  <div className="analytics-section-title">No macro alert rules yet</div>
+                  <div className="analytics-section-title">No saved macro alert rules yet</div>
                   <div className="analytics-card-subtitle">
-                    Create alerts for rate changes, inflation surprises, FX moves, liquidity stress, or regime shifts.
+                    Save workspace alert rules for rate changes, inflation surprises, FX moves, liquidity stress, or regime shifts.
                   </div>
                   <div className="analytics-pill-group">
                     {["CPI YoY > 3.5%", "VIX > 25", "US 10Y > 5%", "USD Liquidity Proxy < -1.0"].map((rule) => (
@@ -3189,17 +3343,17 @@ export function AnalyticsModule({ backendUrl }) {
                     tone={Number(filteredCommodities.movers[0]?.dailyChangePct) >= 0 ? "positive" : "negative"}
                   />
                   <AnalyticsStatCard
-                    title="Flow Mode"
-                    value={commodityFlowMode.toUpperCase()}
-                    subvalue="ETF, fund or futures positioning"
-                    source="Flows"
+                    title="Upcoming Events"
+                    value={String((commoditiesData.calendar || []).length)}
+                    subvalue="Live commodity calendar entries"
+                    source="Calendar"
                     tone="neutral"
                   />
                   <AnalyticsStatCard
-                    title="Active Symbol"
-                    value={selectedCommoditySymbol || "—"}
-                    subvalue="Selected commodity detail view"
-                    source="Detail"
+                    title="Selected Price"
+                    value={selectedCommodityLatestPrice == null ? "—" : formatMoney(selectedCommodityLatestPrice, 2)}
+                    subvalue={selectedCommodityRow?.name || selectedCommoditySymbol || "Selected commodity"}
+                    source={selectedCommodityRow?.source || "Quote"}
                     tone="info"
                   />
                 </div>
@@ -3543,8 +3697,8 @@ export function AnalyticsModule({ backendUrl }) {
                   rows={(commoditiesData.fundamentals || []).map((row, idx) => ({ id: row.id || `cmd-fn-${idx}`, ...row }))}
                 />
                 <AnalyticsTableCard
-                  title="Event Calendar & Alerts"
-                  subtitle="Upcoming catalysts and threshold rules"
+                  title="Event Calendar & Saved Alerts"
+                  subtitle="Live catalysts plus your saved workspace rules"
                   emptyText="No calendar/alert rows."
                   headerExtra={
                     <button
@@ -3557,7 +3711,7 @@ export function AnalyticsModule({ backendUrl }) {
                             symbol: selectedCommoditySymbol,
                             rule: `Trigger when ${selectedCommoditySymbol} daily change > 2%`,
                             status: "active",
-                            sourceType: "Your own rule engine",
+                            sourceType: "Saved workspace rule",
                           },
                         ])
                       }
@@ -3574,7 +3728,7 @@ export function AnalyticsModule({ backendUrl }) {
                   ]}
                   rows={[
                     ...(commoditiesData.calendar || []).map((row, idx) => ({ id: row.id || `cmd-cal-${idx}`, date: row.date, event: row.event || row.title, importance: row.importance || "medium", sourceType: row.sourceType || "Economic calendar API" })),
-                    ...(commodityAlertRules || []).map((row, idx) => ({ id: row.id || `cmd-al-${idx}`, date: "Alert", event: row.rule || row.name, importance: row.status || "active", sourceType: row.sourceType || "Your own rule engine" })),
+                    ...(commodityAlertRules || []).map((row, idx) => ({ id: row.id || `cmd-al-${idx}`, date: "Alert", event: row.rule || row.name, importance: row.status || "active", sourceType: row.sourceType || "Saved workspace rule" })),
                   ]}
                 />
               </div>
@@ -3737,7 +3891,7 @@ function GeographySearch({
   );
 }
 
-function AnalyticsLayout({ eyebrow, title, description, updatedAt, activeTab, onTabChange, toolbar, children }) {
+function AnalyticsLayout({ eyebrow, title, description, updatedAt, isRefreshing = false, activeTab, onTabChange, toolbar, children }) {
   return (
     <div className="analytics-layout">
       <section className="analytics-page-header">
@@ -3749,6 +3903,7 @@ function AnalyticsLayout({ eyebrow, title, description, updatedAt, activeTab, on
         <div className="analytics-header-meta">
           <span>Last update</span>
           <strong>{formatDateTime(updatedAt)}</strong>
+          {isRefreshing ? <em style={{ color: "#7dd3fc" }}>Refreshing…</em> : null}
         </div>
       </section>
       <AssetClassTabs tabs={CATEGORY_TABS} activeTab={activeTab} onChange={onTabChange} />
@@ -3894,7 +4049,7 @@ function TimeframeSelector({ options, value, onChange }) {
 }
 
 function DataTable({ columns, rows = [], emptyText, loading = false, filters, pagination, exportLabel, onRowClick }) {
-  if (loading) return <LoadingSkeleton label="Loading table rows..." />;
+  if (loading && rows.length === 0) return <LoadingSkeleton label="Loading table rows..." />;
   const actions = (filters || pagination || exportLabel) ? (
     <div className="analytics-table-actions">
       {filters ? <div className="analytics-pill-group">{filters}</div> : <span />}

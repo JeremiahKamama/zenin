@@ -4,6 +4,8 @@ import { zeninFetch } from "../utils/zeninFetch";
 import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
 
+const ENABLE_APPLE_OAUTH = false;
+
 function writeStoredAuthUser(user, expiresAt = null) {
   if (user) {
     localStorage.setItem("zenin_auth_user", JSON.stringify(user));
@@ -279,15 +281,17 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               >
                 <span style={{ fontSize: '1.2rem' }}>G</span> Google
               </button>
-              <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
-                type="button"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                onClick={() => onOAuthStart("apple")}
-                disabled={loading}
-              >
-                <span style={{ fontSize: '1.2rem' }}></span> Apple
-              </button>
+              {ENABLE_APPLE_OAUTH ? (
+                <button 
+                  className="auth-v2-btn auth-v2-btn-ghost" 
+                  type="button"
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                  onClick={() => onOAuthStart("apple")}
+                  disabled={loading}
+                >
+                  <span style={{ fontSize: '1.2rem' }}></span> Apple
+                </button>
+              ) : null}
             </div>
 
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center', marginTop: '24px' }}>
@@ -361,15 +365,17 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               >
                 <span style={{ fontSize: '1.2rem' }}>G</span> Google
               </button>
-              <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
-                type="button"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                onClick={() => onOAuthStart("apple")}
-                disabled={loading}
-              >
-                <span style={{ fontSize: '1.2rem' }}></span> Apple
-              </button>
+              {ENABLE_APPLE_OAUTH ? (
+                <button 
+                  className="auth-v2-btn auth-v2-btn-ghost" 
+                  type="button"
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                  onClick={() => onOAuthStart("apple")}
+                  disabled={loading}
+                >
+                  <span style={{ fontSize: '1.2rem' }}></span> Apple
+                </button>
+              ) : null}
             </div>
 
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center', marginTop: '24px' }}>

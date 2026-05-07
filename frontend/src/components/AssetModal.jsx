@@ -875,7 +875,7 @@ export function AssetModal({
             ) : null}
           </div>
 
-          {chartRange && !loading && (
+          {chartRange && (
             <div className="chart-range-display">
               <span className="range-label">{chartRange.label || "Range"}</span>
               <span className="range-dates">{chartRange.start} — {chartRange.end}</span>

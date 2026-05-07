@@ -75,12 +75,26 @@ const watchlistAssetSchema = z.object({
 });
 
 const workspaceDocSchema = z.object({
-  payloadJson: z.record(z.any()),
-});
+  document: z.any().optional().nullable(),
+  payloadJson: z.any().optional().nullable(),
+}).refine(
+  (value) => Object.prototype.hasOwnProperty.call(value, "document") || Object.prototype.hasOwnProperty.call(value, "payloadJson"),
+  { message: "document is required" }
+).transform((value) => ({
+  document: value.document ?? value.payloadJson ?? null
+}));
 
 const workspaceCollectionSchema = z.object({
-  itemsJson: z.array(z.any()),
-});
+  items: z.array(z.any()).optional(),
+  itemsJson: z.array(z.any()).optional(),
+  limit: z.number().int().positive().optional()
+}).refine(
+  (value) => Array.isArray(value.items) || Array.isArray(value.itemsJson),
+  { message: "items is required" }
+).transform((value) => ({
+  items: Array.isArray(value.items) ? value.items : value.itemsJson,
+  limit: value.limit
+}));
 
 const optionsCalculationSchema = z.object({
   symbol: symbolSchema,

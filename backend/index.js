@@ -13,7 +13,7 @@ const {
   verifyAuthenticationResponse,
 } = require("@simplewebauthn/server");
 const { OAuth2Client } = require("google-auth-library");
-const appleSignin = require("apple-signin-auth");
+// const appleSignin = require("apple-signin-auth");
 const { sendPasswordResetEmail } = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -92,9 +92,11 @@ const {
   tradeExecutions,
   balance,
   trading,
-  admin
+  admin,
+  analytics
 } = require("./database");
-const { ANNUAL_RETURNS, REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
+const { REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
+const { fetchFarsideEtfFlows: fetchLatestFarsideEtfFlows } = require("./farsideEtf");
 
 const app = express();
 
@@ -191,48 +193,56 @@ const MACRO_INDICATOR_CONFIG = [
   {
     key: "gdp_growth_rate",
     label: "GDP Growth Rate",
+    category: "growth",
     unit: "%",
     aliases: ["gdp", "gdp growth", "real gdp", "gdp growth rate"]
   },
   {
     key: "interest_rate",
     label: "Interest Rate",
+    category: "rates",
     unit: "%",
     aliases: ["interest rate", "policy rate", "central bank rate", "cash rate", "fed funds"]
   },
   {
     key: "inflation_rate",
     label: "Inflation Rate",
+    category: "inflation",
     unit: "%",
     aliases: ["inflation", "inflation rate", "cpi yoy", "headline inflation"]
   },
   {
     key: "unemployment_rate",
     label: "Unemployment Rate",
+    category: "labor",
     unit: "%",
     aliases: ["unemployment", "jobless rate", "unemployment rate"]
   },
   {
     key: "consumer_confidence",
     label: "Consumer Confidence",
+    category: "sentiment",
     unit: "Index",
     aliases: ["consumer confidence", "consumer sentiment", "confidence index"]
   },
   {
     key: "balance_of_trade",
     label: "Balance of Trade",
+    category: "external",
     unit: "B",
     aliases: ["balance of trade", "trade balance", "current account"]
   },
   {
     key: "cpi",
     label: "CPI",
+    category: "inflation",
     unit: "Index",
     aliases: ["cpi", "consumer price index", "consumer prices"]
   },
   {
     key: "core_inflation_rate",
     label: "Core Inflation Rate",
+    category: "inflation",
     unit: "%",
     aliases: ["core inflation", "core cpi", "core inflation rate"]
   }
@@ -416,80 +426,9 @@ async function fetchDuneLatestResults(queryId) {
  * Note: Cloudflare might block this in certain environments.
  */
 async function fetchFarsideEtfFlows() {
-  const assets = ["btc", "eth", "sol"];
-  let allFlows = [];
-
-  for (const asset of assets) {
-    try {
-      const fetch = await resolveFetch();
-      const path = asset === "btc" ? "bitcoin" : asset === "eth" ? "ethereum" : "solana";
-      const url = `https://farside.co.uk/${path}-etf-flow/`;
-
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-        }
-      });
-
-      if (!response.ok) {
-        console.warn(`[Farside] ${asset.toUpperCase()} fetch failed: ${response.status}`);
-        continue;
-      }
-
-      const html = await response.text();
-      
-      // Basic scraping logic for Farside's table structure
-      // We look for rows that contain a date and numerical values
-      const rows = html.match(/<tr[^>]*>([\s\S]*?)<\/tr>/g) || [];
-      const managerMap = {
-        btc: ["BlackRock", "Fidelity", "Bitwise", "Ark 21Shares", "Invesco", "Franklin", "Valkyrie", "WisdomTree", "VanEck", "Grayscale", "Hashdex"],
-        eth: ["BlackRock", "Fidelity", "Bitwise", "Grayscale", "Grayscale Mini", "Franklin", "VanEck", "21Shares", "Invesco"],
-        sol: ["21Shares", "VanEck", "Franklin", "Canaccord", "Global X"]
-      };
-
-      const tickers = {
-        btc: ["IBIT", "FBTC", "BITB", "ARKB", "BTCO", "EZBC", "BRRR", "BTCW", "HODL", "GBTC", "DEFI"],
-        eth: ["ETHA", "FETH", "ETHW", "ETHE", "ETH", "EZET", "ETHV", "CETH", "QETH"],
-        sol: ["ASOL", "VSOL", "FSOL", "CSOL", "GSOL"]
-      };
-
-      // We only take the last row that has data (excluding the total row)
-      let targetRow = null;
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i];
-        if (row.includes("Total") || !row.match(/\d{1,2}\s[A-Za-z]{3}\s\d{2,4}/)) continue;
-        targetRow = row;
-        break;
-      }
-
-      if (targetRow) {
-        const cells = targetRow.match(/<td[^>]*>([\s\S]*?)<\/td>/g) || [];
-        const dateStr = (cells[0] || "").replace(/<[^>]*>/g, "").trim();
-        
-        managerMap[asset].forEach((manager, idx) => {
-          const rawVal = (cells[idx + 1] || "").replace(/<[^>]*>/g, "").replace(/[$,]/g, "").trim();
-          const val = parseFloat(rawVal);
-          if (!isNaN(val)) {
-            allFlows.push({
-              id: `farside-${asset}-${tickers[asset][idx]}-${dateStr}`,
-              date: dateStr,
-              manager,
-              ticker: tickers[asset][idx],
-              asset: asset.toUpperCase(),
-              netUsd: val * 1000000, // Farside usually reports in millions
-              period: "daily",
-              source: "Farside"
-            });
-          }
-        });
-      }
-    } catch (error) {
-      console.error(`[Farside] Error scraping ${asset}:`, error.message);
-    }
-  }
-
-  return allFlows.length > 0 ? allFlows : null;
+  const fetch = await resolveFetch();
+  const flows = await fetchLatestFarsideEtfFlows(fetch);
+  return Array.isArray(flows) && flows.length > 0 ? flows : null;
 }
 app.use(cors({
   origin: (origin, callback) => {
@@ -611,7 +550,8 @@ if (AUTH_HASH_KEY.length < 32) {
     console.warn("********************************************************************************");
   }
 }
-const OAUTH_PROVIDERS = ["google", "apple", "github", "microsoft"];
+const OAUTH_PROVIDERS = ["google", "github", "microsoft"];
+const ARCHIVED_OAUTH_PROVIDERS = new Set(["apple"]);
 const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
 const ADMIN_MIGRATION_KEY = String(process.env.ADMIN_MIGRATION_KEY || "").trim();
 const ALLOW_DEV_AUTH_DEBUG =
@@ -3968,6 +3908,9 @@ app.get("/api/auth/oauth/providers", (_req, res) => {
 
 app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
   const provider = String(req.body?.provider || "").trim().toLowerCase();
+  if (ARCHIVED_OAUTH_PROVIDERS.has(provider)) {
+    return res.status(410).json({ error: "Apple sign-in is temporarily unavailable." });
+  }
   if (!OAUTH_PROVIDERS.includes(provider)) {
     return res.status(400).json({ error: "Unsupported provider." });
   }
@@ -3994,21 +3937,6 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
       scope: ["https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"],
       redirect_uri: redirectUri,
       state
-    });
-    return res.json({ provider, configured: true, authorizationUrl: authUrl });
-  }
-
-  if (provider === "apple") {
-    const clientId = process.env.APPLE_CLIENT_ID;
-    if (!clientId) return res.status(500).json({ error: "Apple OAuth not configured." });
-
-    const redirectUri = `${redirectUriBase}/api/auth/oauth/apple/callback`;
-    const authUrl = appleSignin.getAuthorizationUrl({
-      clientID: clientId,
-      redirectURI: redirectUri,
-      scope: "name email",
-      responseMode: "form_post",
-      state,
     });
     return res.json({ provider, configured: true, authorizationUrl: authUrl });
   }
@@ -4083,78 +4011,12 @@ app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
 });
 
 app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ extended: true }), async (req, res) => {
-  let oauthState;
-  try {
-    oauthState = parseOAuthStateToken(req.body?.state);
-  } catch (error) {
-    return res.redirect(buildOAuthFailureRedirect({
-      entryPath: "/auth",
-      authMode: "signin",
-      returnTo: "/app",
-      errorMessage: error.message || "Apple sign-in session expired. Please try again."
-    }));
-  }
-
-  const code = String(req.body?.code || "").trim();
-  const userJson = req.body?.user;
-  if (!code) {
-    return res.redirect(buildOAuthFailureRedirect({
-      ...oauthState,
-      errorMessage: "Apple sign-in did not return an authorization code."
-    }));
-  }
-  if (oauthState.provider !== "apple") {
-    return res.redirect(buildOAuthFailureRedirect({
-      ...oauthState,
-      errorMessage: "Apple sign-in session was invalid. Please try again."
-    }));
-  }
-
-  try {
-    const clientId = process.env.APPLE_CLIENT_ID;
-    const teamId = process.env.APPLE_TEAM_ID;
-    const keyId = process.env.APPLE_KEY_ID;
-    const privateKey = (process.env.APPLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
-
-    const tokenResponse = await appleSignin.getAuthorizationToken(code, {
-      clientID: clientId,
-      teamID: teamId,
-      keyID: keyId,
-      privateKey: privateKey,
-      redirectURI: `${process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host")}/api/auth/oauth/apple/callback`,
-    });
-
-    const decodedToken = await appleSignin.verifyIdToken(tokenResponse.id_token, {
-      audience: clientId,
-      ignoreExpiration: false,
-    });
-
-    const email = decodedToken.email;
-    let displayName = null;
-    if (userJson) {
-      const userData = JSON.parse(userJson);
-      if (userData.name) {
-        displayName = `${userData.name.firstName || ""} ${userData.name.lastName || ""}`.trim();
-      }
-    }
-
-    const user = await userAuth.upsertOAuthUser({
-      email,
-      displayName,
-      authProvider: "apple"
-    });
-
-    const session = await issueSessionForUser(user.id, req, { persistent: true });
-    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: true });
-
-    return res.redirect(buildOAuthSuccessRedirect(oauthState.returnTo));
-  } catch (error) {
-    console.error("[Apple OAuth] Callback failed:", error);
-    return res.redirect(buildOAuthFailureRedirect({
-      ...oauthState,
-      errorMessage: "Apple sign-in failed. Please try again."
-    }));
-  }
+  return res.redirect(buildOAuthFailureRedirect({
+    entryPath: sanitizeOAuthEntryPath(req.body?.entryPath),
+    authMode: sanitizeOAuthMode(req.body?.authMode, "signin"),
+    returnTo: sanitizeInternalRedirectPath(req.body?.returnTo, "/app"),
+    errorMessage: "Apple sign-in is temporarily unavailable."
+  }));
 });
 
 app.post("/api/auth/oauth/mock", authLimiter, async (req, res) => {
@@ -5976,6 +5838,168 @@ async function fetchWorldBankMacroMetrics(countryCode) {
   );
   const byKey = new Map(entries.map((entry) => [entry.key, entry.rows]));
   return MACRO_INDICATOR_CONFIG.map((config) => buildMacroMetric(byKey.get(config.key) || [], config));
+}
+
+const MACRO_REGION_MEMBERS = {
+  GLB: ["USA", "DEU", "JPN", "CHN", "IND", "GBR", "BRA", "KEN", "AUS", "CAN"],
+  NAM: ["USA", "CAN", "MEX"],
+  EUR: ["DEU", "FRA", "ITA", "ESP", "NLD", "GBR"],
+  ASI: ["JPN", "CHN", "IND", "KOR", "SGP"],
+  AFR: ["KEN", "ZAF", "NGA", "EGY"],
+  LATAM: ["BRA", "MEX", "ARG", "CHL", "COL"],
+  MENA: ["SAU", "ARE", "EGY", "TUR"]
+};
+
+const MACRO_MAP_COUNTRIES = ["USA", "DEU", "JPN", "GBR", "CAN", "AUS", "IND", "CHN", "BRA", "KEN", "ZAF", "SAU"];
+
+function getMacroIndicatorConfig(input) {
+  const normalized = String(input || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return MACRO_INDICATOR_CONFIG.find((config) => {
+    if (String(config.key || "").trim().toLowerCase() === normalized) return true;
+    if (String(config.label || "").trim().toLowerCase() === normalized) return true;
+    return (Array.isArray(config.aliases) ? config.aliases : []).some((alias) => String(alias || "").trim().toLowerCase() === normalized);
+  }) || null;
+}
+
+function normalizeMacroRange(range) {
+  const normalized = String(range || "5Y").trim().toUpperCase();
+  if (["1Y", "5Y", "10Y", "MAX"].includes(normalized)) return normalized;
+  return "5Y";
+}
+
+function sliceMacroSeriesByRange(series = [], range = "5Y") {
+  const rows = (Array.isArray(series) ? series : [])
+    .map((row) => ({ ...row, ts: Number(row?.ts) || new Date(row?.date || 0).getTime() }))
+    .filter((row) => Number.isFinite(row.ts))
+    .sort((a, b) => a.ts - b.ts);
+  if (!rows.length) return [];
+  if (range === "MAX") return rows;
+  const now = Date.now();
+  const cutoffMs = range === "1Y"
+    ? now - (366 * 24 * 60 * 60 * 1000)
+    : range === "10Y"
+    ? now - (3653 * 24 * 60 * 60 * 1000)
+    : now - (1827 * 24 * 60 * 60 * 1000);
+  const filtered = rows.filter((row) => row.ts >= cutoffMs);
+  return filtered.length >= 3 ? filtered : rows.slice(-Math.min(rows.length, range === "1Y" ? 12 : range === "10Y" ? 40 : 24));
+}
+
+function findPriorSeriesPoint(rows, index, maxAgeDays) {
+  const current = rows[index];
+  if (!current?.ts) return index > 0 ? rows[index - 1] : null;
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const candidate = rows[cursor];
+    if (!candidate?.ts) continue;
+    if (current.ts - candidate.ts >= maxAgeMs) return candidate;
+  }
+  return index > 0 ? rows[index - 1] : null;
+}
+
+function deriveMacroSeriesForMode(series = [], mode = "levels") {
+  const rows = (Array.isArray(series) ? series : []).filter((row) => Number.isFinite(Number(row?.value)));
+  const normalizedMode = String(mode || "levels").trim().toLowerCase();
+  if (normalizedMode === "levels") {
+    return rows.map((row) => ({ date: row.date, value: Number(row.value) }));
+  }
+  return rows
+    .map((row, index) => {
+      const current = Number(row?.value);
+      const previous = normalizedMode === "yoy"
+        ? Number(findPriorSeriesPoint(rows, index, 365)?.value)
+        : normalizedMode === "mom"
+        ? Number(findPriorSeriesPoint(rows, index, 28)?.value)
+        : Number(rows[index - 1]?.value);
+      if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+      const value = normalizedMode === "change"
+        ? current - previous
+        : previous !== 0
+        ? ((current - previous) / Math.abs(previous)) * 100
+        : null;
+      if (!Number.isFinite(value)) return null;
+      return { date: row.date, value: Number(value.toFixed(2)) };
+    })
+    .filter(Boolean);
+}
+
+async function fetchMacroMetricByIndicator(countryCode, indicatorInput) {
+  const config = getMacroIndicatorConfig(indicatorInput);
+  if (!config) return { config: null, metric: null };
+  const metrics = await fetchWorldBankMacroMetrics(countryCode);
+  const metric = (Array.isArray(metrics) ? metrics : []).find((row) => String(row?.key || "").trim().toLowerCase() === String(config.key || "").trim().toLowerCase()) || null;
+  return { config, metric };
+}
+
+async function aggregateMacroMetricsForCountries(countryCodes = []) {
+  const members = [...new Set((Array.isArray(countryCodes) ? countryCodes : []).map((code) => String(code || "").trim().toUpperCase()).filter(Boolean))];
+  if (!members.length) return sanitizeMacroMetrics([]);
+  const metricsByCountry = await Promise.all(members.map(async (code) => {
+    try {
+      return await fetchWorldBankMacroMetrics(code);
+    } catch {
+      return [];
+    }
+  }));
+  return MACRO_INDICATOR_CONFIG.map((config) => {
+    const currentValues = [];
+    const previousValues = [];
+    metricsByCountry.forEach((countryMetrics) => {
+      const row = (Array.isArray(countryMetrics) ? countryMetrics : []).find((metric) => String(metric?.key || "").trim().toLowerCase() === config.key);
+      const current = Number(row?.current);
+      const previous = Number(row?.previous);
+      if (Number.isFinite(current)) currentValues.push(current);
+      if (Number.isFinite(previous)) previousValues.push(previous);
+    });
+    const current = currentValues.length ? currentValues.reduce((sum, value) => sum + value, 0) / currentValues.length : null;
+    const previous = previousValues.length ? previousValues.reduce((sum, value) => sum + value, 0) / previousValues.length : null;
+    return {
+      key: config.key,
+      label: config.label,
+      unit: config.unit,
+      current: Number.isFinite(current) ? Number(current.toFixed(2)) : null,
+      previous: Number.isFinite(previous) ? Number(previous.toFixed(2)) : null,
+      expectation: null,
+      asOf: new Date().toISOString(),
+      series: []
+    };
+  });
+}
+
+function inferMacroIndicatorFromEvent(event = {}) {
+  const text = `${event?.title || ""} ${event?.event || ""} ${event?.name || ""}`.toLowerCase();
+  const config = MACRO_INDICATOR_CONFIG.find((entry) =>
+    (Array.isArray(entry.aliases) ? entry.aliases : []).some((alias) => text.includes(String(alias || "").trim().toLowerCase()))
+  );
+  return config || null;
+}
+
+function normalizeImportanceLevel(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return "medium";
+  if (text.includes("high") || text === "red") return "high";
+  if (text.includes("low") || text === "yellow") return "low";
+  return "medium";
+}
+
+function importanceMatchesFilter(importance, filterValue) {
+  const normalizedFilter = String(filterValue || "all").trim().toLowerCase();
+  if (!normalizedFilter || normalizedFilter === "all") return true;
+  return normalizeImportanceLevel(importance) === normalizedFilter;
+}
+
+function pearsonCorrelation(pairs = []) {
+  const cleanPairs = (Array.isArray(pairs) ? pairs : []).filter(([x, y]) => Number.isFinite(Number(x)) && Number.isFinite(Number(y)));
+  if (cleanPairs.length < 3) return null;
+  const xs = cleanPairs.map(([x]) => Number(x));
+  const ys = cleanPairs.map(([, y]) => Number(y));
+  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
+  const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+  const numerator = xs.reduce((sum, value, index) => sum + ((value - meanX) * (ys[index] - meanY)), 0);
+  const stdX = Math.sqrt(xs.reduce((sum, value) => sum + ((value - meanX) ** 2), 0));
+  const stdY = Math.sqrt(ys.reduce((sum, value) => sum + ((value - meanY) ** 2), 0));
+  if (!stdX || !stdY) return null;
+  return Number((numerator / (stdX * stdY)).toFixed(2));
 }
 
 function normalizeCountryCatalogEntry(raw = {}) {
@@ -7929,127 +7953,200 @@ app.get("/api/db/watchlist/check/:symbol", requireSignedIn, async (req, res) => 
 app.get('/api/analytics/crypto', async (req, res) => {
   try {
     const fetch = await resolveFetch();
-    const assets = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
+    const trackedPerpAssets = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
 
-    const [bybitRes, binanceFundingRes, binanceMarkRes, hlRes, ...binanceOIPromises] = await Promise.allSettled([
-      fetch("https://api.bybit.com/v5/market/tickers?category=linear").then(r => r.json()),
-      fetch("https://fapi.binance.com/fapi/v1/premiumIndex").then(r => r.json()),
-      fetch("https://fapi.binance.com/fapi/v1/ticker/price").then(r => r.json()),
+    const safeJson = async (url, options = undefined) => {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`${url} responded with ${response.status}`);
+      }
+      return response.json();
+    };
+
+    const normalizePerpSymbol = (value) =>
+      String(value || "")
+        .toUpperCase()
+        .replace(/\/USDC?$/i, "")
+        .replace(/USDC?-PERP$/i, "")
+        .replace(/-PERP$/i, "")
+        .replace(/USDC?$/i, "")
+        .replace(/-USD$/i, "")
+        .replace(/[_\s]/g, "")
+        .trim();
+
+    const [hlRes, lighterFundingRes, lighterOrderBooksRes, lighterOrderBookDetailsRes, ...metricResponses] = await Promise.allSettled([
       postHyperliquidInfo({ type: "metaAndAssetCtxs" }),
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT`).then(r => r.json()).catch(() => null),
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=ETHUSDT`).then(r => r.json()).catch(() => null),
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=SOLUSDT`).then(r => r.json()).catch(() => null),
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=BNBUSDT`).then(r => r.json()).catch(() => null),
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=HYPEUSDT`).then(r => r.json()).catch(() => null),
+      safeJson("https://mainnet.zklighter.elliot.ai/api/v1/funding-rates"),
+      safeJson("https://mainnet.zklighter.elliot.ai/api/v1/orderBooks"),
+      safeJson("https://mainnet.zklighter.elliot.ai/api/v1/orderBookDetails"),
+      ...trackedPerpAssets.map((symbol) =>
+        safeJson(`https://fapi.asterdex.com/fapi/v1/premiumIndex?symbol=${symbol}USDT`).catch(() => null)
+      ),
+      ...trackedPerpAssets.map((symbol) =>
+        safeJson(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}USDT`).catch(() => null)
+      ),
+      ...trackedPerpAssets.map((symbol) =>
+        safeJson(`https://fapi.asterdex.com/fapi/v1/openInterest?symbol=${symbol}USDT`).catch(() => null)
+      )
     ]);
 
     const perpMetrics = [];
 
-    // Hyperliquid parsing
     if (hlRes.status === "fulfilled" && Array.isArray(hlRes.value)) {
       const [meta, contexts] = hlRes.value;
       const universe = Array.isArray(meta?.universe) ? meta.universe : [];
       const ctxs = Array.isArray(contexts) ? contexts : [];
-      universe.forEach((u, idx) => {
-        const symbol = String(u?.name || "").toUpperCase();
-        if (assets.includes(symbol) && ctxs[idx]) {
-          const markPx = firstFiniteNumber(ctxs[idx]?.markPx, ctxs[idx]?.midPx, 0) || 0;
-          const oiCoins = firstFiniteNumber(ctxs[idx]?.openInterest, ctxs[idx]?.open_interest, 0) || 0;
-          const funding = firstFiniteNumber(
-            ctxs[idx]?.funding,
-            ctxs[idx]?.fundingRate,
-            ctxs[idx]?.funding_rate,
-            ctxs[idx]?.funding8h,
-            ctxs[idx]?.funding_8h,
-            0
-          ) || 0;
-          perpMetrics.push({
-            symbol,
-            openInterestUsd: oiCoins * markPx,
-            fundingRate: funding,
-            exchange: "Hyperliquid"
-          });
-        }
+      universe.forEach((item, index) => {
+        const symbol = normalizePerpSymbol(item?.name);
+        if (!trackedPerpAssets.includes(symbol) || !ctxs[index]) return;
+        const markPx = firstFiniteNumber(ctxs[index]?.markPx, ctxs[index]?.midPx, 0) || 0;
+        const oiCoins = firstFiniteNumber(ctxs[index]?.openInterest, ctxs[index]?.open_interest, 0) || 0;
+        const funding = firstFiniteNumber(
+          ctxs[index]?.funding,
+          ctxs[index]?.fundingRate,
+          ctxs[index]?.funding_rate,
+          ctxs[index]?.funding8h,
+          ctxs[index]?.funding_8h,
+          0
+        ) || 0;
+
+        perpMetrics.push({
+          symbol,
+          openInterestUsd: oiCoins * markPx,
+          fundingRate: funding,
+          exchange: "Hyperliquid"
+        });
       });
     }
 
-    // Bybit parsing
-    if (bybitRes.status === "fulfilled" && bybitRes.value?.result?.list) {
-      const list = bybitRes.value.result.list;
-      list.forEach(item => {
-        const symbol = String(item?.symbol || "").replace(/USDT$/, "").replace(/USDC$/, "");
-        if (assets.includes(symbol)) {
-          const lastPx = firstFiniteNumber(item?.lastPrice, item?.markPrice, item?.indexPrice, 0) || 0;
-          const oiUsd = firstFiniteNumber(
-            item?.openInterestValue,
-            item?.open_interest_value,
-            item?.openInterestUsd,
-            item?.open_interest_usd,
-            (firstFiniteNumber(item?.openInterest, item?.open_interest, 0) || 0) * lastPx,
-            0
-          ) || 0;
-          const funding = firstFiniteNumber(
-            item?.fundingRate,
-            item?.funding_rate,
-            item?.nextFundingRate,
-            item?.next_funding_rate,
-            0
-          ) || 0;
-          perpMetrics.push({
-            symbol,
-            openInterestUsd: oiUsd || (firstFiniteNumber(item?.openInterest, 0) * lastPx),
-            fundingRate: funding,
-            exchange: "Bybit"
-          });
-        }
+    trackedPerpAssets.forEach((symbol, index) => {
+      const fundingResponse = metricResponses[index];
+      const markResponse = metricResponses[index + trackedPerpAssets.length];
+      const oiResponse = metricResponses[index + trackedPerpAssets.length * 2];
+      const fundingItem = fundingResponse?.status === "fulfilled" ? fundingResponse.value : null;
+      const markItem = markResponse?.status === "fulfilled" ? markResponse.value : null;
+      const oiItem = oiResponse?.status === "fulfilled" ? oiResponse.value : null;
+
+      if (!fundingItem && !markItem && !oiItem) return;
+
+      const markPx = firstFiniteNumber(
+        fundingItem?.markPrice,
+        markItem?.price,
+        oiItem?.price,
+        0
+      ) || 0;
+      const oiCoins = firstFiniteNumber(oiItem?.openInterest, oiItem?.open_interest, 0) || 0;
+
+      perpMetrics.push({
+        symbol,
+        openInterestUsd: oiCoins * markPx,
+        fundingRate: firstFiniteNumber(
+          fundingItem?.lastFundingRate,
+          fundingItem?.fundingRate,
+          fundingItem?.funding_rate,
+          0
+        ) || 0,
+        exchange: "Aster"
       });
+    });
+
+    const lighterFundingPayload = lighterFundingRes.status === "fulfilled" ? lighterFundingRes.value : null;
+    const lighterFundingRows = Array.isArray(lighterFundingPayload)
+      ? lighterFundingPayload
+      : Array.isArray(lighterFundingPayload?.funding_rates)
+      ? lighterFundingPayload.funding_rates
+      : Array.isArray(lighterFundingPayload?.data)
+      ? lighterFundingPayload.data
+      : [];
+
+    const lighterMarketRows = lighterOrderBooksRes.status === "fulfilled" && Array.isArray(lighterOrderBooksRes.value?.order_books)
+      ? lighterOrderBooksRes.value.order_books
+      : [];
+    const lighterMarketIdBySymbol = new Map(
+      lighterMarketRows
+        .filter((row) => String(row?.market_type || "").toLowerCase() === "perp")
+        .map((row) => [
+          normalizePerpSymbol(row?.symbol || row?.name),
+          String(row?.market_id ?? row?.market_index ?? row?.id ?? "")
+        ])
+    );
+    const lighterDetailRows = Array.isArray(lighterOrderBookDetailsRes.value?.order_book_details)
+      ? lighterOrderBookDetailsRes.value.order_book_details
+      : [];
+    const lighterDetailBySymbol = new Map(
+      lighterDetailRows
+        .filter((row) => String(row?.market_type || "").toLowerCase() === "perp")
+        .map((row) => [normalizePerpSymbol(row?.symbol || row?.name), row])
+    );
+
+    const lighterFundingBySymbol = new Map();
+    lighterFundingRows.forEach((row) => {
+      const symbol = normalizePerpSymbol(
+        row?.symbol ||
+        row?.market ||
+        row?.market_symbol ||
+        row?.name
+      );
+      if (!symbol) return;
+      lighterFundingBySymbol.set(symbol, row);
+    });
+
+    trackedPerpAssets.forEach((symbol) => {
+      const marketId = lighterMarketIdBySymbol.get(symbol) || "";
+      const detailBySymbol = lighterDetailBySymbol.get(symbol);
+      const detail = detailBySymbol && (!marketId || String(detailBySymbol?.market_id ?? detailBySymbol?.market_index ?? "") === marketId)
+        ? detailBySymbol
+        : null;
+      const markPx = firstFiniteNumber(detail?.last_trade_price, detail?.mark_price, 0) || 0;
+      const oiCoins = firstFiniteNumber(detail?.open_interest, detail?.openInterest, 0);
+      const openInterestUsd = Number.isFinite(oiCoins) ? oiCoins * markPx : null;
+      const fundingItem = lighterFundingBySymbol.get(symbol);
+      const fundingRate = firstFiniteNumber(
+        fundingItem?.rate,
+        fundingItem?.funding_rate,
+        fundingItem?.current_funding_rate,
+        fundingItem?.fundingRate,
+        0
+      ) || 0;
+
+      if (!Number.isFinite(openInterestUsd) && !fundingItem) return;
+
+      perpMetrics.push({
+        symbol,
+        openInterestUsd: Number.isFinite(openInterestUsd) ? openInterestUsd : 0,
+        fundingRate,
+        exchange: "Lighter"
+      });
+    });
+
+    const uniquePerpMetrics = Array.from(
+      new Map(
+        perpMetrics.map((row) => [
+          `${row.exchange}:${row.symbol}`,
+          {
+            ...row,
+            openInterestUsd: Number(row.openInterestUsd) || 0,
+            fundingRate: Number(row.fundingRate) || 0
+          }
+        ])
+      ).values()
+    ).sort((a, b) => a.symbol.localeCompare(b.symbol) || a.exchange.localeCompare(b.exchange));
+
+    if (uniquePerpMetrics.length === 0) {
+      [
+        { symbol: "BTC", openInterestUsd: 2551394389.72814, fundingRate: 0.0000125, exchange: "Hyperliquid", isFallback: true },
+        { symbol: "ETH", openInterestUsd: 1260632757.9146798, fundingRate: 0.0000125, exchange: "Hyperliquid", isFallback: true },
+        { symbol: "HYPE", openInterestUsd: 867329045.8769996, fundingRate: 0.0000083841, exchange: "Hyperliquid", isFallback: true },
+        { symbol: "BTC", openInterestUsd: 462370604.68500006, fundingRate: -0.00004272, exchange: "Aster", isFallback: true },
+        { symbol: "ETH", openInterestUsd: 207047217.34368002, fundingRate: -0.00001191, exchange: "Aster", isFallback: true },
+        { symbol: "SOL", openInterestUsd: 300179846.42729986, fundingRate: 0.0000125, exchange: "Hyperliquid", isFallback: true }
+      ].forEach((row) => uniquePerpMetrics.push(row));
     }
 
-    // Binance parsing
-    if (binanceFundingRes.status === "fulfilled" && Array.isArray(binanceFundingRes.value)) {
-      const markRows = binanceMarkRes.status === "fulfilled" && Array.isArray(binanceMarkRes.value)
-        ? binanceMarkRes.value
-        : [];
-      const ois = [
-        binanceOIPromises[0]?.value, // BTC
-        binanceOIPromises[1]?.value, // ETH
-        binanceOIPromises[2]?.value, // SOL
-        binanceOIPromises[3]?.value, // BNB
-        binanceOIPromises[4]?.value  // HYPE
-      ];
-
-      const symbolsToMap = ["BTC", "ETH", "SOL", "BNB", "HYPE"];
-      symbolsToMap.forEach((sym, i) => {
-        const fundingItem = binanceFundingRes.value.find(f => f.symbol === `${sym}USDT`);
-        const markItem = markRows.find(f => f.symbol === `${sym}USDT`);
-        const oiItem = ois[i];
-        if (fundingItem || oiItem) {
-          const markPx = firstFiniteNumber(fundingItem?.markPrice, markItem?.price, oiItem?.price, 0) || 0;
-          const oiCoins = firstFiniteNumber(oiItem?.openInterest, oiItem?.open_interest, 0) || 0;
-          perpMetrics.push({
-            symbol: sym,
-            openInterestUsd: oiCoins * markPx,
-            fundingRate: firstFiniteNumber(
-              fundingItem?.lastFundingRate,
-              fundingItem?.fundingRate,
-              fundingItem?.last_funding_rate,
-              0
-            ) || 0,
-            exchange: "Binance"
-          });
-        }
-      });
-    }
-
-    // Sort by symbol, then exchange
-    perpMetrics.sort((a, b) => a.symbol.localeCompare(b.symbol) || a.exchange.localeCompare(b.exchange));
-
-    // Attempt live Dune fetches for specialized metrics
-    // REPLACE these placeholders with your actual Dune Query IDs
     const DUNE_QUERY_IDS = {
-      MARKET_SHARE: "3834927", // Example ID for Market Share
-      OVERVIEW: "3834930",     // Example ID for Perps Overview
-      ETF_INFLOWS: "3834935"   // Example ID for ETF Flows
+      MARKET_SHARE: "3834927",
+      OVERVIEW: "3834930",
+      ETF_INFLOWS: "3834935"
     };
 
     const [duneMarketShareRows, duneOverviewRows, duneEtfFlowsRows, farsideFlows] = await Promise.all([
@@ -8059,8 +8156,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
       fetchFarsideEtfFlows()
     ]);
 
-    // Map Dune data to our visual formats, falling back to static mocks if API fails
-    const perpsMarketShare = duneMarketShareRows ? duneMarketShareRows.map(row => ({
+    const perpsMarketShare = duneMarketShareRows ? duneMarketShareRows.map((row) => ({
       protocol: row.protocol || "Unknown",
       sharePct: Number(row.share_pct || row.sharePct || 0),
       color: row.color || "#64748b"
@@ -8073,7 +8169,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
       { protocol: "Others", sharePct: 16.3, color: "#64748b" }
     ];
 
-    const perpsOverview = duneOverviewRows ? duneOverviewRows.map(row => ({
+    const perpsOverview = duneOverviewRows ? duneOverviewRows.map((row) => ({
       protocol: row.protocol || "Unknown",
       volume24h: Number(row.volume24h || row.volume_24h || 0),
       openInterest: Number(row.open_interest || row.openInterest || 0)
@@ -8086,28 +8182,25 @@ app.get('/api/analytics/crypto', async (req, res) => {
       { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
     ];
 
-    const etfInflows = (farsideFlows && farsideFlows.length > 0) ? farsideFlows : (duneEtfFlowsRows ? duneEtfFlowsRows.map(row => ({
-      id: row.id || `etf-${row.ticker}-${row.date}`,
-      date: row.date || new Date().toISOString().split("T")[0],
-      manager: row.manager || row.fund_manager || "Fidelity",
-      ticker: row.ticker || "FBTC",
-      asset: row.asset || "BTC",
-      netUsd: Number(row.net_usd || row.amount || 0),
-      period: row.period || "daily",
-      source: "Dune"
-    })) : [
-      { id: "farside-1", date: "2024-03-27", manager: "BlackRock", ticker: "IBIT", asset: "BTC", netUsd: 323800000, period: "daily", source: "Farside (Static)" },
-      { id: "farside-2", date: "2024-03-27", manager: "Fidelity", ticker: "FBTC", asset: "BTC", netUsd: 279500000, period: "daily", source: "Farside (Static)" },
-      { id: "farside-3", date: "2024-03-27", manager: "Grayscale", ticker: "GBTC", asset: "BTC", netUsd: -299800000, period: "daily", source: "Farside (Static)" },
-      { id: "farside-eth-1", date: "2024-03-27", manager: "BlackRock", ticker: "ETHA", asset: "ETH", netUsd: 45200000, period: "daily", source: "Farside (Static)" },
-      { id: "farside-eth-2", date: "2024-03-27", manager: "Fidelity", ticker: "FETH", asset: "ETH", netUsd: 21300000, period: "daily", source: "Farside (Static)" },
-      { id: "farside-sol-1", date: "2024-03-27", manager: "VanEck", ticker: "VSOL", asset: "SOL", netUsd: 8500000, period: "daily", source: "Farside (Static)" },
-      { id: "farside-sol-2", date: "2024-03-27", manager: "21Shares", ticker: "ASOL", asset: "SOL", netUsd: 4200000, period: "daily", source: "Farside (Static)" }
-    ]);
+    let etfInflows = await analytics.getEtfInflows(200);
+    if (!etfInflows || etfInflows.length === 0) {
+      etfInflows = (Array.isArray(farsideFlows) && farsideFlows.length > 0)
+        ? farsideFlows
+        : (duneEtfFlowsRows ? duneEtfFlowsRows.map((row) => ({
+            id: row.id || `etf-${row.ticker}-${row.date}`,
+            date: row.date,
+            manager: row.manager,
+            ticker: row.ticker,
+            asset: row.asset,
+            netUsd: Number(row.net_usd || row.netUsd || 0),
+            period: row.period || "daily",
+            source: "Dune"
+          })) : []);
+    }
 
     res.json({
       updatedAt: new Date().toISOString(),
-      perpMetrics,
+      perpMetrics: uniquePerpMetrics,
       kimchiPremium: { valuePct: 1.2, market: "KRW vs USD" },
       etfInflows,
       perpsMarketShare,
@@ -8802,12 +8895,17 @@ app.get("/api/equities/reits/:symbol/income", async (req, res) => {
   res.json(rows);
 });
 app.get("/api/equities/stocks", async (req, res) => {
-  // Returns the list of available stocks (placeholder for now)
-  res.json([
-    { symbol: "AAPL", name: "Apple Inc.", sector: "Technology" },
-    { symbol: "MSFT", name: "Microsoft Corp.", sector: "Technology" },
-    { symbol: "HIMS", name: "Hims & Hers Health, Inc.", sector: "Healthcare" },
-  ]);
+  try {
+    const payload = await getEquitiesAnalyticsPayload();
+    res.json(Array.isArray(payload?.stockScreener) ? payload.stockScreener : []);
+  } catch (error) {
+    console.error("[Equities] Stock screener error:", error);
+    const stale = await readServiceSnapshot("analytics-equities-v2", { scope: "equities" });
+    if (Array.isArray(stale?.payload?.stockScreener)) {
+      return res.json(stale.payload.stockScreener);
+    }
+    res.json([]);
+  }
 });
 
 app.get("/api/equities/stocks/:symbol/fundamentals", async (req, res) => {
@@ -8884,355 +8982,111 @@ app.get("/api/equities/market/actions", async (req, res) => {
 });
 
 
-app.get('/api/analytics/equities', async (req, res) => {
-  const snapshotParams = { scope: "equities" };
-  const fresh = await readFreshSnapshot("analytics-equities", snapshotParams, ROUTE_CACHE_TTLS_MS["analytics-equities"]);
-  if (fresh) {
-    return res.json(fresh);
+/**
+ * Runs a Python script and returns parsed JSON output.
+ */
+async function runPythonScript(scriptPath, args = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonBinary, [scriptPath, ...args], { cwd: __dirname });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (data) => (stdout += data));
+    child.stderr.on("data", (data) => (stderr += data));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(`Python script ${scriptPath} exited with code ${code}. Stderr: ${stderr}`));
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (err) {
+        reject(new Error(`Failed to parse Python output from ${scriptPath}: ${err.message}. Output: ${stdout}`));
+      }
+    });
+  });
+}
+
+const EQUITIES_ANALYTICS_SNAPSHOT_SCOPE = "analytics-equities-v2";
+const EQUITIES_ANALYTICS_SNAPSHOT_PARAMS = { scope: "equities" };
+const EQUITIES_ANALYTICS_TTL_MS = 15 * 60 * 1000;
+
+async function buildEquitiesAnalyticsPayload() {
+  console.log("[Analytics] Fetching live equities data...");
+  const analyticsPayload = await runPythonScript("scripts/fetch_equities_analytics.py");
+  const [macroData, riskIndicators] = await Promise.all([
+    analytics.fetchAnalyticsMacroRows("USA").catch(() => []),
+    fetchAnalyticsRiskIndicators().catch(() => [])
+  ]);
+
+  return {
+    updatedAt: analyticsPayload?.updatedAt || new Date().toISOString(),
+    benchmarkIndexHistory: Array.isArray(analyticsPayload?.benchmarkIndexHistory) ? analyticsPayload.benchmarkIndexHistory : [],
+    benchmarkPerformance: Array.isArray(analyticsPayload?.benchmarkPerformance) ? analyticsPayload.benchmarkPerformance : [],
+    stockScreener: Array.isArray(analyticsPayload?.stockScreener) ? analyticsPayload.stockScreener : [],
+    correlationLabels: Array.isArray(analyticsPayload?.correlationLabels) ? analyticsPayload.correlationLabels : [],
+    correlationMatrix: Array.isArray(analyticsPayload?.correlationMatrix) ? analyticsPayload.correlationMatrix : [],
+    volatilityMetrics: Array.isArray(analyticsPayload?.volatilityMetrics) ? analyticsPayload.volatilityMetrics : [],
+    valuationData: Array.isArray(analyticsPayload?.valuationData) ? analyticsPayload.valuationData : [],
+    annualReturns: Array.isArray(analyticsPayload?.annualReturns) ? analyticsPayload.annualReturns : [],
+    sectorPerformance: [],
+    regionalPerformance: [],
+    styleFactors: [],
+    rebalanceSignals: [],
+    dividendData: [],
+    earningsCalendar: [],
+    macroData,
+    fundFlows: [],
+    fxRates: [],
+    forexMovers: { gainers: [], losers: [] },
+    marketBreadth: null,
+    riskIndicators,
+    corporateActions: [],
+    reitData: REIT_DATA,
+    mmfYields: MMF_YIELDS,
+    fundsList: FUNDS_LIST
+  };
+}
+
+async function getEquitiesAnalyticsPayload({ ttlMs = EQUITIES_ANALYTICS_TTL_MS, forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    const fresh = await readFreshSnapshot(
+      EQUITIES_ANALYTICS_SNAPSHOT_SCOPE,
+      EQUITIES_ANALYTICS_SNAPSHOT_PARAMS,
+      ttlMs
+    );
+    if (fresh) return fresh;
   }
+
+  return withInflightDedup(
+    EQUITIES_ANALYTICS_SNAPSHOT_SCOPE,
+    EQUITIES_ANALYTICS_SNAPSHOT_PARAMS,
+    async () => {
+      const payload = await buildEquitiesAnalyticsPayload();
+      await writeAllSnapshots(
+        EQUITIES_ANALYTICS_SNAPSHOT_SCOPE,
+        EQUITIES_ANALYTICS_SNAPSHOT_PARAMS,
+        payload
+      );
+      return payload;
+    }
+  );
+}
+
+app.get('/api/analytics/equities', async (req, res) => {
   try {
-    const calculateCAGR = (series, assetKey, years) => {
-      const recent = series.slice(0, years);
-      if (recent.length === 0) return 0;
-      // Total return = Product of (1 + r) - 1
-      const product = recent.reduce((acc, curr) => acc * (1 + curr[assetKey] / 100), 1);
-      const cagr = (Math.pow(product, 1 / recent.length) - 1) * 100;
-      return Number(cagr.toFixed(2));
-    };
-
-    const calcAnnualizedVolatility = (series, assetKey) => {
-      const returns = series
-        .map((row) => Number(row?.[assetKey]))
-        .filter((v) => Number.isFinite(v))
-        .map((v) => v / 100);
-      if (returns.length < 2) return 0;
-      const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
-      const variance = returns.reduce((s, v) => s + ((v - mean) ** 2), 0) / (returns.length - 1);
-      return Number((Math.sqrt(variance) * Math.sqrt(252) * 100).toFixed(2));
-    };
-
-    const calcMaxDrawdown = (series, assetKey) => {
-      const returns = series
-        .slice()
-        .reverse()
-        .map((row) => Number(row?.[assetKey]))
-        .filter((v) => Number.isFinite(v))
-        .map((v) => 1 + (v / 100));
-      if (!returns.length) return 0;
-      let equity = 1;
-      let peak = 1;
-      let maxDd = 0;
-      returns.forEach((r) => {
-        equity *= r;
-        peak = Math.max(peak, equity);
-        maxDd = Math.min(maxDd, (equity / peak) - 1);
-      });
-      return Number((Math.abs(maxDd) * 100).toFixed(2));
-    };
-
-    const calcSharpe = (series, assetKey, rf = 0.03) => {
-      const returns = series
-        .map((row) => Number(row?.[assetKey]))
-        .filter((v) => Number.isFinite(v))
-        .map((v) => v / 100);
-      if (returns.length < 2) return 0;
-      const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
-      const std = Math.sqrt(returns.reduce((s, v) => s + ((v - mean) ** 2), 0) / (returns.length - 1));
-      if (std === 0) return 0;
-      return Number((((mean - rf / 252) / std) * Math.sqrt(252)).toFixed(2));
-    };
-
-    const calcSortino = (series, assetKey, rf = 0.03) => {
-      const returns = series
-        .map((row) => Number(row?.[assetKey]))
-        .filter((v) => Number.isFinite(v))
-        .map((v) => v / 100);
-      if (returns.length < 2) return 0;
-      const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
-      const downside = returns.filter((v) => v < 0);
-      if (!downside.length) return 0;
-      const downsideDev = Math.sqrt(downside.reduce((s, v) => s + (v ** 2), 0) / downside.length);
-      if (downsideDev === 0) return 0;
-      return Number((((mean - rf / 252) / downsideDev) * Math.sqrt(252)).toFixed(2));
-    };
-
-    const benchmarkIndexHistory = [
-      {
-        id: "spx",
-        name: "S&P 500",
-        symbol: "SPX",
-        region: "USA",
-        currency: "USD",
-        daily: 0.42,
-        weekly: 1.34,
-        monthly: 2.85,
-        annual: calculateCAGR(ANNUAL_RETURNS, "sp500", 1),
-        ytd: 9.78,
-        yr1: calculateCAGR(ANNUAL_RETURNS, "sp500", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "sp500", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "sp500", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "sp500", 10),
-        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.sp500))
-      },
-      {
-        id: "mxwo",
-        name: "MSCI World",
-        symbol: "MXWO",
-        region: "Global",
-        currency: "USD",
-        daily: 0.31,
-        weekly: 1.09,
-        monthly: 2.12,
-        annual: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 1),
-        ytd: 8.24,
-        yr1: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 10),
-        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.msciWorld))
-      },
-      {
-        id: "mxef",
-        name: "MSCI EM",
-        symbol: "MXEF",
-        region: "Emerging Markets",
-        currency: "USD",
-        daily: 0.57,
-        weekly: 1.81,
-        monthly: 3.06,
-        annual: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1),
-        ytd: 11.32,
-        yr1: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "msciEm", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "msciEm", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "msciEm", 10),
-        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.msciEm))
-      },
-      {
-        id: "reit",
-        name: "Global REITs",
-        symbol: "EPRA/NAREIT",
-        region: "Global",
-        currency: "USD",
-        daily: 0.15,
-        weekly: 0.72,
-        monthly: 1.24,
-        annual: calculateCAGR(ANNUAL_RETURNS, "reits", 1),
-        ytd: 4.2,
-        yr1: calculateCAGR(ANNUAL_RETURNS, "reits", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "reits", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "reits", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "reits", 10),
-        sparkline: ANNUAL_RETURNS.slice(0, 10).reverse().map((r) => Number(r.reits))
-      }
-    ];
-
-    const sectorPerformance = [
-      { sector: "Technology", daily: 0.64, ytd: 18.2, yr1: 24.5, flowUsdBn: 6.2 },
-      { sector: "Financials", daily: 0.28, ytd: 11.1, yr1: 14.0, flowUsdBn: 2.4 },
-      { sector: "Healthcare", daily: -0.12, ytd: 6.4, yr1: 8.9, flowUsdBn: -0.8 },
-      { sector: "Energy", daily: 0.43, ytd: 9.8, yr1: 12.2, flowUsdBn: 1.3 },
-      { sector: "Industrials", daily: 0.37, ytd: 10.5, yr1: 13.7, flowUsdBn: 1.7 },
-      { sector: "Consumer", daily: 0.21, ytd: 7.3, yr1: 10.1, flowUsdBn: 0.9 },
-      { sector: "Utilities", daily: -0.05, ytd: 3.9, yr1: 5.4, flowUsdBn: 0.4 }
-    ];
-
-    const regionalPerformance = [
-      { region: "USA", currency: "USD", daily: 0.42, ytd: 9.78, yr1: 25.02, yr3: calculateCAGR(ANNUAL_RETURNS, "sp500", 3) },
-      { region: "Europe", currency: "EUR", daily: 0.19, ytd: 6.42, yr1: 12.14, yr3: 6.88 },
-      { region: "Asia", currency: "JPY", daily: 0.33, ytd: 8.11, yr1: 15.24, yr3: 7.11 },
-      { region: "Emerging Markets", currency: "USD", daily: 0.57, ytd: 11.32, yr1: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1), yr3: calculateCAGR(ANNUAL_RETURNS, "msciEm", 3) },
-      { region: "Frontier Markets", currency: "USD", daily: 0.25, ytd: 5.38, yr1: 9.04, yr3: 4.82 }
-    ];
-
-    const styleFactors = [
-      { factor: "Value", daily: 0.24, ytd: 7.2, yr1: 11.8 },
-      { factor: "Growth", daily: 0.58, ytd: 14.7, yr1: 22.6 },
-      { factor: "Momentum", daily: 0.49, ytd: 13.4, yr1: 20.1 },
-      { factor: "Quality", daily: 0.31, ytd: 10.2, yr1: 14.9 },
-      { factor: "Low Volatility", daily: 0.12, ytd: 5.1, yr1: 7.6 },
-      { factor: "Size (Small Cap)", daily: 0.19, ytd: 6.3, yr1: 9.4 }
-    ];
-
-    const rebalanceSignals = [
-      { bucket: "Technology", targetWeight: 27, currentWeight: 31, driftPct: 4.0, signal: "Trim" },
-      { bucket: "Financials", targetWeight: 14, currentWeight: 12.2, driftPct: -1.8, signal: "Add" },
-      { bucket: "Healthcare", targetWeight: 13, currentWeight: 11.4, driftPct: -1.6, signal: "Add" },
-      { bucket: "Energy", targetWeight: 8, currentWeight: 7.5, driftPct: -0.5, signal: "Hold" },
-      { bucket: "Industrials", targetWeight: 10, currentWeight: 9.7, driftPct: -0.3, signal: "Hold" }
-    ];
-
-    const correlationLabels = ["SPX", "World", "EM", "REIT", "US10Y"];
-    const correlationMatrix = [
-      [1.00, 0.88, 0.71, 0.64, -0.31],
-      [0.88, 1.00, 0.79, 0.67, -0.22],
-      [0.71, 0.79, 1.00, 0.52, -0.18],
-      [0.64, 0.67, 0.52, 1.00, -0.36],
-      [-0.31, -0.22, -0.18, -0.36, 1.00]
-    ];
-
-    const volatilityMetrics = [
-      {
-        asset: "S&P 500",
-        annualizedVolatility: calcAnnualizedVolatility(ANNUAL_RETURNS, "sp500"),
-        maxDrawdown: calcMaxDrawdown(ANNUAL_RETURNS, "sp500"),
-        sharpe: calcSharpe(ANNUAL_RETURNS, "sp500"),
-        sortino: calcSortino(ANNUAL_RETURNS, "sp500")
-      },
-      {
-        asset: "MSCI World",
-        annualizedVolatility: calcAnnualizedVolatility(ANNUAL_RETURNS, "msciWorld"),
-        maxDrawdown: calcMaxDrawdown(ANNUAL_RETURNS, "msciWorld"),
-        sharpe: calcSharpe(ANNUAL_RETURNS, "msciWorld"),
-        sortino: calcSortino(ANNUAL_RETURNS, "msciWorld")
-      },
-      {
-        asset: "MSCI EM",
-        annualizedVolatility: calcAnnualizedVolatility(ANNUAL_RETURNS, "msciEm"),
-        maxDrawdown: calcMaxDrawdown(ANNUAL_RETURNS, "msciEm"),
-        sharpe: calcSharpe(ANNUAL_RETURNS, "msciEm"),
-        sortino: calcSortino(ANNUAL_RETURNS, "msciEm")
-      }
-    ];
-
-    const dividendData = [
-      { symbol: "SPY", dividendYield: 1.34, payoutRatio: 38.1, exDividendDate: "2026-06-20", dividendGrowth5Y: 6.2 },
-      { symbol: "VIG", dividendYield: 1.79, payoutRatio: 44.7, exDividendDate: "2026-06-24", dividendGrowth5Y: 7.1 },
-      { symbol: "SCHD", dividendYield: 3.45, payoutRatio: 52.3, exDividendDate: "2026-06-22", dividendGrowth5Y: 10.4 }
-    ];
-
-    const earningsCalendar = [
-      { date: "2026-04-24", symbol: "MSFT", period: "Q1", estimateEPS: 3.12, previousSurprisePct: 4.1, revisionTrend: "Up" },
-      { date: "2026-04-25", symbol: "AAPL", period: "Q2", estimateEPS: 1.66, previousSurprisePct: 2.3, revisionTrend: "Flat" },
-      { date: "2026-04-26", symbol: "AMZN", period: "Q1", estimateEPS: 1.12, previousSurprisePct: 5.2, revisionTrend: "Up" },
-      { date: "2026-04-28", symbol: "NVDA", period: "Q1", estimateEPS: 6.08, previousSurprisePct: 7.9, revisionTrend: "Up" }
-    ];
-
-    const valuationData = [
-      { scope: "USA (S&P 500)", pe: 22.8, pb: 4.3, evEbitda: 14.2, dividendYield: 1.4, fcfYield: 3.9 },
-      { scope: "Europe (STOXX 600)", pe: 14.1, pb: 1.9, evEbitda: 9.7, dividendYield: 3.2, fcfYield: 6.1 },
-      { scope: "Asia (MSCI Asia)", pe: 15.8, pb: 1.7, evEbitda: 10.9, dividendYield: 2.4, fcfYield: 5.3 },
-      { scope: "Emerging (MSCI EM)", pe: 12.9, pb: 1.6, evEbitda: 8.8, dividendYield: 2.7, fcfYield: 6.8 }
-    ];
-
-    const [macroData, fxPayload, riskIndicators] = await Promise.all([
-      fetchAnalyticsMacroRows("USA"),
-      fetchForexRates(),
-      fetchAnalyticsRiskIndicators()
-    ]);
-
-    const fundFlows = [
-      { segment: "US Tech ETFs", assetClass: "Equities", region: "USA", sector: "Technology", period: "1W", netFlowUsdBn: 4.2 },
-      { segment: "EM Broad ETFs", assetClass: "Equities", region: "Emerging Markets", sector: "Broad", period: "1W", netFlowUsdBn: 1.6 },
-      { segment: "US IG Bond ETFs", assetClass: "Fixed Income", region: "USA", sector: "Investment Grade", period: "1W", netFlowUsdBn: 2.1 },
-      { segment: "Energy Sector ETFs", assetClass: "Equities", region: "Global", sector: "Energy", period: "1W", netFlowUsdBn: -0.4 }
-    ];
-
-    const fxRates = Array.isArray(fxPayload?.rates) ? fxPayload.rates : [];
-    const forexMovers = {
-      gainers: Array.isArray(fxPayload?.gainers) ? fxPayload.gainers : [],
-      losers: Array.isArray(fxPayload?.losers) ? fxPayload.losers : [],
-      source: fxPayload?.source || "Finviz",
-      stale: Boolean(fxPayload?.stale),
-      stale_reason: fxPayload?.stale_reason || null
-    };
-
-    const marketBreadth = {
-      adLine: 12850,
-      newHighs: 184,
-      newLows: 41,
-      above50dmaPct: 62.3,
-      above200dmaPct: 58.7
-    };
-
-    const corporateActions = [
-      { date: "2026-04-18", symbol: "TSLA", action: "Split Proposal", detail: "Board authorized review for 3-for-1 split." },
-      { date: "2026-04-15", symbol: "AAPL", action: "Buyback", detail: "Authorized additional $90B repurchase plan." },
-      { date: "2026-04-12", symbol: "XOM", action: "Special Dividend", detail: "Declared special cash dividend of $0.35/share." },
-      { date: "2026-04-09", symbol: "UNH", action: "M&A", detail: "Announced acquisition of care-tech provider." }
-    ];
-
-    const benchmarkPerformance = [
-      {
-        name: "S&P 500 (USA)",
-        yr1: calculateCAGR(ANNUAL_RETURNS, "sp500", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "sp500", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "sp500", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "sp500", 10),
-        yr20: calculateCAGR(ANNUAL_RETURNS, "sp500", 20),
-      },
-      {
-        name: "MSCI World (Global)",
-        yr1: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 10),
-        yr20: calculateCAGR(ANNUAL_RETURNS, "msciWorld", 20),
-      },
-      {
-        name: "MSCI EM (Emerging)",
-        yr1: calculateCAGR(ANNUAL_RETURNS, "msciEm", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "msciEm", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "msciEm", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "msciEm", 10),
-        yr20: calculateCAGR(ANNUAL_RETURNS, "msciEm", 20),
-      },
-      {
-        name: "Global REITs (EPRA/Nareit)",
-        yr1: calculateCAGR(ANNUAL_RETURNS, "reits", 1),
-        yr3: calculateCAGR(ANNUAL_RETURNS, "reits", 3),
-        yr5: calculateCAGR(ANNUAL_RETURNS, "reits", 5),
-        yr10: calculateCAGR(ANNUAL_RETURNS, "reits", 10),
-        yr20: calculateCAGR(ANNUAL_RETURNS, "reits", 20),
-      }
-    ];
-
-    const enrichedFundsList = FUNDS_LIST.map((fund, idx) => ({
-      ...fund,
-      domicile: fund.jurisdiction,
-      structure: String(fund.type || "").toLowerCase().includes("etf") ? "UCITS/40-Act ETF" : "Open-end Fund",
-      feeBps: [3, 6, 9, 12, 18, 24, 35][idx % 7],
-      assetClass: idx % 3 === 0 ? "Equities" : idx % 3 === 1 ? "Multi-Asset" : "Fixed Income"
-    }));
-
-    const payload = {
-      updatedAt: new Date().toISOString(),
-      benchmarkIndexHistory,
-      benchmarkPerformance,
-      sectorPerformance,
-      regionalPerformance,
-      styleFactors,
-      rebalanceSignals,
-      correlationLabels,
-      correlationMatrix,
-      volatilityMetrics,
-      dividendData,
-      earningsCalendar,
-      valuationData,
-      macroData,
-      fundFlows,
-      fxRates,
-      forexMovers,
-      marketBreadth,
-      riskIndicators,
-      corporateActions,
-      annualReturns: ANNUAL_RETURNS,
-      reitData: REIT_DATA,
-      mmfYields: MMF_YIELDS,
-      fundsList: enrichedFundsList
-    };
-    await writeAllSnapshots("analytics-equities", snapshotParams, payload);
+    const payload = await getEquitiesAnalyticsPayload();
     res.json(payload);
   } catch (error) {
-    const cached = await readServiceSnapshot("analytics-equities", snapshotParams);
-    if (cached?.payload) {
-      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "analytics_equities_fetch_failed"));
+    console.error("[Analytics] Equities error:", error);
+    const stale = await readServiceSnapshot(
+      EQUITIES_ANALYTICS_SNAPSHOT_SCOPE,
+      EQUITIES_ANALYTICS_SNAPSHOT_PARAMS
+    );
+    if (stale?.payload) {
+      return res.json(stale.payload);
     }
-    handleServerError(res, "Analytics Equities fetch failed", error);
+    res.status(500).json({ error: "Failed to fetch equities analytics" });
   }
 });
-
-
 // ---------------------------------------------------------------------------
 // Atomic trade execution (portfolio + balance + trade journal)
 // ---------------------------------------------------------------------------
@@ -9460,7 +9314,43 @@ async function startServer() {
     server.once("error", reject);
     server.listen(port, "0.0.0.0", () => {
       server.removeListener("error", reject);
-      console.log(`Portfolio manager backend listening on port ${port}`);
+      console.log(`Portfolio manager backend (with WS) listening on port ${port}`);
+
+      // Start the Farside sync scheduler (runs every weekday at 9am UTC)
+      function startFarsideScheduler() {
+        const syncScript = path.join(__dirname, 'scripts', 'sync-farside-etf.js');
+        const runSync = () => {
+          console.log("[Scheduler] Triggering Farside ETF sync...");
+          const { exec } = require('child_process');
+          exec(`node "${syncScript}"`, (error, stdout, stderr) => {
+            if (error) console.error(`[Scheduler] Farside sync error: ${error.message}`);
+            if (stderr) console.error(`[Scheduler] Farside sync stderr: ${stderr}`);
+            console.log(`[Scheduler] Farside sync output: ${stdout}`);
+          });
+        };
+
+        const scheduleNext = () => {
+          const now = new Date();
+          const next9am = new Date();
+          next9am.setUTCHours(9, 0, 0, 0);
+          if (now >= next9am) next9am.setUTCDate(next9am.getUTCDate() + 1);
+          
+          // Weekend check: if Saturday (6) or Sunday (0), move to Monday (1)
+          const day = next9am.getUTCDay();
+          if (day === 6) next9am.setUTCDate(next9am.getUTCDate() + 2);
+          else if (day === 0) next9am.setUTCDate(next9am.getUTCDate() + 1);
+
+          const delay = next9am.getTime() - now.getTime();
+          console.log(`[Scheduler] Next Farside sync scheduled for ${next9am.toISOString()} (in ${Math.round(delay/1000/60)} minutes)`);
+          setTimeout(() => {
+            runSync();
+            scheduleNext();
+          }, delay);
+        };
+        scheduleNext();
+      }
+      startFarsideScheduler();
+
       resolve();
     });
   });
@@ -9533,7 +9423,7 @@ app.get("/api/macro/indicators", requireSignedIn, (req, res) => {
   res.json(MACRO_INDICATOR_CONFIG.map(c => ({
     code: c.key.toUpperCase(),
     name: c.label,
-    category: "growth", // Fallback category
+    category: c.category || "growth",
     unit: c.unit
   })));
 });
@@ -9543,12 +9433,42 @@ app.get("/api/macro/alerts", requireSignedIn, (req, res) => {
 });
 
 app.get("/api/macro/global/overview", requireSignedIn, async (req, res) => {
-  res.json(buildMacroOverviewPayload("GLOBAL", "Global", buildDeterministicMacroMetrics("GLOBAL")));
+  try {
+    const metrics = await aggregateMacroMetricsForCountries(MACRO_REGION_MEMBERS.GLB);
+    res.json(buildMacroOverviewPayload("GLOBAL", "Global", metrics));
+  } catch (error) {
+    res.json({
+      ...buildMacroOverviewPayload("GLOBAL", "Global", buildDeterministicMacroMetrics("GLOBAL")),
+      stale: true,
+      stale_reason: error?.message || "macro_global_overview_fallback"
+    });
+  }
 });
 
 app.get("/api/macro/region/:code/overview", requireSignedIn, async (req, res) => {
   const code = String(req.params.code || "REGION").trim().toUpperCase();
-  res.json(buildMacroOverviewPayload(code, code, buildDeterministicMacroMetrics(code)));
+  const members = MACRO_REGION_MEMBERS[code] || [];
+  if (!members.length) {
+    return res.json({
+      code,
+      name: code,
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: "macro_region_members_unavailable",
+      items: []
+    });
+  }
+  try {
+    const metrics = await aggregateMacroMetricsForCountries(members);
+    res.json(buildMacroOverviewPayload(code, code, metrics));
+  } catch (error) {
+    res.json({
+      ...buildMacroOverviewPayload(code, code, buildDeterministicMacroMetrics(code)),
+      stale: true,
+      stale_reason: error?.message || "macro_region_overview_fallback"
+    });
+  }
 });
 
 app.get("/api/macro/country/:code/overview", requireSignedIn, async (req, res) => {
@@ -9565,60 +9485,267 @@ app.get("/api/macro/country/:code/overview", requireSignedIn, async (req, res) =
   }
 });
 
-app.get("/api/macro/timeseries", (req, res) => {
-  const { indicator, range } = req.query;
-  const points = range === "1Y" ? 12 : range === "5Y" ? 24 : 60;
-  const series = Array.from({ length: points }, (_, i) => ({
-    date: new Date(Date.now() - (points - i) * 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    value: 100 + i * 0.5 + Math.sin(i / 2) * 5
-  }));
-  res.json({ series });
+app.get("/api/macro/timeseries", requireSignedIn, async (req, res) => {
+  const geo = String(req.query.geo || "").trim().toUpperCase();
+  const indicator = String(req.query.indicator || "").trim();
+  const range = normalizeMacroRange(req.query.range);
+  const mode = String(req.query.mode || "levels").trim().toLowerCase();
+  try {
+    const country = await resolveCountryReference(geo);
+    const countryCode = String(country?.cca3 || geo || "").trim().toUpperCase();
+    const { config, metric } = await fetchMacroMetricByIndicator(countryCode, indicator);
+    if (!config || !metric?.series?.length) {
+      return res.json({
+        series: [],
+        updatedAt: new Date().toISOString(),
+        unavailable: true,
+        stale_reason: "macro_timeseries_unavailable"
+      });
+    }
+    const sliced = sliceMacroSeriesByRange(metric.series, range);
+    const series = deriveMacroSeriesForMode(sliced, mode);
+    return res.json({
+      updatedAt: new Date().toISOString(),
+      source: "World Bank",
+      indicator: config.label,
+      geo: countryCode,
+      mode,
+      range,
+      series
+    });
+  } catch (error) {
+    return res.json({
+      series: [],
+      updatedAt: new Date().toISOString(),
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "macro_timeseries_fetch_failed"
+    });
+  }
 });
 
-app.get("/api/macro/compare", (req, res) => {
+app.get("/api/macro/compare", requireSignedIn, async (req, res) => {
   const geos = String(req.query.geos || "")
     .split(",")
     .map((geo) => geo.trim().toUpperCase())
-    .filter(Boolean);
-  const rows = geos.map((geo, idx) => ({
-    id: `cmp-${idx}`,
-    geo,
-    value: Number((100 + deterministicMacroOffset(geo, 9)).toFixed(2)),
-    delta: Number((deterministicMacroOffset(`${geo}:delta`, 2) - 1).toFixed(2))
-  }));
-  res.json({ rows });
+    .filter(Boolean)
+    .slice(0, 12);
+  const indicator = String(req.query.indicator || "").trim();
+  try {
+    const rows = (await Promise.all(geos.map(async (geo, idx) => {
+      try {
+        const country = await resolveCountryReference(geo);
+        const countryCode = String(country?.cca3 || geo).trim().toUpperCase();
+        const { metric } = await fetchMacroMetricByIndicator(countryCode, indicator);
+        const value = Number(metric?.current);
+        const previous = Number(metric?.previous);
+        if (!Number.isFinite(value)) return null;
+        const delta = Number.isFinite(previous) ? Number((value - previous).toFixed(2)) : null;
+        return { id: `cmp-${idx}`, geo: countryCode, value: Number(value.toFixed(2)), delta, asOf: metric?.asOf || null };
+      } catch {
+        return null;
+      }
+    }))).filter(Boolean);
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank", rows });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank", stale: true, unavailable: true, stale_reason: error?.message || "macro_compare_fetch_failed", rows: [] });
+  }
 });
 
-app.get("/api/macro/calendar", (req, res) => {
-  res.json({ events: [] });
+app.get("/api/macro/calendar", requireSignedIn, async (req, res) => {
+  const geo = String(req.query.geo || "").trim().toUpperCase();
+  const from = String(req.query.from || "").trim();
+  const to = String(req.query.to || "").trim();
+  const importance = String(req.query.importance || "all").trim().toLowerCase();
+  const indicatorType = String(req.query.type || "all").trim().toLowerCase();
+  try {
+    const resolvedCountry = geo && geo !== "ALL" ? await resolveCountryReference(geo).catch(() => null) : null;
+    const countryCode = String(resolvedCountry?.cca3 || geo || "").trim().toUpperCase();
+    const rows = (await fetchForexFactoryEvents())
+      .map((event, idx) => {
+        const config = inferMacroIndicatorFromEvent(event);
+        return {
+          id: event.id || `macro-cal-${idx}`,
+          date: String(event?.date || event?.asOf || "").slice(0, 10),
+          geo: String(event?.countryCode || event?.country || "").trim().toUpperCase(),
+          indicator: config?.label || "Macro Release",
+          category: config?.category || "other",
+          importance: normalizeImportanceLevel(event?.impact || event?.importance),
+          event: event?.title || event?.event || event?.name || "Economic release"
+        };
+      })
+      .filter((row) => row.date)
+      .filter((row) => !countryCode || countryCode === "ALL" || row.geo === countryCode)
+      .filter((row) => !from || row.date >= from)
+      .filter((row) => !to || row.date <= to)
+      .filter((row) => importanceMatchesFilter(row.importance, importance))
+      .filter((row) => indicatorType === "all" || row.category === indicatorType)
+      .slice(0, 100);
+    res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", events: rows });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", stale: true, unavailable: true, stale_reason: error?.message || "macro_calendar_fetch_failed", events: [] });
+  }
 });
 
-app.get("/api/macro/map", (req, res) => {
-  res.json({ rows: [] });
+app.get("/api/macro/map", requireSignedIn, async (req, res) => {
+  const indicator = String(req.query.indicator || "").trim();
+  try {
+    const rows = (await Promise.all(MACRO_MAP_COUNTRIES.map(async (countryCode, idx) => {
+      try {
+        const { metric } = await fetchMacroMetricByIndicator(countryCode, indicator);
+        const value = Number(metric?.current);
+        if (!Number.isFinite(value)) return null;
+        return {
+          id: `map-${idx}`,
+          geo: countryCode,
+          value: Number(value.toFixed(2)),
+          asOf: metric?.asOf || null
+        };
+      } catch {
+        return null;
+      }
+    }))).filter(Boolean);
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank", rows });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank", stale: true, unavailable: true, stale_reason: error?.message || "macro_map_fetch_failed", rows: [] });
+  }
 });
 
-app.get("/api/macro/rankings", (req, res) => {
-  res.json({ rows: [] });
+app.get("/api/macro/rankings", requireSignedIn, async (req, res) => {
+  const indicator = String(req.query.indicator || "").trim();
+  const sort = String(req.query.sort || "value_desc").trim().toLowerCase();
+  try {
+    const rows = (await Promise.all(MACRO_MAP_COUNTRIES.map(async (countryCode) => {
+      try {
+        const { metric } = await fetchMacroMetricByIndicator(countryCode, indicator);
+        const value = Number(metric?.current);
+        const previous = Number(metric?.previous);
+        if (!Number.isFinite(value)) return null;
+        return {
+          geo: countryCode,
+          value: Number(value.toFixed(2)),
+          delta: Number.isFinite(previous) ? Number((value - previous).toFixed(2)) : null,
+          asOf: metric?.asOf || null
+        };
+      } catch {
+        return null;
+      }
+    }))).filter(Boolean);
+    rows.sort((a, b) => {
+      if (sort === "value_asc") return Number(a.value) - Number(b.value);
+      if (sort === "delta_desc") return Number(b.delta || -Infinity) - Number(a.delta || -Infinity);
+      return Number(b.value) - Number(a.value);
+    });
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: "World Bank",
+      rows: rows.map((row, index) => ({ id: `rk-${index}`, rank: index + 1, ...row }))
+    });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank", stale: true, unavailable: true, stale_reason: error?.message || "macro_rankings_fetch_failed", rows: [] });
+  }
 });
 
-app.get("/api/macro/forecast", (req, res) => {
-  res.json({ points: [] });
-});
-
-app.get("/api/macro/source/:indicator", (req, res) => {
+app.get("/api/macro/forecast", requireSignedIn, (_req, res) => {
   res.json({
-    source: "EODHD + World Bank",
     updatedAt: new Date().toISOString(),
-    methodology: "Blended real-time and structural indicators."
+    source: "Unavailable",
+    points: [],
+    unavailable: true,
+    stale_reason: "macro_forecast_model_not_available"
   });
 });
 
-app.get("/api/macro/regime", (req, res) => {
-  res.json({ label: "expansion", score: 65, explain: "Overall positive momentum." });
+app.get("/api/macro/source/:indicator", requireSignedIn, (req, res) => {
+  const config = getMacroIndicatorConfig(req.params.indicator);
+  res.json({
+    source: "World Bank",
+    provider: "World Bank Open Data",
+    updatedAt: new Date().toISOString(),
+    frequency: "Monthly to annual, depending on the indicator",
+    methodology: config
+      ? `${config.label} is sourced from the World Bank country series and normalized into the Analytics view without synthetic placeholder values.`
+      : "Country-level macro indicator series sourced from the World Bank."
+  });
 });
 
-app.get("/api/macro/correlation", (req, res) => {
-  res.json({ rows: [] });
+app.get("/api/macro/regime", requireSignedIn, async (req, res) => {
+  const geo = String(req.query.geo || "USA").trim().toUpperCase();
+  try {
+    const country = await resolveCountryReference(geo);
+    const countryCode = String(country?.cca3 || geo).trim().toUpperCase();
+    const metrics = sanitizeMacroMetrics(await fetchWorldBankMacroMetrics(countryCode));
+    const metricByKey = new Map(metrics.map((metric) => [String(metric.key || "").trim().toLowerCase(), metric]));
+    const growth = Number(metricByKey.get("gdp_growth_rate")?.current);
+    const inflation = Number(metricByKey.get("inflation_rate")?.current ?? metricByKey.get("core_inflation_rate")?.current);
+    const rates = Number(metricByKey.get("interest_rate")?.current);
+    const unemployment = Number(metricByKey.get("unemployment_rate")?.current);
+    let label = "mixed";
+    let score = 50;
+    let explain = "Macro conditions are mixed across growth, inflation, labor, and rates.";
+    if (Number.isFinite(growth) && Number.isFinite(inflation) && growth >= 2 && inflation <= 3.5) {
+      label = "expansion";
+      score = 75;
+      explain = "Growth is healthy while inflation remains comparatively contained.";
+    } else if (Number.isFinite(inflation) && inflation >= 5) {
+      label = "inflationary";
+      score = 35;
+      explain = "Inflation is elevated relative to trend and is pressuring financial conditions.";
+    } else if (Number.isFinite(growth) && growth < 0) {
+      label = "recession risk";
+      score = 20;
+      explain = "Growth has turned negative, which raises recession risk.";
+    } else if (Number.isFinite(growth) && growth < 1) {
+      label = "slowdown";
+      score = 45;
+      explain = "Growth is positive but weak relative to long-term trend.";
+    } else if (Number.isFinite(rates) && Number.isFinite(inflation) && rates > inflation) {
+      label = "tightening";
+      score = 55;
+      explain = "Policy rates are restrictive relative to inflation, which suggests tighter financial conditions.";
+    } else if (Number.isFinite(unemployment) && unemployment >= 7) {
+      label = "labor stress";
+      score = 40;
+      explain = "Labor-market stress is elevated relative to typical expansion conditions.";
+    }
+    res.json({ label, score, explain, updatedAt: new Date().toISOString(), source: "World Bank" });
+  } catch (error) {
+    res.json({ label: "unavailable", score: null, explain: "Macro regime data is unavailable for the selected geography.", updatedAt: new Date().toISOString(), source: "World Bank", stale: true, unavailable: true, stale_reason: error?.message || "macro_regime_fetch_failed" });
+  }
+});
+
+app.get("/api/macro/correlation", requireSignedIn, async (req, res) => {
+  const geo = String(req.query.geo || "USA").trim().toUpperCase();
+  const indicator = String(req.query.indicator || "").trim();
+  const asset = String(req.query.asset || "SPY").trim().toUpperCase();
+  const window = String(req.query.window || "180d").trim().toLowerCase();
+  try {
+    const country = await resolveCountryReference(geo);
+    const countryCode = String(country?.cca3 || geo || "USA").trim().toUpperCase();
+    const { metric } = await fetchMacroMetricByIndicator(countryCode, indicator);
+    const macroSeries = Array.isArray(metric?.series) ? metric.series : [];
+    const historyRange = window === "3y" ? "5Y" : window === "1y" ? "1Y" : "1Y";
+    const assetHistory = await fetchHistoryFromYahoo(asset, historyRange);
+    const assetSeries = historyRowsToSeries(assetHistory.history);
+    const assetByDate = new Map(assetSeries.map((row) => [row.date, row.value]));
+    const pairs = macroSeries
+      .map((row) => [Number(row?.value), assetByDate.get(String(row?.date || "").slice(0, 10))])
+      .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(Number(y)));
+    const coefficient = pearsonCorrelation(pairs);
+    const rows = coefficient == null
+      ? []
+      : [{
+          pair: `${String(metric?.label || indicator || "Indicator")} vs ${asset}`,
+          coefficient,
+          window,
+          geo: countryCode,
+          observations: pairs.length,
+          source: "World Bank + Yahoo Finance"
+        }];
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank + Yahoo Finance", rows });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), source: "World Bank + Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "macro_correlation_fetch_failed", rows: [] });
+  }
 });
 
 function deterministicMacroOffset(seed, span = 1) {
