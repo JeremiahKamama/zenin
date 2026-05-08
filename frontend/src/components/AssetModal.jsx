@@ -2,12 +2,11 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getCurrencySymbol, formatCurrency, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { getMarketStatus } from "../utils/marketHours";
 const BACKEND_URL = ZENIN_API_BASE_URL;
-
-const INTERVALS = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 export function AssetModal({
@@ -23,6 +22,9 @@ export function AssetModal({
   trades = [],
   spotPrices = {}
 }) {
+  const intervals = Array.isArray(getAppRuntimeConfig()?.ui?.assetModalIntervals)
+    ? getAppRuntimeConfig().ui.assetModalIntervals
+    : ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyStale, setHistoryStale] = useState(false);
@@ -884,7 +886,7 @@ export function AssetModal({
 
           <div className="interval-toggle-bottom">
             <div className="interval-toggle">
-              {INTERVALS.map((int) => {
+              {intervals.map((int) => {
                 const perf = performanceMap[int];
                 return (
                   <div key={int} className="interval-btn-wrapper">

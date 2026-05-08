@@ -5,10 +5,9 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { zeninFetch } from "../utils/zeninFetch";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
-const SUPPORTED_OPTIONS_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
-const RFQ_OPTIONS_ASSETS = new Set(["HYPE"]);
 
 const StrategySimulatorCard = ({
   activeAsset,
@@ -21,9 +20,12 @@ const StrategySimulatorCard = ({
   loading = false,
   availableExpiries = [],
 }) => {
+  const supportedAssets = Array.isArray(getAppRuntimeConfig()?.options?.supportedAssets)
+    ? getAppRuntimeConfig().options.supportedAssets
+    : ["BTC", "ETH", "SOL", "HYPE"];
   const assetOptions = Array.isArray(allAssets) && allAssets.length
     ? allAssets
-    : ["BTC", "ETH", "SOL", "HYPE"];
+    : supportedAssets;
 
   return (
     <div className="watchlist-panel glass strategy-simulator-panel">
@@ -80,13 +82,21 @@ export const OptionsModule = ({
   spotPrices: externalSpotPrices = {},
   showToast
 }) => {
+  const supportedAssets = Array.isArray(getAppRuntimeConfig()?.options?.supportedAssets)
+    ? getAppRuntimeConfig().options.supportedAssets
+    : ["BTC", "ETH", "SOL", "HYPE"];
+  const rfqAssets = new Set(
+    Array.isArray(getAppRuntimeConfig()?.options?.rfqAssets)
+      ? getAppRuntimeConfig().options.rfqAssets.map((asset) => String(asset || "").trim().toUpperCase())
+      : ["HYPE"]
+  );
   const activeTradesRef = useRef(null);
   const [activeAsset, setActiveAsset] = useState("BTC");
   const [availableExpiries, setAvailableExpiries] = useState([]);
   const [spotPrices, setSpotPrices] = useState(externalSpotPrices);
   const [spotSources, setSpotSources] = useState({});
   const [activeExpiry, setActiveExpiry] = useState(null);
-  const [allAssets, setAllAssets] = useState(SUPPORTED_OPTIONS_ASSETS);
+  const [allAssets, setAllAssets] = useState(supportedAssets);
   const [chain, setChain] = useState([]);
   const [multiChainCache, setMultiChainCache] = useState({}); // symbol -> chain
   const [metrics, setMetrics] = useState({ iv: 0, pcr: 0, skew: "N/A" });
@@ -307,8 +317,8 @@ const handleStrategyChosen = async (tradePayload) => {
 // handleConfirmStrategyTrade removed as it is now handled inline by handleStrategyChosen
 
 useEffect(() => {
-  setAllAssets(SUPPORTED_OPTIONS_ASSETS);
-}, []);
+  setAllAssets(supportedAssets);
+}, [supportedAssets]);
 
 useEffect(() => {
   let cancelled = false;
@@ -440,7 +450,7 @@ useEffect(() => {
   let isMounted = true; // prevent state update after unmount
   const controller = new AbortController();
   const requestKey = `${String(activeAsset || "").trim().toUpperCase()}:${activeExpiry || "latest"}`;
-  const inferredMarketStructure = RFQ_OPTIONS_ASSETS.has(String(activeAsset || "").trim().toUpperCase()) ? "rfq" : "orderbook";
+  const inferredMarketStructure = rfqAssets.has(String(activeAsset || "").trim().toUpperCase()) ? "rfq" : "orderbook";
   const inferredMarketStructureLabel = inferredMarketStructure === "rfq" ? "RFQ" : "Orderbook";
   const inferredMarketStructureNote = inferredMarketStructure === "rfq"
     ? "HYPE can be quoted via Derive RFQ, so the chain ladder may look sparse even when the market is live."
@@ -769,7 +779,7 @@ useEffect(() => {
         return `Waiting for Telegram whale options trades from ${telegramSourceLabel}...`;
       })()
     : "Waiting for Derive whale options trades...";
-  const activeUsesRfq = marketStructure === "rfq" || RFQ_OPTIONS_ASSETS.has(String(activeAsset || "").trim().toUpperCase());
+  const activeUsesRfq = marketStructure === "rfq" || rfqAssets.has(String(activeAsset || "").trim().toUpperCase());
   const chainInventoryLabel = activeUsesRfq
     ? (chain.length > 0 ? `${chain.length} Ladder Strikes Cached` : "RFQ market")
     : `${chain.length} Strikes Available`;

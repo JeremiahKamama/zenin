@@ -1,6 +1,8 @@
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
+import { storePostAuthRedirect } from "./utils/authRedirect";
+import { hasWorkspaceSession } from "./utils/workspacePersistence";
 
 function resolveEntry(pathname) {
   if (typeof window !== "undefined" && window.__ZENIN_ENTRY__) {
@@ -13,12 +15,23 @@ function resolveEntry(pathname) {
 }
 
 function redirectUnauthenticatedAppEntry(entry) {
-  // Bypassed for now to allow Guest access without sign-up
-  return;
+  if (entry !== "app" || typeof window === "undefined") return false;
+
+  const params = new URLSearchParams(window.location.search);
+  const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
+  if (allowGuest || hasWorkspaceSession()) return false;
+
+  const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  storePostAuthRedirect(target, "/app");
+  const authUrl = new URL("/auth", window.location.origin);
+  authUrl.searchParams.set("mode", "signup");
+  authUrl.searchParams.set("next", target);
+  window.location.replace(`${authUrl.pathname}${authUrl.search}${authUrl.hash}`);
+  return true;
 }
 
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");
-redirectUnauthenticatedAppEntry(entry);
+const redirectedToAuth = redirectUnauthenticatedAppEntry(entry);
 
 async function loadEntryComponent(currentEntry) {
   try {
@@ -55,9 +68,10 @@ function applyGlobalTheme() {
 
 applyGlobalTheme();
 
-const rootElement = document.getElementById("root");
-const hasPrerenderedMarkup = entry === "public" && Boolean(rootElement?.hasChildNodes());
+const rootElement = redirectedToAuth ? null : document.getElementById("root");
+const hasPrerenderedMarkup = !redirectedToAuth && entry === "public" && Boolean(rootElement?.hasChildNodes());
 
+if (!redirectedToAuth) {
 loadEntryComponent(entry).then((RootComponent) => {
   const app = (
     <React.StrictMode>
@@ -87,3 +101,4 @@ loadEntryComponent(entry).then((RootComponent) => {
     `;
   }
 });
+}

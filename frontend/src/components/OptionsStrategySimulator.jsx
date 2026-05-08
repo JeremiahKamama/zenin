@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 // ─── Config / Data ─────────────────────────────────────────────────────────────
 
@@ -269,6 +270,11 @@ const OptionsStrategySimulator = ({
   availableExpiries = [],
   error = ""
 }) => {
+  const simulatorConfig = getAppRuntimeConfig()?.options?.simulator || {};
+  const views = Array.isArray(simulatorConfig?.views) && simulatorConfig.views.length ? simulatorConfig.views : VIEWS;
+  const timeHorizons = Array.isArray(simulatorConfig?.timeHorizons) && simulatorConfig.timeHorizons.length ? simulatorConfig.timeHorizons : TIME_HORIZONS;
+  const tierMeta = simulatorConfig?.tierMeta && Object.keys(simulatorConfig.tierMeta).length ? simulatorConfig.tierMeta : TIER_META;
+  const strategyLibrary = simulatorConfig?.strategyLibrary && Object.keys(simulatorConfig.strategyLibrary).length ? simulatorConfig.strategyLibrary : STRATEGY_LIBRARY;
   const [selectedView, setSelectedView] = useState(null);
   const [selectedHorizon, setSelectedHorizon] = useState(null);
   const [selectedStrategyId, setSelectedStrategyId] = useState(null);
@@ -283,7 +289,7 @@ const OptionsStrategySimulator = ({
   const strategies = useMemo(() => {
     if (!selectedView || !selectedHorizon) return [];
 
-    const raw = STRATEGY_LIBRARY[selectedView] || [];
+    const raw = strategyLibrary[selectedView] || [];
     return raw
       .filter((s) => !s.horizons || s.horizons.includes(selectedHorizon))
       .map((s, idx) => {
@@ -297,7 +303,7 @@ const OptionsStrategySimulator = ({
           payoffLabel: s.payoffLabel || "",
         };
       });
-  }, [selectedView, selectedHorizon]);
+  }, [selectedHorizon, selectedView, strategyLibrary]);
 
   const visible = strategies.slice(0, maxVisible);
   const selectedStrategy = visible.find(s => s.id === selectedStrategyId);
@@ -459,12 +465,12 @@ const OptionsStrategySimulator = ({
           </span>
           {selectedView && (
             <span style={{ fontSize: "0.75rem", color: "var(--options-sim-accent)" }}>
-              Active: {VIEWS.find((v) => v.id === selectedView)?.label}
+              Active: {views.find((v) => v.id === selectedView)?.label}
             </span>
           )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
-          {VIEWS.map((v) => (
+          {views.map((v) => (
             <button
               key={v.id}
               type="button"
@@ -486,12 +492,12 @@ const OptionsStrategySimulator = ({
           </span>
           {selectedHorizon && (
             <span style={{ fontSize: "0.75rem", color: "var(--options-sim-accent)" }}>
-              Active: {TIME_HORIZONS.find((h) => h.id === selectedHorizon)?.label}
+              Active: {timeHorizons.find((h) => h.id === selectedHorizon)?.label}
             </span>
           )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
-          {TIME_HORIZONS.map((h) => (
+          {timeHorizons.map((h) => (
             <button
               key={h.id}
               type="button"
@@ -544,7 +550,7 @@ const OptionsStrategySimulator = ({
               </thead>
               <tbody>
                 {visible.map((s) => {
-                  const tier = TIER_META[s.tier] || TIER_META.medium;
+                  const tier = tierMeta[s.tier] || tierMeta.medium;
                   const isSelected = s.id === selectedStrategyId;
                   return (
                     <React.Fragment key={s.id}>

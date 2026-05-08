@@ -17,10 +17,13 @@ import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
+import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
 import { applySeo } from "./utils/seo";
+import { storePostAuthRedirect } from "./utils/authRedirect";
+import { getAppRuntimeConfig, setRuntimeConfigs } from "./config/runtimeConfigStore";
 
 function isStaleChunkError(error) {
   const message = String(error?.message || error || "");
@@ -90,6 +93,30 @@ const FullMetricsPage = lazyWithReloadRetry(
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const ADMIN_EMAIL = String(import.meta.env.VITE_ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
+const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
+
+function isGuestAccessRequested() {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  return GUEST_ACCESS_VALUES.has(String(params.get("guest") || "").trim().toLowerCase());
+}
+
+function redirectToAuthGate() {
+  if (typeof window === "undefined") return;
+  const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  storePostAuthRedirect(target, "/app");
+  const authUrl = new URL("/auth", window.location.origin);
+  authUrl.searchParams.set("mode", "signup");
+  authUrl.searchParams.set("next", target);
+  window.location.replace(`${authUrl.pathname}${authUrl.search}${authUrl.hash}`);
+}
+
+function getBrowserNotificationPermission() {
+  if (typeof window === "undefined" || typeof Notification === "undefined") {
+    return "unsupported";
+  }
+  return Notification.permission;
+}
 
 function parseRouteFromLocation() {
   if (typeof window === "undefined") {
@@ -116,51 +143,16 @@ function formatPlanLabel(plan, billingCycle = "monthly") {
 }
 
 function normalizeCurrentPlan(plan) {
+  const validPlans = Array.isArray(getAppRuntimeConfig()?.subscription?.validPlans)
+    ? getAppRuntimeConfig().subscription.validPlans
+    : ["starter", "pro", "desk"];
   const normalized = String(plan || "").trim().toLowerCase();
-  if (["starter", "pro", "desk"].includes(normalized)) return normalized;
+  if (validPlans.includes(normalized)) return normalized;
   return "starter";
 }
 
-const PLAN_RANK = {
-  starter: 0,
-  pro: 1,
-  desk: 2
-};
-
-const SECTION_MIN_PLAN = {
-  Home: "starter",
-  Portfolio: "starter",
-  Watchlist: "starter",
-  Analytics: "pro",
-  Journal: "pro",
-  Options: "desk",
-  Predictions: "desk",
-  "Tax Estimator": "starter",
-  Metrics: "pro"
-};
-
-const FALLBACK_CATEGORIES = ["stocks", "crypto", "indicators"];
-const FALLBACK_ASSETS_BY_CATEGORY = {
-  stocks: [
-    { symbol: "AAPL", name: "Apple Inc.", type: "stock", marketType: "equity", category: "stocks", theme: "Mega Cap Tech", price: 169.3, priceChangePercent: 0.84 },
-    { symbol: "MSFT", name: "Microsoft Corporation", type: "stock", marketType: "equity", category: "stocks", theme: "Mega Cap Tech", price: 412.8, priceChangePercent: 0.46 },
-    { symbol: "NVDA", name: "NVIDIA Corporation", type: "stock", marketType: "equity", category: "stocks", theme: "AI Infrastructure", price: 875.6, priceChangePercent: 1.18 },
-    { symbol: "HIMS", name: "Hims & Hers Health", type: "stock", marketType: "equity", category: "stocks", theme: "Digital Health", price: 51.2, priceChangePercent: -0.72 }
-  ],
-  crypto: [
-    { symbol: "BTC", name: "Bitcoin", type: "crypto", marketType: "spot", category: "crypto", price: 94250, priceChangePercent: 0.38 },
-    { symbol: "ETH", name: "Ethereum", type: "crypto", marketType: "spot", category: "crypto", price: 3240, priceChangePercent: -0.21 },
-    { symbol: "SOL", name: "Solana", type: "crypto", marketType: "spot", category: "crypto", price: 146.8, priceChangePercent: 1.08 }
-  ],
-  indicators: [
-    { symbol: "CPI", name: "Consumer Price Index", type: "indicator", marketType: "macro", category: "indicators", country: "USA" },
-    { symbol: "GDP", name: "Gross Domestic Product", type: "indicator", marketType: "macro", category: "indicators", country: "USA" },
-    { symbol: "FEDFUNDS", name: "Federal Funds Rate", type: "indicator", marketType: "macro", category: "indicators", country: "USA" }
-  ]
-};
-
 const getFallbackAssetsForCategory = (category) =>
-  FALLBACK_ASSETS_BY_CATEGORY[String(category || "").toLowerCase()] || [];
+  getAppRuntimeConfig()?.watchlist?.fallbackAssetsByCategory?.[String(category || "").toLowerCase()] || [];
 
 const searchFallbackAssets = (query, type) => {
   const normalizedQuery = String(query || "").trim().toLowerCase();
@@ -179,7 +171,7 @@ const searchFallbackAssets = (query, type) => {
 };
 
 function requiredPlanForSection(section) {
-  return SECTION_MIN_PLAN[section] || "starter";
+  return getAppRuntimeConfig()?.subscription?.sectionMinPlan?.[section] || "starter";
 }
 
 function hasSectionAccess(plan, section) {
@@ -190,7 +182,8 @@ function hasSectionAccessForUser(plan, isAdmin, section) {
   if (isAdmin) return true;
   const userPlan = normalizeCurrentPlan(plan);
   const requiredPlan = requiredPlanForSection(section);
-  return Number(PLAN_RANK[userPlan] || 0) >= Number(PLAN_RANK[requiredPlan] || 0);
+  const planRank = getAppRuntimeConfig()?.subscription?.planRank || {};
+  return Number(planRank[userPlan] || 0) >= Number(planRank[requiredPlan] || 0);
 }
 
 function hasStoredAuthSession() {
@@ -360,6 +353,30 @@ function App() {
       schema: []
     });
   }, []);
+
+  useRuntimeConfig({ enabled: true });
+  const appRuntimeConfig = getAppRuntimeConfig();
+  const fallbackCategories = Array.isArray(appRuntimeConfig?.watchlist?.fallbackCategories)
+    ? appRuntimeConfig.watchlist.fallbackCategories
+    : ["stocks", "crypto", "indicators"];
+  const authenticatorOptions = Array.isArray(appRuntimeConfig?.auth?.authenticatorOptions)
+    ? appRuntimeConfig.auth.authenticatorOptions
+    : [];
+  const passkeyOptions = Array.isArray(appRuntimeConfig?.auth?.passkeyOptions)
+    ? appRuntimeConfig.auth.passkeyOptions
+    : [];
+  const cexOptions = Array.isArray(appRuntimeConfig?.connections?.venues?.cex)
+    ? appRuntimeConfig.connections.venues.cex
+    : [];
+  const dexOptions = Array.isArray(appRuntimeConfig?.connections?.venues?.dex)
+    ? appRuntimeConfig.connections.venues.dex
+    : [];
+  const brokerOptions = Array.isArray(appRuntimeConfig?.connections?.venues?.brokers)
+    ? appRuntimeConfig.connections.venues.brokers
+    : [];
+  const predictionOptions = Array.isArray(appRuntimeConfig?.connections?.venues?.prediction)
+    ? appRuntimeConfig.connections.venues.prediction
+    : [];
 
   const [categories, setCategories] = useState([]);
   const [assets, setAssets] = useState([]);
@@ -2234,6 +2251,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
+  const allowGuestAccess = useMemo(() => isGuestAccessRequested(), []);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
@@ -2263,7 +2281,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return false;
     }
   });
-  const [isGuestUser, setIsGuestUser] = useState(() => !hasStoredAuthSession());
+  const [isGuestUser, setIsGuestUser] = useState(() => allowGuestAccess || !hasStoredAuthSession());
 
   const [themeMode, setThemeMode] = useState(() => {
     try {
@@ -2400,6 +2418,11 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
 
   useEffect(() => {
+    if (!bootstrapData?.appConfig) return;
+    setRuntimeConfigs({ appConfig: bootstrapData.appConfig });
+  }, [bootstrapData]);
+
+  useEffect(() => {
     let mounted = true;
 
     const hydrateRequiredAuth = async () => {
@@ -2408,6 +2431,10 @@ const handleOptionTradeClosed = async (tradeId) => {
         const data = await res.json().catch(() => ({}));
         if (!mounted) return;
         if (!res.ok || !data?.authenticated || !data?.user) {
+          if (!allowGuestAccess) {
+            redirectToAuthGate();
+            return;
+          }
           localStorage.removeItem("zenin_auth_user");
           localStorage.removeItem("zenin_auth_expires_at");
           setIsGuestUser(true);
@@ -2435,6 +2462,10 @@ const handleOptionTradeClosed = async (tradeId) => {
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
+        if (!allowGuestAccess) {
+          setAccessCheckLoading(false);
+          return;
+        }
         localStorage.removeItem("zenin_auth_user");
         localStorage.removeItem("zenin_auth_expires_at");
         setIsGuestUser(true);
@@ -2450,7 +2481,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [allowGuestAccess]);
 
   useEffect(() => {
     if (accessCheckLoading) return undefined;
@@ -2543,7 +2574,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       setCategories(
         Array.isArray(bootstrapData?.categories) && bootstrapData.categories.length
           ? bootstrapData.categories
-          : FALLBACK_CATEGORIES
+          : fallbackCategories
       );
     });
 
@@ -2572,16 +2603,16 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (!bootstrapError) return;
     console.warn("Workspace bootstrap unavailable; using existing local state.", bootstrapError);
     if (!categories.length) {
-      setCategories(FALLBACK_CATEGORIES);
+      setCategories(fallbackCategories);
     }
-  }, [bootstrapError, categories.length]);
+  }, [bootstrapError, categories.length, fallbackCategories]);
 
   useEffect(() => {
     if (!isGuestUser) return;
     if (!categories.length) {
-      setCategories(FALLBACK_CATEGORIES);
+      setCategories(fallbackCategories);
     }
-  }, [isGuestUser, categories.length]);
+  }, [isGuestUser, categories.length, fallbackCategories]);
   const [connectedAccounts, setConnectedAccounts] = useState(() => {
     const raw = localStorage.getItem("zenin_connected_accounts");
     if (!raw) return [];
@@ -2595,15 +2626,13 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isConnectWindowOpen, setIsConnectWindowOpen] = useState(false);
   const [accountForm, setAccountForm] = useState({
     venueType: "cex",
-    provider: "Binance",
+    provider: cexOptions[0] || "Binance",
     username: "",
     apiKey: "",
     apiSecret: ""
   });
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
   const settingsCategories = ["Profile", "Subscription", "General", "Accounts", "Layout", "Notification"];
-  const AUTHENTICATOR_OPTIONS = ["Google Authenticator", "Authy", "Microsoft Authenticator", "1Password", "Bitwarden"];
-  const PASSKEY_OPTIONS = ["iCloud Keychain", "Google Password Manager", "1Password", "Dashlane", "Bitwarden"];
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
     const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
@@ -2629,12 +2658,12 @@ const handleOptionTradeClosed = async (tradeId) => {
     newPassword: "",
     confirmPassword: "",
     twoFactorMethod: "authenticator",
-    authenticatorService: AUTHENTICATOR_OPTIONS[0],
+    authenticatorService: authenticatorOptions[0] || "Google Authenticator",
     twoFactorCode: "",
     phoneNumber: "",
     recoveryEmail: "",
     passkeyName: "Primary Device",
-    passkeyProvider: PASSKEY_OPTIONS[0]
+    passkeyProvider: passkeyOptions[0] || "iCloud Keychain"
   });
   const [totpSetup, setTotpSetup] = useState({ secret: null, qrCodeDataUrl: null, loading: false });
   const [profileFeedback, setProfileFeedback] = useState({
@@ -2642,6 +2671,209 @@ const handleOptionTradeClosed = async (tradeId) => {
     password: null,
     twofa: null
   });
+  const [browserNotificationPermission, setBrowserNotificationPermission] = useState(() => getBrowserNotificationPermission());
+  const [notificationFeedback, setNotificationFeedback] = useState(null);
+
+  useEffect(() => {
+    if (!authenticatorOptions.length) return;
+    setProfileForms((prev) => (
+      authenticatorOptions.includes(prev.authenticatorService)
+        ? prev
+        : { ...prev, authenticatorService: authenticatorOptions[0] }
+    ));
+  }, [authenticatorOptions]);
+
+  useEffect(() => {
+    if (!passkeyOptions.length) return;
+    setProfileForms((prev) => (
+      passkeyOptions.includes(prev.passkeyProvider)
+        ? prev
+        : { ...prev, passkeyProvider: passkeyOptions[0] }
+    ));
+  }, [passkeyOptions]);
+
+  useEffect(() => {
+    const venueCatalog = accountForm.venueType === "cex"
+      ? cexOptions
+      : accountForm.venueType === "dex"
+        ? dexOptions
+        : accountForm.venueType === "prediction"
+          ? predictionOptions
+          : brokerOptions;
+    if (!venueCatalog.length) return;
+    setAccountForm((prev) => (
+      venueCatalog.includes(prev.provider)
+        ? prev
+        : { ...prev, provider: venueCatalog[0] }
+    ));
+  }, [accountForm.venueType, brokerOptions, cexOptions, dexOptions, predictionOptions]);
+
+  const browserNotificationsSupported = browserNotificationPermission !== "unsupported";
+  const browserNotificationsGranted = browserNotificationPermission === "granted";
+  const browserNotificationsBlocked = browserNotificationPermission === "denied";
+  const browserNotificationStatusLabel = browserNotificationPermission === "granted"
+    ? "Allowed"
+    : browserNotificationPermission === "denied"
+      ? "Blocked"
+      : browserNotificationPermission === "default"
+        ? "Not requested"
+        : "Unavailable";
+  const emailNotificationDestination = String(profileSecurity?.email || userEmail || "").trim();
+  const canUseEmailNotifications = !isGuestUser && Boolean(emailNotificationDestination) && Boolean(profileSecurity?.emailVerified);
+  const effectiveEmailNotificationsEnabled = preferences.notifyEmail && canUseEmailNotifications;
+  const canUseBrowserNotifications = browserNotificationsSupported && browserNotificationsGranted;
+  const effectiveBrowserNotificationsEnabled = preferences.notifyBrowser && canUseBrowserNotifications;
+
+  const setNotificationMessage = useCallback((type, text) => {
+    setNotificationFeedback(text ? { type, text } : null);
+  }, []);
+
+  const requestBrowserNotificationAccess = useCallback(async () => {
+    if (typeof window === "undefined" || typeof Notification === "undefined") {
+      setBrowserNotificationPermission("unsupported");
+      setNotificationMessage("error", "Browser notifications are not supported in this browser.");
+      return false;
+    }
+
+    let permission = Notification.permission;
+    if (permission === "default") {
+      permission = await Notification.requestPermission();
+    }
+    setBrowserNotificationPermission(permission);
+
+    if (permission === "granted") {
+      return true;
+    }
+
+    setNotificationMessage(
+      "error",
+      permission === "denied"
+        ? "Browser notifications are blocked. Enable them in your browser site settings to continue."
+        : "Browser notification permission was dismissed."
+    );
+    return false;
+  }, [setNotificationMessage]);
+
+  const sendTestBrowserNotification = useCallback(async () => {
+    const granted = await requestBrowserNotificationAccess();
+    if (!granted || typeof Notification === "undefined") return;
+
+    const notification = new Notification("Zenin alerts are ready", {
+      body: "Browser notifications are enabled for market alerts, order updates, and workspace reminders."
+    });
+    notification.onclick = () => {
+      if (typeof window !== "undefined") {
+        window.focus();
+      }
+    };
+    setNotificationMessage("success", "Sent a test browser notification.");
+  }, [requestBrowserNotificationAccess, setNotificationMessage]);
+
+  const handleNotificationPreferenceToggle = useCallback(async (key, checked) => {
+    setNotificationFeedback(null);
+
+    if (key === "notifyBrowser") {
+      if (!checked) {
+        setPreferences((prev) => ({ ...prev, notifyBrowser: false }));
+        setNotificationMessage("info", "Browser notifications turned off for this workspace.");
+        return;
+      }
+      if (!browserNotificationsSupported) {
+        setPreferences((prev) => ({ ...prev, notifyBrowser: false }));
+        setNotificationMessage("error", "Browser notifications are not supported in this browser.");
+        return;
+      }
+      if (browserNotificationsBlocked) {
+        setPreferences((prev) => ({ ...prev, notifyBrowser: false }));
+        setNotificationMessage("error", "Browser notifications are blocked. Enable them in your browser site settings to continue.");
+        return;
+      }
+      const granted = await requestBrowserNotificationAccess();
+      if (!granted) {
+        setPreferences((prev) => ({ ...prev, notifyBrowser: false }));
+        return;
+      }
+      setPreferences((prev) => ({ ...prev, notifyBrowser: true }));
+      setNotificationMessage("success", "Browser notifications enabled.");
+      return;
+    }
+
+    if (key === "notifyEmail") {
+      if (!checked) {
+        setPreferences((prev) => ({ ...prev, notifyEmail: false }));
+        setNotificationMessage("info", "Email notifications turned off for this workspace.");
+        return;
+      }
+      if (isGuestUser) {
+        setPreferences((prev) => ({ ...prev, notifyEmail: false }));
+        setNotificationMessage("error", "Sign in to route email notifications to an account inbox.");
+        return;
+      }
+      if (!profileSecurity?.emailVerified) {
+        setPreferences((prev) => ({ ...prev, notifyEmail: false }));
+        setNotificationMessage("error", "Verify your profile email before enabling email notifications.");
+        return;
+      }
+      if (!emailNotificationDestination) {
+        setPreferences((prev) => ({ ...prev, notifyEmail: false }));
+        setNotificationMessage("error", "Add a profile email before enabling email notifications.");
+        return;
+      }
+      setPreferences((prev) => ({ ...prev, notifyEmail: true }));
+      setNotificationMessage("success", `Email notifications will go to ${emailNotificationDestination}.`);
+      return;
+    }
+
+    setPreferences((prev) => ({ ...prev, [key]: checked }));
+    if (!checked) return;
+
+    if (effectiveBrowserNotificationsEnabled === false && canUseBrowserNotifications === false) {
+      await requestBrowserNotificationAccess();
+    }
+
+    if (effectiveBrowserNotificationsEnabled) {
+      setNotificationMessage("success", "This alert type will use your enabled browser notification channel.");
+      return;
+    }
+
+    if (effectiveEmailNotificationsEnabled) {
+      setNotificationMessage("success", `This alert type will also route to ${emailNotificationDestination}.`);
+      return;
+    }
+
+    setNotificationMessage("info", "Enable browser or verified email notifications to ensure this alert type can reach you.");
+  }, [
+    browserNotificationsBlocked,
+    browserNotificationsSupported,
+    canUseBrowserNotifications,
+    browserNotificationPermission,
+    emailNotificationDestination,
+    effectiveBrowserNotificationsEnabled,
+    effectiveEmailNotificationsEnabled,
+    isGuestUser,
+    profileSecurity?.emailVerified,
+    requestBrowserNotificationAccess,
+    setNotificationMessage
+  ]);
+
+  useEffect(() => {
+    setPreferences((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (prev.notifyEmail && !canUseEmailNotifications) {
+        next.notifyEmail = false;
+        changed = true;
+      }
+
+      if (prev.notifyBrowser && !canUseBrowserNotifications) {
+        next.notifyBrowser = false;
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [canUseBrowserNotifications, canUseEmailNotifications]);
 
   const fetchTotpSetup = useCallback(async () => {
     if (isGuestUser) return;
@@ -2658,6 +2890,20 @@ const handleOptionTradeClosed = async (tradeId) => {
       setTotpSetup(prev => ({ ...prev, loading: false }));
     }
   }, [isGuestUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncPermissionState = () => {
+      setBrowserNotificationPermission(getBrowserNotificationPermission());
+    };
+    syncPermissionState();
+    window.addEventListener("focus", syncPermissionState);
+    document.addEventListener("visibilitychange", syncPermissionState);
+    return () => {
+      window.removeEventListener("focus", syncPermissionState);
+      document.removeEventListener("visibilitychange", syncPermissionState);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("zenin_preferences", JSON.stringify(preferences));
@@ -2713,23 +2959,18 @@ const handleOptionTradeClosed = async (tradeId) => {
     setExpandedSettingsPanels((prev) => ({ ...prev, [panelKey]: !prev[panelKey] }));
   };
 
-  const CEX_OPTIONS = ["Binance", "Bybit", "Kraken", "OKX", "Coinbase Advanced"];
-  const DEX_OPTIONS = ["Hyperliquid", "dYdX", "Aevo", "Lyra", "Derive"];
-  const BROKER_OPTIONS = ["Interactive Brokers", "Alpaca", "Tradier", "Schwab", "Robinhood"];
-  const PREDICTION_OPTIONS = ["Polymarket", "Kalshi"];
-
   const venueOptions = accountForm.venueType === "cex"
-    ? CEX_OPTIONS
+    ? cexOptions
     : accountForm.venueType === "dex"
-      ? DEX_OPTIONS
+      ? dexOptions
       : accountForm.venueType === "prediction"
-        ? PREDICTION_OPTIONS
-        : BROKER_OPTIONS;
+        ? predictionOptions
+        : brokerOptions;
 
   const openConnectWindow = () => {
     setAccountForm({
       venueType: "cex",
-      provider: CEX_OPTIONS[0],
+      provider: cexOptions[0] || "Binance",
       username: "",
       apiKey: "",
       apiSecret: ""
@@ -4062,7 +4303,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   value={profileForms.authenticatorService}
                                   onChange={(e) => setProfileForms((prev) => ({ ...prev, authenticatorService: e.target.value }))}
                                 >
-                                  {AUTHENTICATOR_OPTIONS.map((service) => (
+                                  {authenticatorOptions.map((service) => (
                                     <option key={service} value={service}>{service}</option>
                                   ))}
                                 </select>
@@ -4096,7 +4337,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   value={profileForms.passkeyProvider}
                                   onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyProvider: e.target.value }))}
                                 >
-                                  {PASSKEY_OPTIONS.map((provider) => (
+                                  {passkeyOptions.map((provider) => (
                                     <option key={provider} value={provider}>{provider}</option>
                                   ))}
                                 </select>
@@ -4408,16 +4649,22 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <span>Email notifications</span>
                           <input
                             type="checkbox"
-                            checked={preferences.notifyEmail}
-                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyEmail: e.target.checked }))}
+                            checked={effectiveEmailNotificationsEnabled}
+                            disabled={!canUseEmailNotifications}
+                            onChange={(e) => {
+                              void handleNotificationPreferenceToggle("notifyEmail", e.target.checked);
+                            }}
                           />
                         </label>
                         <label className="settings-toggle-row">
                           <span>Browser notifications</span>
                           <input
                             type="checkbox"
-                            checked={preferences.notifyBrowser}
-                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyBrowser: e.target.checked }))}
+                            checked={effectiveBrowserNotificationsEnabled}
+                            disabled={!browserNotificationsSupported || browserNotificationsBlocked}
+                            onChange={(e) => {
+                              void handleNotificationPreferenceToggle("notifyBrowser", e.target.checked);
+                            }}
                           />
                         </label>
                         <label className="settings-toggle-row">
@@ -4425,7 +4672,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <input
                             type="checkbox"
                             checked={preferences.notifyPriceAlerts}
-                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyPriceAlerts: e.target.checked }))}
+                            onChange={(e) => {
+                              void handleNotificationPreferenceToggle("notifyPriceAlerts", e.target.checked);
+                            }}
                           />
                         </label>
                         <label className="settings-toggle-row">
@@ -4433,7 +4682,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <input
                             type="checkbox"
                             checked={preferences.notifyOrderEvents}
-                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyOrderEvents: e.target.checked }))}
+                            onChange={(e) => {
+                              void handleNotificationPreferenceToggle("notifyOrderEvents", e.target.checked);
+                            }}
                           />
                         </label>
                         <label className="settings-toggle-row">
@@ -4441,9 +4692,46 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <input
                             type="checkbox"
                             checked={preferences.notifyNews}
-                            onChange={(e) => setPreferences((prev) => ({ ...prev, notifyNews: e.target.checked }))}
+                            onChange={(e) => {
+                              void handleNotificationPreferenceToggle("notifyNews", e.target.checked);
+                            }}
                           />
                         </label>
+                        <p className="settings-meta" style={{ marginTop: "12px" }}>
+                          Email destination: {isGuestUser
+                            ? "Sign in required"
+                            : emailNotificationDestination || "Add a profile email"}
+                          {!isGuestUser && profileSecurity?.emailVerified === false ? " · Verification required" : ""}
+                        </p>
+                        <p className="settings-meta">
+                          Browser permission: {browserNotificationStatusLabel}
+                          {!browserNotificationsSupported ? " · Not supported in this browser" : ""}
+                        </p>
+                        <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                          <button
+                            className="settings-secondary-btn"
+                            onClick={() => {
+                              void handleNotificationPreferenceToggle("notifyBrowser", true);
+                            }}
+                            disabled={!browserNotificationsSupported || browserNotificationsGranted || browserNotificationsBlocked}
+                          >
+                            {browserNotificationsGranted ? "Browser Ready" : "Enable Browser Alerts"}
+                          </button>
+                          <button
+                            className="settings-secondary-btn"
+                            onClick={() => {
+                              void sendTestBrowserNotification();
+                            }}
+                            disabled={!effectiveBrowserNotificationsEnabled || !browserNotificationsGranted}
+                          >
+                            Send Test Notification
+                          </button>
+                        </div>
+                        {notificationFeedback?.text ? (
+                          <p className={`settings-status ${notificationFeedback.type === "error" ? "error" : notificationFeedback.type}`}>
+                            {notificationFeedback.text}
+                          </p>
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -4469,12 +4757,12 @@ const handleOptionTradeClosed = async (tradeId) => {
                         onChange={(e) => {
                           const nextType = e.target.value;
                           const nextProvider = nextType === "cex"
-                            ? CEX_OPTIONS[0]
+                            ? (cexOptions[0] || "Binance")
                             : nextType === "dex"
-                              ? DEX_OPTIONS[0]
+                              ? (dexOptions[0] || "Hyperliquid")
                               : nextType === "prediction"
-                                ? PREDICTION_OPTIONS[0]
-                                : BROKER_OPTIONS[0];
+                                ? (predictionOptions[0] || "Polymarket")
+                                : (brokerOptions[0] || "Interactive Brokers");
                           setAccountForm((prev) => ({ ...prev, venueType: nextType, provider: nextProvider }));
                         }}
                       >

@@ -6,11 +6,8 @@ import { ZeninLogo } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "./utils/authRedirect";
-
-const PASSKEY_PROVIDERS = ["Platform Authenticator", "iCloud Keychain", "Google Password Manager", "1Password", "Bitwarden"];
-const VALID_PLANS = ["starter", "pro", "desk"];
-const VALID_BILLING_CYCLES = ["monthly", "yearly"];
-const ENABLE_APPLE_OAUTH = false;
+import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
+import { getPublicRuntimeConfig } from "./config/runtimeConfigStore";
 
 function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
@@ -20,13 +17,19 @@ function getModeFromLocation() {
 }
 
 function normalizePlan(plan) {
+  const validPlans = Array.isArray(getPublicRuntimeConfig()?.subscription?.validPlans)
+    ? getPublicRuntimeConfig().subscription.validPlans
+    : ["starter", "pro", "desk"];
   const value = String(plan || "").trim().toLowerCase();
-  return VALID_PLANS.includes(value) ? value : null;
+  return validPlans.includes(value) ? value : null;
 }
 
 function normalizeBillingCycle(billingCycle) {
+  const validBillingCycles = Array.isArray(getPublicRuntimeConfig()?.subscription?.validBillingCycles)
+    ? getPublicRuntimeConfig().subscription.validBillingCycles
+    : ["monthly", "yearly"];
   const value = String(billingCycle || "").trim().toLowerCase();
-  return VALID_BILLING_CYCLES.includes(value) ? value : null;
+  return validBillingCycles.includes(value) ? value : null;
 }
 
 function getRequestedPlan() {
@@ -121,6 +124,11 @@ async function readJson(res) {
 }
 
 export default function AuthPage() {
+  const { publicConfig } = useRuntimeConfig({ enabled: true });
+  const passkeyProviders = Array.isArray(publicConfig?.auth?.passkeyProviders)
+    ? publicConfig.auth.passkeyProviders
+    : [];
+  const enableAppleOAuth = Boolean(publicConfig?.auth?.enableAppleOAuth);
   const [mode, setMode] = useState(getModeFromLocation);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -145,7 +153,7 @@ export default function AuthPage() {
     passkeyId: ""
   });
   const [forgotForm, setForgotForm] = useState({ email: getEmailFromStorage(), token: "", newPassword: "" });
-  const [passkeyForm, setPasskeyForm] = useState({ name: "Primary Device", provider: PASSKEY_PROVIDERS[0] });
+  const [passkeyForm, setPasskeyForm] = useState({ name: "Primary Device", provider: passkeyProviders[0] || "Platform Authenticator" });
 
   const [rememberMe, setRememberMe] = useState(true);
   const [showSigninPassword, setShowSigninPassword] = useState(false);
@@ -183,6 +191,15 @@ export default function AuthPage() {
       setError(oauthError);
     }
   }, []);
+
+  useEffect(() => {
+    if (!passkeyProviders.length) return;
+    setPasskeyForm((prev) => (
+      passkeyProviders.includes(prev.provider)
+        ? prev
+        : { ...prev, provider: passkeyProviders[0] }
+    ));
+  }, [passkeyProviders]);
 
   useEffect(() => {
     let mounted = true;
@@ -425,7 +442,7 @@ export default function AuthPage() {
                   <span className="provider-icon">G</span>
                   <span>Google</span>
                 </button>
-                {ENABLE_APPLE_OAUTH ? (
+                {enableAppleOAuth ? (
                   <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
                     <span className="provider-icon"></span>
                     <span>Apple</span>
@@ -491,7 +508,7 @@ export default function AuthPage() {
                   <span className="provider-icon">G</span>
                   <span>Google</span>
                 </button>
-                {ENABLE_APPLE_OAUTH ? (
+                {enableAppleOAuth ? (
                   <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
                     <span className="provider-icon"></span>
                     <span>Apple</span>
@@ -521,7 +538,7 @@ export default function AuthPage() {
 
               <label className="auth-v2-label" htmlFor="passkey-provider">Provider</label>
               <select id="passkey-provider" className="auth-v2-input" value={passkeyForm.provider} onChange={(e) => setPasskeyForm((prev) => ({ ...prev, provider: e.target.value }))}>
-                {PASSKEY_PROVIDERS.map((provider) => (
+                    {passkeyProviders.map((provider) => (
                   <option key={provider} value={provider}>{provider}</option>
                 ))}
               </select>
@@ -627,7 +644,7 @@ export default function AuthPage() {
                       <span className="provider-icon">G</span>
                       <span>Continue with Google</span>
                     </button>
-                    {ENABLE_APPLE_OAUTH ? (
+                    {enableAppleOAuth ? (
                       <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
                         <span className="provider-icon"></span>
                         <span>Continue with Apple</span>

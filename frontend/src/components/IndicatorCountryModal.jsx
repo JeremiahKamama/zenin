@@ -3,25 +3,16 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
-const ALLOWED_MACRO_INDICATOR_KEYS = [
-  "gdp_growth_rate",
-  "interest_rate",
-  "inflation_rate",
-  "unemployment_rate",
-  "consumer_confidence",
-  "balance_of_trade",
-  "cpi",
-  "core_inflation_rate"
-];
 
 const sanitizeMacroSnapshot = (snapshot) => {
   if (!snapshot || typeof snapshot !== "object") return snapshot;
-  const allowed = new Set(ALLOWED_MACRO_INDICATOR_KEYS);
+  const allowed = new Set(getAppRuntimeConfig()?.analytics?.allowedMacroIndicatorKeys || []);
   const metrics = Array.isArray(snapshot.metrics)
     ? snapshot.metrics.filter((row) => allowed.has(String(row?.key || "")))
     : [];

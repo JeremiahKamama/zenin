@@ -4,6 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recha
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
 import { loadWorkspaceCollection, saveWorkspaceCollection } from "../utils/workspacePersistence";
 import { AssetModal } from "./AssetModal";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
@@ -388,6 +389,19 @@ const getCorrelationTone = (value) => {
 
 
 export function AnalyticsModule({ backendUrl }) {
+  const analyticsConfig = getAppRuntimeConfig()?.analytics || {};
+  const macroCategoryOptions = Array.isArray(analyticsConfig?.macroCategoryOptions) && analyticsConfig.macroCategoryOptions.length
+    ? analyticsConfig.macroCategoryOptions
+    : MACRO_CATEGORY_OPTIONS;
+  const macroViewOptions = Array.isArray(analyticsConfig?.macroViewOptions) && analyticsConfig.macroViewOptions.length
+    ? analyticsConfig.macroViewOptions
+    : MACRO_VIEW_OPTIONS;
+  const fallbackMacroGeos = Array.isArray(analyticsConfig?.fallbackMacroGeos) && analyticsConfig.fallbackMacroGeos.length
+    ? analyticsConfig.fallbackMacroGeos
+    : FALLBACK_MACRO_GEOS;
+  const fallbackMacroIndicators = Array.isArray(analyticsConfig?.fallbackMacroIndicators) && analyticsConfig.fallbackMacroIndicators.length
+    ? analyticsConfig.fallbackMacroIndicators
+    : FALLBACK_MACRO_INDICATORS;
   const [activeTab, setActiveTab] = useState("crypto");
   const [cryptoData, setCryptoData] = useState(EMPTY_CRYPTO);
   const [optionsData, setOptionsData] = useState(EMPTY_OPTIONS);
@@ -450,8 +464,8 @@ export function AnalyticsModule({ backendUrl }) {
   const [favoriteGeoCodes, setFavoriteGeoCodes] = useState([]);
   const [recentGeoCodes, setRecentGeoCodes] = useState(["USA"]);
   const [recentCountries, setRecentCountries] = useState(["USA"]);
-  const [macroGeographies, setMacroGeographies] = useState(FALLBACK_MACRO_GEOS);
-  const [macroIndicators, setMacroIndicators] = useState(FALLBACK_MACRO_INDICATORS);
+  const [macroGeographies, setMacroGeographies] = useState(fallbackMacroGeos);
+  const [macroIndicators, setMacroIndicators] = useState(fallbackMacroIndicators);
   const [macroOverview, setMacroOverview] = useState([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [macroTimeseries, setMacroTimeseries] = useState([]);
@@ -494,6 +508,14 @@ export function AnalyticsModule({ backendUrl }) {
   const COMMODITY_PRICE_SERIES_PAGE_SIZE = 10;
   const COMMODITY_SEASONALITY_PAGE_SIZE = 6;
   const analyticsWorkspaceHydratedRef = useRef(false);
+
+  useEffect(() => {
+    setMacroGeographies(fallbackMacroGeos);
+  }, [fallbackMacroGeos]);
+
+  useEffect(() => {
+    setMacroIndicators(fallbackMacroIndicators);
+  }, [fallbackMacroIndicators]);
 
   const markTabLoaded = (tabId) => {
     if (!tabId || loadedTabsRef.current[tabId]) return;
@@ -2753,7 +2775,7 @@ export function AnalyticsModule({ backendUrl }) {
                     <div className="analytics-card-label">Indicator</div>
                     <input className="analytics-input" type="text" value={indicatorSearch} onChange={(e) => setIndicatorSearch(e.target.value)} placeholder="Search indicators" />
                     <select className="analytics-select" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
-                      {MACRO_CATEGORY_OPTIONS.map((cat) => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                      {macroCategoryOptions.map((cat) => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
                     </select>
                     <select className="analytics-select" value={selectedIndicator} onChange={(e) => setSelectedIndicator(e.target.value)}>
                       {(filteredMacroIndicators.length ? filteredMacroIndicators : macroIndicators).map((indicator) => (
@@ -2770,7 +2792,7 @@ export function AnalyticsModule({ backendUrl }) {
                 </ControlPanel>
 
                 <div className="analytics-pill-group">
-                  {MACRO_VIEW_OPTIONS.map((view) => (
+                  {macroViewOptions.map((view) => (
                     <button key={view.key} type="button" onClick={() => setMacroView(view.key)} className={`analytics-chip-button ${macroView === view.key ? "active" : ""}`}>{view.label}</button>
                   ))}
                 </div>
@@ -2969,7 +2991,7 @@ export function AnalyticsModule({ backendUrl }) {
                       </select>
                       <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Types</option>
-                        {MACRO_CATEGORY_OPTIONS.map((cat) => <option key={`cal-type-${cat.key}`} value={cat.key}>{cat.label}</option>)}
+                        {macroCategoryOptions.map((cat) => <option key={`cal-type-${cat.key}`} value={cat.key}>{cat.label}</option>)}
                       </select>
                     </div>
                   }

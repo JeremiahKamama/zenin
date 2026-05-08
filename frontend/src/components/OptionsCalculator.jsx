@@ -1,38 +1,18 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { TradingViewChart } from "./TradingViewChart";
+import { zeninFetch } from "../utils/zeninFetch";
+import { hasWorkspaceSession } from "../utils/workspacePersistence";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
-
-const STRATEGIES = [
-  { name: "Long Call", legs: [{ type: "call", direction: "long", qty: 1 }] },
-  { name: "Short Call", legs: [{ type: "call", direction: "short", qty: 1 }] },
-  { name: "Long Put", legs: [{ type: "put", direction: "long", qty: 1 }] },
-  { name: "Short Put", legs: [{ type: "put", direction: "short", qty: 1 }] },
-  { name: "Call Spread", legs: [{ type: "call", direction: "long", qty: 1 }, { type: "call", direction: "short", qty: 1 }] },
-  { name: "Put Spread", legs: [{ type: "put", direction: "long", qty: 1 }, { type: "put", direction: "short", qty: 1 }] },
-  { name: "Credit Call Spread", legs: [{ type: "call", direction: "short", qty: 1 }, { type: "call", direction: "long", qty: 1 }] },
-  { name: "Credit Put Spread", legs: [{ type: "put", direction: "short", qty: 1 }, { type: "put", direction: "long", qty: 1 }] },
-  { name: "Long Straddle", legs: [{ type: "call", direction: "long", qty: 1 }, { type: "put", direction: "long", qty: 1 }] },
-  { name: "Short Straddle", legs: [{ type: "call", direction: "short", qty: 1 }, { type: "put", direction: "short", qty: 1 }] },
-  { name: "Long Strangle", legs: [{ type: "call", direction: "long", qty: 1 }, { type: "put", direction: "long", qty: 1 }] },
-  { name: "Short Strangle", legs: [{ type: "call", direction: "short", qty: 1 }, { type: "put", direction: "short", qty: 1 }] },
-  { name: "Iron Condor", legs: [{ type: "put", direction: "long", qty: 1 }, { type: "put", direction: "short", qty: 1 }, { type: "call", direction: "short", qty: 1 }, { type: "call", direction: "long", qty: 1 }] },
-  { name: "Iron Butterfly", legs: [{ type: "put", direction: "long", qty: 1 }, { type: "put", direction: "short", qty: 1 }, { type: "call", direction: "short", qty: 1 }, { type: "call", direction: "long", qty: 1 }] },
-  { name: "Long Calendar", legs: [{ type: "call", direction: "short", qty: 1 }, { type: "call", direction: "long", qty: 1 }] },
-  { name: "Short Calendar", legs: [{ type: "call", direction: "long", qty: 1 }, { type: "call", direction: "short", qty: 1 }] },
-  { name: "Ratio Call Spread", legs: [{ type: "call", direction: "long", qty: 1 }, { type: "call", direction: "short", qty: 2 }] },
-  { name: "Ratio Put Spread", legs: [{ type: "put", direction: "long", qty: 1 }, { type: "put", direction: "short", qty: 2 }] },
-];
-
-const EMPTY_LEG = { strike: "", expiry: "", type: "call", direction: "long", qty: 1, premium: "", iv: "" };
 const CALCULATIONS_PAGE_SIZE = 10;
 
 function hasStoredAuthToken() {
   try {
-    return Boolean(String(sessionStorage.getItem("zenin_auth_token") || localStorage.getItem("zenin_auth_token") || "").trim());
+    return hasWorkspaceSession();
   } catch {
     return false;
   }
@@ -104,10 +84,14 @@ export function OptionsCalculator({   spotPrice = 0,
   marketStructure = "orderbook",
   marketStructureLabel = "Orderbook",
   marketStructureNote = "" }) {
+  const strategies = Array.isArray(getAppRuntimeConfig()?.options?.calculatorStrategies)
+    ? getAppRuntimeConfig().options.calculatorStrategies
+    : [];
+  const emptyLeg = getAppRuntimeConfig()?.options?.emptyLeg || { strike: "", expiry: "", type: "call", direction: "long", qty: 1, premium: "", iv: "" };
   const [symbol, setSymbol] = useState(() => String(activeAsset || "").trim().toUpperCase() || "BTC");
   const [symbolSearch, setSymbolSearch] = useState(() => String(activeAsset || "").trim().toUpperCase() || "BTC");
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
-  const [legs, setLegs] = useState([{ ...EMPTY_LEG }]);
+  const [legs, setLegs] = useState([{ ...emptyLeg }]);
   const [activeStrategy, setActiveStrategy] = useState(null);
   const [savedCalculations, setSavedCalculations] = useState([]);
   const [savedCalculationsOpen, setSavedCalculationsOpen] = useState(false);
@@ -143,7 +127,7 @@ export function OptionsCalculator({   spotPrice = 0,
   const r = 0.0425;
 
   useEffect(() => {
-    setLegs([{ ...EMPTY_LEG }]);
+    setLegs([{ ...emptyLeg }]);
     setActiveStrategy(null);
     setSavedCalculationsPage(1);
   }, [symbol]);
@@ -211,7 +195,7 @@ export function OptionsCalculator({   spotPrice = 0,
   return Number.isFinite(mid) && mid > 0 ? mid.toFixed(4) : "";
 };
   
-  const addLeg = () => setLegs(prev => [...prev, { ...EMPTY_LEG }]);
+  const addLeg = () => setLegs(prev => [...prev, { ...emptyLeg }]);
   const removeLeg = (i) => setLegs(prev => prev.filter((_, idx) => idx !== i));
   const updateLeg = (i, field, value) => setLegs(prev => prev.map((leg, idx) => idx === i ? { ...leg, [field]: value } : leg));
   const updateLegMarketSelection = (i, patch) => {
@@ -278,7 +262,7 @@ export function OptionsCalculator({   spotPrice = 0,
 
   const applyStrategy = (strategy) => {
     setActiveStrategy(strategy.name);
-    setLegs(strategy.legs.map(l => ({ ...EMPTY_LEG, ...l })));
+    setLegs(strategy.legs.map(l => ({ ...emptyLeg, ...l })));
   };
 
 
@@ -431,7 +415,7 @@ export function OptionsCalculator({   spotPrice = 0,
           symbol: normalizedSymbol,
           limit: "100"
         });
-        const res = await fetch(`${BACKEND_URL}/db/options-calculations?${params.toString()}`, {
+        const res = await zeninFetch(`/db/options-calculations?${params.toString()}`, {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -500,7 +484,7 @@ export function OptionsCalculator({   spotPrice = 0,
       createdAt: new Date().toISOString()
     };
     try {
-      const res = await fetch(`${BACKEND_URL}/db/options-calculations`, {
+      const res = await zeninFetch("/db/options-calculations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(calc)
@@ -629,7 +613,7 @@ export function OptionsCalculator({   spotPrice = 0,
           <div className="watchlist-panel glass options-calculator-strategy-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
             <div className="options-calculator-strategy-grid">
-              {STRATEGIES.map((s) => (
+              {strategies.map((s) => (
                 <button
                   type="button"
                   className={`options-calculator-strategy-btn ${activeStrategy === s.name ? "active" : ""}`}

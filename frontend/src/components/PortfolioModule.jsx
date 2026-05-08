@@ -5,6 +5,8 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
 import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
+import { zeninFetch } from "../utils/zeninFetch";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -88,6 +90,12 @@ export function PortfolioModule({
   onOpenPredictions,
   onOpenJournal
 }){
+  const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
+    ? getAppRuntimeConfig().ui.g7Currencies
+    : ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
+  const intervals = Array.isArray(getAppRuntimeConfig()?.ui?.portfolioIntervals)
+    ? getAppRuntimeConfig().ui.portfolioIntervals
+    : ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
   const [chartMode, setChartMode] = useState("equity");
   const [chartInterval, setChartInterval] = useState("1D");
   const [showDiversificationModal, setShowDiversificationModal] = useState(false);
@@ -110,8 +118,6 @@ export function PortfolioModule({
   const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
   const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
   const prefsHydratedRef = useRef(false);
-  const G7_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
-  const INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
   const syncPortfolioCollection = (namespace, rows, limit = 100) => {
     saveWorkspaceCollection(namespace, rows, limit).catch((error) => {
       console.warn(`Workspace sync skipped for ${namespace}.`, error);
@@ -1166,9 +1172,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   useEffect(() => {
     const fetchExchangeKeys = async () => {
       try {
-        const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-keys`, {
-          headers: { "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}` }
-        });
+        const res = await zeninFetch("/db/exchange-keys");
         if (res.ok) {
           const data = await res.json();
           setExchangeKeys(data);
@@ -1182,11 +1186,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
   const handleAddExchangeKey = async (payload) => {
     try {
-      const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-keys`, {
+      const res = await zeninFetch("/db/exchange-keys", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}`
+          "Content-Type": "application/json"
         },
         body: JSON.stringify(payload)
       });
@@ -1203,10 +1206,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
   const handleRemoveExchangeKey = async (id) => {
     try {
-      const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-keys/${id}`, {
-        method: "DELETE",
-        headers: { "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}` }
-      });
+      const res = await zeninFetch(`/db/exchange-keys/${id}`, { method: "DELETE" });
       if (res.ok) {
         setExchangeKeys(prev => prev.filter(k => k.id !== id));
       }
@@ -1218,10 +1218,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const handleSyncExchange = async (id) => {
     setIsSyncing(true);
     try {
-      const res = await fetch(`${ZENIN_API_BASE_URL}/api/db/exchange-sync/${id}`, {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${localStorage.getItem("zenin_auth_token")}` }
-      });
+      const res = await zeninFetch(`/db/exchange-sync/${id}`, { method: "POST" });
       if (res.ok) {
         // We should trigger a full workspace refresh here if possible,
         // or just rely on the user to refresh.
@@ -2262,7 +2259,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <span>Connections</span>
           </button>
           <div className="portfolio-v2-range">
-            {INTERVALS.map((int) => (
+            {intervals.map((int) => (
               <button
                 key={int}
                 type="button"
@@ -2344,7 +2341,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               className="portfolio-v2-select"
               aria-label="Currency"
             >
-              {G7_CURRENCIES.map(curr => (
+              {g7Currencies.map(curr => (
                 <option key={curr} value={curr}>{curr}</option>
               ))}
             </select>

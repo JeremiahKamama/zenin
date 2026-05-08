@@ -97,6 +97,7 @@ const {
 } = require("./database");
 const { REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
 const { fetchFarsideEtfFlows: fetchLatestFarsideEtfFlows } = require("./farsideEtf");
+const { buildPublicRuntimeConfig, buildAppRuntimeConfig } = require("./runtimeConfig");
 
 const app = express();
 
@@ -2398,9 +2399,19 @@ async function buildUserBootstrapPayload(userId, options = {}) {
     trades: Array.isArray(trades) ? trades : [],
     feeSummary: feeSummary || null,
     categories: Object.keys(watchlistData),
+    appConfig: buildAppRuntimeConfig(),
     updatedAt: new Date().toISOString()
   };
 }
+
+app.get("/api/public/config", async (_req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
+  return res.json({
+    publicConfig: buildPublicRuntimeConfig(),
+    appConfig: buildAppRuntimeConfig(),
+    updatedAt: new Date().toISOString()
+  });
+});
 
 app.get("/api/app/bootstrap", requireSignedIn, async (req, res) => {
   const tradeLimit = Math.max(200, Math.min(2000, Number(req.query.tradeLimit) || 1000));

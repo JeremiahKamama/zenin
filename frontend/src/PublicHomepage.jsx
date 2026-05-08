@@ -5,15 +5,8 @@ import { ZeninLogo, LineZMark } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo, buildAbsoluteUrl, SITE_URL } from "./utils/seo";
 import { clearPostAuthRedirect, getPostAuthRedirectPath, sanitizeInternalPath, storePostAuthRedirect } from "./utils/authRedirect";
-
-const VALID_PLANS = ["starter", "pro", "desk"];
-const VALID_BILLING_CYCLES = ["monthly", "yearly"];
-const YEARLY_DISCOUNT_RATE = 0.2;
-const MONTHLY_PRICES = {
-  starter: 0,
-  pro: 29,
-  desk: 99
-};
+import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
+import { getPublicRuntimeConfig } from "./config/runtimeConfigStore";
 
 const HOME_URL = `${SITE_URL}/`;
 const SOCIAL_IMAGE_URL = buildAbsoluteUrl("/og/zenin-capital-home.svg");
@@ -39,13 +32,19 @@ const FAQ_ITEMS = [
 ];
 
 function normalizePlan(plan) {
+  const validPlans = Array.isArray(getPublicRuntimeConfig()?.subscription?.validPlans)
+    ? getPublicRuntimeConfig().subscription.validPlans
+    : ["starter", "pro", "desk"];
   const value = String(plan || "").trim().toLowerCase();
-  return VALID_PLANS.includes(value) ? value : "starter";
+  return validPlans.includes(value) ? value : "starter";
 }
 
 function normalizeBillingCycle(cycle) {
+  const validBillingCycles = Array.isArray(getPublicRuntimeConfig()?.subscription?.validBillingCycles)
+    ? getPublicRuntimeConfig().subscription.validBillingCycles
+    : ["monthly", "yearly"];
   const value = String(cycle || "").trim().toLowerCase();
-  return VALID_BILLING_CYCLES.includes(value) ? value : "monthly";
+  return validBillingCycles.includes(value) ? value : "monthly";
 }
 
 function toMoney(value) {
@@ -60,9 +59,12 @@ function toMoney(value) {
 }
 
 function getPlanPrice(plan, cycle) {
+  const subscriptionConfig = getPublicRuntimeConfig()?.subscription || {};
+  const yearlyDiscountRate = Number(subscriptionConfig?.yearlyDiscountRate || 0);
+  const monthlyPrices = subscriptionConfig?.monthlyPrices || {};
   const normalizedPlan = normalizePlan(plan);
   const normalizedCycle = normalizeBillingCycle(cycle);
-  const monthlyBase = Number(MONTHLY_PRICES[normalizedPlan] || 0);
+  const monthlyBase = Number(monthlyPrices[normalizedPlan] || 0);
   if (normalizedCycle === "monthly") {
     return {
       amount: monthlyBase,
@@ -71,9 +73,9 @@ function getPlanPrice(plan, cycle) {
       yearlyTotal: Math.round(monthlyBase * 12 * 100) / 100
     };
   }
-  const yearlyTotal = Math.round(monthlyBase * 12 * (1 - YEARLY_DISCOUNT_RATE) * 100) / 100;
+  const yearlyTotal = Math.round(monthlyBase * 12 * (1 - yearlyDiscountRate) * 100) / 100;
   const monthlyEquivalent = Math.round((yearlyTotal / 12) * 100) / 100;
-  const savePercent = Math.round(YEARLY_DISCOUNT_RATE * 100);
+  const savePercent = Math.round(yearlyDiscountRate * 100);
   return {
     amount: yearlyTotal,
     periodLabel: "/year",
@@ -103,6 +105,7 @@ function saveAuthUser(user) {
 
 
 export default function PublicHomepage() {
+  useRuntimeConfig({ enabled: true });
   const [menuOpen, setMenuOpen] = useState(false);
   const [authUser, setAuthUser] = useState(() => readStoredAuthUser());
   const [openAppChecking, setOpenAppChecking] = useState(false);

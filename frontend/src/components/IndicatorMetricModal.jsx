@@ -1,13 +1,6 @@
 import { useMemo, useState } from "react";
 import { TradingViewChart } from "./TradingViewChart";
-
-const HORIZONS = [
-  { key: "1Y", label: "1Y", years: 1 },
-  { key: "3Y", label: "3Y", years: 3 },
-  { key: "5Y", label: "5Y", years: 5 },
-  { key: "10Y", label: "10Y", years: 10 },
-  { key: "MAX", label: "MAX", years: null }
-];
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 const formatMetricValue = (value, unit) => {
   const n = Number(value);
@@ -17,6 +10,15 @@ const formatMetricValue = (value, unit) => {
 };
 
 export function IndicatorMetricModal({ countryName, metric, onClose }) {
+  const horizons = Array.isArray(getAppRuntimeConfig()?.ui?.indicatorMetricHorizons)
+    ? getAppRuntimeConfig().ui.indicatorMetricHorizons
+    : [
+      { key: "1Y", label: "1Y", years: 1 },
+      { key: "3Y", label: "3Y", years: 3 },
+      { key: "5Y", label: "5Y", years: 5 },
+      { key: "10Y", label: "10Y", years: 10 },
+      { key: "MAX", label: "MAX", years: null }
+    ];
   const [activeHorizon, setActiveHorizon] = useState("10Y");
 
   const series = useMemo(() => {
@@ -40,13 +42,13 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
 
   const filteredSeries = useMemo(() => {
     if (activeHorizon === "MAX") return series;
-    const selected = HORIZONS.find((entry) => entry.key === activeHorizon);
+    const selected = horizons.find((entry) => entry.key === activeHorizon);
     if (!selected?.years) return series;
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - selected.years);
     const trimmed = series.filter((point) => point.x >= cutoff.getTime());
     return trimmed.length > 0 ? trimmed : series;
-  }, [activeHorizon, series]);
+  }, [activeHorizon, horizons, series]);
 
   const trend = useMemo(() => {
     if (filteredSeries.length < 2) return null;
@@ -118,7 +120,7 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
         <div className="chart-section">
           <div className="indicator-metric-controls">
             <div className="interval-toggle">
-              {HORIZONS.map((entry) => (
+              {horizons.map((entry) => (
                 <button
                   key={entry.key}
                   className={activeHorizon === entry.key ? "active" : ""}

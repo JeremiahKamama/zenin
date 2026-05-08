@@ -1,73 +1,37 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD } from '../utils/currencyUtils';
+import { getAppRuntimeConfig } from '../config/runtimeConfigStore';
 
-// ─── Global Tax Rules (flat CGT approximation for retail traders) ────────────
-const TAX_RULES = {
-  // Americas
-  USA:         { name: 'United States',       region: 'Americas',      currency: 'USD', cgRate: 0.20,  stRate: 0.37,  logic: 'LTCG: 20%, STCG: 37%' },
-  Brazil:      { name: 'Brazil',              region: 'Americas',      currency: 'BRL', cgRate: 0.15,  stRate: 0.15,  logic: 'Flat: 15–22.5%' },
-  Canada:      { name: 'Canada',              region: 'Americas',      currency: 'CAD', cgRate: 0.2656, stRate: 0.2656, logic: '50% inclusion, top effective ~26.56%' },
-  // Europe
-  UK:          { name: 'United Kingdom',      region: 'Europe',        currency: 'GBP', cgRate: 0.24,  stRate: 0.24,  logic: 'CGT Higher Rate: 24%' },
-  Germany:     { name: 'Germany',             region: 'Europe',        currency: 'EUR', cgRate: 0.26375,stRate:0.26375,logic: 'Abgeltungsteuer: 26.375%' },
-  France:      { name: 'France',              region: 'Europe',        currency: 'EUR', cgRate: 0.30,  stRate: 0.30,  logic: 'Flat Rate PFU: 30%' },
-  Spain:       { name: 'Spain',               region: 'Europe',        currency: 'EUR', cgRate: 0.26,  stRate: 0.26,  logic: 'Savings Tax: 19–26%' },
-  Italy:       { name: 'Italy',               region: 'Europe',        currency: 'EUR', cgRate: 0.26,  stRate: 0.26,  logic: 'Imposta Sostitutiva: 26%' },
-  Netherlands: { name: 'Netherlands',         region: 'Europe',        currency: 'EUR', cgRate: 0.32,  stRate: 0.32,  logic: 'Box 3 Deemed Return ~32%' },
-  Portugal:    { name: 'Portugal',            region: 'Europe',        currency: 'EUR', cgRate: 0.28,  stRate: 0.28,  logic: 'Flat Rate: 28%' },
-  Switzerland: { name: 'Switzerland',         region: 'Europe',        currency: 'CHF', cgRate: 0.0,   stRate: 0.0,   logic: 'Capital Gains: 0% (private investors)' },
-  // Middle East
-  UAE:         { name: 'United Arab Emirates',region: 'Middle East',   currency: 'AED', cgRate: 0.0,   stRate: 0.0,   logic: 'Personal CGT: 0%' },
-  SaudiArabia: { name: 'Saudi Arabia',        region: 'Middle East',   currency: 'SAR', cgRate: 0.0,   stRate: 0.0,   logic: 'Personal CGT: 0%' },
-  Qatar:       { name: 'Qatar',               region: 'Middle East',   currency: 'QAR', cgRate: 0.0,   stRate: 0.0,   logic: 'Personal CGT: 0%' },
-  Bahrain:     { name: 'Bahrain',             region: 'Middle East',   currency: 'BHD', cgRate: 0.0,   stRate: 0.0,   logic: 'Personal CGT: 0%' },
-  Oman:        { name: 'Oman',                region: 'Middle East',   currency: 'OMR', cgRate: 0.0,   stRate: 0.0,   logic: 'Personal CGT: 0%' },
-  // South East Asia
-  Singapore:   { name: 'Singapore',           region: 'South East Asia',currency: 'SGD', cgRate: 0.0,   stRate: 0.0,   logic: 'No CGT for individuals' },
-  Malaysia:    { name: 'Malaysia',            region: 'South East Asia',currency: 'MYR', cgRate: 0.30,  stRate: 0.30,  logic: 'RPGT: 30% for disposal within 5 yrs' },
-  Indonesia:   { name: 'Indonesia',           region: 'South East Asia',currency: 'IDR', cgRate: 0.10,  stRate: 0.10,  logic: 'Final Tax on listings: 0.1%; general: 10%' },
-  Thailand:    { name: 'Thailand',            region: 'South East Asia',currency: 'THB', cgRate: 0.15,  stRate: 0.15,  logic: 'Withholding Tax: ~15%' },
-  Vietnam:     { name: 'Vietnam',             region: 'South East Asia',currency: 'VND', cgRate: 0.20,  stRate: 0.20,  logic: 'Securities Transfer Tax: 0.1%; CIT: 20%' },
-  Philippines: { name: 'Philippines',         region: 'South East Asia',currency: 'PHP', cgRate: 0.15,  stRate: 0.15,  logic: 'Final Tax: 15% on net gains' },
-  // Asia
-  India:       { name: 'India',               region: 'Asia',          currency: 'INR', cgRate: 0.125, stRate: 0.20,  logic: 'LTCG: 12.5%, STCG: 20%' },
-  China:       { name: 'China',               region: 'Asia',          currency: 'CNY', cgRate: 0.20,  stRate: 0.20,  logic: 'Flat: 20% on income' },
-  Japan:       { name: 'Japan',               region: 'Asia',          currency: 'JPY', cgRate: 0.20315,stRate:0.20315,logic: 'Flat: 20.315%' },
-  SouthKorea:  { name: 'South Korea',         region: 'Asia',          currency: 'KRW', cgRate: 0.22,  stRate: 0.22,  logic: 'Flat: 22% for large traders' },
-  HongKong:    { name: 'Hong Kong',           region: 'Asia',          currency: 'HKD', cgRate: 0.0,   stRate: 0.0,   logic: 'No CGT' },
-  // Africa – top 10 economies
-  SouthAfrica: { name: 'South Africa',        region: 'Africa',        currency: 'ZAR', cgRate: 0.18,  stRate: 0.18,  logic: 'Effective ~18% (40% inclusion × 45%)' },
-  Nigeria:     { name: 'Nigeria',             region: 'Africa',        currency: 'NGN', cgRate: 0.10,  stRate: 0.10,  logic: 'CGT: 10%' },
-  Egypt:       { name: 'Egypt',               region: 'Africa',        currency: 'EGP', cgRate: 0.10,  stRate: 0.10,  logic: 'Exchange transaction tax; ~10% effective' },
-  Ethiopia:    { name: 'Ethiopia',            region: 'Africa',        currency: 'ETB', cgRate: 0.30,  stRate: 0.30,  logic: 'Business income tax up to 30%' },
-  Kenya:       { name: 'Kenya',               region: 'Africa',        currency: 'KES', cgRate: 0.15,  stRate: 0.15,  logic: 'CGT: 15%' },
-  Morocco:     { name: 'Morocco',             region: 'Africa',        currency: 'MAD', cgRate: 0.15,  stRate: 0.15,  logic: 'Fixed tax: 15%' },
-  Angola:      { name: 'Angola',              region: 'Africa',        currency: 'AOA', cgRate: 0.15,  stRate: 0.15,  logic: 'Capital income tax: 15%' },
-  Ghana:       { name: 'Ghana',               region: 'Africa',        currency: 'GHS', cgRate: 0.15,  stRate: 0.15,  logic: 'Securities gains: 15%' },
-  Tanzania:    { name: 'Tanzania',            region: 'Africa',        currency: 'TZS', cgRate: 0.10,  stRate: 0.10,  logic: 'CGT: 10% (resident individuals)' },
-  Cote:        { name: "Côte d'Ivoire",      region: 'Africa',        currency: 'XOF', cgRate: 0.25,  stRate: 0.25,  logic: 'Corporate-aligned CGT: 25%' },
-};
+function getTaxConfig() {
+  return getAppRuntimeConfig()?.tax || {};
+}
 
-const REGIONS = ['Americas', 'Europe', 'Middle East', 'South East Asia', 'Asia', 'Africa'];
-const TAX_RULES_LAST_UPDATED = 'April 21, 2026';
-const TAX_RULE_SOURCES = [
-  { label: 'OECD tax database', href: 'https://www.oecd.org/tax/tax-policy/tax-database/' },
-  { label: 'KPMG tax rates online', href: 'https://kpmg.com/xx/en/home/services/tax/tax-tools-and-resources/tax-rates-online.html' },
-  { label: 'PwC worldwide tax summaries', href: 'https://taxsummaries.pwc.com/' }
-];
+function getTaxRules() {
+  return getTaxConfig().rules || {};
+}
 
-const DEFAULT_INCOME_BREAKDOWN = {
-  salary: 0,
-  dividends: 0,
-  interest: 0,
-  stakingRewards: 0,
-  airdrops: 0,
-  otherOrdinaryIncome: 0
-};
+function getTaxRegions() {
+  return Array.isArray(getTaxConfig().regions) ? getTaxConfig().regions : [];
+}
+
+function getTaxSources() {
+  return Array.isArray(getTaxConfig().sources) ? getTaxConfig().sources : [];
+}
+
+function getDefaultIncomeBreakdown() {
+  return getTaxConfig().defaultIncomeBreakdown || {
+    salary: 0,
+    dividends: 0,
+    interest: 0,
+    stakingRewards: 0,
+    airdrops: 0,
+    otherOrdinaryIncome: 0
+  };
+}
 
 // ─── Core tax calculation per jurisdiction ────────────────────────────────────
 function calcLiability(key, gains, options = {}) {
-  const rule = TAX_RULES[key];
+  const rule = getTaxRules()[key];
   if (!rule) return { liability: 0, details: {} };
   const { cgRate, stRate } = rule;
   const details = {};
@@ -159,7 +123,7 @@ function applyHoldingPeriodOverride(gains, acquisitionDate, saleDate) {
   return next;
 }
 
-function totalOrdinaryIncome(income = DEFAULT_INCOME_BREAKDOWN) {
+function totalOrdinaryIncome(income = getDefaultIncomeBreakdown()) {
   return Object.values(income || {}).reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
 }
 
@@ -348,6 +312,12 @@ function deriveGainsFromTrades(trades = [], costBasisMethod = 'fifo') {
 }
 
 export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
+  const taxConfig = getTaxConfig();
+  const taxRules = taxConfig.rules || {};
+  const taxRegions = Array.isArray(taxConfig.regions) ? taxConfig.regions : [];
+  const taxSources = Array.isArray(taxConfig.sources) ? taxConfig.sources : [];
+  const taxRulesLastUpdated = String(taxConfig.lastUpdated || '');
+  const defaultIncomeBreakdown = getDefaultIncomeBreakdown();
   const [jurisdictions, setJurisdictions] = useState(['USA']);
   const [jurisdictionSearch, setJurisdictionSearch] = useState('');
   const [activeRegion, setActiveRegion] = useState('All');
@@ -362,7 +332,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const [showImportPreview, setShowImportPreview] = useState(false);
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const [detectedCountry, setDetectedCountry] = useState('');
-  const [additionalIncome, setAdditionalIncome] = useState(DEFAULT_INCOME_BREAKDOWN);
+  const [additionalIncome, setAdditionalIncome] = useState(defaultIncomeBreakdown);
   const [scenario, setScenario] = useState({
     countryA: 'USA',
     countryB: 'UAE',
@@ -413,7 +383,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   useEffect(() => {
     if (!detectedCountry) return;
     if (jurisdictions.length > 0) return;
-    if (TAX_RULES[detectedCountry]) setJurisdictions([detectedCountry]);
+    if (taxRules[detectedCountry]) setJurisdictions([detectedCountry]);
   }, [detectedCountry, jurisdictions.length]);
 
   const toggleJurisdiction = (key) => {
@@ -444,7 +414,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     if (jurisdictions.length === 0) { alert('Select at least one jurisdiction.'); return; }
     const { adjustedGains, grossTotal, taxableGain, netAfterCosts, totalCosts } = buildAdjustedGains(gains, advanced);
     const newResults = jurisdictions.map(j => {
-      const targetCurrency = TAX_RULES[j].currency;
+      const targetCurrency = taxRules[j].currency;
       
       // 1) Convert everything to USD first (if not already)
       const inputCurrency = advanced.currency || "USD";
@@ -484,7 +454,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
       return {
         jurisdictionKey: j,
-        jurisdiction: TAX_RULES[j].name,
+        jurisdiction: taxRules[j].name,
         currency: targetCurrency,
         liability,
         liabilityUSD,
@@ -526,11 +496,11 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
     // Compute all other jurisdictions
     const currentKeys = new Set(results.map(r => r.jurisdictionKey));
-    const scored = Object.keys(TAX_RULES)
+    const scored = Object.keys(taxRules)
       .filter(k => !currentKeys.has(k))
       .map(k => {
         const { liability } = calcLiability(k, gains, { ordinaryIncomeTotal });
-        return { key: k, name: TAX_RULES[k].name, currency: TAX_RULES[k].currency, region: TAX_RULES[k].region, logic: TAX_RULES[k].logic, liability, saving: primaryLiability - liability };
+        return { key: k, name: taxRules[k].name, currency: taxRules[k].currency, region: taxRules[k].region, logic: taxRules[k].logic, liability, saving: primaryLiability - liability };
       })
       .filter(r => r.saving > 0)
       .sort((a, b) => b.saving - a.saving)
@@ -578,7 +548,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     setResults([]);
     setFileName('');
     setShowImportPreview(false);
-    setAdditionalIncome(DEFAULT_INCOME_BREAKDOWN);
+    setAdditionalIncome(defaultIncomeBreakdown);
     setScenario({
       countryA: 'USA',
       countryB: 'UAE',
@@ -625,7 +595,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     }, 600);
   };
 
-  const filteredJurisdictions = Object.entries(TAX_RULES).filter(([k, info]) => {
+  const filteredJurisdictions = Object.entries(taxRules).filter(([k, info]) => {
     const matchSearch = info.name.toLowerCase().includes(jurisdictionSearch.toLowerCase()) || k.toLowerCase().includes(jurisdictionSearch.toLowerCase());
     const matchRegion = activeRegion === 'All' || info.region === activeRegion;
     return matchSearch && matchRegion;
@@ -634,7 +604,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const summaryPreview = useMemo(() => {
     const { adjustedGains, grossTotal, taxableGain, netAfterCosts, totalCosts } = buildAdjustedGains(gains, advanced);
     const first = jurisdictions[0] || "USA";
-    const targetCurrency = TAX_RULES[first]?.currency || "USD";
+    const targetCurrency = taxRules[first]?.currency || "USD";
     const inputCurrency = advanced.currency || "USD";
 
     // 1) Convert everything to USD first
@@ -665,7 +635,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     const effectiveRate = taxableBase > 0 ? (estimatedTax / taxableBase) * 100 : 0;
 
     return {
-      jurisdiction: TAX_RULES[first]?.name || "N/A",
+      jurisdiction: taxRules[first]?.name || "N/A",
       grossTotal,
       netAfterCosts,
       totalCosts,
@@ -751,8 +721,8 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
   const scenarioComparison = useMemo(() => {
     const { adjustedGains } = buildAdjustedGains(gains, advanced);
-    const countryA = TAX_RULES[scenario.countryA] ? scenario.countryA : 'USA';
-    const countryB = TAX_RULES[scenario.countryB] ? scenario.countryB : 'UAE';
+    const countryA = taxRules[scenario.countryA] ? scenario.countryA : 'USA';
+    const countryB = taxRules[scenario.countryB] ? scenario.countryB : 'UAE';
     const shiftDays = Number(scenario.shiftDays || 0);
     const shiftedSaleDate = advanced.saleDate
       ? new Date(new Date(advanced.saleDate).getTime() + shiftDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -793,7 +763,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
       scenario.countryB,
       ...comparisonScenarios.map((item) => item.country)
     ]);
-    const nextCountry = Object.keys(TAX_RULES).find((key) => !usedCountries.has(key)) || 'Singapore';
+    const nextCountry = Object.keys(taxRules).find((key) => !usedCountries.has(key)) || 'Singapore';
     setComparisonScenarios((prev) => [
       ...prev,
       {
@@ -982,7 +952,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
             onChange={(e) => setJurisdictionSearch(e.target.value)}
           />
           <div className="tax-v2-region-tabs">
-            {['All', ...REGIONS].map((r) => (
+            {['All', ...taxRegions].map((r) => (
               <button key={r} type="button" className={`tax-v2-pill ${activeRegion === r ? "active" : ""}`} onClick={() => setActiveRegion(r)}>{r}</button>
             ))}
           </div>
@@ -1152,14 +1122,14 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           </div>
           <div className="tax-v2-scenario-grid">
             <div className="tax-v2-scenario-card">
-              <h4>{countryFlag(scenarioComparison.countryA)} {TAX_RULES[scenarioComparison.countryA]?.name}<span className="tax-v2-base-pill">Base</span></h4>
+              <h4>{countryFlag(scenarioComparison.countryA)} {taxRules[scenarioComparison.countryA]?.name}<span className="tax-v2-base-pill">Base</span></h4>
               <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
               <div><span>Estimated Tax</span><strong>{formatMoney(scenarioComparison.nowA)}</strong></div>
               <div><span>Effective Rate</span><strong>{summaryPreview.effectiveRate.toFixed(2)}%</strong></div>
               <div><span>Net After Tax</span><strong className="positive">{formatMoney(Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowA))}</strong></div>
             </div>
             <div className="tax-v2-scenario-card">
-              <h4>{countryFlag(scenarioComparison.countryB)} {TAX_RULES[scenarioComparison.countryB]?.name}</h4>
+              <h4>{countryFlag(scenarioComparison.countryB)} {taxRules[scenarioComparison.countryB]?.name}</h4>
               <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
               <div><span>Estimated Tax</span><strong>{formatMoney(scenarioComparison.nowB)}</strong></div>
               <div><span>Effective Rate</span><strong>{summaryPreview.taxableGain > 0 ? ((scenarioComparison.nowB / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100).toFixed(2) : "0.00"}%</strong></div>
@@ -1167,7 +1137,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
             </div>
             {comparisonScenarioCards.map((item) => (
               <div className="tax-v2-scenario-card" key={item.id}>
-                <h4>{countryFlag(item.country)} {TAX_RULES[item.country]?.name}</h4>
+                <h4>{countryFlag(item.country)} {taxRules[item.country]?.name}</h4>
                 <div><span>Taxable Gain</span><strong>{formatMoney(summaryPreview.taxableGain)}</strong></div>
                 <div><span>Estimated Tax</span><strong>{formatMoney(item.liability)}</strong></div>
                 <div><span>Effective Rate</span><strong>{item.effectiveRate.toFixed(2)}%</strong></div>
@@ -1188,7 +1158,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           <p>This estimator is informational only and not tax advice. Confirm rates, forms, and filing treatment with a qualified advisor.</p>
         </div>
         <div className="tax-v2-source-links">
-          {TAX_RULE_SOURCES.map((source) => (
+          {taxSources.map((source) => (
             <a key={source.href} href={source.href} target="_blank" rel="noreferrer">{source.label}</a>
           ))}
         </div>

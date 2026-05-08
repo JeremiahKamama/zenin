@@ -4,19 +4,12 @@ import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
-
-const MOVERS_HORIZONS = {
-  daily: { label: "Daily", interval: "1D" },
-  weekly: { label: "Weekly", interval: "1W" },
-  quarterly: { label: "Quarterly", interval: "3M" },
-  ytd: { label: "YTD", interval: "YTD" },
-  yearly: { label: "Yearly", interval: "1Y" }
-};
 
 const HOME_VIEW_STORAGE_KEY = "zenin_home_view_state_v1";
 const HOME_SAVED_VIEWS_STORAGE_KEY = "zenin_home_saved_views";
@@ -60,6 +53,16 @@ export function HomeModule({
   onOpenWatchlist,
   onOpenAnalytics
 }) {
+  const moversHorizons = getAppRuntimeConfig()?.ui?.moversHorizons || {
+    daily: { label: "Daily", interval: "1D" },
+    weekly: { label: "Weekly", interval: "1W" },
+    quarterly: { label: "Quarterly", interval: "3M" },
+    ytd: { label: "YTD", interval: "YTD" },
+    yearly: { label: "Yearly", interval: "1Y" }
+  };
+  const displayIntervals = Array.isArray(getAppRuntimeConfig()?.ui?.homeDisplayIntervals)
+    ? getAppRuntimeConfig().ui.homeDisplayIntervals
+    : ["1D", "1W", "1M", "3M", "1Y", "ALL"];
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
   const [moversHorizon, setMoversHorizon] = useState("daily");
@@ -290,7 +293,7 @@ export function HomeModule({
     const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
     const key = `${symbol}:${moverType}`;
     const perf = moversPerformanceByKey[key];
-    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
     const value = Number(perf?.[intervalCode]);
     if (Number.isFinite(value)) return value;
     if (intervalCode === "1D") {
@@ -305,7 +308,7 @@ export function HomeModule({
     .filter((asset) => Number.isFinite(asset.__moverChange));
 
   const moversCoverage = useMemo(() => {
-    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
     return moversUniverse.reduce((summary, asset) => {
       const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
       const key = `${String(asset?.symbol || "").toUpperCase()}:${moverType}`;
@@ -448,7 +451,7 @@ export function HomeModule({
       rows.push({
         id: `mv-${row.symbol}`,
         type: "price",
-        text: `${row.symbol} moved ${Number(row.__moverChange).toFixed(2)}% (${MOVERS_HORIZONS[moversHorizon]?.label || "selected horizon"})`
+        text: `${row.symbol} moved ${Number(row.__moverChange).toFixed(2)}% (${moversHorizons[moversHorizon]?.label || "selected horizon"})`
       });
     });
     if (Number.isFinite(todayView.vix) && todayView.vix > 25) {
@@ -491,7 +494,7 @@ export function HomeModule({
         symbol: leader.symbol,
         type: leader.__moverType || leader.type || "asset",
         context: "home-top-mover",
-        message: `${leader.symbol} moved ${formatSignedPercent(Number(leader.__moverChange || 0))} on the ${MOVERS_HORIZONS[moversHorizon]?.label || "selected"} horizon.`
+        message: `${leader.symbol} moved ${formatSignedPercent(Number(leader.__moverChange || 0))} on the ${moversHorizons[moversHorizon]?.label || "selected"} horizon.`
       }, 50);
       syncHomeCollection("home:alerts", nextAlerts, 50);
       setQuickActionFeedback(`Alert saved to your Zenin workspace for ${leader.symbol}.`);
@@ -520,7 +523,7 @@ export function HomeModule({
         emotion: "neutral",
         confidence: 4,
         preThesis: leader
-          ? `${symbol} is a notable mover on the ${MOVERS_HORIZONS[moversHorizon]?.label || "selected"} horizon. Capture follow-up plan before taking a trade.`
+          ? `${symbol} is a notable mover on the ${moversHorizons[moversHorizon]?.label || "selected"} horizon. Capture follow-up plan before taking a trade.`
           : "Capture today’s market takeaway from the Home dashboard.",
         postReview: "",
         mistakeCategory: "",
@@ -759,7 +762,7 @@ export function HomeModule({
   };
 
   const missingFlowRows = useMemo(() => {
-    const intervalCode = MOVERS_HORIZONS[moversHorizon]?.interval || "1D";
+    const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
     const rows = (Array.isArray(moversUniverse) ? moversUniverse : []).reduce((acc, asset, idx) => {
       const symbol = String(asset?.symbol || "").toUpperCase();
       const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
@@ -1421,7 +1424,6 @@ export function HomeModule({
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const dailyChangePct = initialBalance > 0 ? (dailyChange / initialBalance) * 100 : 0;
   const chartModeButtons = [["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]];
-  const DISPLAY_INTERVALS = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
   const heroIntervals = ["Today", "1W", "1M", "YTD", "1Y"];
   const chartValues = chartData.map((point) => Number(point?.[1])).filter(Number.isFinite);
   const bestDay = chartValues.length > 1 ? Math.max(...chartValues.slice(1).map((value, idx) => value - chartValues[idx])) : 0;
@@ -2051,7 +2053,7 @@ export function HomeModule({
               width="100%"
             />
             <div className="home-v2-toggle-row home-v2-toggle-row-right">
-              {DISPLAY_INTERVALS.map((int) => (
+              {displayIntervals.map((int) => (
                 <button
                   key={int}
                   type="button"

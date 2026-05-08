@@ -1,84 +1,40 @@
 /**
  * Basic currency formatting and conversion utilities for Zenin.
  */
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
-export const CURRENCY_SYMBOLS = {
-  USD: "$",
-  EUR: "€",
-  GBP: "£",
-  JPY: "¥",
-  CAD: "C$",
-  AUD: "A$",
-  CHF: "CHF ",
-  CNY: "CN¥",
-  HKD: "HK$",
-  KRW: "₩",
-  TWD: "NT$",
-  AED: "AED ",
-  INR: "₹",
-  MXN: "MX$",
-  BRL: "R$",
-  SGD: "S$",
-  NZD: "NZ$",
-  BTC: "₿",
-  ETH: "Ξ",
-  SOL: "SOL ",
-  HYPE: "H ",
-};
+function getCurrencySymbolsMap() {
+  return getAppRuntimeConfig()?.currency?.symbols || {};
+}
 
-const FOREX_QUOTE_CURRENCY = {
-  EURUSD: "USD",
-  "EUR/USD": "USD",
-  GBPUSD: "USD",
-  "GBP/USD": "USD",
-  AUDUSD: "USD",
-  "AUD/USD": "USD",
-  NZDUSD: "USD",
-  "NZD/USD": "USD",
-  USDJPY: "JPY",
-  "USD/JPY": "JPY",
-  USDCAD: "CAD",
-  "USD/CAD": "CAD",
-  USDCHF: "CHF",
-  "USD/CHF": "CHF",
-  EURGBP: "GBP",
-  "EUR/GBP": "GBP",
-  EURJPY: "JPY",
-  "EUR/JPY": "JPY",
-  GBPJPY: "JPY",
-  "GBP/JPY": "JPY",
-  "JPY=X": "JPY",
-  "CAD=X": "CAD",
-  "CHF=X": "CHF",
-  "EURUSD=X": "USD",
-  "GBPUSD=X": "USD",
-  "AUDUSD=X": "USD",
-  "NZDUSD=X": "USD",
-  "EURGBP=X": "GBP",
-  "EURJPY=X": "JPY",
-  "GBPJPY=X": "JPY",
-};
+function getForexQuoteCurrencyMap() {
+  return getAppRuntimeConfig()?.currency?.forexQuoteCurrency || {};
+}
 
-// Default exchange rates (fallback if not provided by backend)
-// To USD
-export const DEFAULT_FX_RATES = {
-  USD: 1.0,
-  EUR: 1.09,
-  GBP: 1.27,
-  JPY: 0.0066,
-  CAD: 0.74,
-  AUD: 0.65,
-  CHF: 1.13,
-  CNY: 0.14,
-  BTC: 65000, // Very rough placeholder, ideally comes from spotPrices
-  ETH: 3500,
-  SOL: 140,
-};
+function getDefaultFxRatesMap() {
+  return getAppRuntimeConfig()?.currency?.defaultFxRates || { USD: 1 };
+}
+
+const dynamicConfigProxyHandler = (resolver) => ({
+  get(_target, prop) {
+    if (typeof prop === "symbol") return undefined;
+    return resolver()?.[prop];
+  },
+  ownKeys() {
+    return Reflect.ownKeys(resolver() || {});
+  },
+  getOwnPropertyDescriptor() {
+    return { enumerable: true, configurable: true };
+  }
+});
+
+export const CURRENCY_SYMBOLS = new Proxy({}, dynamicConfigProxyHandler(getCurrencySymbolsMap));
+export const DEFAULT_FX_RATES = new Proxy({}, dynamicConfigProxyHandler(getDefaultFxRatesMap));
 
 export function getCurrencySymbol(currency = "USD") {
   const code = String(currency || "").trim().toUpperCase();
   if (!code) return "$";
-  return CURRENCY_SYMBOLS[code] || `${code} `;
+  return getCurrencySymbolsMap()[code] || `${code} `;
 }
 
 export function inferAssetCurrency(assetOrSymbol, fallback = "USD") {
@@ -89,7 +45,8 @@ export function inferAssetCurrency(assetOrSymbol, fallback = "USD") {
   const symbol = String(asset ? asset.symbol || "" : assetOrSymbol || "").trim().toUpperCase();
   if (!symbol) return fallback;
 
-  if (FOREX_QUOTE_CURRENCY[symbol]) return FOREX_QUOTE_CURRENCY[symbol];
+  const forexQuoteCurrency = getForexQuoteCurrencyMap();
+  if (forexQuoteCurrency[symbol]) return forexQuoteCurrency[symbol];
 
   if (symbol.includes("/")) {
     const [, quote] = symbol.split("/");
@@ -164,7 +121,7 @@ export function convertToUSD(value, from = "USD", rates = {}) {
 
   // 3) Final fallback to hardcoded defaults
   if (rate == null) {
-    rate = DEFAULT_FX_RATES[fromKey] || 1.0;
+    rate = getDefaultFxRatesMap()[fromKey] || 1.0;
   }
   
   return num * rate;
@@ -196,7 +153,7 @@ export function convertFromUSD(value, to = "USD", rates = {}) {
     }
   }
   if (rate == null) {
-    rate = DEFAULT_FX_RATES[toKey] || 1.0;
+    rate = getDefaultFxRatesMap()[toKey] || 1.0;
   }
   
   // value_usd = value_x * rate  => value_x = value_usd / rate

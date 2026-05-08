@@ -1,8 +1,7 @@
 /**
  * Utility to determine if a market is open based on the asset's symbol and type.
  */
-
-import { MARKET_HOURS } from "../constants/marketConfig";
+import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 
 export function getMarketStatus(asset) {
@@ -48,7 +47,11 @@ export function getMarketStatus(asset) {
   else if (symbol.endsWith(".TO") || symbol.endsWith(".V")) exchange = "CA";
   else if (symbol.endsWith(".NS") || symbol.endsWith(".BO")) exchange = "IN";
 
-  const config = MARKET_HOURS[exchange] || MARKET_HOURS.US;
+  const marketHours = getAppRuntimeConfig()?.marketHours || {};
+  const config = marketHours[exchange] || marketHours.US;
+  if (!config?.tz) {
+    return { isOpen: true, status: "Open" };
+  }
   
   // Get current time in the target timezone
   const now = new Date();

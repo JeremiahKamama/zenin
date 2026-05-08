@@ -60,7 +60,10 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
   const handleGuestEntry = () => {
     localStorage.removeItem("zenin_auth_user");
-    window.location.href = getPostAuthRedirectPath();
+    const guestTarget = new URL(getPostAuthRedirectPath(), window.location.origin);
+    guestTarget.searchParams.set("guest", "1");
+    clearPostAuthRedirect();
+    window.location.href = `${guestTarget.pathname}${guestTarget.search}${guestTarget.hash}`;
   };
 
   const handleSignin = async (e, overrideCode) => {
