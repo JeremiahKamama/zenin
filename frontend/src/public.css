@@ -2707,3 +2707,118 @@ body.page-dark-theme #root {
 .auth-v2-card {
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.72) !important;
 }
+
+.auth-v2-modal-card {
+  width: min(420px, calc(100vw - 24px)) !important;
+  border-radius: 24px;
+  padding: 24px 22px 18px !important;
+}
+
+.auth-v2-modal-card .auth-v2-logo {
+  margin-bottom: 16px !important;
+}
+
+.auth-v2-modal-card h1 {
+  font-size: clamp(1.8rem, 4.8vw, 2.4rem);
+}
+
+.auth-v2-modal-card .auth-v2-subtitle {
+  margin: 8px auto 12px;
+  max-width: 340px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.auth-v2-modal-card .auth-v2-label {
+  margin-bottom: 5px;
+  font-size: 0.95rem;
+}
+
+.auth-v2-modal-card .auth-v2-input {
+  min-height: 48px;
+  font-size: 0.97rem;
+  padding: 0 14px;
+  border-radius: 12px;
+}
+
+.auth-v2-modal-card .auth-v2-btn {
+  min-height: 48px;
+  font-size: 0.98rem;
+  border-radius: 12px;
+}
+
+.auth-v2-modal-card .auth-v2-btn-primary {
+  margin-top: 6px;
+}
+
+.auth-v2-modal-card .auth-v2-btn-ghost {
+  margin-top: 6px;
+}
+
+.auth-v2-modal-card .auth-v2-divider {
+  margin: 14px 0 6px;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.auth-v2-modal-card .auth-v2-bottom-link {
+  margin-top: 12px !important;
+  font-size: 0.9rem;
+}
+
+.auth-v2-modal-card .auth-v2-error {
+  margin-top: 12px !important;
+  font-size: 0.9rem;
+}
+
+.auth-v2-modal-card .auth-v2-mail-illustration {
+  margin: 10px 0 !important;
+}
+
+.auth-v2-modal-form {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-v2-modal-row {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-v2-modal-row .auth-v2-btn {
+  margin-top: 0;
+}
+
+.auth-v2-modal-forgot-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-v2-modal-forgot-link {
+  margin-bottom: 4px !important;
+  font-size: 0.78rem !important;
+}
+
+@media (max-width: 520px) {
+  .auth-v2-modal-card {
+    width: min(390px, calc(100vw - 20px)) !important;
+    border-radius: 20px;
+    padding: 20px 16px 16px !important;
+  }
+
+  .auth-v2-modal-card h1 {
+    font-size: clamp(1.6rem, 7.5vw, 2rem);
+  }
+
+  .auth-v2-modal-card .auth-v2-subtitle {
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+  }
+
+  .auth-v2-modal-card .auth-v2-input,
+  .auth-v2-modal-card .auth-v2-btn {
+    min-height: 46px;
+  }
+}

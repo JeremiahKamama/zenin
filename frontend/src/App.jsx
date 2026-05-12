@@ -23,6 +23,15 @@ import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Analytics } from "@vercel/analytics/react"
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
+import {
+  REVENUECAT_RECOMMENDED_SETUP,
+  REVENUECAT_WEB_API_KEY,
+  formatRevenueCatError,
+  isRevenueCatCancelledError,
+  loadRevenueCatState,
+  presentRevenueCatPaywall,
+  purchaseRevenueCatPackage
+} from "./utils/revenueCat";
 import { getAppRuntimeConfig, setRuntimeConfigs } from "./config/runtimeConfigStore";
 
 function isStaleChunkError(error) {
@@ -2263,6 +2272,17 @@ const handleOptionTradeClosed = async (tradeId) => {
       return "Starter Plan";
     }
   });
+  const [currentBillingCycle, setCurrentBillingCycle] = useState(() => {
+    try {
+      const rawUser = localStorage.getItem("zenin_auth_user");
+      const parsed = rawUser ? JSON.parse(rawUser) : null;
+      return String(parsed?.currentBillingCycle || "monthly").trim().toLowerCase() === "yearly"
+        ? "yearly"
+        : "monthly";
+    } catch {
+      return "monthly";
+    }
+  });
   const [currentPlan, setCurrentPlan] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
@@ -2279,6 +2299,24 @@ const handleOptionTradeClosed = async (tradeId) => {
       return isAdminUser(parsed);
     } catch {
       return false;
+    }
+  });
+  const [authUserId, setAuthUserId] = useState(() => {
+    try {
+      const rawUser = localStorage.getItem("zenin_auth_user");
+      const parsed = rawUser ? JSON.parse(rawUser) : null;
+      return parsed?.id != null ? String(parsed.id) : "";
+    } catch {
+      return "";
+    }
+  });
+  const [authDisplayName, setAuthDisplayName] = useState(() => {
+    try {
+      const rawUser = localStorage.getItem("zenin_auth_user");
+      const parsed = rawUser ? JSON.parse(rawUser) : null;
+      return String(parsed?.displayName || "").trim();
+    } catch {
+      return "";
     }
   });
   const [isGuestUser, setIsGuestUser] = useState(() => allowGuestAccess || !hasStoredAuthSession());
@@ -2439,7 +2477,10 @@ const handleOptionTradeClosed = async (tradeId) => {
           localStorage.removeItem("zenin_auth_expires_at");
           setIsGuestUser(true);
           setIsAdmin(false);
+          setAuthUserId("");
+          setAuthDisplayName("");
           setCurrentPlan("starter");
+          setCurrentBillingCycle("monthly");
           setAccountPlanLabel("Starter Plan");
           setProfileSecurity((prev) => ({
             ...buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || prev?.email || "user@zenin.app"),
@@ -2455,7 +2496,10 @@ const handleOptionTradeClosed = async (tradeId) => {
           setUserEmail(String(data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
           setIsAdmin(userIsAdmin);
           setIsGuestUser(false);
+          setAuthUserId(data.user.id != null ? String(data.user.id) : "");
+          setAuthDisplayName(String(data.user.displayName || "").trim());
           setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
+          setCurrentBillingCycle(String(data.user.currentBillingCycle || "monthly").trim().toLowerCase() === "yearly" ? "yearly" : "monthly");
           setAccountPlanLabel(userIsAdmin ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
           setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
         }
@@ -2470,7 +2514,10 @@ const handleOptionTradeClosed = async (tradeId) => {
         localStorage.removeItem("zenin_auth_expires_at");
         setIsGuestUser(true);
         setIsAdmin(false);
+        setAuthUserId("");
+        setAuthDisplayName("");
         setCurrentPlan("starter");
+        setCurrentBillingCycle("monthly");
         setAccountPlanLabel("Starter Plan");
         settingsSyncReadyRef.current = false;
         setAccessCheckLoading(false);
@@ -2673,6 +2720,19 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(() => getBrowserNotificationPermission());
   const [notificationFeedback, setNotificationFeedback] = useState(null);
+  const revenueCatPaywallRef = useRef(null);
+  const revenueCatPlanSyncRef = useRef("");
+  const [revenueCatState, setRevenueCatState] = useState({
+    loading: false,
+    syncingPlan: false,
+    purchasing: false,
+    paywallBusy: false,
+    error: "",
+    message: "",
+    customerInfo: null,
+    offerings: null,
+    access: null
+  });
 
   useEffect(() => {
     if (!authenticatorOptions.length) return;
@@ -2874,6 +2934,279 @@ const handleOptionTradeClosed = async (tradeId) => {
       return changed ? next : prev;
     });
   }, [canUseBrowserNotifications, canUseEmailNotifications]);
+
+  const syncRevenueCatPlanToAccount = useCallback(async (access) => {
+    if (isGuestUser || !access?.hasActiveSubscription) return;
+
+    const targetPlan = normalizeCurrentPlan(access.currentPlan);
+    const targetBillingCycle = String(access.currentBillingCycle || "monthly").trim().toLowerCase() === "yearly"
+      ? "yearly"
+      : "monthly";
+
+    if (targetPlan === "starter") return;
+
+    const syncKey = `${targetPlan}:${targetBillingCycle}`;
+    if (
+      revenueCatPlanSyncRef.current === syncKey ||
+      (currentPlan === targetPlan && currentBillingCycle === targetBillingCycle)
+    ) {
+      revenueCatPlanSyncRef.current = syncKey;
+      return;
+    }
+
+    setRevenueCatState((prev) => ({ ...prev, syncingPlan: true }));
+    try {
+      const res = await zeninFetch(`${BACKEND_URL}/api/account/plan`, {
+        method: "POST",
+        body: JSON.stringify({ plan: targetPlan, billingCycle: targetBillingCycle })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to sync RevenueCat plan with Zenin.");
+      }
+
+      if (data?.user) {
+        localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+        if (data.user.email) {
+          localStorage.setItem("zenin_email", data.user.email);
+          setUserEmail(String(data.user.email));
+        }
+        setAuthUserId(data.user.id != null ? String(data.user.id) : "");
+        setAuthDisplayName(String(data.user.displayName || "").trim());
+        setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
+        setCurrentBillingCycle(
+          String(data.user.currentBillingCycle || targetBillingCycle).trim().toLowerCase() === "yearly"
+            ? "yearly"
+            : "monthly"
+        );
+        setAccountPlanLabel(
+          isAdminUser(data.user)
+            ? "Admin"
+            : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle)
+        );
+      }
+
+      revenueCatPlanSyncRef.current = syncKey;
+      setRevenueCatState((prev) => ({
+        ...prev,
+        syncingPlan: false,
+        message: `Synced RevenueCat access to the ${targetPlan.toUpperCase()} ${targetBillingCycle} plan.`
+      }));
+    } catch (error) {
+      setRevenueCatState((prev) => ({
+        ...prev,
+        syncingPlan: false,
+        error: error?.message || "Could not sync RevenueCat access with Zenin."
+      }));
+    }
+  }, [currentBillingCycle, currentPlan, isGuestUser]);
+
+  const refreshRevenueCatState = useCallback(async ({ keepMessage = false } = {}) => {
+    if (accessCheckLoading || isGuestUser || !authUserId) {
+      setRevenueCatState((prev) => ({
+        ...prev,
+        loading: false,
+        syncingPlan: false,
+        purchasing: false,
+        paywallBusy: false,
+        error: "",
+        message: keepMessage ? prev.message : "",
+        customerInfo: null,
+        offerings: null,
+        access: null
+      }));
+      return null;
+    }
+
+    setRevenueCatState((prev) => ({
+      ...prev,
+      loading: true,
+      error: "",
+      message: keepMessage ? prev.message : prev.message
+    }));
+
+    try {
+      const nextState = await loadRevenueCatState({
+        appUserId: authUserId,
+        email: emailNotificationDestination || userEmail,
+        displayName: authDisplayName
+      });
+
+      setRevenueCatState((prev) => ({
+        ...prev,
+        loading: false,
+        customerInfo: nextState.customerInfo,
+        offerings: nextState.offerings,
+        access: nextState.access
+      }));
+
+      void syncRevenueCatPlanToAccount(nextState.access);
+      return nextState;
+    } catch (error) {
+      setRevenueCatState((prev) => ({
+        ...prev,
+        loading: false,
+        customerInfo: null,
+        offerings: null,
+        access: null,
+        error: formatRevenueCatError(error)
+      }));
+      return null;
+    }
+  }, [
+    accessCheckLoading,
+    authDisplayName,
+    authUserId,
+    emailNotificationDestination,
+    isGuestUser,
+    syncRevenueCatPlanToAccount,
+    userEmail
+  ]);
+
+  const handleRevenueCatPackagePurchase = useCallback(async (rcPackage) => {
+    if (!rcPackage || isGuestUser || !authUserId) return;
+
+    setRevenueCatState((prev) => ({
+      ...prev,
+      purchasing: true,
+      error: "",
+      message: ""
+    }));
+
+    try {
+      const purchaseResult = await purchaseRevenueCatPackage({
+        appUserId: authUserId,
+        email: emailNotificationDestination || userEmail,
+        displayName: authDisplayName,
+        rcPackage,
+        htmlTarget: revenueCatPaywallRef.current || undefined,
+        metadata: {
+          zenin_surface: "subscription_settings",
+          zenin_package_id: String(rcPackage?.identifier || "")
+        }
+      });
+
+      const snapshot = await refreshRevenueCatState({ keepMessage: true });
+      setRevenueCatState((prev) => ({
+        ...prev,
+        purchasing: false,
+        message: purchaseResult?.redemptionInfo
+          ? "Purchase completed. Redemption details are available for this purchase."
+          : snapshot?.access?.hasActiveSubscription
+            ? "Purchase completed and subscription access was refreshed."
+            : "Purchase completed."
+      }));
+    } catch (error) {
+      setRevenueCatState((prev) => ({
+        ...prev,
+        purchasing: false,
+        error: isRevenueCatCancelledError(error)
+          ? "Purchase canceled."
+          : formatRevenueCatError(error)
+      }));
+    }
+  }, [
+    authDisplayName,
+    authUserId,
+    emailNotificationDestination,
+    isGuestUser,
+    refreshRevenueCatState,
+    userEmail
+  ]);
+
+  const handleShowRevenueCatPaywall = useCallback(async () => {
+    if (isGuestUser || !authUserId) return;
+
+    const currentOffering = revenueCatState.offerings?.current || null;
+    if (!currentOffering || !currentOffering.availablePackages?.length) {
+      setRevenueCatState((prev) => ({
+        ...prev,
+        error: "No RevenueCat offering is currently configured. Create products, entitlements, and a current offering first."
+      }));
+      return;
+    }
+
+    setRevenueCatState((prev) => ({
+      ...prev,
+      paywallBusy: true,
+      error: "",
+      message: ""
+    }));
+
+    try {
+      const purchaseResult = await presentRevenueCatPaywall({
+        appUserId: authUserId,
+        email: emailNotificationDestination || userEmail,
+        displayName: authDisplayName,
+        offering: currentOffering,
+        htmlTarget: revenueCatPaywallRef.current || undefined,
+        onVisitCustomerCenter: () => {
+          if (revenueCatState.access?.managementURL) {
+            window.open(revenueCatState.access.managementURL, "_blank", "noopener,noreferrer");
+          }
+        }
+      });
+
+      const snapshot = await refreshRevenueCatState({ keepMessage: true });
+      setRevenueCatState((prev) => ({
+        ...prev,
+        paywallBusy: false,
+        message: purchaseResult?.redemptionInfo
+          ? "Paywall purchase completed. Redemption details are available for this purchase."
+          : snapshot?.access?.hasActiveSubscription
+            ? "Paywall purchase completed and subscription access was refreshed."
+            : "Paywall closed."
+      }));
+    } catch (error) {
+      setRevenueCatState((prev) => ({
+        ...prev,
+        paywallBusy: false,
+        error: isRevenueCatCancelledError(error)
+          ? "Paywall closed without purchasing."
+          : formatRevenueCatError(error)
+      }));
+    }
+  }, [
+    authDisplayName,
+    authUserId,
+    emailNotificationDestination,
+    isGuestUser,
+    refreshRevenueCatState,
+    revenueCatState.access,
+    revenueCatState.offerings,
+    userEmail
+  ]);
+
+  useEffect(() => {
+    if (accessCheckLoading) return;
+    if (isGuestUser || !authUserId) {
+      revenueCatPlanSyncRef.current = "";
+      setRevenueCatState((prev) => ({
+        ...prev,
+        loading: false,
+        syncingPlan: false,
+        purchasing: false,
+        paywallBusy: false,
+        customerInfo: null,
+        offerings: null,
+        access: null,
+        error: "",
+        message: ""
+      }));
+      return;
+    }
+
+    void refreshRevenueCatState();
+  }, [accessCheckLoading, authUserId, isGuestUser, refreshRevenueCatState]);
+
+  const revenueCatPackages = useMemo(
+    () => revenueCatState.offerings?.current?.availablePackages || [],
+    [revenueCatState.offerings]
+  );
+  const revenueCatApiKeyPreview = useMemo(() => {
+    const raw = String(REVENUECAT_WEB_API_KEY || "");
+    return raw ? `${raw.slice(0, 8)}...${raw.slice(-4)}` : "Not configured";
+  }, []);
 
   const fetchTotpSetup = useCallback(async () => {
     if (isGuestUser) return;
@@ -3100,6 +3433,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       }
       const data = await res.json();
       setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
+      setCurrentBillingCycle(String(data.user.currentBillingCycle || billingCycle || "monthly").trim().toLowerCase() === "yearly" ? "yearly" : "monthly");
       setAccountPlanLabel(isAdminUser(data.user) ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
       setProfileFeedback((prev) => ({
         ...prev,
@@ -4464,12 +4798,186 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <div className="settings-panel-body">
                         <div className="settings-chip-row">
                           <span className="settings-chip success">Current: {accountPlanLabel}</span>
+                          <span className="settings-chip">RevenueCat key: {revenueCatApiKeyPreview}</span>
                         </div>
                         <p className="settings-meta" style={{ marginTop: "10px" }}>
-                          You are currently on the {currentPlan.toUpperCase()} plan. 
-                          Contact support to upgrade or downgrade your account.
+                          RevenueCat Web Billing is configured for this app and uses your signed-in Zenin user as the RevenueCat App User ID.
                         </p>
-                        
+
+                        {isGuestUser ? (
+                          <p className="settings-status info">Sign in to load RevenueCat offerings, purchase subscriptions, and manage billing.</p>
+                        ) : null}
+
+                        {!isGuestUser ? (
+                          <>
+                            <div className="settings-inline-actions" style={{ marginTop: "14px" }}>
+                              <button
+                                className="settings-secondary-btn"
+                                onClick={() => {
+                                  void refreshRevenueCatState();
+                                }}
+                                disabled={revenueCatState.loading || revenueCatState.purchasing || revenueCatState.paywallBusy}
+                              >
+                                {revenueCatState.loading ? "Refreshing..." : "Refresh RevenueCat"}
+                              </button>
+                              <button
+                                className="settings-secondary-btn"
+                                onClick={() => {
+                                  void handleShowRevenueCatPaywall();
+                                }}
+                                disabled={
+                                  revenueCatState.loading ||
+                                  revenueCatState.purchasing ||
+                                  revenueCatState.paywallBusy ||
+                                  revenueCatPackages.length === 0
+                                }
+                              >
+                                {revenueCatState.paywallBusy ? "Opening Paywall..." : "Present RevenueCat Paywall"}
+                              </button>
+                              <button
+                                className="settings-secondary-btn"
+                                onClick={() => {
+                                  if (revenueCatState.access?.managementURL) {
+                                    window.open(revenueCatState.access.managementURL, "_blank", "noopener,noreferrer");
+                                  }
+                                }}
+                                disabled={!revenueCatState.access?.managementURL}
+                              >
+                                Manage Subscription
+                              </button>
+                            </div>
+
+                            <div
+                              style={{
+                                marginTop: "16px",
+                                padding: "14px",
+                                border: "1px solid rgba(255,255,255,0.08)",
+                                borderRadius: "14px",
+                                background: "rgba(255,255,255,0.02)"
+                              }}
+                            >
+                              <p className="settings-meta" style={{ marginTop: 0 }}>
+                                RevenueCat customer
+                              </p>
+                              <p style={{ margin: "6px 0 0", fontWeight: 600 }}>
+                                {authUserId || "Unavailable"}
+                              </p>
+                              <p className="settings-meta" style={{ marginTop: "10px" }}>
+                                Active entitlements: {revenueCatState.access?.activeEntitlements?.length || 0}
+                                {" · "}
+                                Active subscriptions: {revenueCatState.access?.activeProductIdentifiers?.length || 0}
+                                {" · "}
+                                Billing cycle: {currentBillingCycle.toUpperCase()}
+                              </p>
+                              {revenueCatState.access?.activeEntitlements?.length ? (
+                                <div className="settings-chip-row" style={{ marginTop: "12px" }}>
+                                  {revenueCatState.access.activeEntitlements.map((entitlement) => (
+                                    <span key={entitlement.identifier} className="settings-chip success">
+                                      {entitlement.identifier}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="settings-meta" style={{ marginTop: "10px" }}>
+                                  No active entitlements yet. This is expected until you create products, attach them to entitlements, and complete a sandbox purchase.
+                                </p>
+                              )}
+                            </div>
+
+                            {revenueCatPackages.length ? (
+                              <div style={{ marginTop: "18px" }}>
+                                <p className="settings-meta" style={{ marginTop: 0 }}>
+                                  Current offering: {revenueCatState.offerings?.current?.identifier || REVENUECAT_RECOMMENDED_SETUP.offeringId}
+                                </p>
+                                <div style={{ display: "grid", gap: "12px", marginTop: "12px" }}>
+                                  {revenueCatPackages.map((pkg) => (
+                                    <div
+                                      key={pkg.identifier}
+                                      style={{
+                                        padding: "14px",
+                                        border: "1px solid rgba(255,255,255,0.08)",
+                                        borderRadius: "14px",
+                                        background: "rgba(255,255,255,0.02)"
+                                      }}
+                                    >
+                                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                                        <div>
+                                          <strong>{pkg.webBillingProduct.title || pkg.identifier}</strong>
+                                          <p className="settings-meta" style={{ marginTop: "6px" }}>
+                                            {pkg.webBillingProduct.description || "RevenueCat product ready for purchase."}
+                                          </p>
+                                          <p className="settings-meta" style={{ marginTop: "6px" }}>
+                                            Product ID: {pkg.webBillingProduct.identifier}
+                                          </p>
+                                        </div>
+                                        <div style={{ textAlign: "right" }}>
+                                          <strong>{pkg.webBillingProduct.currentPrice.formattedPrice}</strong>
+                                          <p className="settings-meta" style={{ marginTop: "6px" }}>
+                                            Package: {pkg.identifier}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                                        <button
+                                          className="settings-secondary-btn"
+                                          onClick={() => {
+                                            void handleRevenueCatPackagePurchase(pkg);
+                                          }}
+                                          disabled={revenueCatState.loading || revenueCatState.purchasing || revenueCatState.paywallBusy}
+                                        >
+                                          {revenueCatState.purchasing ? "Opening Checkout..." : "Purchase Package"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div
+                                style={{
+                                  marginTop: "18px",
+                                  padding: "14px",
+                                  border: "1px dashed rgba(255,255,255,0.14)",
+                                  borderRadius: "14px"
+                                }}
+                              >
+                                <p style={{ margin: 0, fontWeight: 600 }}>RevenueCat setup still needs products and an offering</p>
+                                <p className="settings-meta" style={{ marginTop: "8px" }}>
+                                  Recommended starter setup for Zenin:
+                                </p>
+                                <p className="settings-meta" style={{ marginTop: "8px" }}>
+                                  Entitlements: <code>{REVENUECAT_RECOMMENDED_SETUP.entitlementIds.pro}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.entitlementIds.desk}</code>
+                                </p>
+                                <p className="settings-meta" style={{ marginTop: "8px" }}>
+                                  Products: <code>{REVENUECAT_RECOMMENDED_SETUP.products.proMonthly}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.products.proYearly}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.products.deskMonthly}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.products.deskYearly}</code>
+                                </p>
+                                <p className="settings-meta" style={{ marginTop: "8px" }}>
+                                  Offering: <code>{REVENUECAT_RECOMMENDED_SETUP.offeringId}</code> with packages for your monthly and yearly plans.
+                                </p>
+                              </div>
+                            )}
+
+                            <div
+                              ref={revenueCatPaywallRef}
+                              id="zenin-revenuecat-paywall"
+                              style={{ marginTop: "18px", minHeight: revenueCatState.paywallBusy ? "320px" : "0px" }}
+                            />
+
+                            {revenueCatState.error ? (
+                              <p className="settings-status error">{revenueCatState.error}</p>
+                            ) : null}
+                            {revenueCatState.message ? (
+                              <p className="settings-status success">{revenueCatState.message}</p>
+                            ) : null}
+                            {revenueCatState.syncingPlan ? (
+                              <p className="settings-status info">Syncing purchased access back into your Zenin account...</p>
+                            ) : null}
+                            <p className="settings-meta" style={{ marginTop: "12px" }}>
+                              Best practice: rely on RevenueCat entitlements for access checks, and use the RevenueCat management URL or Web Billing customer portal for subscription self-service after purchase.
+                            </p>
+                          </>
+                        ) : null}
+
                         {(userEmail === "jeremiahkamama@gmail.com" || userEmail.startsWith("admin")) && (
                           <div style={{ marginTop: "20px", padding: "12px", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: "8px" }}>
                             <h4 style={{ margin: "0 0 10px 0", color: "#f87171" }}>Developer Admin Simulator</h4>
