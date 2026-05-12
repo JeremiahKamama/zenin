@@ -46,6 +46,99 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png" />
     <title>Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --zc-bg: #050816;
+        --zc-panel: rgba(15, 23, 42, 0.78);
+        --zc-border: rgba(148, 163, 184, 0.18);
+        --zc-text: #e5eefc;
+        --zc-muted: #8da2c0;
+        --zc-accent: #4f7cff;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background:
+          radial-gradient(circle at top, rgba(79, 124, 255, 0.14), transparent 36%),
+          linear-gradient(180deg, #07101f 0%, var(--zc-bg) 62%, #03060f 100%);
+        color: var(--zc-text);
+        font-family: "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      #root {
+        min-height: 100vh;
+      }
+
+      .zenin-boot {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 32px 20px;
+      }
+
+      .zenin-boot-card {
+        width: min(420px, 100%);
+        padding: 28px 26px;
+        border-radius: 24px;
+        border: 1px solid var(--zc-border);
+        background: var(--zc-panel);
+        box-shadow: 0 30px 80px rgba(2, 6, 23, 0.45);
+        backdrop-filter: blur(18px);
+      }
+
+      .zenin-boot-brand {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #cdd8ec;
+      }
+
+      .zenin-boot-title {
+        margin: 14px 0 8px;
+        font-size: clamp(28px, 5vw, 38px);
+        line-height: 1.05;
+        font-weight: 700;
+      }
+
+      .zenin-boot-copy {
+        margin: 0;
+        color: var(--zc-muted);
+        font-size: 15px;
+        line-height: 1.6;
+      }
+
+      .zenin-boot-progress {
+        position: relative;
+        overflow: hidden;
+        height: 10px;
+        margin-top: 18px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.14);
+      }
+
+      .zenin-boot-progress::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        width: 42%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #7aa2ff 0%, var(--zc-accent) 100%);
+        animation: zeninBootLoad 1.05s ease-in-out infinite;
+      }
+
+      @keyframes zeninBootLoad {
+        0% {
+          transform: translateX(-120%);
+        }
+        100% {
+          transform: translateX(320%);
+        }
+      }
+    </style>
     <script>
       (function () {
         var path = String(window.location.pathname || "/").toLowerCase();
@@ -113,10 +206,41 @@
   </head>
   <body>
     <div id="root"></div>
+    <template id="zenin-public-prerender"></template>
+    <script>
+      (function () {
+        var entry = window.__ZENIN_ENTRY__ || "public";
+        var root = document.getElementById("root");
+        var template = document.getElementById("zenin-public-prerender");
+        if (!root) return;
+
+        if (entry === "public" && template && template.innerHTML.trim()) {
+          root.innerHTML = template.innerHTML;
+          root.dataset.prerendered = "public";
+          return;
+        }
+
+        var title = entry === "auth" ? "Preparing secure access" : "Loading your workspace";
+        var copy = entry === "auth"
+          ? "Starting Zenin account access with passkeys, OAuth, and recovery flows."
+          : "Initializing portfolios, watchlists, market data, and your Zenin workspace.";
+
+        root.dataset.prerendered = "boot";
+        root.innerHTML =
+          '<div class="zenin-boot">' +
+            '<div class="zenin-boot-card">' +
+              '<div class="zenin-boot-brand">Zenin Capital</div>' +
+              '<h1 class="zenin-boot-title">' + title + '</h1>' +
+              '<p class="zenin-boot-copy">' + copy + '</p>' +
+              '<div class="zenin-boot-progress" aria-hidden="true"></div>' +
+            '</div>' +
+          '</div>';
+      })();
+    </script>
     <script>
       if (window.__ZENIN_ENTRY__ && window.__ZENIN_ENTRY__ !== "public") {
-        var root = document.getElementById("root");
-        if (root) root.innerHTML = "";
+        var canonical = document.querySelector('link[rel="canonical"]');
+        if (canonical) canonical.setAttribute("href", "https://www.zenin.capital" + window.location.pathname);
       }
     </script>
     <script type="module" src="/src/main.jsx"></script>

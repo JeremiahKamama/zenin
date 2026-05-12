@@ -114,7 +114,9 @@ function mapAuthUserRow(row) {
   return {
     ...row,
     passkeys: parseJsonPayload(row.passkeys, []),
-    backupCodes: parseJsonPayload(row.backupCodes, [])
+    backupCodes: parseJsonPayload(row.backupCodes, []),
+    emailVerificationCodeHash: row.emailVerificationCodeHash || row.email_verification_code_hash || null,
+    emailVerificationRequestedAt: row.emailVerificationRequestedAt || row.email_verification_requested_at || null
   };
 }
 
@@ -945,6 +947,8 @@ async function initializeDatabase() {
         two_factor_enabled_at TIMESTAMPTZ,
         backup_codes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         passkeys_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        email_verification_code_hash TEXT,
+        email_verification_requested_at TIMESTAMPTZ,
         current_plan TEXT NOT NULL DEFAULT 'starter',
         current_billing_cycle TEXT NOT NULL DEFAULT 'monthly',
         plan_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1027,6 +1031,12 @@ async function initializeDatabase() {
     await client.query(`
       ALTER TABLE app_users
       ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS email_verification_code_hash TEXT,
+      ADD COLUMN IF NOT EXISTS email_verification_requested_at TIMESTAMPTZ;
     `);
 
     await client.query(`
@@ -2424,6 +2434,32 @@ const analytics = {
       date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : toDateString(row.date),
       netUsd: Number(row.netUsd)
     }));
+  },
+
+  upsertEtfInflows: async (flows = []) => {
+    if (!Array.isArray(flows) || flows.length === 0) return;
+
+    for (const flow of flows) {
+      await pool.query(`
+        INSERT INTO etf_inflows (date, asset, manager, ticker, net_usd, period, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (date, ticker) DO UPDATE
+        SET 
+          net_usd = EXCLUDED.net_usd,
+          manager = EXCLUDED.manager,
+          asset = EXCLUDED.asset,
+          source = EXCLUDED.source,
+          updated_at = NOW()
+      `, [
+        flow.date,
+        flow.asset,
+        flow.manager,
+        flow.ticker,
+        flow.netUsd,
+        flow.period || 'daily',
+        flow.source
+      ]);
+    }
   }
 };
 
@@ -2451,6 +2487,8 @@ const userAuth = {
         two_factor_enabled_at AS "twoFactorEnabledAt",
         backup_codes_json AS "backupCodes",
         passkeys_json AS passkeys,
+        email_verification_code_hash AS "emailVerificationCodeHash",
+        email_verification_requested_at AS "emailVerificationRequestedAt",
         current_plan AS "currentPlan",
         current_billing_cycle AS "currentBillingCycle",
         plan_updated_at AS "planUpdatedAt",
@@ -2535,6 +2573,8 @@ const userAuth = {
         plan_updated_at AS "planUpdatedAt",
         failed_login_count AS "failedLoginCount",
         locked_until AS "lockedUntil",
+        email_verification_code_hash AS "emailVerificationCodeHash",
+        email_verification_requested_at AS "emailVerificationRequestedAt",
         created_at AS "createdAt"
       FROM app_users
       WHERE email = $1
@@ -2570,6 +2610,8 @@ const userAuth = {
         plan_updated_at AS "planUpdatedAt",
         failed_login_count AS "failedLoginCount",
         locked_until AS "lockedUntil",
+        email_verification_code_hash AS "emailVerificationCodeHash",
+        email_verification_requested_at AS "emailVerificationRequestedAt",
         created_at AS "createdAt"
       FROM app_users
       WHERE id = $1
@@ -2640,6 +2682,29 @@ const userAuth = {
       SET revoked_at = NOW()
       WHERE token_hash = $1 AND revoked_at IS NULL;
     `, [String(tokenHash || "")]);
+  },
+
+  updateUserVerificationCode: async (userId, codeHash) => {
+    await pool.query(`
+      UPDATE app_users
+      SET 
+        email_verification_code_hash = $2,
+        email_verification_requested_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId), codeHash]);
+  },
+
+  verifyUserEmail: async (userId) => {
+    await pool.query(`
+      UPDATE app_users
+      SET 
+        email_verified = TRUE,
+        email_verification_code_hash = NULL,
+        email_verification_requested_at = NULL,
+        updated_at = NOW()
+      WHERE id = $1;
+    `, [toUserId(userId)]);
   },
 
   revokeSessionsByUserId: async (userId) => {

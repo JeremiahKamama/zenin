@@ -14,7 +14,7 @@ const {
 } = require("@simplewebauthn/server");
 const { OAuth2Client } = require("google-auth-library");
 // const appleSignin = require("apple-signin-auth");
-const { sendPasswordResetEmail } = require("./email");
+const { sendPasswordResetEmail, sendVerificationEmail } = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -98,6 +98,11 @@ const {
 const { REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
 const { fetchFarsideEtfFlows: fetchLatestFarsideEtfFlows } = require("./farsideEtf");
 const { buildPublicRuntimeConfig, buildAppRuntimeConfig } = require("./runtimeConfig");
+const {
+  buildRevenueCatIntegrationItem,
+  getRevenueCatAdminSummary,
+  getRevenueCatCustomerSnapshot
+} = require("./revenuecat");
 
 const app = express();
 
@@ -326,15 +331,6 @@ app.use(helmet.frameguard({ action: "deny" }));
 app.use(helmet.referrerPolicy({ policy: "strict-origin-when-cross-origin" }));
 app.use(helmet.permittedCrossDomainPolicies());
 
-// CSRF origin validation for state-changing requests (#6)
-app.use((req, res, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  const origin = req.headers.origin;
-  if (!origin) return next(); // same-origin requests may omit Origin
-  if (isAllowedOrigin(origin)) return next();
-  return res.status(403).json({ error: "Origin not allowed." });
-});
-
 function sanitizeSymbol(symbol) {
   return symbol.replace(/[^a-zA-Z0-9.\-_:]/g, "").slice(0, 30);
 }
@@ -395,6 +391,47 @@ function isAllowedOrigin(origin) {
   return false;
 }
 
+const corsAllowedMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"];
+const corsAllowedHeaders = [
+  "Content-Type",
+  "Authorization",
+  "X-Requested-With",
+  "Accept",
+  "X-Zenin-Simulate-Plan"
+];
+
+function applyCorsHeaders(req, res) {
+  const requestOrigin = String(req.headers.origin || "").trim();
+  if (!requestOrigin || !isAllowedOrigin(requestOrigin)) return false;
+
+  res.setHeader("Access-Control-Allow-Origin", normalizeOrigin(requestOrigin));
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Methods", corsAllowedMethods.join(", "));
+  res.setHeader("Access-Control-Allow-Headers", corsAllowedHeaders.join(", "));
+  return true;
+}
+
+app.use((req, res, next) => {
+  const corsApplied = applyCorsHeaders(req, res);
+  if (String(req.method || "").toUpperCase() === "OPTIONS") {
+    if (corsApplied) {
+      return res.sendStatus(204);
+    }
+    return res.status(403).json({ error: "Blocked origin" });
+  }
+  return next();
+});
+
+// CSRF origin validation for state-changing requests (#6)
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next(); // same-origin requests may omit Origin
+  if (isAllowedOrigin(origin)) return next();
+  return res.status(403).json({ error: "Origin not allowed." });
+});
+
 // Helper to fetch latest results from Dune Analytics
 async function fetchDuneLatestResults(queryId) {
   const apiKey = process.env.DUNE_API_KEY;
@@ -438,12 +475,12 @@ app.use(cors({
     } else {
       const normalizedOrigin = normalizeOrigin(origin);
       console.warn(`[CORS] Blocked origin: ${origin} (Normalized: ${normalizedOrigin})`);
-      callback(new Error("Not allowed by CORS"));
+      callback(null, false);
     }
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "X-Zenin-Simulate-Plan"],
+  methods: corsAllowedMethods,
+  allowedHeaders: corsAllowedHeaders,
   optionsSuccessStatus: 204
 }));
 
@@ -806,6 +843,17 @@ function normalizeBillingCycleInput(billingCycle) {
   const normalized = String(billingCycle || "").trim().toLowerCase();
   if (["monthly", "yearly"].includes(normalized)) return normalized;
   return null;
+}
+
+function summarizeIntegrationItems(items = []) {
+  const connectedApps = items.filter((item) => item.status === "active" || item.status === "connected").length;
+  const failedSyncs = items.filter((item) => item.status !== "active" && item.status !== "connected").length;
+  return {
+    connectedApps,
+    syncHealth: Number((((items.length - failedSyncs) / Math.max(items.length, 1)) * 100).toFixed(1)),
+    webhooksActive: items.filter((item) => item.category === "Developer" && item.status === "active").length,
+    failedSyncs
+  };
 }
 
 function getBearerToken(req) {
@@ -2854,7 +2902,23 @@ app.get("/api/admin/users/:id", requireAdmin, async (req, res) => {
     if (!details) {
       return res.status(404).json({ error: "User not found" });
     }
-    return res.json(details);
+    const revenueCat = await getRevenueCatCustomerSnapshot({
+      userId: req.params.id,
+      email: details.user?.email || null
+    }).catch((error) => ({
+      configured: true,
+      found: false,
+      providerStatus: {
+        name: "RevenueCat",
+        status: "degraded",
+        note: error?.message || "RevenueCat lookup failed.",
+        lastSyncAt: new Date().toISOString()
+      },
+      subscriptions: [],
+      activeEntitlements: [],
+      invoices: []
+    }));
+    return res.json({ ...details, revenueCat });
   } catch (error) {
     return handleServerError(res, "Failed to fetch user details", error);
   }
@@ -2945,8 +3009,27 @@ app.get("/api/admin/database", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/billing", requireAdmin, async (req, res) => {
   try {
-    const stats = await admin.getBillingStats();
-    res.json(stats);
+    const [stats, revenueCat] = await Promise.all([
+      admin.getBillingStats(),
+      getRevenueCatAdminSummary().catch((error) => ({
+        configured: true,
+        providerStatus: {
+          name: "RevenueCat",
+          status: "degraded",
+          note: error?.message || "RevenueCat summary failed.",
+          lastSyncAt: new Date().toISOString()
+        },
+        offerings: [],
+        entitlements: [],
+        recentCustomers: [],
+        summary: {
+          offeringsCount: 0,
+          entitlementsCount: 0,
+          recentCustomersCount: 0
+        }
+      }))
+    ]);
+    res.json({ ...stats, revenueCat });
   } catch (error) {
     handleServerError(res, "getBillingStats", error);
   }
@@ -2977,10 +3060,43 @@ app.get("/api/admin/logs", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/integrations", requireAdmin, async (_req, res) => {
   try {
-    const integrations = await admin.getIntegrationsStatus();
-    return res.json(integrations);
+    const [integrations, revenueCat] = await Promise.all([
+      admin.getIntegrationsStatus(),
+      getRevenueCatAdminSummary().catch(() => null)
+    ]);
+    const items = [
+      buildRevenueCatIntegrationItem(revenueCat),
+      ...(integrations?.items || []).filter((item) => String(item?.name || "").toLowerCase() !== "revenuecat")
+    ];
+    return res.json({
+      ...integrations,
+      items,
+      summary: summarizeIntegrationItems(items)
+    });
   } catch (error) {
     return handleServerError(res, "Failed to fetch integrations", error);
+  }
+});
+
+app.get("/api/admin/revenuecat/customers/lookup", requireAdmin, async (req, res) => {
+  try {
+    const rawQuery = String(req.query?.query || "").trim();
+    const email = String(req.query?.email || "").trim() || (rawQuery.includes("@") ? rawQuery : "");
+    const customerId = String(req.query?.customerId || "").trim();
+    const userId = String(req.query?.userId || "").trim() || (!rawQuery.includes("@") ? rawQuery : "");
+
+    if (!rawQuery && !email && !customerId && !userId) {
+      return res.status(400).json({ message: "Provide a RevenueCat customer id, app user id, or email address." });
+    }
+
+    const snapshot = await getRevenueCatCustomerSnapshot({
+      customerId: customerId || null,
+      userId: userId || null,
+      email: email || null
+    });
+    return res.json(snapshot);
+  } catch (error) {
+    return handleServerError(res, "Failed to lookup RevenueCat customer", error);
   }
 });
 
@@ -3449,11 +3565,20 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
       authProvider: "email",
       emailVerified: false
     });
+
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const { hash: codeHash } = derivePasswordHash(verificationCode);
+    
+    await userAuth.updateUserVerificationCode(created.id, codeHash);
+    await sendVerificationEmail(email, verificationCode);
+
     const session = await issueSessionForUser(created.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+    
     return res.status(201).json({
       expiresAt: session.expiresAt,
-      user: sanitizeAuthUser(created)
+      user: sanitizeAuthUser(created),
+      requiresVerification: true
     });
   } catch (error) {
     return handleServerError(res, "Signup failed", error);
@@ -3615,6 +3740,76 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(for
     });
   } catch (error) {
     return handleServerError(res, "Forgot password confirm failed", error);
+  }
+});
+
+app.post("/api/auth/verify-email", async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: "Verification code is required" });
+
+    const session = await resolveSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Session expired" });
+
+    const user = await userAuth.findUserById(session.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (user.emailVerified) return res.status(400).json({ error: "Email already verified" });
+
+    if (!user.emailVerificationCodeHash) {
+      return res.status(400).json({ error: "No verification code requested" });
+    }
+
+    const [salt, storedHash] = user.emailVerificationCodeHash.split(":");
+    const { hash: inputHash } = derivePasswordHash(code, salt);
+    
+    if (inputHash !== user.emailVerificationCodeHash) {
+      return res.status(400).json({ error: "Invalid verification code" });
+    }
+
+    // Check expiry (e.g. 15 minutes)
+    const requestedAt = new Date(user.emailVerificationRequestedAt).getTime();
+    if (Date.now() - requestedAt > 15 * 60 * 1000) {
+      return res.status(400).json({ error: "Verification code expired. Please request a new one." });
+    }
+
+    await userAuth.verifyUserEmail(user.id);
+    
+    return res.json({ 
+      success: true, 
+      message: "Email verified successfully",
+      user: sanitizeAuthUser({ ...user, emailVerified: true })
+    });
+  } catch (error) {
+    return handleServerError(res, "Verification failed", error);
+  }
+});
+
+app.post("/api/auth/resend-verification", async (req, res) => {
+  try {
+    const session = await resolveSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Session expired" });
+
+    const user = await userAuth.findUserById(session.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (user.emailVerified) return res.status(400).json({ error: "Email already verified" });
+
+    // Rate limit resends (e.g. 1 minute)
+    if (user.emailVerificationRequestedAt) {
+      const requestedAt = new Date(user.emailVerificationRequestedAt).getTime();
+      if (Date.now() - requestedAt < 60 * 1000) {
+        return res.status(429).json({ error: "Please wait before requesting another code" });
+      }
+    }
+
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const { hash: codeHash } = derivePasswordHash(verificationCode);
+    
+    await userAuth.updateUserVerificationCode(user.id, codeHash);
+    await sendVerificationEmail(user.email, verificationCode);
+
+    return res.json({ success: true, message: "Verification code sent" });
+  } catch (error) {
+    return handleServerError(res, "Failed to resend verification", error);
   }
 });
 
@@ -8194,11 +8389,12 @@ app.get('/api/analytics/crypto', async (req, res) => {
     ];
 
     let etfInflows = await analytics.getEtfInflows(200);
+    
+    // If DB is empty, try to populate it with live data
     if (!etfInflows || etfInflows.length === 0) {
-      etfInflows = (Array.isArray(farsideFlows) && farsideFlows.length > 0)
+      const liveFlows = (Array.isArray(farsideFlows) && farsideFlows.length > 0)
         ? farsideFlows
         : (duneEtfFlowsRows ? duneEtfFlowsRows.map((row) => ({
-            id: row.id || `etf-${row.ticker}-${row.date}`,
             date: row.date,
             manager: row.manager,
             ticker: row.ticker,
@@ -8207,6 +8403,14 @@ app.get('/api/analytics/crypto', async (req, res) => {
             period: row.period || "daily",
             source: "Dune"
           })) : []);
+      
+      if (liveFlows.length > 0) {
+        await analytics.upsertEtfInflows(liveFlows);
+        etfInflows = liveFlows;
+      }
+    } else if (Array.isArray(farsideFlows) && farsideFlows.length > 0) {
+      // Even if DB has data, we can background-upsert the latest from Farside if successful
+      analytics.upsertEtfInflows(farsideFlows).catch(err => console.error("[ETF] Background upsert failed:", err));
     }
 
     res.json({

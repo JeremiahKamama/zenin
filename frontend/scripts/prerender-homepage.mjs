@@ -32,7 +32,10 @@ try {
   const template = await fs.readFile(distHtmlPath, "utf8");
   const { renderPublicHomepage } = require(tempModulePath);
   const appHtml = await renderPublicHomepage();
-  const rendered = template.replace('<div id="root"></div>', `<div id="root">${appHtml}</div>`);
+  const rendered = template.replace(
+    '<template id="zenin-public-prerender"></template>',
+    `<template id="zenin-public-prerender">${appHtml}</template>`
+  );
   await fs.writeFile(distHtmlPath, rendered, "utf8");
 } finally {
   await fs.rm(tempModulePath, { force: true });

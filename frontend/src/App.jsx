@@ -1,10 +1,5 @@
 import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./styles.css";
-import { startRegistration } from "@simplewebauthn/browser";
-import { Watchlist } from "./components/Watchlist";
-import { AssetModal } from "./components/AssetModal";
-import { IndicatorCountryModal } from "./components/IndicatorCountryModal";
-import { CompanyProfilePage } from "./components/CompanyProfilePage";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
 import { updateFXRates, convertToUSD, inferAssetCurrency } from "./utils/currencyUtils";
@@ -19,13 +14,9 @@ import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
-import { SpeedInsights } from "@vercel/speed-insights/react"
-import { Analytics } from "@vercel/analytics/react"
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
 import {
-  REVENUECAT_RECOMMENDED_SETUP,
-  REVENUECAT_WEB_API_KEY,
   formatRevenueCatError,
   isRevenueCatCancelledError,
   loadRevenueCatState,
@@ -97,6 +88,40 @@ const FullMetricsPage = lazyWithReloadRetry(
   () => import("./components/FullMetricsPage").then((mod) => ({ default: mod.FullMetricsPage })),
   "zenin_lazy_retry_metrics"
 );
+const Watchlist = lazyWithReloadRetry(
+  () => import("./components/Watchlist").then((mod) => ({ default: mod.Watchlist })),
+  "zenin_lazy_retry_watchlist"
+);
+const AssetModal = lazyWithReloadRetry(
+  () => import("./components/AssetModal").then((mod) => ({ default: mod.AssetModal })),
+  "zenin_lazy_retry_asset_modal"
+);
+const IndicatorCountryModal = lazyWithReloadRetry(
+  () => import("./components/IndicatorCountryModal").then((mod) => ({ default: mod.IndicatorCountryModal })),
+  "zenin_lazy_retry_indicator_modal"
+);
+const CompanyProfilePage = lazyWithReloadRetry(
+  () => import("./components/CompanyProfilePage").then((mod) => ({ default: mod.CompanyProfilePage })),
+  "zenin_lazy_retry_company"
+);
+const SpeedInsights = lazyWithReloadRetry(
+  () => import("@vercel/speed-insights/react").then((mod) => ({ default: mod.SpeedInsights })),
+  "zenin_lazy_retry_speed_insights"
+);
+const Analytics = lazyWithReloadRetry(
+  () => import("@vercel/analytics/react").then((mod) => ({ default: mod.Analytics })),
+  "zenin_lazy_retry_analytics_beacon"
+);
+
+let webAuthnBrowserModulePromise = null;
+
+async function getStartRegistration() {
+  if (!webAuthnBrowserModulePromise) {
+    webAuthnBrowserModulePromise = import("@simplewebauthn/browser");
+  }
+  const mod = await webAuthnBrowserModulePromise;
+  return mod.startRegistration;
+}
 
 
 
@@ -163,12 +188,38 @@ function normalizeCurrentPlan(plan) {
 const getFallbackAssetsForCategory = (category) =>
   getAppRuntimeConfig()?.watchlist?.fallbackAssetsByCategory?.[String(category || "").toLowerCase()] || [];
 
+const moduleLoadingFallback = <div className="loading-state module-loading-state">Loading workspace...</div>;
+
 const searchFallbackAssets = (query, type) => {
   const normalizedQuery = String(query || "").trim().toLowerCase();
+  const normalizedType = String(type || "").toLowerCase();
   if (!normalizedQuery) return [];
-  const category = String(type || "").toLowerCase() === "crypto"
+  if (normalizedType === "indicator" || normalizedType === "indicators") {
+    const fallbackMacroGeos = Array.isArray(getAppRuntimeConfig()?.analytics?.fallbackMacroGeos)
+      ? getAppRuntimeConfig().analytics.fallbackMacroGeos
+      : [];
+    return fallbackMacroGeos
+      .filter((geo) => String(geo?.type || "").trim().toLowerCase() === "country")
+      .filter((geo) => {
+        const code = String(geo?.code || "").trim().toLowerCase();
+        const name = String(geo?.name || "").trim().toLowerCase();
+        return code.includes(normalizedQuery) || name.includes(normalizedQuery);
+      })
+      .slice(0, 8)
+      .map((geo) => ({
+        symbol: String(geo?.code || "").trim().toUpperCase(),
+        name: String(geo?.name || "").trim(),
+        type: "indicator",
+        category: "indicators",
+        marketType: "macro",
+        market: "Macro",
+        countryCode: String(geo?.code || "").trim().toUpperCase(),
+        countryName: String(geo?.name || "").trim()
+      }));
+  }
+  const category = normalizedType === "crypto"
     ? "crypto"
-    : String(type || "").toLowerCase() === "indicator"
+    : normalizedType === "indicator" || normalizedType === "indicators"
       ? "indicators"
       : "stocks";
   return getFallbackAssetsForCategory(category)
@@ -2733,6 +2784,23 @@ const handleOptionTradeClosed = async (tradeId) => {
     offerings: null,
     access: null
   });
+  const formatSubscriptionUserError = useCallback((error, fallback = "We couldn't load subscription details right now. Please try again shortly.") => {
+    if (isRevenueCatCancelledError(error)) {
+      return "Purchase canceled.";
+    }
+    const rawMessage = formatRevenueCatError(error);
+    const normalized = String(rawMessage || "").trim().toLowerCase();
+    if (
+      normalized.includes("revenuecat api key") ||
+      normalized.includes("offering") ||
+      normalized.includes("entitlement") ||
+      normalized.includes("product") ||
+      normalized.includes("app user id")
+    ) {
+      return fallback;
+    }
+    return rawMessage;
+  }, []);
 
   useEffect(() => {
     if (!authenticatorOptions.length) return;
@@ -3049,7 +3117,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         customerInfo: null,
         offerings: null,
         access: null,
-        error: formatRevenueCatError(error)
+        error: formatSubscriptionUserError(error)
       }));
       return null;
     }
@@ -3058,6 +3126,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     authDisplayName,
     authUserId,
     emailNotificationDestination,
+    formatSubscriptionUserError,
     isGuestUser,
     syncRevenueCatPlanToAccount,
     userEmail
@@ -3100,15 +3169,14 @@ const handleOptionTradeClosed = async (tradeId) => {
       setRevenueCatState((prev) => ({
         ...prev,
         purchasing: false,
-        error: isRevenueCatCancelledError(error)
-          ? "Purchase canceled."
-          : formatRevenueCatError(error)
+        error: formatSubscriptionUserError(error, "We couldn't update your subscription right now. Please try again shortly.")
       }));
     }
   }, [
     authDisplayName,
     authUserId,
     emailNotificationDestination,
+    formatSubscriptionUserError,
     isGuestUser,
     refreshRevenueCatState,
     userEmail
@@ -3121,7 +3189,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (!currentOffering || !currentOffering.availablePackages?.length) {
       setRevenueCatState((prev) => ({
         ...prev,
-        error: "No RevenueCat offering is currently configured. Create products, entitlements, and a current offering first."
+        error: "Subscription changes are temporarily unavailable right now. Please try again shortly."
       }));
       return;
     }
@@ -3162,14 +3230,15 @@ const handleOptionTradeClosed = async (tradeId) => {
         ...prev,
         paywallBusy: false,
         error: isRevenueCatCancelledError(error)
-          ? "Paywall closed without purchasing."
-          : formatRevenueCatError(error)
+          ? "Billing window closed without changing your plan."
+          : formatSubscriptionUserError(error, "We couldn't open subscription options right now. Please try again shortly.")
       }));
     }
   }, [
     authDisplayName,
     authUserId,
     emailNotificationDestination,
+    formatSubscriptionUserError,
     isGuestUser,
     refreshRevenueCatState,
     revenueCatState.access,
@@ -3203,10 +3272,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     () => revenueCatState.offerings?.current?.availablePackages || [],
     [revenueCatState.offerings]
   );
-  const revenueCatApiKeyPreview = useMemo(() => {
-    const raw = String(REVENUECAT_WEB_API_KEY || "");
-    return raw ? `${raw.slice(0, 8)}...${raw.slice(-4)}` : "Not configured";
-  }, []);
 
   const fetchTotpSetup = useCallback(async () => {
     if (isGuestUser) return;
@@ -3759,6 +3824,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         if (!optionsRes.ok) throw new Error(options?.error || "Failed to get registration options.");
 
         // Step 2: Start the WebAuthn registration ceremony in the browser
+        const startRegistration = await getStartRegistration();
         const attResp = await startRegistration(options);
 
         // Step 3: Send the result back to the server for verification
@@ -4082,15 +4148,17 @@ const handleOptionTradeClosed = async (tradeId) => {
       <main className="main-content">
         {routeState.type === "company" ? (
           <div className="view-container">
-            <CompanyProfilePage
-              symbol={routeState.symbol}
-              asset={routedCompanyAsset}
-              onBack={navigateToAppRoute}
-            />
+            <Suspense fallback={moduleLoadingFallback}>
+              <CompanyProfilePage
+                symbol={routeState.symbol}
+                asset={routedCompanyAsset}
+                onBack={navigateToAppRoute}
+              />
+            </Suspense>
           </div>
         ) : (
           <GenericErrorBoundary>
-            <Suspense fallback={<div className="loading-state module-loading-state">Loading workspace...</div>}>
+            <Suspense fallback={moduleLoadingFallback}>
         {activeSection === "Home" && (
           <HomeModule
             portfolio={portfolioWithEntry}
@@ -4344,28 +4412,30 @@ const handleOptionTradeClosed = async (tradeId) => {
       </main>
 
       {selectedAsset && (
-        normalizeAssetType(selectedAsset) === "indicator" ? (
-          <IndicatorCountryModal
-            asset={selectedAsset}
-            onClose={() => setSelectedAsset(null)}
-            isInWatchlist={isInWatchlist}
-            onToggleStar={toggleWatchlistStar}
-          />
-        ) : (
-          <AssetModal
-            asset={selectedAsset}
-            onClose={() => setSelectedAsset(null)}
-            onConfirm={addToPortfolio}
-            isInWatchlist={isInWatchlist}
-            onToggleStar={toggleWatchlistStar}
-            onViewCompanyProfile={openCompanyProfile}
-            portfolio={portfolioWithEntry}
-            balance={balance}
-            cashBalances={cashBalances}
-            trades={trades}
-            spotPrices={spotPrices}
-          />
-        )
+        <Suspense fallback={null}>
+          {normalizeAssetType(selectedAsset) === "indicator" ? (
+            <IndicatorCountryModal
+              asset={selectedAsset}
+              onClose={() => setSelectedAsset(null)}
+              isInWatchlist={isInWatchlist}
+              onToggleStar={toggleWatchlistStar}
+            />
+          ) : (
+            <AssetModal
+              asset={selectedAsset}
+              onClose={() => setSelectedAsset(null)}
+              onConfirm={addToPortfolio}
+              isInWatchlist={isInWatchlist}
+              onToggleStar={toggleWatchlistStar}
+              onViewCompanyProfile={openCompanyProfile}
+              portfolio={portfolioWithEntry}
+              balance={balance}
+              cashBalances={cashBalances}
+              trades={trades}
+              spotPrices={spotPrices}
+            />
+          )}
+        </Suspense>
       )}
 
       {tradeToast && (
@@ -4798,14 +4868,16 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <div className="settings-panel-body">
                         <div className="settings-chip-row">
                           <span className="settings-chip success">Current: {accountPlanLabel}</span>
-                          <span className="settings-chip">RevenueCat key: {revenueCatApiKeyPreview}</span>
+                          <span className="settings-chip">
+                            {revenueCatState.access?.hasActiveSubscription ? "Subscription active" : "No active paid subscription"}
+                          </span>
                         </div>
                         <p className="settings-meta" style={{ marginTop: "10px" }}>
-                          RevenueCat Web Billing is configured for this app and uses your signed-in Zenin user as the RevenueCat App User ID.
+                          Check your current plan, change plans when options are available, and manage billing from one place.
                         </p>
 
                         {isGuestUser ? (
-                          <p className="settings-status info">Sign in to load RevenueCat offerings, purchase subscriptions, and manage billing.</p>
+                          <p className="settings-status info">Sign in to view your subscription, change plans, and manage billing.</p>
                         ) : null}
 
                         {!isGuestUser ? (
@@ -4818,7 +4890,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 }}
                                 disabled={revenueCatState.loading || revenueCatState.purchasing || revenueCatState.paywallBusy}
                               >
-                                {revenueCatState.loading ? "Refreshing..." : "Refresh RevenueCat"}
+                                {revenueCatState.loading ? "Refreshing..." : "Refresh Subscription"}
                               </button>
                               <button
                                 className="settings-secondary-btn"
@@ -4832,7 +4904,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   revenueCatPackages.length === 0
                                 }
                               >
-                                {revenueCatState.paywallBusy ? "Opening Paywall..." : "Present RevenueCat Paywall"}
+                                {revenueCatState.paywallBusy ? "Opening Billing..." : "Change Plan"}
                               </button>
                               <button
                                 className="settings-secondary-btn"
@@ -4857,37 +4929,27 @@ const handleOptionTradeClosed = async (tradeId) => {
                               }}
                             >
                               <p className="settings-meta" style={{ marginTop: 0 }}>
-                                RevenueCat customer
+                                Subscription status
                               </p>
                               <p style={{ margin: "6px 0 0", fontWeight: 600 }}>
-                                {authUserId || "Unavailable"}
+                                {revenueCatState.access?.hasActiveSubscription
+                                  ? `${String(currentPlan || "starter").toUpperCase()} plan`
+                                  : "Starter plan"}
                               </p>
                               <p className="settings-meta" style={{ marginTop: "10px" }}>
-                                Active entitlements: {revenueCatState.access?.activeEntitlements?.length || 0}
-                                {" · "}
-                                Active subscriptions: {revenueCatState.access?.activeProductIdentifiers?.length || 0}
-                                {" · "}
                                 Billing cycle: {currentBillingCycle.toUpperCase()}
                               </p>
-                              {revenueCatState.access?.activeEntitlements?.length ? (
-                                <div className="settings-chip-row" style={{ marginTop: "12px" }}>
-                                  {revenueCatState.access.activeEntitlements.map((entitlement) => (
-                                    <span key={entitlement.identifier} className="settings-chip success">
-                                      {entitlement.identifier}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="settings-meta" style={{ marginTop: "10px" }}>
-                                  No active entitlements yet. This is expected until you create products, attach them to entitlements, and complete a sandbox purchase.
-                                </p>
-                              )}
+                              <p className="settings-meta" style={{ marginTop: "10px" }}>
+                                {revenueCatState.access?.managementURL
+                                  ? "Use Manage Subscription to open your billing portal."
+                                  : "A billing portal link will appear here when it is available for your subscription."}
+                              </p>
                             </div>
 
                             {revenueCatPackages.length ? (
                               <div style={{ marginTop: "18px" }}>
                                 <p className="settings-meta" style={{ marginTop: 0 }}>
-                                  Current offering: {revenueCatState.offerings?.current?.identifier || REVENUECAT_RECOMMENDED_SETUP.offeringId}
+                                  Available plans
                                 </p>
                                 <div style={{ display: "grid", gap: "12px", marginTop: "12px" }}>
                                   {revenueCatPackages.map((pkg) => (
@@ -4904,17 +4966,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                                         <div>
                                           <strong>{pkg.webBillingProduct.title || pkg.identifier}</strong>
                                           <p className="settings-meta" style={{ marginTop: "6px" }}>
-                                            {pkg.webBillingProduct.description || "RevenueCat product ready for purchase."}
-                                          </p>
-                                          <p className="settings-meta" style={{ marginTop: "6px" }}>
-                                            Product ID: {pkg.webBillingProduct.identifier}
+                                            {pkg.webBillingProduct.description || "Review this subscription option and choose it if it matches the access you need."}
                                           </p>
                                         </div>
                                         <div style={{ textAlign: "right" }}>
                                           <strong>{pkg.webBillingProduct.currentPrice.formattedPrice}</strong>
-                                          <p className="settings-meta" style={{ marginTop: "6px" }}>
-                                            Package: {pkg.identifier}
-                                          </p>
                                         </div>
                                       </div>
                                       <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
@@ -4925,7 +4981,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                           }}
                                           disabled={revenueCatState.loading || revenueCatState.purchasing || revenueCatState.paywallBusy}
                                         >
-                                          {revenueCatState.purchasing ? "Opening Checkout..." : "Purchase Package"}
+                                          {revenueCatState.purchasing ? "Opening Checkout..." : "Choose Plan"}
                                         </button>
                                       </div>
                                     </div>
@@ -4941,18 +4997,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   borderRadius: "14px"
                                 }}
                               >
-                                <p style={{ margin: 0, fontWeight: 600 }}>RevenueCat setup still needs products and an offering</p>
+                                <p style={{ margin: 0, fontWeight: 600 }}>Subscription options are not available right now</p>
                                 <p className="settings-meta" style={{ marginTop: "8px" }}>
-                                  Recommended starter setup for Zenin:
-                                </p>
-                                <p className="settings-meta" style={{ marginTop: "8px" }}>
-                                  Entitlements: <code>{REVENUECAT_RECOMMENDED_SETUP.entitlementIds.pro}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.entitlementIds.desk}</code>
-                                </p>
-                                <p className="settings-meta" style={{ marginTop: "8px" }}>
-                                  Products: <code>{REVENUECAT_RECOMMENDED_SETUP.products.proMonthly}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.products.proYearly}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.products.deskMonthly}</code>, <code>{REVENUECAT_RECOMMENDED_SETUP.products.deskYearly}</code>
-                                </p>
-                                <p className="settings-meta" style={{ marginTop: "8px" }}>
-                                  Offering: <code>{REVENUECAT_RECOMMENDED_SETUP.offeringId}</code> with packages for your monthly and yearly plans.
+                                  Please try again shortly. If this keeps happening, contact support and we’ll help you change your plan.
                                 </p>
                               </div>
                             )}
@@ -4973,14 +5020,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                               <p className="settings-status info">Syncing purchased access back into your Zenin account...</p>
                             ) : null}
                             <p className="settings-meta" style={{ marginTop: "12px" }}>
-                              Best practice: rely on RevenueCat entitlements for access checks, and use the RevenueCat management URL or Web Billing customer portal for subscription self-service after purchase.
+                              Use Change Plan to review upgrades or downgrades, and use Manage Subscription for billing self-service after purchase.
                             </p>
                           </>
                         ) : null}
 
-                        {(userEmail === "jeremiahkamama@gmail.com" || userEmail.startsWith("admin")) && (
+                        {isAdmin && import.meta.env.DEV && (
                           <div style={{ marginTop: "20px", padding: "12px", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: "8px" }}>
-                            <h4 style={{ margin: "0 0 10px 0", color: "#f87171" }}>Developer Admin Simulator</h4>
+                            <h4 style={{ margin: "0 0 10px 0", color: "#f87171" }}>Developer Plan Simulator</h4>
                             <label className="settings-field">
                               <span>Simulate Plan Tier</span>
                               <select 
@@ -5336,8 +5383,10 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         </div>
       )}
-      <SpeedInsights />
-      <Analytics />
+      <Suspense fallback={null}>
+        <SpeedInsights />
+        <Analytics />
+      </Suspense>
     </div>
   );
 }

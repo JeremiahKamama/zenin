@@ -116,6 +116,7 @@ const pricesQuerySchema = z.object({
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(100),
+  type: z.enum(["tradfi", "crypto", "indicator", "indicators"]).optional().default("tradfi"),
 });
 
 const emailRequestSchema = z.object({

@@ -110,6 +110,79 @@ async function sendPasswordResetEmail(email, resetToken) {
   }
 }
 
+/**
+ * Sends an account verification email to a user with a 6-digit code.
+ * Falls back to console logging in local/dev environments.
+ * @param {string} email - Recipient email address
+ * @param {string} code - The 6-digit verification code
+ */
+async function sendVerificationEmail(email, code) {
+  const client = getResendClient();
+
+  // --- Dev fallback: no Resend key ---
+  if (!client) {
+    console.warn("[Email] RESEND_API_KEY missing or placeholder — falling back to console log.");
+    console.log("\n" + "=".repeat(70));
+    console.log("[DEV] Verification email NOT sent (Resend not configured).");
+    console.log(`[DEV] Recipient: ${email}`);
+    console.log(`[DEV] Code     : ${code}`);
+    console.log("=".repeat(70) + "\n");
+    return false;
+  }
+
+  const htmlContent = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 8px; background-color: #ffffff; color: #333333;">
+      <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #000000; margin: 0;">ZENIN</h1>
+        <p style="color: #666666; font-size: 14px; margin-top: 5px;">Capital Management</p>
+      </div>
+      
+      <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 20px;">Verify your account</h2>
+      
+      <p style="font-size: 16px; line-height: 1.5; margin-bottom: 25px;">
+        To complete your registration with Zenin Capital, please enter the following verification code:
+      </p>
+      
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="display: inline-block; padding: 16px 32px; background-color: #f3f4f6; color: #000000; border-radius: 8px; font-weight: 700; font-size: 32px; letter-spacing: 0.1em;">
+          ${code}
+        </div>
+      </div>
+      
+      <p style="font-size: 14px; line-height: 1.5; color: #666666; margin-bottom: 20px;">
+        If you didn't request this, you can safely ignore this email.
+      </p>
+      
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 30px 0;">
+      
+      <p style="font-size: 12px; color: #999999; text-align: center; margin: 0;">
+        &copy; ${new Date().getFullYear()} Zenin Capital. All rights reserved.
+      </p>
+    </div>
+  `;
+
+  try {
+    const { data, error } = await client.emails.send({
+      from: SMTP_FROM,
+      to: email,
+      subject: `Verify your Zenin Capital account - ${code}`,
+      html: htmlContent,
+    });
+
+    if (error) {
+      console.error(`[Email] Resend error sending to ${email}:`, error);
+      return false;
+    }
+
+    console.log(`[Email] Sent verification to ${email} (id: ${data.id})`);
+    return true;
+  } catch (err) {
+    console.error(`[Email] Unexpected error sending verification to ${email}:`, err);
+    return false;
+  }
+}
+
 module.exports = {
   sendPasswordResetEmail,
+  sendVerificationEmail,
 };

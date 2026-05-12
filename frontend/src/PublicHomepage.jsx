@@ -108,6 +108,7 @@ export default function PublicHomepage() {
   useRuntimeConfig({ enabled: true });
   const [menuOpen, setMenuOpen] = useState(false);
   const [authUser, setAuthUser] = useState(() => readStoredAuthUser());
+  const [authSyncing, setAuthSyncing] = useState(true);
   const [openAppChecking, setOpenAppChecking] = useState(false);
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
@@ -130,7 +131,7 @@ export default function PublicHomepage() {
     () => normalizeBillingCycle(authUser?.currentBillingCycle || "monthly"),
     [authUser?.currentBillingCycle]
   );
-  const hasAuthenticatedPlanContext = Boolean(authUser?.id);
+  const hasAuthenticatedPlanContext = !authSyncing && Boolean(authUser?.id);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -251,14 +252,17 @@ export default function PublicHomepage() {
           setAuthUser(data.user);
           saveAuthUser(data.user);
           setBillingCycle(normalizeBillingCycle(data.user.currentBillingCycle || "monthly"));
-          return;
+        } else {
+          setAuthUser(null);
+          localStorage.removeItem("zenin_auth_user");
+          localStorage.removeItem("zenin_auth_expires_at");
         }
-        setAuthUser(null);
-        localStorage.removeItem("zenin_auth_user");
-        localStorage.removeItem("zenin_auth_expires_at");
       })
-      .catch(() => {
-        // best-effort sync
+      .catch((err) => {
+        console.error("Session verification failed:", err);
+      })
+      .finally(() => {
+        if (mounted) setAuthSyncing(false);
       });
     return () => {
       mounted = false;
@@ -372,7 +376,6 @@ export default function PublicHomepage() {
 
           <nav className={`nav-links ${menuOpen ? "open" : ""}`} aria-label="Primary navigation">
             <a href="#features">Features</a>
-            <a href="#screens">Screens</a>
             <a href="#coverage">Coverage</a>
             <a href="#pricing">Pricing</a>
             <a href="#about">About</a>

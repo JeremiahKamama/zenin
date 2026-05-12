@@ -162,6 +162,7 @@ export default function AuthPage() {
   const [signupTouched, setSignupTouched] = useState(false);
   const [signinTouched, setSigninTouched] = useState(false);
   const [legalDoc, setLegalDoc] = useState("");
+  const [verifyCode, setVerifyCode] = useState("");
 
   const signupPasswordRules = useMemo(() => getPasswordRuleState(signupForm.password), [signupForm.password]);
   const signupStrengthLabel = useMemo(() => getPasswordStrengthLabel(signupPasswordRules), [signupPasswordRules]);
@@ -238,6 +239,16 @@ export default function AuthPage() {
   const setModeAndUrl = (nextMode) => {
     setError("");
     setMessage("");
+    
+    // Pre-fill email if moving from signup to signin with an entered email
+    if (nextMode === "signin" && mode === "signup" && signupForm.email) {
+      setSigninForm((prev) => ({ ...prev, email: signupForm.email }));
+    }
+    // Pre-fill email if moving from signin to signup
+    if (nextMode === "signup" && mode === "signin" && signinForm.email) {
+      setSignupForm((prev) => ({ ...prev, email: signinForm.email }));
+    }
+
     setMode(nextMode);
     const url = new URL(window.location.href);
     url.searchParams.set("mode", nextMode);
@@ -288,7 +299,30 @@ export default function AuthPage() {
     });
     const data = await readJson(res);
     persistAuth(data);
+    if (data.requiresVerification) {
+      setSignupStep("verify");
+    } else {
+      setSignupStep("created");
+    }
+  });
+
+  const onVerifyEmail = () => runAction(async () => {
+    if (!/^\d{6}$/.test(verifyCode.trim())) throw new Error("Enter a 6-digit verification code.");
+    const res = await zeninFetch("/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ code: verifyCode.trim() })
+    });
+    const data = await readJson(res);
+    persistAuth(data);
     setSignupStep("created");
+  });
+
+  const onResendVerification = () => runAction(async () => {
+    const res = await zeninFetch("/auth/resend-verification", {
+      method: "POST"
+    });
+    const data = await readJson(res);
+    setMessage(data.message || "Verification code resent.");
   });
 
   const onSignin = (overrideCode) => runAction(async () => {
@@ -427,6 +461,7 @@ export default function AuthPage() {
                 className={`auth-v2-input ${signupEmailInvalid ? "is-error" : ""}`}
                 type="email"
                 placeholder="you@example.com"
+                autoComplete="email"
                 value={signupForm.email}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, email: e.target.value }))}
               />
@@ -436,7 +471,7 @@ export default function AuthPage() {
                 {loading ? "Please wait..." : "Continue"}
               </button>
 
-              <div className="auth-v2-divider"><span>Or continue with</span></div>
+              <div className="auth-v2-divider">Or continue with</div>
               <div className="auth-v2-oauth-row">
                 <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
                   <span className="provider-icon">G</span>
@@ -450,11 +485,7 @@ export default function AuthPage() {
                 ) : null}
               </div>
 
-              <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={() => setSignupStep("passkey")}>Sign up with passkey</button>
-              <p className="auth-v2-footnote">Use Face ID, Touch ID, Windows Hello, or your device passcode.</p>
-
               <div className="auth-v2-divider auth-v2-divider-soft" />
-
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => setModeAndUrl("signin")}>Sign in</button></p>
               <p className="auth-v2-terms">By continuing, you agree to Zenin Capital&apos;s <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("terms")}>Terms</button> and <button type="button" className="auth-v2-link-btn" onClick={() => openLegalDoc("privacy")}>Privacy Policy</button>.</p>
             </>
@@ -500,7 +531,6 @@ export default function AuthPage() {
               </ul>
 
               <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onCreateAccount}>Create account</button>
-              <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => setSignupStep("passkey")}>Use passkey instead</button>
 
               <div className="auth-v2-divider"><span>Or continue with</span></div>
               <div className="auth-v2-oauth-row">
@@ -545,6 +575,30 @@ export default function AuthPage() {
 
               <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onRegisterPasskey}>Create passkey</button>
               <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={() => setSignupStep("secure")}>Use password instead</button>
+              {message ? <p className="auth-v2-success-inline">✓ {message}</p> : null}
+            </>
+          )}
+
+          {mode === "signup" && signupStep === "verify" && (
+            <>
+              <h1>Verify your email</h1>
+              <p className="auth-v2-subtitle">We&apos;ve sent a 6-digit code to <strong>{signupForm.email}</strong>. Enter it below to verify your account.</p>
+
+              <label className="auth-v2-label" htmlFor="verify-code">Verification code</label>
+              <input
+                id="verify-code"
+                className="auth-v2-input"
+                type="text"
+                placeholder="000000"
+                maxLength={6}
+                value={verifyCode}
+                onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ""))}
+              />
+
+              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onVerifyEmail}>Verify account</button>
+              <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={onResendVerification}>Resend code</button>
+              
+              <p className="auth-v2-bottom-link">Entered the wrong email? <button className="auth-v2-link-btn" onClick={() => setSignupStep("email")}>Change email</button></p>
               {message ? <p className="auth-v2-success-inline">✓ {message}</p> : null}
             </>
           )}
@@ -630,27 +684,29 @@ export default function AuthPage() {
                 </>
               ) : (
                 <>
-                  <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={() => onSignin()}>Sign in</button>
-
-                  <div className="auth-v2-divider"><span>Or</span></div>
-
-                  <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-passkey-entry" disabled={loading} onClick={onPasskeySignin}>
-                    🔑 Sign in with Passkey
+                  <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={() => onSignin()}>
+                    {loading ? "Signing in..." : "Sign in"}
                   </button>
 
-                  <div className="auth-v2-divider"><span>Or continue with</span></div>
-                  <div className="auth-v2-oauth-row auth-v2-oauth-row-stacked">
+                  <div className="auth-v2-divider">Or continue with</div>
+                  
+                  <div className="auth-v2-oauth-row">
                     <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuthStart("google")}>
                       <span className="provider-icon">G</span>
-                      <span>Continue with Google</span>
+                      <span>Google</span>
                     </button>
                     {enableAppleOAuth ? (
                       <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuthStart("apple")}>
                         <span className="provider-icon"></span>
-                        <span>Continue with Apple</span>
+                        <span>Apple</span>
                       </button>
                     ) : null}
                   </div>
+
+                  <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={onPasskeySignin}>
+                    <span>🔑</span>
+                    <span>Sign in with Passkey</span>
+                  </button>
                 </>
               )}
 
@@ -710,7 +766,20 @@ export default function AuthPage() {
           )}
 
           {message ? <p className="auth-v2-message">{message}</p> : null}
-          {error ? <p className="auth-v2-error">{error}</p> : null}
+          {error ? (
+            <div className="auth-v2-error-container">
+              <p className="auth-v2-error">{error}</p>
+              {error.toLowerCase().includes("exists") && mode === "signup" && (
+                <button 
+                  className="auth-v2-link-btn" 
+                  style={{ display: 'block', margin: '8px auto 0', fontSize: '14px' }}
+                  onClick={() => setModeAndUrl("signin")}
+                >
+                  Sign in instead?
+                </button>
+              )}
+            </div>
+          ) : null}
         </section>
       </main>
       <AuthLegalModal doc={legalDoc} onClose={closeLegalDoc} />

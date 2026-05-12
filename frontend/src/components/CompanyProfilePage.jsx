@@ -1434,8 +1434,8 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 {/* News Feed */}
                 <section className="intel-section">
                   <h3 className="intel-title">Latest News</h3>
-                  <div className="intel-news-list">
-                    {finvizData.news?.slice(0, 12).map((n, i) => (
+                  <div className="intel-news-list intel-news-list-scrollable">
+                    {finvizData.news?.map((n, i) => (
                       <a key={`news-${i}`} className="intel-news-item" href={n.link} target="_blank" rel="noreferrer">
                         <span className="news-time">{n.timestamp}</span>
                         <div className="news-body">

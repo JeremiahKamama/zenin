@@ -658,6 +658,7 @@ body.dark-theme .nav-btn.active {
 
 .sidebar.collapsed .sidebar-nav {
   align-items: center;
+  overflow: hidden;
 }
 
 .sidebar.collapsed .nav-btn {
@@ -11297,6 +11298,29 @@ body.dark-theme .sidebar-footer {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.intel-news-list-scrollable {
+  max-height: 440px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.intel-news-list-scrollable::-webkit-scrollbar {
+  width: 5px;
+}
+
+.intel-news-list-scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.intel-news-list-scrollable::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+}
+
+.intel-news-list-scrollable::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
 }
 
 .intel-news-item {

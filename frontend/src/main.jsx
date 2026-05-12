@@ -69,7 +69,10 @@ function applyGlobalTheme() {
 applyGlobalTheme();
 
 const rootElement = redirectedToAuth ? null : document.getElementById("root");
-const hasPrerenderedMarkup = !redirectedToAuth && entry === "public" && Boolean(rootElement?.hasChildNodes());
+const hasPrerenderedMarkup =
+  !redirectedToAuth &&
+  entry === "public" &&
+  rootElement?.dataset?.prerendered === "public";
 
 if (!redirectedToAuth) {
 loadEntryComponent(entry).then((RootComponent) => {

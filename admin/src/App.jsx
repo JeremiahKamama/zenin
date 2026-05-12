@@ -157,7 +157,17 @@ const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US
   maximumFractionDigits: 0,
 }).format(Number(value || 0));
 
+const formatMoneyAmount = (value, currency = 'USD') => new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency,
+  maximumFractionDigits: 2,
+}).format(Number(value || 0));
+
 const formatMetricNumber = (value) => Number(value || 0).toLocaleString();
+
+const formatStatusLabel = (value, fallback = 'unknown') => String(value || fallback)
+  .replace(/[_-]+/g, ' ')
+  .replace(/\b\w/g, (char) => char.toUpperCase());
 
 const formatAdminRoleLabel = (role) => {
   const value = String(role || 'user').trim().toLowerCase();
@@ -548,6 +558,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
   const sessions = details?.sessions || [];
   const recentAudit = details?.recentAudit || [];
   const recentActivity = details?.recentActivity || [];
+  const revenueCat = details?.revenueCat || null;
 
   const requestReason = (label) => window.prompt(`Reason for ${label.toLowerCase()}:`, '')?.trim();
 
@@ -681,6 +692,11 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                 <div className="detail-value">{resolvedUser.billingCycle || 'monthly'}</div>
               </div>
             </div>
+          </div>
+
+          <div className="detail-section">
+            <h4 className="detail-section-title">RevenueCat</h4>
+            <RevenueCatCustomerSnapshot snapshot={revenueCat} />
           </div>
 
           <div className="detail-section">
@@ -1847,10 +1863,154 @@ const AuditTrailView = ({ auditData, onSelectEvent, onOpenUser, seedQuery = '' }
   );
 };
 
+const RevenueCatCustomerSnapshot = ({ snapshot, compact = false }) => {
+  if (!snapshot?.configured) {
+    return (
+      <p style={{ fontSize: compact ? '12px' : '13px', color: 'var(--text-muted)' }}>
+        RevenueCat admin access is not configured on the backend yet.
+      </p>
+    );
+  }
+
+  if (!snapshot?.found || !snapshot?.customer) {
+    return (
+      <p style={{ fontSize: compact ? '12px' : '13px', color: 'var(--text-muted)' }}>
+        No RevenueCat customer was found for this record yet.
+      </p>
+    );
+  }
+
+  const customer = snapshot.customer;
+  const subscriptions = snapshot.subscriptions || [];
+  const entitlements = snapshot.activeEntitlements || [];
+  const invoices = snapshot.invoices || [];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? '12px' : '14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr' : '1fr 1fr', gap: '12px' }}>
+        <div style={{ padding: compact ? '12px' : '14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Customer ID</p>
+          <p style={{ fontSize: compact ? '12px' : '13px', fontWeight: 600, fontFamily: 'monospace', wordBreak: 'break-all' }}>{customer.id}</p>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+            Matched via {formatStatusLabel(snapshot.resolution || 'direct')}
+          </p>
+        </div>
+        <div style={{ padding: compact ? '12px' : '14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Profile</p>
+          <p style={{ fontSize: compact ? '12px' : '13px', fontWeight: 600 }}>{customer.displayName || customer.email || 'Unnamed customer'}</p>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+            {customer.email || 'No email'}{customer.createdAt ? ` • Created ${formatAbsoluteDate(customer.createdAt)}` : ''}
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '12px' }}>
+        <div style={{ padding: compact ? '10px 12px' : '12px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Entitlements</p>
+          <p style={{ fontSize: compact ? '16px' : '18px', fontWeight: 700 }}>{formatMetricNumber(entitlements.length)}</p>
+        </div>
+        <div style={{ padding: compact ? '10px 12px' : '12px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Subscriptions</p>
+          <p style={{ fontSize: compact ? '16px' : '18px', fontWeight: 700 }}>{formatMetricNumber(subscriptions.length)}</p>
+        </div>
+        <div style={{ padding: compact ? '10px 12px' : '12px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Invoices</p>
+          <p style={{ fontSize: compact ? '16px' : '18px', fontWeight: 700 }}>{formatMetricNumber(invoices.length)}</p>
+        </div>
+      </div>
+
+      {customer.managementUrl ? (
+        <div>
+          <a className="btn btn-secondary" href={customer.managementUrl} target="_blank" rel="noreferrer" style={{ fontSize: '12px', height: compact ? '32px' : '34px' }}>
+            Open Customer Portal
+          </a>
+        </div>
+      ) : null}
+
+      {entitlements.length ? (
+        <div>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>Entitlements</p>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {entitlements.map((item) => (
+              <span key={`${customer.id}-${item.id}`} className="badge badge-success" style={{ fontSize: '10px' }}>
+                {item.id}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {subscriptions.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Subscriptions</p>
+          {subscriptions.slice(0, compact ? 2 : 4).map((item) => (
+            <div key={`${customer.id}-${item.id}`} style={{ padding: compact ? '10px 12px' : '12px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+              <div>
+                <p style={{ fontSize: compact ? '12px' : '13px', fontWeight: 600 }}>{item.productId}</p>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {formatStatusLabel(item.status)} • {formatStatusLabel(item.store)}
+                </p>
+              </div>
+              <div style={{ textAlign: 'right', fontSize: '11px', color: 'var(--text-muted)' }}>
+                <p>{item.currentPeriodEndsAt ? formatAbsoluteDate(item.currentPeriodEndsAt) : 'No renewal date'}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {invoices.length && !compact ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Recent Invoices</p>
+          {invoices.slice(0, 3).map((invoice) => (
+            <div key={`${customer.id}-${invoice.id}`} style={{ padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+              <div>
+                <p style={{ fontSize: '13px', fontWeight: 600 }}>{invoice.id}</p>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {formatStatusLabel(invoice.status)} • {formatAbsoluteDate(invoice.createdAt)}
+                </p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <p style={{ fontSize: '13px', fontWeight: 600 }}>{formatMoneyAmount(invoice.amount, invoice.currency)}</p>
+                {invoice.hostedUrl ? (
+                  <a className="btn btn-secondary" href={invoice.hostedUrl} target="_blank" rel="noreferrer" style={{ fontSize: '12px', height: '32px' }}>
+                    Open
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const BillingView = ({ stats }) => {
   const adminUi = useAdminUi();
   const summary = stats?.summary || {};
   const providerStatus = stats?.providerStatus || {};
+  const revenueCat = stats?.revenueCat || {};
+  const [lookupQuery, setLookupQuery] = useState('');
+  const [lookupResult, setLookupResult] = useState(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState('');
+
+  const handleRevenueCatLookup = async () => {
+    const trimmed = lookupQuery.trim();
+    if (!trimmed) return;
+    setLookupLoading(true);
+    setLookupError('');
+    try {
+      const payload = await adminFetch(`/revenuecat/customers/lookup?query=${encodeURIComponent(trimmed)}`);
+      setLookupResult(payload);
+    } catch (error) {
+      setLookupResult(null);
+      setLookupError(error.message || 'RevenueCat lookup failed.');
+    } finally {
+      setLookupLoading(false);
+    }
+  };
 
   return (
     <div className="fade-in">
@@ -1900,6 +2060,113 @@ const BillingView = ({ stats }) => {
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', gap: '16px' }}>
+            <div>
+              <h3 style={{ fontSize: '18px', fontWeight: 600 }}>RevenueCat</h3>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Server-side RevenueCat status, catalog health, and customer inspection.
+              </p>
+            </div>
+            <span className={`badge badge-${revenueCat?.providerStatus?.status === 'active' || revenueCat?.providerStatus?.status === 'connected' ? 'success' : 'warning'}`}>
+              {String(revenueCat?.providerStatus?.status || 'unknown').toUpperCase()}
+            </span>
+          </div>
+          <div className="prop-list">
+            <div className="prop-item"><span className="prop-label">Project</span><span className="prop-value">{revenueCat?.providerStatus?.projectIdPreview || 'missing'}</span></div>
+            <div className="prop-item"><span className="prop-label">Secret Key</span><span className="prop-value">{revenueCat?.providerStatus?.secretKeyPreview || 'missing'}</span></div>
+            <div className="prop-item"><span className="prop-label">Offerings</span><span className="prop-value">{formatMetricNumber(revenueCat?.summary?.offeringsCount || 0)}</span></div>
+            <div className="prop-item"><span className="prop-label">Entitlements</span><span className="prop-value">{formatMetricNumber(revenueCat?.summary?.entitlementsCount || 0)}</span></div>
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '16px' }}>
+            {revenueCat?.providerStatus?.note || 'RevenueCat configuration state is unavailable.'}
+          </p>
+          <div style={{ marginTop: '16px', display: 'grid', gap: '10px' }}>
+            <div style={{ padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>Catalog</p>
+              <p style={{ fontSize: '13px', margin: '6px 0 0' }}>
+                {(revenueCat?.offerings || []).length
+                  ? revenueCat.offerings.map((item) => item.id).join(', ')
+                  : 'No offerings returned.'}
+              </p>
+            </div>
+            <div style={{ padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>Entitlement IDs</p>
+              <p style={{ fontSize: '13px', margin: '6px 0 0' }}>
+                {(revenueCat?.entitlements || []).length
+                  ? revenueCat.entitlements.map((item) => item.id).join(', ')
+                  : 'No entitlements returned.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: '24px', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ fontSize: '18px', fontWeight: 600 }}>RevenueCat Customer Lookup</h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Search by Zenin app user ID, RevenueCat customer ID, or checkout email to inspect entitlements and billing state.
+            </p>
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '12px' }}
+            onClick={() => adminUi.downloadJson('zenin-revenuecat-summary.json', revenueCat, 'RevenueCat summary exported.', 'The RevenueCat admin snapshot was downloaded as JSON.')}
+          >
+            Export RevenueCat
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '20px' }}>
+          <div style={{ padding: '18px', borderRadius: '14px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+            <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>Recent Customers</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {(revenueCat?.recentCustomers || []).length ? revenueCat.recentCustomers.map((customer) => (
+                <div key={customer.id} style={{ padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                  <p style={{ fontSize: '13px', fontWeight: 600 }}>{customer.displayName || customer.email || customer.id}</p>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', fontFamily: 'monospace', wordBreak: 'break-all' }}>{customer.id}</p>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                    {customer.createdAt ? `Created ${formatAbsoluteDate(customer.createdAt)}` : 'Creation date unavailable'}
+                  </p>
+                </div>
+              )) : (
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No customers were returned in the latest RevenueCat snapshot.</p>
+              )}
+            </div>
+          </div>
+
+          <div style={{ padding: '18px', borderRadius: '14px', border: '1px solid var(--border)', background: 'var(--bg-app)' }}>
+            <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>Lookup</h4>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+              <input
+                type="text"
+                value={lookupQuery}
+                onChange={(event) => setLookupQuery(event.target.value)}
+                placeholder="App user ID, customer ID, or email"
+                style={{ flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px', color: 'var(--text-primary)' }}
+              />
+              <button
+                className="btn btn-primary"
+                style={{ fontSize: '12px' }}
+                onClick={handleRevenueCatLookup}
+                disabled={!revenueCat?.configured || lookupLoading || !lookupQuery.trim()}
+              >
+                {lookupLoading ? 'Looking up...' : 'Lookup'}
+              </button>
+            </div>
+            {lookupError ? <p style={{ fontSize: '12px', color: '#ef4444', marginBottom: '12px' }}>{lookupError}</p> : null}
+            {lookupResult ? (
+              <RevenueCatCustomerSnapshot snapshot={lookupResult} compact={true} />
+            ) : (
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                Lookup works best with the same Zenin user ID used as the RevenueCat App User ID in the main app.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -2663,6 +2930,8 @@ const IntegrationsView = ({ data, onRetryIntegration }) => {
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Credentials: {app.credentialStatus || 'unknown'}</span>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Sync lag: {formatMetricNumber(app.syncLagMinutes || 0)}m</span>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Failures 24h: {formatMetricNumber(app.webhookFailures || 0)}</span>
+                      {app.metadata?.projectIdPreview ? <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Project: {app.metadata.projectIdPreview}</span> : null}
+                      {app.metadata?.secretKeyPreview ? <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Key: {app.metadata.secretKeyPreview}</span> : null}
                     </div>
                   </div>
                 </div>

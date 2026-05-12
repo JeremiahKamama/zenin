@@ -102,6 +102,8 @@ function parseFarsideNumber(token) {
 
   if (
     normalized === "-" ||
+    normalized === "–" ||
+    normalized === "—" ||
     /^pending$/i.test(normalized) ||
     /^yes$/i.test(normalized) ||
     /^no$/i.test(normalized)
@@ -131,15 +133,16 @@ function extractLatestCompletedRow(lines, tickerCount) {
     const line = lines[index];
     if (!DATE_RE.test(line)) continue;
 
-    const cells = lines.slice(index + 1, index + 2 + tickerCount);
+    const cells = lines.slice(index + 1, index + 1 + tickerCount + 1);
     if (cells.length < tickerCount + 1) continue;
 
-    const flowValues = cells.slice(1).map(parseFarsideNumber);
-    if (!flowValues.some((value) => Number.isFinite(value))) continue;
+    const flowValues = cells.slice(0, tickerCount).map(parseFarsideNumber);
+    // If we have at least one numeric flow, consider this a valid row
+    if (!flowValues.some((value) => value !== null)) continue;
 
     latestRow = {
       dateLabel: line,
-      total: parseFarsideNumber(cells[0]),
+      total: parseFarsideNumber(cells[tickerCount]), // Total is usually the last column
       flowValues
     };
   }
@@ -180,8 +183,17 @@ async function fetchFarsideEtfFlows(fetchImpl) {
     try {
       const response = await fetchImpl(config.url, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+          "Sec-Ch-Ua-Mobile": "?0",
+          "Sec-Ch-Ua-Platform": '"Windows"',
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-User": "?1",
+          "Upgrade-Insecure-Requests": "1"
         }
       });
 
