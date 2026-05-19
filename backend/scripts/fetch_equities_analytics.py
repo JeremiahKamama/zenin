@@ -191,7 +191,7 @@ def sortino_ratio(daily_returns: pd.Series, risk_free_annual: float = 0.0):
 def yearly_total_returns(series: pd.Series) -> Dict[int, float]:
     if series is None or series.empty or not isinstance(series.index, pd.DatetimeIndex):
         return {}
-    year_end = series.resample("YE").last().dropna()
+    year_end = series.resample("Y").last().dropna()
     returns = year_end.pct_change().dropna() * 100.0
     current_year = pd.Timestamp.utcnow().year
     return {

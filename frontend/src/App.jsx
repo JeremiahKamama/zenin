@@ -4,9 +4,25 @@ import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils
 import { calculateOptionPnL } from "./utils/optionsPnL";
 import { updateFXRates, convertToUSD, inferAssetCurrency } from "./utils/currencyUtils";
 import { ZeninLogo } from "./components/Branding";
+import {
+  AccountIcon,
+  AnalyticsIcon,
+  HomeIcon,
+  JournalIcon,
+  LiveRailIcon,
+  LogoutIcon,
+  MetricsIcon,
+  OptionsIcon,
+  PortfolioIcon,
+  PredictionsIcon,
+  TaxIcon,
+  ThemeDarkIcon,
+  ThemeLightIcon,
+  WatchlistIcon
+} from "./components/SidebarIcons";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
-import { zeninFetch } from "./utils/zeninFetch";
+import { zeninFetch, zeninFetchJson } from "./utils/zeninFetch";
 import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection } from "./utils/workspacePersistence";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
@@ -14,6 +30,7 @@ import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
+import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
 import {
@@ -24,6 +41,26 @@ import {
   purchaseRevenueCatPackage
 } from "./utils/revenueCat";
 import { getAppRuntimeConfig, setRuntimeConfigs } from "./config/runtimeConfigStore";
+
+const REQUIRED_WATCHLIST_CATEGORIES = ["indicators", "commodities"];
+const DEFAULT_WATCHLIST_CATEGORIES = ["stocks", "crypto", ...REQUIRED_WATCHLIST_CATEGORIES];
+
+function withRequiredWatchlistCategories(categories = []) {
+  const seen = new Set();
+  const normalized = (Array.isArray(categories) ? categories : [])
+    .map((category) => String(category || "").trim().toLowerCase())
+    .filter((category) => {
+      if (!category || seen.has(category)) return false;
+      seen.add(category);
+      return true;
+    });
+
+  REQUIRED_WATCHLIST_CATEGORIES.forEach((category) => {
+    if (!seen.has(category)) normalized.push(category);
+  });
+
+  return normalized.length ? normalized : DEFAULT_WATCHLIST_CATEGORIES;
+}
 
 function isStaleChunkError(error) {
   const message = String(error?.message || error || "");
@@ -126,7 +163,6 @@ async function getStartRegistration() {
 
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
-const ADMIN_EMAIL = String(import.meta.env.VITE_ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
 
 function isGuestAccessRequested() {
@@ -185,10 +221,73 @@ function normalizeCurrentPlan(plan) {
   return "starter";
 }
 
+function resolveEffectivePlan(userPlan, workspacePlan) {
+  const normalizedUserPlan = normalizeCurrentPlan(userPlan);
+  const normalizedWorkspacePlan = normalizeCurrentPlan(workspacePlan);
+  const planRank = getAppRuntimeConfig()?.subscription?.planRank || { starter: 0, pro: 1, desk: 2 };
+  return Number(planRank[normalizedWorkspacePlan] || 0) > Number(planRank[normalizedUserPlan] || 0)
+    ? normalizedWorkspacePlan
+    : normalizedUserPlan;
+}
+
+function getConnectPromptSessionKey(userId) {
+  return `zenin_connect_prompt_seen_${String(userId || "guest")}`;
+}
+
 const getFallbackAssetsForCategory = (category) =>
   getAppRuntimeConfig()?.watchlist?.fallbackAssetsByCategory?.[String(category || "").toLowerCase()] || [];
 
 const moduleLoadingFallback = <div className="loading-state module-loading-state">Loading workspace...</div>;
+
+const SIDEBAR_SECTION_META = {
+  Home: {
+    group: "Core",
+    eyebrow: "Home",
+    description: "Open your daily snapshot and market pulse."
+  },
+  Portfolio: {
+    group: "Core",
+    eyebrow: "Portfolio",
+    description: "Track allocation, cash, and performance."
+  },
+  Watchlist: {
+    group: "Core",
+    eyebrow: "Watchlist",
+    description: "Follow assets, macro calendars, and catalysts."
+  },
+  Analytics: {
+    group: "Research",
+    eyebrow: "Analytics",
+    description: "Scan cross-market and macro context."
+  },
+  Metrics: {
+    group: "Research",
+    eyebrow: "Metrics",
+    description: "Inspect full metrics and sourced datasets."
+  },
+  Options: {
+    group: "Research",
+    eyebrow: "Options",
+    description: "Review chains, pricing, and options flow."
+  },
+  Predictions: {
+    group: "Research",
+    eyebrow: "Predictions",
+    description: "Monitor prediction markets and event odds."
+  },
+  Journal: {
+    group: "Tools",
+    eyebrow: "Journal",
+    description: "Capture notes, setups, and trade reviews."
+  },
+  "Tax Estimator": {
+    group: "Tools",
+    eyebrow: "Tax",
+    description: "Model scenarios and tax exposure."
+  }
+};
+
+const SIDEBAR_GROUP_ORDER = ["Core", "Research", "Tools"];
 
 const searchFallbackAssets = (query, type) => {
   const normalizedQuery = String(query || "").trim().toLowerCase();
@@ -251,9 +350,9 @@ function hasStoredAuthSession() {
 }
 
 function isAdminUser(user) {
-  const email = String(user?.email || "").trim().toLowerCase();
   const authProvider = String(user?.authProvider || "").trim().toLowerCase();
-  return Boolean(email && email === ADMIN_EMAIL) || authProvider === "admin";
+  const adminRole = String(user?.adminRole || "").trim().toLowerCase();
+  return Boolean(user?.isAdmin) || (adminRole && adminRole !== "user") || authProvider === "admin";
 }
 
 const FEE_SOURCE_EXCHANGE_REPORTED = "exchange_reported";
@@ -417,8 +516,8 @@ function App() {
   useRuntimeConfig({ enabled: true });
   const appRuntimeConfig = getAppRuntimeConfig();
   const fallbackCategories = Array.isArray(appRuntimeConfig?.watchlist?.fallbackCategories)
-    ? appRuntimeConfig.watchlist.fallbackCategories
-    : ["stocks", "crypto", "indicators"];
+    ? withRequiredWatchlistCategories(appRuntimeConfig.watchlist.fallbackCategories)
+    : DEFAULT_WATCHLIST_CATEGORIES;
   const authenticatorOptions = Array.isArray(appRuntimeConfig?.auth?.authenticatorOptions)
     ? appRuntimeConfig.auth.authenticatorOptions
     : [];
@@ -987,11 +1086,7 @@ function App() {
       return;
     }
 
-    zeninFetch(`/watchlist?category=${activeCategory}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Server responded with ${res.status}`);
-        return res.json();
-      })
+    zeninFetchJson(`/watchlist?category=${activeCategory}`)
       .then((data) => {
         const allAssets = Array.isArray(data) ? data : data.assets || [];
         setAssets((prev) => mergeAssetPrices(allAssets, prev));
@@ -2399,15 +2494,32 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
-    "profile-email": true,
-    "profile-password": true,
-    "profile-twofa": true,
+    "profile-email": false,
+    "profile-password": false,
+    "profile-twofa": false,
+    "workspace-overview": true,
+    "workspace-team": true,
+    "workspace-activity": true,
     "general-display": true,
     "general-data": true,
     "accounts-connected": true,
     "layout-presets": true,
     "notifications-channels": true
   });
+
+  useEffect(() => {
+    if (!isSettingsOpen || activeSettingsCategory !== "Profile") return;
+    setExpandedSettingsPanels((prev) => {
+      if (!prev["profile-email"] && !prev["profile-password"] && !prev["profile-twofa"]) return prev;
+      return {
+        ...prev,
+        "profile-email": false,
+        "profile-password": false,
+        "profile-twofa": false
+      };
+    });
+  }, [isSettingsOpen, activeSettingsCategory]);
+
   const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const [preferences, setPreferences] = useState(() => {
     const raw = localStorage.getItem("zenin_preferences");
@@ -2462,6 +2574,21 @@ const handleOptionTradeClosed = async (tradeId) => {
     () => isGuestUser ? sections : sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
     [sections, currentPlan, isAdmin, isGuestUser]
   );
+  const sidebarNavigationGroups = useMemo(() => {
+    const hiddenRailSections = new Set(isSidebarCollapsed ? ["Metrics", "Predictions"] : ["Metrics"]);
+    const visibleSections = accessibleSections.filter((section) => !hiddenRailSections.has(section));
+    return SIDEBAR_GROUP_ORDER.map((group) => ({
+      label: group,
+      items: visibleSections.map((section) => ({
+        section,
+        meta: SIDEBAR_SECTION_META[section] || {
+          group: "Workspace",
+          eyebrow: "Section",
+          description: "Open this workspace section."
+        }
+      })).filter((entry) => entry.meta.group === group)
+    })).filter((group) => group.items.length > 0);
+  }, [accessibleSections, isSidebarCollapsed]);
   const handleLogout = useCallback(async () => {
     try {
       await zeninFetch("/auth/signout", { method: "POST" });
@@ -2493,13 +2620,17 @@ const handleOptionTradeClosed = async (tradeId) => {
     ];
 
     keysToRemove.forEach(key => localStorage.removeItem(key));
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem(getConnectPromptSessionKey(authUserId));
+    }
     
     // Hard redirect to clear any memory-resident state
     window.location.href = "/";
-  }, []);
+  }, [authUserId]);
 
   const {
     bootstrapData,
+    bootstrapLoading,
     bootstrapError
   } = useAppBootstrap({
     enabled: !accessCheckLoading && !isGuestUser,
@@ -2509,7 +2640,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   useEffect(() => {
     if (!bootstrapData?.appConfig) return;
     setRuntimeConfigs({ appConfig: bootstrapData.appConfig });
-  }, [bootstrapData]);
+  }, [bootstrapData, currentBillingCycle, currentPlan, isAdmin]);
 
   useEffect(() => {
     let mounted = true;
@@ -2537,6 +2668,10 @@ const handleOptionTradeClosed = async (tradeId) => {
             ...buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || prev?.email || "user@zenin.app"),
             passwordHash: prev?.passwordHash || ""
           }));
+          setActiveWorkspace(null);
+          setWorkspaceMembers([]);
+          setWorkspaceInvites([]);
+          setWorkspaceActivity([]);
           settingsSyncReadyRef.current = false;
           setAccessCheckLoading(false);
           return;
@@ -2544,15 +2679,22 @@ const handleOptionTradeClosed = async (tradeId) => {
           localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
           if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
           const userIsAdmin = isAdminUser(data.user);
+          const effectivePlan = resolveEffectivePlan(data.user.currentPlan, data?.workspace?.plan);
+          const effectiveBillingCycle = String(data?.workspace?.billingCycle || data.user.currentBillingCycle || "monthly").trim().toLowerCase() === "yearly" ? "yearly" : "monthly";
           setUserEmail(String(data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
           setIsAdmin(userIsAdmin);
           setIsGuestUser(false);
           setAuthUserId(data.user.id != null ? String(data.user.id) : "");
           setAuthDisplayName(String(data.user.displayName || "").trim());
-          setCurrentPlan(normalizeCurrentPlan(data.user.currentPlan));
-          setCurrentBillingCycle(String(data.user.currentBillingCycle || "monthly").trim().toLowerCase() === "yearly" ? "yearly" : "monthly");
-          setAccountPlanLabel(userIsAdmin ? "Admin" : formatPlanLabel(data.user.currentPlan, data.user.currentBillingCycle));
+          setCurrentPlan(effectivePlan);
+          setCurrentBillingCycle(effectiveBillingCycle);
+          setAccountPlanLabel(userIsAdmin ? "Admin" : formatPlanLabel(effectivePlan, effectiveBillingCycle));
           setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
+          setActiveWorkspace(data?.workspace || null);
+          setWorkspaceForm({
+            name: String(data?.workspace?.name || "").trim(),
+            slug: String(data?.workspace?.slug || "").trim()
+          });
         }
         setAccessCheckLoading(false);
       } catch {
@@ -2570,6 +2712,10 @@ const handleOptionTradeClosed = async (tradeId) => {
         setCurrentPlan("starter");
         setCurrentBillingCycle("monthly");
         setAccountPlanLabel("Starter Plan");
+        setActiveWorkspace(null);
+        setWorkspaceMembers([]);
+        setWorkspaceInvites([]);
+        setWorkspaceActivity([]);
         settingsSyncReadyRef.current = false;
         setAccessCheckLoading(false);
       }
@@ -2585,27 +2731,23 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (accessCheckLoading) return undefined;
     if (isGuestUser) {
       settingsSyncReadyRef.current = false;
+      setConnectedAccountsHydrated(true);
       return undefined;
     }
 
     let cancelled = false;
     settingsSyncReadyRef.current = false;
+    setConnectedAccountsHydrated(false);
 
     const loadWorkspaceSettings = async () => {
       try {
-        const [preferencesResult, accountsResult] = await Promise.all([
-          loadWorkspaceDoc("settings:preferences", null),
-          loadWorkspaceCollection("settings:connected_accounts", [])
-        ]);
+        const preferencesResult = await loadWorkspaceDoc("settings:preferences", null);
         if (cancelled) return;
         if (preferencesResult?.document && typeof preferencesResult.document === "object") {
           setPreferences((prev) => ({
             ...prev,
             ...preferencesResult.document
           }));
-        }
-        if (Array.isArray(accountsResult?.items)) {
-          setConnectedAccounts(accountsResult.items);
         }
       } catch (error) {
         if (!cancelled) {
@@ -2614,6 +2756,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       } finally {
         if (!cancelled) {
           settingsSyncReadyRef.current = true;
+          setConnectedAccountsHydrated(true);
         }
       }
     };
@@ -2669,9 +2812,42 @@ const handleOptionTradeClosed = async (tradeId) => {
       setWatchlistAssets((prev) => mergeAssetPrices(mergedWatchlist, prev));
       setTrades(incomingTrades);
       setTradeFeeSummary(bootstrapData?.feeSummary || null);
+      if (bootstrapData?.activeWorkspace?.plan) {
+        const effectivePlan = resolveEffectivePlan(currentPlan, bootstrapData.activeWorkspace.plan);
+        if (effectivePlan !== currentPlan) {
+          setCurrentPlan(effectivePlan);
+          setAccountPlanLabel(isAdmin ? "Admin" : formatPlanLabel(effectivePlan, bootstrapData?.activeWorkspace?.billingCycle || currentBillingCycle));
+        }
+      }
+      setActiveWorkspace(bootstrapData?.activeWorkspace || null);
+      setWorkspaceMembers(Array.isArray(bootstrapData?.workspaceMembers) ? bootstrapData.workspaceMembers : []);
+      setWorkspaceInvites(Array.isArray(bootstrapData?.workspaceInvites) ? bootstrapData.workspaceInvites : []);
+      setWorkspaceActivity(Array.isArray(bootstrapData?.workspaceActivity) ? bootstrapData.workspaceActivity : []);
+      setWorkspaceForm({
+        name: String(bootstrapData?.activeWorkspace?.name || "").trim(),
+        slug: String(bootstrapData?.activeWorkspace?.slug || "").trim()
+      });
+      if (Array.isArray(bootstrapData?.workspaceAccounts) && bootstrapData.workspaceAccounts.length) {
+        setConnectedAccounts(bootstrapData.workspaceAccounts.map((account) => ({
+          id: account.id,
+          provider: account.extraData?.providerLabel || account.exchange,
+          exchange: account.exchange,
+          username: account.extraData?.username || account.extraData?.address || "Workspace source",
+          venueType: account.extraData?.venueType || "cex",
+          apiKeyMasked: "Workspace managed",
+          permissionScope: account.permissionScope || "unknown",
+          canTrade: !!account.canTrade,
+          lastVerifiedScope: account.lastVerifiedScope || "unknown",
+          riskLevel: account.riskLevel || "standard",
+          connectedAt: account.createdAt || null,
+          lastSyncAt: account.lastSyncAt || null,
+          lastSyncStatus: account.lastSyncStatus || "idle",
+          lastSyncMeta: account.lastSyncMeta || {}
+        })));
+      }
       setCategories(
         Array.isArray(bootstrapData?.categories) && bootstrapData.categories.length
-          ? bootstrapData.categories
+          ? withRequiredWatchlistCategories(bootstrapData.categories)
           : fallbackCategories
       );
     });
@@ -2722,6 +2898,17 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   });
   const [isConnectWindowOpen, setIsConnectWindowOpen] = useState(false);
+  const [connectPromptMode, setConnectPromptMode] = useState("manual");
+  const [connectAccountFeedback, setConnectAccountFeedback] = useState("");
+  const [connectedAccountsHydrated, setConnectedAccountsHydrated] = useState(false);
+  const [activeWorkspace, setActiveWorkspace] = useState(null);
+  const [workspaceMembers, setWorkspaceMembers] = useState([]);
+  const [workspaceInvites, setWorkspaceInvites] = useState([]);
+  const [workspaceActivity, setWorkspaceActivity] = useState([]);
+  const [workspaceFeedback, setWorkspaceFeedback] = useState(null);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceForm, setWorkspaceForm] = useState({ name: "", slug: "" });
+  const [workspaceInviteForm, setWorkspaceInviteForm] = useState({ email: "", role: "member" });
   const [accountForm, setAccountForm] = useState({
     venueType: "cex",
     provider: cexOptions[0] || "Binance",
@@ -2730,7 +2917,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     apiSecret: ""
   });
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
-  const settingsCategories = ["Profile", "Subscription", "General", "Accounts", "Layout", "Notification"];
+  const settingsCategories = ["Profile", "Subscription", "Workspace", "General", "Accounts", "Layout", "Notification"];
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
     const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
@@ -3357,6 +3544,23 @@ const handleOptionTradeClosed = async (tradeId) => {
     setExpandedSettingsPanels((prev) => ({ ...prev, [panelKey]: !prev[panelKey] }));
   };
 
+  const collapseProfileSettingsPanels = () => {
+    setExpandedSettingsPanels((prev) => ({
+      ...prev,
+      "profile-email": false,
+      "profile-password": false,
+      "profile-twofa": false
+    }));
+  };
+
+  const handleSettingsCategorySelect = (category) => {
+    setActiveSettingsCategory(category);
+    if (category === "Profile") collapseProfileSettingsPanels();
+    if (category === "Workspace") {
+      void refreshWorkspacePanel();
+    }
+  };
+
   const venueOptions = accountForm.venueType === "cex"
     ? cexOptions
     : accountForm.venueType === "dex"
@@ -3365,7 +3569,18 @@ const handleOptionTradeClosed = async (tradeId) => {
         ? predictionOptions
         : brokerOptions;
 
-  const openConnectWindow = () => {
+  const onboardingVenuePreview = useMemo(
+    () =>
+      Array.from(new Set([
+        ...(cexOptions || []).slice(0, 2),
+        ...(brokerOptions || []).slice(0, 2),
+        ...(predictionOptions || []).slice(0, 1),
+        ...(dexOptions || []).slice(0, 1)
+      ].filter(Boolean))).slice(0, 6),
+    [brokerOptions, cexOptions, dexOptions, predictionOptions]
+  );
+
+  const openConnectWindow = useCallback((mode = "manual") => {
     setAccountForm({
       venueType: "cex",
       provider: cexOptions[0] || "Binance",
@@ -3373,8 +3588,149 @@ const handleOptionTradeClosed = async (tradeId) => {
       apiKey: "",
       apiSecret: ""
     });
+    setConnectAccountFeedback("");
+    setConnectPromptMode(mode);
     setIsConnectWindowOpen(true);
-  };
+  }, [cexOptions]);
+
+  const refreshWorkspacePanel = useCallback(async () => {
+    if (isGuestUser) return null;
+    setWorkspaceBusy(true);
+    setWorkspaceFeedback(null);
+    try {
+      const [workspaceRes, activityRes] = await Promise.all([
+        zeninFetch("/workspaces/current"),
+        zeninFetch("/workspaces/current/activity?limit=20")
+      ]);
+      const workspaceData = await workspaceRes.json().catch(() => ({}));
+      const activityData = await activityRes.json().catch(() => ({}));
+      if (!workspaceRes.ok) {
+        throw new Error(workspaceData?.error || "Could not load workspace settings.");
+      }
+      setActiveWorkspace(workspaceData?.workspace || null);
+      setWorkspaceMembers(Array.isArray(workspaceData?.members) ? workspaceData.members : []);
+      setWorkspaceInvites(Array.isArray(workspaceData?.invites) ? workspaceData.invites : []);
+      setWorkspaceActivity(Array.isArray(activityData?.items) ? activityData.items : []);
+      setWorkspaceForm({
+        name: String(workspaceData?.workspace?.name || "").trim(),
+        slug: String(workspaceData?.workspace?.slug || "").trim()
+      });
+      return workspaceData;
+    } catch (error) {
+      setWorkspaceFeedback({ type: "error", text: error?.message || "Could not load workspace settings." });
+      return null;
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [isGuestUser]);
+
+  const saveWorkspaceSettings = useCallback(async () => {
+    if (isGuestUser || !activeWorkspace) return;
+    setWorkspaceBusy(true);
+    setWorkspaceFeedback(null);
+    try {
+      const res = await zeninFetch("/workspaces/current", {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: workspaceForm.name.trim(),
+          slug: workspaceForm.slug.trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Could not update workspace.");
+      }
+      setActiveWorkspace(data?.workspace || activeWorkspace);
+      setWorkspaceFeedback({ type: "success", text: "Workspace settings updated." });
+      await refreshWorkspacePanel();
+    } catch (error) {
+      setWorkspaceFeedback({ type: "error", text: error?.message || "Could not update workspace." });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [activeWorkspace, isGuestUser, refreshWorkspacePanel, workspaceForm.name, workspaceForm.slug]);
+
+  const sendWorkspaceInvite = useCallback(async () => {
+    if (isGuestUser || !activeWorkspace) return;
+    setWorkspaceBusy(true);
+    setWorkspaceFeedback(null);
+    try {
+      const res = await zeninFetch("/workspaces/current/invites", {
+        method: "POST",
+        body: JSON.stringify({
+          email: workspaceInviteForm.email.trim(),
+          role: workspaceInviteForm.role
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Could not create workspace invite.");
+      }
+      setWorkspaceInviteForm({ email: "", role: "member" });
+      setWorkspaceFeedback({ type: "success", text: `Invite created for ${data?.invite?.email || "member"}.` });
+      await refreshWorkspacePanel();
+    } catch (error) {
+      setWorkspaceFeedback({ type: "error", text: error?.message || "Could not create workspace invite." });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [activeWorkspace, isGuestUser, refreshWorkspacePanel, workspaceInviteForm.email, workspaceInviteForm.role]);
+
+  const updateWorkspaceMemberRole = useCallback(async (member, nextRole) => {
+    if (!member?.userId) return;
+    setWorkspaceBusy(true);
+    setWorkspaceFeedback(null);
+    try {
+      const res = await zeninFetch(`/workspaces/current/members/${member.userId}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: nextRole })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Could not update workspace member role.");
+      }
+      setWorkspaceFeedback({ type: "success", text: `Updated ${member.email || member.displayName || "member"} to ${nextRole}.` });
+      await refreshWorkspacePanel();
+    } catch (error) {
+      setWorkspaceFeedback({ type: "error", text: error?.message || "Could not update workspace member role." });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [refreshWorkspacePanel]);
+
+  const removeWorkspaceMember = useCallback(async (member) => {
+    if (!member?.userId) return;
+    setWorkspaceBusy(true);
+    setWorkspaceFeedback(null);
+    try {
+      const res = await zeninFetch(`/workspaces/current/members/${member.userId}`, {
+        method: "DELETE"
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Could not remove workspace member.");
+      }
+      setWorkspaceFeedback({ type: "success", text: `Removed ${member.email || member.displayName || "member"} from the workspace.` });
+      await refreshWorkspacePanel();
+    } catch (error) {
+      setWorkspaceFeedback({ type: "error", text: error?.message || "Could not remove workspace member." });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [refreshWorkspacePanel]);
+
+  useEffect(() => {
+    if (accessCheckLoading || bootstrapLoading || isGuestUser || !authUserId || !connectedAccountsHydrated) return;
+    if (connectedAccounts.length > 0) return;
+    if (typeof sessionStorage === "undefined") {
+      openConnectWindow("onboarding");
+      return;
+    }
+    const sessionKey = getConnectPromptSessionKey(authUserId);
+    if (sessionStorage.getItem(sessionKey) === "1") return;
+    sessionStorage.setItem(sessionKey, "1");
+    openConnectWindow("onboarding");
+  }, [accessCheckLoading, authUserId, bootstrapLoading, connectedAccounts.length, connectedAccountsHydrated, isGuestUser, openConnectWindow]);
 
   const connectAccount = async () => {
     if (!accountForm.username.trim() || !accountForm.apiKey.trim()) return;
@@ -3387,18 +3743,43 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     try {
       if (!isGuestUser) {
+        const inferredCanTrade = (accountForm.venueType === "cex" || accountForm.venueType === "broker") && !!accountForm.apiSecret.trim();
+        const riskLevel = inferredCanTrade ? "trading" : accountForm.apiSecret.trim() ? "sensitive" : "standard";
+        const permissionScope = inferredCanTrade ? "trade" : "unknown";
         // 1. Send the key to backend for encryption & storage
         const payload = {
           exchange: accountForm.provider.toLowerCase(),
           apiKey: accountForm.apiKey.trim(),
           apiSecret: accountForm.apiSecret.trim() || "",
-          extraData: { username: accountForm.username.trim(), venueType: accountForm.venueType }
+          extraData: { username: accountForm.username.trim(), venueType: accountForm.venueType },
+          permissionScope,
+          canTrade: inferredCanTrade,
+          lastVerifiedScope: permissionScope,
+          riskLevel
         };
 
-        const res = await zeninFetch("/db/exchange-keys", {
+        let res = await zeninFetch("/db/exchange-keys", {
           method: "POST",
           body: JSON.stringify(payload)
         });
+        if (res.status === 428) {
+          const currentPassword = window.prompt("Confirm your current password to add a sensitive account:", "")?.trim();
+          if (!currentPassword) {
+            throw new Error("Account confirmation is required to add this connection.");
+          }
+          const reauthRes = await zeninFetch("/auth/reauth", {
+            method: "POST",
+            body: JSON.stringify({ currentPassword })
+          });
+          if (!reauthRes.ok) {
+            const reauthData = await reauthRes.json().catch(() => ({}));
+            throw new Error(reauthData?.error || "Could not confirm your account.");
+          }
+          res = await zeninFetch("/db/exchange-keys", {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+        }
         
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -3424,10 +3805,18 @@ const handleOptionTradeClosed = async (tradeId) => {
           provider: accountForm.provider,
           username: accountForm.username.trim(),
           apiKeyMasked: addedKey.apiKey,
-          connectedAt: new Date().toISOString()
+          permissionScope: addedKey.permissionScope || permissionScope,
+          canTrade: !!addedKey.canTrade,
+          lastVerifiedScope: addedKey.lastVerifiedScope || permissionScope,
+          riskLevel: addedKey.riskLevel || riskLevel,
+          connectedAt: new Date().toISOString(),
+          lastSyncAt: new Date().toISOString(),
+          lastSyncStatus: "success",
+          lastSyncMeta: {}
         };
         const nextAccounts = [nextAccount, ...connectedAccounts];
         setConnectedAccounts(nextAccounts);
+        void refreshWorkspacePanel();
       } else {
         // Guest user fallback (localStorage)
         const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
@@ -3437,6 +3826,10 @@ const handleOptionTradeClosed = async (tradeId) => {
           provider: accountForm.provider,
           username: accountForm.username.trim(),
           apiKeyMasked: masked,
+          permissionScope: "unknown",
+          canTrade: false,
+          lastVerifiedScope: "unknown",
+          riskLevel: "standard",
           connectedAt: new Date().toISOString()
         };
         const nextAccounts = [nextAccount, ...connectedAccounts];
@@ -3445,7 +3838,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       setIsConnectWindowOpen(false);
     } catch (error) {
       console.error("Connected account sync failed:", error);
-      alert(error.message || "Failed to connect and sync account.");
+      setConnectAccountFeedback(error.message || "Failed to connect and sync account.");
     } finally {
       setIsSyncingAccount(false);
     }
@@ -3966,72 +4359,29 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const settingsPreviewNote = "Workspace sync: profile, security, preferences, and connected-account metadata now save to your Zenin workspace. They still do not sync trades or permissions to external providers.";
 
-  const sectionIcon = (section) => {
-    if (section === "Home") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M3 11.5L12 4l9 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M6 10v10h12V10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    if (section === "Portfolio") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 7h16v11H4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M9 7V5h6v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    if (section === "Analytics") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 17h16M4 12h16M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    if (section === "Metrics") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 20V10M18 20V4M6 20v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    if (section === "Watchlist") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9L12 3z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    if (section === "Options") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 18h5V6H4zM15 18h5V10h-5z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    if (section === "Predictions") {
-      return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 17l5-5 4 3 7-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M4 4v13h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    }
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M6 4h12v16H6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M9 8h6M9 12h6M9 16h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    );
+  const sidebarIconMap = {
+    Home: HomeIcon,
+    Portfolio: PortfolioIcon,
+    Watchlist: WatchlistIcon,
+    Analytics: AnalyticsIcon,
+    Metrics: MetricsIcon,
+    Options: OptionsIcon,
+    Predictions: PredictionsIcon,
+    Journal: JournalIcon,
+    "Tax Estimator": TaxIcon
   };
 
+  const sectionIcon = (section) => {
+    const Icon = sidebarIconMap[section] || JournalIcon;
+    return <Icon />;
+  };
 
+  const isSidebarVisuallyCollapsed = isSidebarCollapsed;
+  const usesWorkspaceShell = routeState.type !== "company";
 
   return (
-    <div className={`app-layout ${isSidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
-      {isSidebarCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
+    <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
+      {isSidebarVisuallyCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
         <button
           className="mobile-hamburger-btn"
           onClick={() => setIsSidebarCollapsed(false)}
@@ -4040,40 +4390,88 @@ const handleOptionTradeClosed = async (tradeId) => {
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       )}
-      <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
-        <header className="sidebar-header">
-          {!isSidebarCollapsed ? (
-            <ZeninLogo size="md" />
+      <aside className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
+        <header className="sidebar-header sidebar-brand-row">
+          {!isSidebarVisuallyCollapsed ? (
+            <div className="sidebar-console-topbar">
+              <strong>ZENIN</strong>
+              <span className="sidebar-console-live"><i /> Live</span>
+              <span className="sidebar-console-market">{activeWorkspace?.name || "Workspace"}</span>
+              {activeWorkspace?.seatLimit ? (
+                <span className="sidebar-console-market">{`${activeWorkspace.seatCount || 0}/${activeWorkspace.seatLimit} seats`}</span>
+              ) : null}
+              <span className="sidebar-console-plan">{accountPlanLabel}</span>
+              <button
+                className="sidebar-toggle-btn mobile-close-btn"
+                onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+              >
+                ‹
+              </button>
+            </div>
           ) : (
-            <ZeninLogo size="sm" showText={false} />
+            <div className="sidebar-collapsed-brand">
+              <button
+                className="sidebar-collapsed-mark"
+                onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+                aria-label="Expand sidebar"
+                title="Expand sidebar"
+              >
+                <ZeninLogo size="sm" showText={false} />
+              </button>
+            </div>
           )}
-          <button
-            className="sidebar-toggle-btn mobile-close-btn"
-            onClick={() => setIsSidebarCollapsed((prev) => !prev)}
-            aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {isSidebarCollapsed ? "›" : "‹"}
-          </button>
         </header>
-        <nav className="sidebar-nav">
-          {accessibleSections.filter(s => s !== "Metrics").map((section) => (
-            <button
-              key={section}
-              className={`nav-btn ${activeSection === section ? "active" : ""}`}
-              onClick={() => {
-                if (!accessibleSections.includes(section)) return;
-                if (routeState.type === "company") navigateToAppRoute();
-                setActiveSection(section);
-              }}
-              title={section}
-            >
-              <span className="nav-icon">{sectionIcon(section)}</span>
-              <span className="nav-full">{section}</span>
-              {section === "Watchlist" && watchlistAssets.length > 0 && (
-                <span className="nav-badge">{watchlistAssets.length}</span>
-              )}
-            </button>
+
+        <nav className="sidebar-nav" aria-label="Workspace navigation">
+          {sidebarNavigationGroups.map((group) => (
+            <div key={group.label} className="sidebar-nav-group">
+              {!isSidebarVisuallyCollapsed ? (
+                <div className="sidebar-section-header">{group.label}</div>
+              ) : null}
+              <div className="sidebar-nav-stack">
+                {group.items.map(({ section, meta }, itemIndex) => {
+                  const isActiveSection = activeSection === section;
+                  const navCode = `${group.label.slice(0, 1).toUpperCase()}${String(itemIndex + 1).padStart(2, "0")}`;
+
+                  return (
+                    <button
+                      key={section}
+                      className={`nav-btn ${isActiveSection ? "active" : ""}`}
+                      onClick={() => {
+                        if (!accessibleSections.includes(section)) return;
+                        if (routeState.type === "company") navigateToAppRoute();
+                        setActiveSection(section);
+                      }}
+                      title={section}
+                      aria-current={isActiveSection ? "page" : undefined}
+                    >
+                      {!isSidebarVisuallyCollapsed ? (
+                        <span className="nav-code" aria-hidden="true">{navCode}</span>
+                      ) : null}
+                      <span className="nav-icon-wrap">
+                        <span className="nav-icon">{sectionIcon(section)}</span>
+                      </span>
+                      <span className="nav-copy">
+                        <span className="nav-label-row">
+                          <span className="nav-full">{section}</span>
+                          {section === "Watchlist" && watchlistAssets.length > 0 && (
+                            <span className="nav-badge">{watchlistAssets.length}</span>
+                          )}
+                        </span>
+                        {isActiveSection && !isSidebarVisuallyCollapsed ? (
+                          <span className="nav-description">{meta.description}</span>
+                        ) : null}
+                      </span>
+                      {isActiveSection && !isSidebarVisuallyCollapsed ? (
+                        <span className="nav-kicker">{meta.eyebrow}</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           ))}
         </nav>
 
@@ -4081,27 +4479,55 @@ const handleOptionTradeClosed = async (tradeId) => {
           className={`sidebar-live-status ${liveStreamStatus}`}
           title={lastLivePriceAt ? `Last price tick ${new Date(lastLivePriceAt).toLocaleTimeString()}` : "Live prices connect when assets are tracked"}
         >
-          <span className="sidebar-live-dot" aria-hidden="true" />
-          <span className="sidebar-live-label">
-            {liveStreamStatus === "connected"
-              ? "Live prices"
-              : liveStreamStatus === "degraded"
-                ? "Polling fallback"
-                : "Live idle"}
-          </span>
+          {!isSidebarVisuallyCollapsed ? (
+            <>
+              <span className="sidebar-live-title">Live Status</span>
+              <span className="sidebar-live-row primary">
+                <span><span className="sidebar-live-dot" aria-hidden="true" />Market {liveStreamStatus === "idle" ? "Idle" : "Open"}</span>
+                <strong>{lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Now"}</strong>
+              </span>
+              <span className="sidebar-live-row">
+                <span>Tracked</span>
+                <strong>{watchlistAssets.length}</strong>
+              </span>
+              <span className="sidebar-live-row">
+                <span>Feed</span>
+                <strong>
+                  {liveStreamStatus === "connected"
+                    ? "Live"
+                    : liveStreamStatus === "degraded"
+                      ? "Fallback"
+                      : "Idle"}
+                </strong>
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="sidebar-live-rail" aria-hidden="true">
+                <span className="sidebar-live-dot" />
+                <span className="sidebar-live-mini-icon">
+                  <LiveRailIcon />
+                </span>
+              </span>
+              <span className="sidebar-live-label">Live status</span>
+            </>
+          )}
         </div>
-
-        <div className="sidebar-section-header">ACCOUNT</div>
         <div className="sidebar-bottom">
+          {!isSidebarVisuallyCollapsed ? <div className="sidebar-section-header">Control Bay</div> : null}
           <button
-            className="sidebar-theme-row"
+            className="sidebar-theme-row sidebar-utility-row"
             onClick={toggleTheme}
             title={`Theme: ${themeMode === "dark" ? "Dark mode" : "Light mode"}`}
             aria-label={`Switch to ${themeMode === "dark" ? "light" : "dark"} mode`}
           >
-            <span className="sidebar-theme-left">
-              <span className="sidebar-theme-icon" aria-hidden="true">{themeMode === "dark" ? "☾" : "☀"}</span>
-              <span className="sidebar-theme-label">Theme</span>
+            <span className="sidebar-utility-left">
+              <span className="sidebar-theme-icon" aria-hidden="true">
+                {themeMode === "dark" ? <ThemeDarkIcon /> : <ThemeLightIcon />}
+              </span>
+              <span className="sidebar-utility-copy">
+                <span className="sidebar-theme-label">Theme</span>
+              </span>
             </span>
             <div className="sidebar-theme-right">
               <span className="sidebar-theme-chip">{themeMode === "dark" ? "Dark" : "Light"}</span>
@@ -4110,42 +4536,40 @@ const handleOptionTradeClosed = async (tradeId) => {
           </button>
 
           <button
-            className="sidebar-footer settings-launcher"
+            className="sidebar-footer sidebar-utility-row sidebar-account-row settings-launcher"
             onClick={() => setIsSettingsOpen(true)}
             title="Open settings"
           >
-            <div className="user-icon">
-              {String(userEmail || "U").trim().charAt(0).toUpperCase() || "U"}
+            <div className="user-icon" aria-hidden="true">
+              <AccountIcon />
             </div>
             <div className="sidebar-account-meta">
-              <span className="sidebar-footer-email" title={userEmail}>
-                {userEmail}
-                <span className="verified-badge">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="#3b82f6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-                </span>
-              </span>
-              <span className="sidebar-plan-label">{accountPlanLabel}</span>
+              <span className="sidebar-theme-label">Account</span>
+              {!isSidebarVisuallyCollapsed && (
+                <span className="sidebar-account-chevron">›</span>
+              )}
             </div>
-            <span className="sidebar-account-chevron">⌄</span>
           </button>
 
           <button
-            className="sidebar-theme-row"
-            style={{ color: "var(--muted)", marginTop: "4px" }}
+            className="sidebar-theme-row sidebar-utility-row sidebar-logout-row"
             onClick={handleLogout}
-            title={isGuestUser ? "Reset session" : "Sign out"}
-            aria-label={isGuestUser ? "Reset session" : "Sign out"}
+            title="Sign out"
+            aria-label="Sign out"
           >
-            <span className="sidebar-theme-left">
-              <span className="sidebar-theme-icon" aria-hidden="true">⏻</span>
-              <span className="sidebar-theme-label">{isGuestUser ? "Exit Guest" : "Log out"}</span>
+            <span className="sidebar-utility-left">
+              <span className="sidebar-theme-icon" aria-hidden="true"><LogoutIcon /></span>
+              <span className="sidebar-utility-copy">
+                <span className="sidebar-theme-label">Logout</span>
+              </span>
             </span>
+            {!isSidebarVisuallyCollapsed ? <span className="sidebar-theme-arrow">›</span> : null}
           </button>
         </div>
 
       </aside>
 
-      <main className="main-content">
+      <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
         {routeState.type === "company" ? (
           <div className="view-container">
             <Suspense fallback={moduleLoadingFallback}>
@@ -4321,7 +4745,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
         {activeSection === "Portfolio" && (
-          <div className="view-container">
+          <div className="view-container portfolio-shell-view">
             <PortfolioModule
                 portfolio={portfolioWithEntry}
                 trades={trades}
@@ -4525,17 +4949,27 @@ const handleOptionTradeClosed = async (tradeId) => {
         <div className="settings-overlay" onClick={() => setIsSettingsOpen(false)}>
           <div className="settings-window" onClick={(e) => e.stopPropagation()}>
             <div className="settings-window-header">
-              <h2>Workspace Settings</h2>
-              <button className="close-btn" onClick={() => setIsSettingsOpen(false)}>&times;</button>
+              <div className="settings-title-block">
+                <span>CONTROL BAY</span>
+                <h2>Workspace Settings</h2>
+                <p>Profile, security, billing, data, and workstation controls.</p>
+              </div>
+              <div className="settings-header-status">
+                <span className="settings-live-dot" aria-hidden="true" />
+                <strong>Live</strong>
+                <em>{accountPlanLabel}</em>
+                <button className="close-btn" onClick={() => setIsSettingsOpen(false)} aria-label="Close settings">&times;</button>
+              </div>
             </div>
 
             <div className="settings-window-body">
               <aside className="settings-categories">
+                <div className="settings-nav-kicker">Settings Index</div>
                 {settingsCategories.map((category) => (
                   <button
                     key={category}
                     className={`settings-category-btn ${activeSettingsCategory === category ? "active" : ""}`}
-                    onClick={() => setActiveSettingsCategory(category)}
+                    onClick={() => handleSettingsCategorySelect(category)}
                   >
                     {category}
                   </button>
@@ -4721,7 +5155,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ) : null}
                               {totpSetup.qrCodeDataUrl && totpSetup.secret ? (
                                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "12px", margin: "16px 0" }}>
-                                  <div style={{ background: "#fff", padding: "12px", borderRadius: "8px", display: "inline-block" }}>
+                                  <div style={{ background: "#fff", padding: "12px", borderRadius: "3px", display: "inline-block" }}>
                                     <img src={totpSetup.qrCodeDataUrl} alt="TOTP QR Code" width="160" height="160" style={{ display: "block" }} />
                                   </div>
                                   <div>
@@ -4924,8 +5358,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 marginTop: "16px",
                                 padding: "14px",
                                 border: "1px solid rgba(255,255,255,0.08)",
-                                borderRadius: "14px",
-                                background: "rgba(255,255,255,0.02)"
+                                borderRadius: "3px",
+                                background: "var(--color-surface-card)"
                               }}
                             >
                               <p className="settings-meta" style={{ marginTop: 0 }}>
@@ -4958,8 +5392,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                                       style={{
                                         padding: "14px",
                                         border: "1px solid rgba(255,255,255,0.08)",
-                                        borderRadius: "14px",
-                                        background: "rgba(255,255,255,0.02)"
+                                        borderRadius: "3px",
+                                        background: "var(--color-surface-card)"
                                       }}
                                     >
                                       <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
@@ -4994,7 +5428,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   marginTop: "18px",
                                   padding: "14px",
                                   border: "1px dashed rgba(255,255,255,0.14)",
-                                  borderRadius: "14px"
+                                  borderRadius: "3px"
                                 }}
                               >
                                 <p style={{ margin: 0, fontWeight: 600 }}>Subscription options are not available right now</p>
@@ -5026,7 +5460,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         ) : null}
 
                         {isAdmin && import.meta.env.DEV && (
-                          <div style={{ marginTop: "20px", padding: "12px", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: "8px" }}>
+                          <div style={{ marginTop: "20px", padding: "12px", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: "3px" }}>
                             <h4 style={{ margin: "0 0 10px 0", color: "#f87171" }}>Developer Plan Simulator</h4>
                             <label className="settings-field">
                               <span>Simulate Plan Tier</span>
@@ -5132,6 +5566,181 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
+                {activeSettingsCategory === "Workspace" && (
+                  <>
+                    <div className="settings-preview-note">
+                      Desk workspaces turn Zenin into a shared operating surface: members, seats, shared account ingestion, and recent desk activity all live here.
+                    </div>
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("workspace-overview")}>
+                        <span>Workspace Overview</span>
+                        <span>{expandedSettingsPanels["workspace-overview"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["workspace-overview"] && (
+                        <div className="settings-panel-body">
+                          {activeWorkspace ? (
+                            <>
+                              <div className="settings-chip-row">
+                                <span className="settings-chip success">{activeWorkspace.plan?.toUpperCase()} desk</span>
+                                <span className="settings-chip">{`${activeWorkspace.seatCount || 0}/${activeWorkspace.seatLimit || 1} seats used`}</span>
+                                <span className="settings-chip">{`Role: ${activeWorkspace.membership?.role || "member"}`}</span>
+                              </div>
+                              <label className="settings-field" style={{ marginTop: "14px" }}>
+                                <span>Workspace Name</span>
+                                <input
+                                  value={workspaceForm.name}
+                                  onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, name: e.target.value }))}
+                                  placeholder="Zenin Desk"
+                                />
+                              </label>
+                              <label className="settings-field">
+                                <span>Workspace Slug</span>
+                                <input
+                                  value={workspaceForm.slug}
+                                  onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, slug: e.target.value }))}
+                                  placeholder="zenin-desk"
+                                />
+                              </label>
+                              <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                                <button
+                                  className="settings-primary-btn"
+                                  onClick={() => { void saveWorkspaceSettings(); }}
+                                  disabled={workspaceBusy || !["owner", "admin"].includes(String(activeWorkspace?.membership?.role || "").toLowerCase())}
+                                >
+                                  {workspaceBusy ? "Saving..." : "Save Workspace"}
+                                </button>
+                                <button
+                                  className="settings-secondary-btn"
+                                  onClick={() => { void refreshWorkspacePanel(); }}
+                                  disabled={workspaceBusy}
+                                >
+                                  Refresh
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="settings-meta">Workspace metadata will appear here after the signed-in desk loads.</p>
+                          )}
+                          {workspaceFeedback ? (
+                            <p className={`settings-status ${workspaceFeedback.type === "error" ? "error" : "success"}`}>{workspaceFeedback.text}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("workspace-team")}>
+                        <span>Members & Invites</span>
+                        <span>{expandedSettingsPanels["workspace-team"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["workspace-team"] && (
+                        <div className="settings-panel-body">
+                          {workspaceMembers.length ? (
+                            <div className="connected-accounts-list">
+                              {workspaceMembers.map((member) => (
+                                <div key={member.userId} className="connected-account-item">
+                                  <div>
+                                    <strong>{member.displayName || member.email || `User ${member.userId}`}</strong>
+                                    <p>{member.email} • {member.role}</p>
+                                  </div>
+                                  {["owner", "admin"].includes(String(activeWorkspace?.membership?.role || "").toLowerCase()) && member.role !== "owner" ? (
+                                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                      <select
+                                        value={member.role}
+                                        onChange={(e) => { void updateWorkspaceMemberRole(member, e.target.value); }}
+                                        disabled={workspaceBusy}
+                                      >
+                                        <option value="member">Member</option>
+                                        <option value="admin">Admin</option>
+                                      </select>
+                                      <button className="settings-secondary-btn" onClick={() => { void removeWorkspaceMember(member); }} disabled={workspaceBusy}>
+                                        Remove
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span>{member.role}</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="settings-meta">No workspace members yet.</p>
+                          )}
+
+                          {["owner", "admin"].includes(String(activeWorkspace?.membership?.role || "").toLowerCase()) ? (
+                            <>
+                              <div className="settings-inline-actions" style={{ marginTop: "14px", alignItems: "flex-end" }}>
+                                <label className="settings-field" style={{ flex: 1 }}>
+                                  <span>Invite Email</span>
+                                  <input
+                                    value={workspaceInviteForm.email}
+                                    onChange={(e) => setWorkspaceInviteForm((prev) => ({ ...prev, email: e.target.value }))}
+                                    placeholder="teammate@zenin.app"
+                                  />
+                                </label>
+                                <label className="settings-field" style={{ width: "140px" }}>
+                                  <span>Role</span>
+                                  <select
+                                    value={workspaceInviteForm.role}
+                                    onChange={(e) => setWorkspaceInviteForm((prev) => ({ ...prev, role: e.target.value }))}
+                                  >
+                                    <option value="member">Member</option>
+                                    <option value="admin">Admin</option>
+                                  </select>
+                                </label>
+                                <button className="settings-primary-btn" onClick={() => { void sendWorkspaceInvite(); }} disabled={workspaceBusy}>
+                                  Invite
+                                </button>
+                              </div>
+                              {workspaceInvites.length ? (
+                                <div className="connected-accounts-list" style={{ marginTop: "14px" }}>
+                                  {workspaceInvites.map((invite) => (
+                                    <div key={invite.id} className="connected-account-item">
+                                      <div>
+                                        <strong>{invite.email}</strong>
+                                        <p>{invite.role} • {invite.status}</p>
+                                      </div>
+                                      <span>{invite.expiresAt ? new Date(invite.expiresAt).toLocaleDateString() : "No expiry"}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("workspace-activity")}>
+                        <span>Desk Activity</span>
+                        <span>{expandedSettingsPanels["workspace-activity"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["workspace-activity"] && (
+                        <div className="settings-panel-body">
+                          {workspaceActivity.length ? (
+                            <div className="connected-accounts-list">
+                              {workspaceActivity.map((entry) => (
+                                <div key={entry.id} className="connected-account-item">
+                                  <div>
+                                    <strong>{entry.eventType.replace(/_/g, " ")}</strong>
+                                    <p>{entry.actorDisplayName || entry.actorEmail || "Workspace member"}</p>
+                                  </div>
+                                  <span>{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "Just now"}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="settings-meta">No desk activity has been recorded yet.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <WorkspaceInstitutionalControlPanel activeWorkspace={activeWorkspace} />
+                  </>
+                )}
+
                 {activeSettingsCategory === "Accounts" && (
                   <>
                     <div className="settings-preview-note">{settingsPreviewNote}</div>
@@ -5150,9 +5759,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 <div key={acc.id} className="connected-account-item">
                                   <div>
                                     <strong>{acc.provider}</strong>
-                                    <p>{acc.username} • {acc.venueType.toUpperCase()}</p>
+                                    <p>
+                                      {acc.username} • {acc.venueType.toUpperCase()}
+                                      {acc.lastSyncStatus ? ` • ${String(acc.lastSyncStatus).toUpperCase()}` : ""}
+                                      {acc.permissionScope ? ` • ${String(acc.permissionScope).replace(/_/g, " ").toUpperCase()}` : ""}
+                                      {acc.riskLevel ? ` • ${String(acc.riskLevel).toUpperCase()}` : ""}
+                                    </p>
                                   </div>
-                                  <span>{acc.apiKeyMasked}</span>
+                                  <span>{acc.lastSyncAt ? new Date(acc.lastSyncAt).toLocaleString() : acc.apiKeyMasked}</span>
                                 </div>
                               ))}
                             </div>
@@ -5296,86 +5910,180 @@ const handleOptionTradeClosed = async (tradeId) => {
 
             {isConnectWindowOpen && (
               <div className="connect-account-overlay" onClick={() => setIsConnectWindowOpen(false)}>
-                <div className="connect-account-window" onClick={(e) => e.stopPropagation()}>
-                  <div className="settings-window-header">
-                    <h2>Connect Account</h2>
-                    <button className="close-btn" onClick={() => setIsConnectWindowOpen(false)}>&times;</button>
-                  </div>
-                  <div className="connect-account-body">
-                    <p className="settings-warning">
-                      Use read-only API keys only. Trading or withdrawal permissions are not supported.
-                    </p>
-                    <label className="settings-field">
-                      <span>Account type</span>
-                      <select
-                        value={accountForm.venueType}
-                        onChange={(e) => {
-                          const nextType = e.target.value;
-                          const nextProvider = nextType === "cex"
-                            ? (cexOptions[0] || "Binance")
-                            : nextType === "dex"
-                              ? (dexOptions[0] || "Hyperliquid")
-                              : nextType === "prediction"
-                                ? (predictionOptions[0] || "Polymarket")
-                                : (brokerOptions[0] || "Interactive Brokers");
-                          setAccountForm((prev) => ({ ...prev, venueType: nextType, provider: nextProvider }));
-                        }}
-                      >
-                        <option value="cex">Crypto Exchange (CEX)</option>
-                        <option value="dex">Decentralized Exchange (DEX)</option>
-                        <option value="broker">Stock Brokerage</option>
-                        <option value="prediction">Prediction Markets</option>
-                      </select>
-                    </label>
-                    <label className="settings-field">
-                      <span>Provider</span>
-                      <select
-                        value={accountForm.provider}
-                        onChange={(e) => setAccountForm((prev) => ({ ...prev, provider: e.target.value }))}
-                      >
-                        {venueOptions.map((venue) => (
-                          <option key={venue} value={venue}>{venue}</option>
+                <div className={`connect-account-window ${connectPromptMode === "onboarding" ? "is-onboarding" : ""}`} onClick={(e) => e.stopPropagation()}>
+                  <div className="connect-account-shell">
+                    <aside className="connect-account-trust-panel">
+                      <div className="connect-account-kicker">Secure setup</div>
+                      <h2>{connectPromptMode === "onboarding" ? "Bring in your portfolio data" : "Connect another account"}</h2>
+                      <p>
+                        Connect read-only API credentials to unlock live portfolio sync, analytics, and tax tracking inside your Zenin workspace.
+                      </p>
+                      <div className="connect-account-trust-grid">
+                        <div className="connect-account-trust-card">
+                          <span>Access model</span>
+                          <strong>Read-only only</strong>
+                          <em>No trading permissions. No withdrawal permissions.</em>
+                        </div>
+                        <div className="connect-account-trust-card">
+                          <span>Coverage</span>
+                          <strong>Portfolio + research</strong>
+                          <em>Holdings, balances, fills, and performance context.</em>
+                        </div>
+                      </div>
+                      <div className="connect-account-security-list">
+                        <div>
+                          <strong>Controlled access</strong>
+                          <span>Least-privilege credentials only. Zenin does not support execution rights here.</span>
+                        </div>
+                        <div>
+                          <strong>Encrypted storage</strong>
+                          <span>Account keys stay in your private workspace and are used only for portfolio data sync.</span>
+                        </div>
+                        <div>
+                          <strong>Start with one venue</strong>
+                          <span>You can add more exchanges, brokerages, or prediction accounts after the first sync.</span>
+                        </div>
+                      </div>
+                      <div className="connect-account-provider-preview">
+                        {onboardingVenuePreview.map((venue) => (
+                          <span key={venue}>{venue}</span>
                         ))}
-                      </select>
-                    </label>
-                    <label className="settings-field">
-                      <span>User Name</span>
-                      <input
-                        type="text"
-                        value={accountForm.username}
-                        onChange={(e) => setAccountForm((prev) => ({ ...prev, username: e.target.value }))}
-                        placeholder="Enter account username"
-                      />
-                    </label>
-                    <label className="settings-field">
-                      <span>API Key / ID</span>
-                      <input
-                        type="password"
-                        value={accountForm.apiKey}
-                        onChange={(e) => setAccountForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-                        placeholder="Enter read-only API key or account ID"
-                        disabled={isSyncingAccount}
-                      />
-                    </label>
-                    {(accountForm.venueType === "cex" || accountForm.provider === "Hyperliquid") && (
-                      <label className="settings-field">
-                        <span>API Secret</span>
-                        <input
-                          type="password"
-                          value={accountForm.apiSecret}
-                          onChange={(e) => setAccountForm((prev) => ({ ...prev, apiSecret: e.target.value }))}
-                          placeholder="Enter read-only API secret"
-                          disabled={isSyncingAccount}
-                        />
-                      </label>
-                    )}
-                    <button
-                      className="settings-primary-btn"
-                      onClick={connectAccount}
-                      disabled={isSyncingAccount || !accountForm.username.trim() || !accountForm.apiKey.trim()}
-                    >
-                      {isSyncingAccount ? "Syncing..." : "Connect"}
-                    </button>
+                      </div>
+                    </aside>
+
+                    <section className="connect-account-form-panel">
+                      <div className="connect-account-header">
+                        <div>
+                          <span>{connectPromptMode === "onboarding" ? "Finish setup" : "Account link"}</span>
+                          <strong>{connectPromptMode === "onboarding" ? "Connect your first venue" : "Add a read-only source"}</strong>
+                        </div>
+                        <button className="close-btn" onClick={() => setIsConnectWindowOpen(false)} aria-label="Close connect account modal">&times;</button>
+                      </div>
+
+                      <div className="connect-account-body">
+                        <div className="connect-account-status-strip">
+                          <div>
+                            <span>Unlocks</span>
+                            <strong>Live portfolio, analytics, tax tracking</strong>
+                          </div>
+                          <div>
+                            <span>Key policy</span>
+                            <strong>Read-only API only</strong>
+                          </div>
+                        </div>
+
+                        <div className="connect-account-type-grid" role="tablist" aria-label="Account type">
+                          {[
+                            { key: "cex", label: "CEX" },
+                            { key: "dex", label: "DEX" },
+                            { key: "broker", label: "Broker" },
+                            { key: "prediction", label: "Prediction" }
+                          ].map((type) => {
+                            const active = accountForm.venueType === type.key;
+                            return (
+                              <button
+                                key={type.key}
+                                type="button"
+                                className={`connect-account-type-btn ${active ? "active" : ""}`}
+                                onClick={() => {
+                                  const nextProvider = type.key === "cex"
+                                    ? (cexOptions[0] || "Binance")
+                                    : type.key === "dex"
+                                      ? (dexOptions[0] || "Hyperliquid")
+                                      : type.key === "prediction"
+                                        ? (predictionOptions[0] || "Polymarket")
+                                        : (brokerOptions[0] || "Interactive Brokers");
+                                  setAccountForm((prev) => ({ ...prev, venueType: type.key, provider: nextProvider }));
+                                  setConnectAccountFeedback("");
+                                }}
+                              >
+                                {type.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <label className="settings-field">
+                          <span>Provider</span>
+                          <select
+                            value={accountForm.provider}
+                            onChange={(e) => {
+                              setAccountForm((prev) => ({ ...prev, provider: e.target.value }));
+                              setConnectAccountFeedback("");
+                            }}
+                          >
+                            {venueOptions.map((venue) => (
+                              <option key={venue} value={venue}>{venue}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="settings-field">
+                          <span>Account label</span>
+                          <input
+                            type="text"
+                            value={accountForm.username}
+                            onChange={(e) => {
+                              setAccountForm((prev) => ({ ...prev, username: e.target.value }));
+                              setConnectAccountFeedback("");
+                            }}
+                            placeholder="Name this connection"
+                          />
+                        </label>
+                        <label className="settings-field">
+                          <span>API Key / Account ID</span>
+                          <input
+                            type="password"
+                            value={accountForm.apiKey}
+                            onChange={(e) => {
+                              setAccountForm((prev) => ({ ...prev, apiKey: e.target.value }));
+                              setConnectAccountFeedback("");
+                            }}
+                            placeholder="Enter read-only API key or account ID"
+                            disabled={isSyncingAccount}
+                          />
+                        </label>
+                        {(accountForm.venueType === "cex" || accountForm.provider === "Hyperliquid") && (
+                          <label className="settings-field">
+                            <span>API Secret</span>
+                            <input
+                              type="password"
+                              value={accountForm.apiSecret}
+                              onChange={(e) => {
+                                setAccountForm((prev) => ({ ...prev, apiSecret: e.target.value }));
+                                setConnectAccountFeedback("");
+                              }}
+                              placeholder="Enter read-only API secret"
+                              disabled={isSyncingAccount}
+                            />
+                          </label>
+                        )}
+
+                        {connectAccountFeedback ? (
+                          <p className="connect-account-feedback error">{connectAccountFeedback}</p>
+                        ) : (
+                          <p className="connect-account-footnote">
+                            Use least-privilege credentials. Connect one venue now and add the rest after your first sync.
+                          </p>
+                        )}
+
+                        <div className="connect-account-actions">
+                          <button
+                            className="settings-secondary-btn connect-account-secondary"
+                            onClick={() => setIsConnectWindowOpen(false)}
+                            disabled={isSyncingAccount}
+                          >
+                            {connectPromptMode === "onboarding" ? "Skip for now" : "Cancel"}
+                          </button>
+                          <button
+                            className="settings-primary-btn connect-account-primary"
+                            onClick={connectAccount}
+                            disabled={isSyncingAccount || !accountForm.username.trim() || !accountForm.apiKey.trim()}
+                          >
+                            {isSyncingAccount ? "Syncing..." : "Connect account"}
+                          </button>
+                        </div>
+                      </div>
+                    </section>
                   </div>
                 </div>
               </div>

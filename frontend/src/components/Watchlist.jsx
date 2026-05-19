@@ -3,12 +3,11 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
-import { zeninFetch } from "../utils/zeninFetch";
-import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { zeninFetchJson } from "../utils/zeninFetch";
 import { getCurrencySymbol, inferAssetCurrency } from "../utils/currencyUtils";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
-
-const BACKEND_URL = ZENIN_API_BASE_URL;
+import { DensePanelHeader, GuidedEmptyState, InlineControlGroup } from "./CompactWorkspaceUI";
+import { SharedWatchlistWorkspacePanel } from "./InstitutionalPanels";
 const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const EARNINGS_CLIENT_CACHE_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 
@@ -43,19 +42,13 @@ export function Watchlist({
   liveStatus = "idle",
   lastLivePriceAt = null,
 }) {
-  const addCategoryText = (() => {
-    const raw = String(activeCategory || "asset").trim();
-    if (!raw) return "Add Asset";
-    const label = raw.charAt(0).toUpperCase() + raw.slice(1);
-    return `Add ${label}`;
-  })();
-
   const [currentPage, setCurrentPage] = useState(1);
-  const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
+  const [viewMode, setViewMode] = useState("list"); // "grid" or "list"
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
   const [earningsNotice, setEarningsNotice] = useState("");
+  const [isEarningsOpen, setIsEarningsOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth > 1100 : true));
   const [indicatorCountry, setIndicatorCountry] = useState("");
   const [macroSnapshot, setMacroSnapshot] = useState(null);
   const [macroLoading, setMacroLoading] = useState(false);
@@ -152,6 +145,17 @@ export function Watchlist({
   }, [activeCategory, activeTheme]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleResize = () => {
+      if (window.innerWidth <= 1100) {
+        setIsEarningsOpen(false);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
     if (activeCategory !== "indicators") {
       setIndicatorCountry("");
       setMacroSnapshot(null);
@@ -225,6 +229,21 @@ export function Watchlist({
           (a) => normalizeTheme(a.theme) === normalizeTheme(activeTheme)
         )
       : starredAssets;
+  const emptyStateTitle = activeTheme && activeTheme !== "All"
+    ? `No ${activeTheme} names in this cut`
+    : `No ${String(activeCategory || "watchlist")} rows yet`;
+  const emptyStateDescription = activeTheme && activeTheme !== "All"
+    ? "This theme filter currently has no tracked names. Reset the theme or star symbols to build a desk-ready list."
+    : `Build this ${activeCategory} watchlist by starring names, switching categories, or saving a shared desk view.`;
+  const emptyStateSteps = activeTheme && activeTheme !== "All"
+    ? [
+        "Reset the theme filter to review the broader category.",
+        "Star the symbols you want to keep in this desk list.",
+      ]
+    : [
+        "Browse the current category and star the names you care about.",
+        "Save the shared view once the desk list reflects your active focus.",
+      ];
 
   const indicatorWatchlistCountries = useMemo(() => {
     return (Array.isArray(watchlistAssets) ? watchlistAssets : [])
@@ -314,21 +333,9 @@ useEffect(() => {
     const fetchMacro = async () => {
       setMacroLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
+        const data = await zeninFetchJson(`/macro-indicators?country=${encodeURIComponent(indicatorCountry)}`, {
           signal: controller.signal
         });
-        if (!res.ok) {
-          let msg = `HTTP ${res.status}`;
-          try {
-            const payload = await res.json();
-            msg = payload?.error || msg;
-          } catch {
-            const text = await res.text();
-            if (text) msg = text;
-          }
-          throw new Error(msg);
-        }
-        const data = await res.json();
         if (!isMounted) return;
         const sanitized = sanitizeMacroSnapshot(data || null);
         setMacroSnapshot(sanitized);
@@ -343,7 +350,7 @@ useEffect(() => {
         }));
         writeResilientCache("macro-indicators", { country: indicatorCountry }, sanitized);
       } catch (err) {
-        if (err.name === "AbortError") return;
+        if (err?.name === "AbortError" || err?.code === "REQUEST_ABORTED") return;
         if (!isMounted) return;
         if (!cachedPayload) setMacroSnapshot(null);
         setMacroStale(true);
@@ -397,14 +404,9 @@ useEffect(() => {
           symbols: earningsSymbols.join(","),
           limit: String(Math.max(1, earningsSymbols.length))
         });
-        const res = await zeninFetch(`/earnings-calendar?${params.toString()}`, {
+        const data = await zeninFetchJson(`/earnings-calendar?${params.toString()}`, {
           signal: controller.signal
         });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`HTTP ${res.status}: ${text}`);
-        }
-        const data = await res.json();
         if (!isMounted) return;
         const items = Array.isArray(data?.items) ? data.items : [];
         setEarningsItems(items);
@@ -412,7 +414,7 @@ useEffect(() => {
         setEarningsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("earnings-calendar", cacheParams, data || { items });
       } catch (err) {
-        if (err.name === "AbortError") return;
+        if (err?.name === "AbortError" || err?.code === "REQUEST_ABORTED") return;
         if (!isMounted) return;
         if (!cached?.payload?.items) setEarningsItems([]);
         setEarningsStale(true);
@@ -437,12 +439,29 @@ useEffect(() => {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
 
+  const formatAssetPrice = (asset) => {
+    if (asset?.price == null) return "—";
+    const isWhole = asset?.currency === "JPY" || asset?.marketType === "spot";
+    const prefix = asset?.market === "Treasury" ? "" : getCurrencySymbol(inferAssetCurrency(asset));
+    const suffix = asset?.market === "Treasury" ? "%" : "";
+    return `${prefix}${Number(asset.price).toLocaleString(undefined, {
+      minimumFractionDigits: isWhole ? 0 : 2,
+      maximumFractionDigits: isWhole ? 0 : 2,
+    })}${suffix}`;
+  };
+
+  const getSessionLabel = (asset) => {
+    if (asset?.isMarketOpen === false) return "Closed";
+    if (liveStatus === "connected" && asset?._liveUpdatedAt) return "Live";
+    if (liveStatus === "degraded") return "Polling";
+    return asset?.marketType ? String(asset.marketType).toUpperCase() : "Tracked";
+  };
+
   return (
     <>
-      <section className="watchlist-panel">
+      <section className="watchlist-panel watchlist-panel-compact">
       <header className="watchlist-header">
-        {/* Category tabs */}
-        <div className="category-tabs">
+        <div className="category-tabs compact">
           {categories.map((category) => (
             <button
               key={category}
@@ -454,9 +473,8 @@ useEffect(() => {
           ))}
         </div>
 
-        {/* View Mode Toggle */}
         {activeCategory !== "indicators" ? (
-          <div className="watchlist-header-actions">
+          <div className="watchlist-header-actions compact">
             <span
               className={`data-health-badge ${liveStatus === "connected" ? "ok" : liveStatus === "degraded" ? "hazard" : "loading"}`}
               title={lastLivePriceAt ? `Last live price tick ${new Date(lastLivePriceAt).toLocaleTimeString()}` : "Live prices start when tracked assets are available"}
@@ -464,7 +482,7 @@ useEffect(() => {
               <span className={`status-icon ${liveStatus === "idle" ? "spinner" : ""}`}>{liveStatus === "connected" ? "✓" : liveStatus === "degraded" ? "⚠" : "⟳"}</span>
               {liveStatus === "connected" ? "Live" : liveStatus === "degraded" ? "Polling" : "Connecting"}
             </span>
-            <div className="view-mode-toggle">
+            <InlineControlGroup className="watchlist-toolbar-toggle">
               <button
                 className={viewMode === "grid" ? "active" : ""}
                 onClick={() => setViewMode("grid")}
@@ -479,12 +497,12 @@ useEffect(() => {
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
               </button>
-            </div>
+            </InlineControlGroup>
           </div>
         ) : null}
       </header>
       {activeCategory === "stocks" && (
-        <div className="theme-tabs" style={{ paddingTop: 0, marginBottom: "10px" }}>
+        <div className="theme-tabs watchlist-theme-strip" style={{ paddingTop: 0, marginBottom: "10px" }}>
           {mergedStockThemes.map((theme) => (
             <button
               key={theme}
@@ -553,9 +571,8 @@ useEffect(() => {
         </div>
       ) : (
         <>
-          {/* Show theme heading when a specific theme is selected */}
           {activeCategory === "stocks" && activeTheme && activeTheme !== "All" && (
-            <div className="theme-heading">
+            <div className="theme-heading compact">
               <span className="theme-label">{activeTheme}</span>
               <span className="theme-count">
                 {displayedAssets.length} compan{displayedAssets.length === 1 ? "y" : "ies"}
@@ -563,147 +580,263 @@ useEffect(() => {
             </div>
           )}
 
-          <div className={`asset-grid ${viewMode === "list" ? "list-mode" : ""}`}>
-            {displayedAssets.length === 0 ? (
-              <div className="empty-state">{addCategoryText}</div>
-            ) : (
-              pagedAssets.map((asset) => (
-                <article
-                  key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
-                  className={`asset-card clickable ${asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}`}
-                  onClick={() => onAdd(asset)}
-                  title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
-                >
-                  <div className="asset-card-main">
-                    <div className="asset-identity">
-                      <strong>{asset.symbol}</strong>
-                      <p>{asset.name}</p>
+          <div className={`watchlist-content-grid ${activeCategory === "stocks" ? "with-aside" : ""}`}>
+            <div className="watchlist-main-surface">
+              {viewMode === "list" ? (
+                <div className="watchlist-blotter">
+                  <div className="watchlist-blotter-head">
+                    <div className="watchlist-blotter-title">
+                      <span>Tracked {activeCategory}</span>
+                      <strong>{displayedAssets.length} rows</strong>
                     </div>
-
-                    <div className="asset-meta-group">
-                      {activeCategory === "stocks" && asset.category && (
-                        <span className="category-badge">{asset.category}</span>
-                      )}
-                    </div>
-
-                    {asset.price != null && (
-                      <div className="asset-price">
-                        <span className="price-val">
-                          {(() => {
-                            if (asset.market === "Treasury") return "";
-                            const activeCurrency = inferAssetCurrency(asset);
-                            return getCurrencySymbol(activeCurrency);
-                          })()}
-                          {asset.price.toLocaleString(undefined, {
-                            minimumFractionDigits: (asset.currency === "JPY" || asset.marketType === "spot") ? 0 : 2,
-                            maximumFractionDigits: (asset.currency === "JPY" || asset.marketType === "spot") ? 0 : 2
-                          })}
-                          {asset.market === "Treasury" ? "%" : ""}
-                        </span>
-                        {asset.isMarketOpen === false && (
-                          <span className="market-closed-dash" title={`Market Closed: ${asset.marketStatus || 'Holiday/Weekend'}`} style={{ color: "var(--color-text-secondary)", marginLeft: "4px", fontSize: "0.9rem" }}>–</span>
-                        )}
-                        {asset.priceChangePercent != null && asset.isMarketOpen !== false &&
-                          (() => {
-                            const change = Number(asset.priceChangePercent);
-                            if (Number.isNaN(change)) return null;
+                    <span className="watchlist-blotter-meta">Quote blotter</span>
+                  </div>
+                  {displayedAssets.length === 0 ? (
+                    <GuidedEmptyState
+                      eyebrow="Watchlist workflow"
+                      title={emptyStateTitle}
+                      description={emptyStateDescription}
+                      steps={emptyStateSteps}
+                      cta={activeTheme && activeTheme !== "All" ? "Show all themes" : undefined}
+                      onAction={activeTheme && activeTheme !== "All" ? () => onThemeSelect?.("All") : undefined}
+                      className="watchlist-guided-empty"
+                    />
+                  ) : (
+                    <div className="watchlist-table-wrap">
+                      <table className="watchlist-table">
+                        <thead>
+                          <tr>
+                            <th>Symbol</th>
+                            <th>Name</th>
+                            <th className="numeric">Last</th>
+                            <th className="numeric">% Chg</th>
+                            <th>Category</th>
+                            <th>Theme</th>
+                            <th>Session</th>
+                            <th className="numeric">Star</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pagedAssets.map((asset) => {
+                            const change = Number(asset?.priceChangePercent);
+                            const hasChange = Number.isFinite(change) && asset?.isMarketOpen !== false;
                             return (
-                              <span
-                                className={`price-change ${change >= 0 ? "positive" : "negative"
-                                  }`}
+                              <tr
+                                key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
+                                className={asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}
+                                onClick={() => onAdd(asset)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    onAdd(asset);
+                                  }
+                                }}
+                                tabIndex={0}
+                                role="button"
+                                title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
                               >
-                                {change >= 0 ? "+" : ""}
-                                {change.toFixed(2)}%
-                              </span>
+                                <td>
+                                  <div className="watchlist-symbol-cell">
+                                    <strong>{asset.symbol}</strong>
+                                    <span>{asset.marketType || asset.type || "tracked"}</span>
+                                  </div>
+                                </td>
+                                <td>{asset.name}</td>
+                                <td className="numeric">{formatAssetPrice(asset)}</td>
+                                <td className={`numeric ${hasChange ? (change >= 0 ? "positive" : "negative") : ""}`}>
+                                  {hasChange ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "—"}
+                                </td>
+                                <td>{asset.category || activeCategory}</td>
+                                <td>{asset.theme || "—"}</td>
+                                <td>{getSessionLabel(asset)}</td>
+                                <td className="numeric">
+                                  <button
+                                    className={`star-button compact ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onToggleStar(asset);
+                                    }}
+                                    title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
+                                  >
+                                    ★
+                                  </button>
+                                </td>
+                              </tr>
                             );
-                          })()}
-                      </div>
-                    )}
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className={`asset-grid ${viewMode === "list" ? "list-mode" : ""}`}>
+                  {displayedAssets.length === 0 ? (
+                    <GuidedEmptyState
+                      eyebrow="Watchlist workflow"
+                      title={emptyStateTitle}
+                      description={emptyStateDescription}
+                      steps={emptyStateSteps}
+                      cta={activeTheme && activeTheme !== "All" ? "Show all themes" : undefined}
+                      onAction={activeTheme && activeTheme !== "All" ? () => onThemeSelect?.("All") : undefined}
+                      className="watchlist-guided-empty"
+                    />
+                  ) : (
+                    pagedAssets.map((asset) => (
+                      <article
+                        key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
+                        className={`asset-card clickable ${asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}`}
+                        onClick={() => onAdd(asset)}
+                        title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
+                      >
+                        <div className="asset-card-main">
+                          <div className="asset-identity">
+                            <strong>{asset.symbol}</strong>
+                            <p>{asset.name}</p>
+                          </div>
+
+                          <div className="asset-meta-group">
+                            {activeCategory === "stocks" && asset.category && (
+                              <span className="category-badge">{asset.category}</span>
+                            )}
+                          </div>
+
+                          {asset.price != null && (
+                            <div className="asset-price">
+                              <span className="price-val">{formatAssetPrice(asset)}</span>
+                              {asset.isMarketOpen === false && (
+                                <span className="market-closed-dash" title={`Market Closed: ${asset.marketStatus || 'Holiday/Weekend'}`} style={{ color: "var(--color-text-secondary)", marginLeft: "4px", fontSize: "0.9rem" }}>–</span>
+                              )}
+                              {asset.priceChangePercent != null && asset.isMarketOpen !== false &&
+                                (() => {
+                                  const change = Number(asset.priceChangePercent);
+                                  if (Number.isNaN(change)) return null;
+                                  return (
+                                    <span className={`price-change ${change >= 0 ? "positive" : "negative"}`}>
+                                      {change >= 0 ? "+" : ""}
+                                      {change.toFixed(2)}%
+                                    </span>
+                                  );
+                                })()}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          className={`star-button ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleStar(asset);
+                          }}
+                          title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
+                        >
+                          ★
+                        </button>
+                      </article>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {totalPages > 1 && (
+                <div className="pagination-controls compact">
+                  <button
+                    className="pagination-button"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+                  >
+                    Previous
+                  </button>
+                  <div className="pagination-label">
+                    Page {currentPage} of {totalPages}
                   </div>
                   <button
-                    className={`star-button ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleStar(asset);
-                    }}
-                    title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
+                    className="pagination-button"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
                   >
-                    ★
+                    Next
                   </button>
-                </article>
-              ))
-            )}
-          </div>
-
-          {totalPages > 1 && (
-            <div className="pagination-controls">
-              <button
-                className="pagination-button"
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
-              >
-                Previous
-              </button>
-              <div className="pagination-label">
-                Page {currentPage} of {totalPages}
-              </div>
-              <button
-                className="pagination-button"
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
-              >
-                Next
-              </button>
+                </div>
+              )}
             </div>
-          )}
+
+            {activeCategory === "stocks" ? (
+              <aside className="watchlist-earnings-rail">
+                <DensePanelHeader
+                  title="Upcoming"
+                  subtitle="Nearest earnings in focus"
+                  meta="Finviz"
+                  actions={
+                    <InlineControlGroup>
+                      <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
+                        <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
+                        Earnings
+                      </span>
+                      <button type="button" className="pagination-button watchlist-collapse-btn" onClick={() => setIsEarningsOpen((value) => !value)}>
+                        {isEarningsOpen ? "Hide" : "Show"}
+                      </button>
+                    </InlineControlGroup>
+                  }
+                />
+                {isEarningsOpen ? (
+                  earningsLoading && earningsRows.length === 0 ? (
+                    <GuidedEmptyState
+                      eyebrow="Earnings rail"
+                      title="Loading upcoming catalysts"
+                      description="Zenin is pulling the nearest earnings set for the names already on your desk."
+                      steps={[
+                        "Keep the blotter open while the catalyst rail syncs.",
+                        "Star the names you want surfaced in this queue.",
+                      ]}
+                      tone="subtle"
+                      className="guided-empty-state--compact"
+                    />
+                  ) : earningsRows.length === 0 ? (
+                    <GuidedEmptyState
+                      eyebrow="Earnings rail"
+                      title="No upcoming earnings surfaced yet"
+                      description="The catalyst rail is empty because there are no nearby events for the currently visible names or the earnings feed has not returned them yet."
+                      steps={[
+                        "Keep starred equities in the watchlist so they can enter the queue.",
+                        "Use desk notes to flag catalysts manually when the feed is quiet.",
+                      ]}
+                      tone="subtle"
+                      className="guided-empty-state--compact"
+                    />
+                  ) : (
+                    <div className="watchlist-earnings-list">
+                      {earningsRows.map(({ symbol, item }) => (
+                        <button
+                          key={symbol}
+                          type="button"
+                          className="watchlist-earnings-row"
+                          onClick={() => {
+                            const match = displayedAssets.find((asset) => asset.symbol === symbol) || assets.find((asset) => asset.symbol === symbol);
+                            if (match) onAdd(match);
+                          }}
+                        >
+                          <strong>{symbol}</strong>
+                          <span>{formatEarningsDate(item?.nextEarnings || item?.earningsText)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                ) : null}
+                {earningsStale && earningsNotice ? (
+                  <div className="snapshot-inline-note">{earningsNotice}</div>
+                ) : null}
+              </aside>
+            ) : null}
+          </div>
         </>
       )}
       </section>
 
-      {activeCategory === "stocks" && (
-        <section className="watchlist-panel glass" style={{ marginTop: "12px", padding: "12px 14px" }}>
-          <div className="section-header" style={{ marginBottom: "8px" }}>
-            <h2 style={{ margin: 0, fontSize: "14px" }}>Earnings</h2>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div className="asset-count">Finviz</div>
-              <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
-                <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
-                Earnings
-              </span>
-            </div>
-          </div>
-          {earningsLoading && earningsRows.length === 0 ? (
-            <div className="loading-state">Loading earnings calendar...</div>
-          ) : earningsRows.length === 0 ? (
-            <div className="loading-state">Waiting for earnings data...</div>
-          ) : (
-            <div style={{ display: "grid", gap: "8px" }}>
-              {earningsRows.map(({ symbol, item }) => (
-                <div
-                  key={symbol}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "8px 10px",
-                    borderRadius: "8px",
-                    border: "1px solid rgba(148,163,184,0.15)",
-                    background: "var(--color-surface, rgba(5,5,5,0.35))"
-                  }}
-                >
-                  <strong style={{ fontSize: "13px", color: "var(--color-text-primary)" }}>{symbol}</strong>
-                  <span style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>
-                    {formatEarningsDate(item?.nextEarnings || item?.earningsText)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {earningsStale && earningsNotice ? (
-            <div className="snapshot-inline-note">{earningsNotice}</div>
-          ) : null}
-        </section>
-      )}
+      <SharedWatchlistWorkspacePanel
+        activeCategory={activeCategory}
+        activeTheme={activeTheme}
+        assets={displayedAssets}
+      />
 
       {selectedIndicatorMetric ? (
         <IndicatorMetricModal

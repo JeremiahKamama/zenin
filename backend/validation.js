@@ -138,6 +138,31 @@ const planUpdateSchema = z.object({
   billingCycle: z.enum(["monthly", "yearly"]),
 });
 
+const workspaceUpdateSchema = z.object({
+  name: z.string().min(2).max(120).trim().optional(),
+  slug: z.string().min(2).max(80).regex(/^[a-z0-9-]+$/i, "Slug may only contain letters, numbers, and hyphens").trim().optional(),
+}).refine(
+  (value) => Object.prototype.hasOwnProperty.call(value, "name") || Object.prototype.hasOwnProperty.call(value, "slug"),
+  { message: "At least one workspace field is required." }
+);
+
+const workspaceInviteSchema = z.object({
+  email: emailSchema,
+  role: z.enum(["admin", "member"]).default("member"),
+});
+
+const workspaceMemberRoleSchema = z.object({
+  role: z.enum(["admin", "member"]),
+});
+
+const workspaceAlertAssignmentSchema = z.object({
+  alertKey: z.string().min(1).max(120).trim(),
+  assignedToUserId: z.number().int().positive().optional().nullable(),
+  status: z.enum(["open", "assigned", "snoozed", "archived"]).optional().default("open"),
+  snoozedUntil: z.string().datetime().optional().nullable(),
+  notes: z.record(z.any()).optional().nullable(),
+});
+
 const watchlistBulkSchema = z.object({
   assets: z.array(watchlistAssetSchema),
 });
@@ -203,6 +228,10 @@ const exchangeKeySchema = z.object({
   apiKey: z.string().min(1).max(255),
   apiSecret: z.string().max(255).optional().nullable(),
   extraData: z.record(z.any()).optional().nullable(),
+  permissionScope: z.enum(["unknown", "read_only", "trade"]).optional().default("unknown"),
+  canTrade: z.boolean().optional().default(false),
+  lastVerifiedScope: z.enum(["unknown", "read_only", "trade"]).optional().default("unknown"),
+  riskLevel: z.enum(["standard", "sensitive", "trading"]).optional().default("standard"),
 });
 
 const validate = (schema, source = "body") => (req, res, next) => {
@@ -213,7 +242,13 @@ const validate = (schema, source = "body") => (req, res, next) => {
         path: err.path.join("."),
         message: err.message
       }));
-      return res.status(400).json({ error: "Validation failed", details: errors });
+      return res.status(400).json({
+        error: "Validation failed",
+        message: "One or more inputs are invalid.",
+        code: "VALIDATION_ERROR",
+        details: errors,
+        retryable: false
+      });
     }
     req[source] = result.data;
     next();
@@ -242,6 +277,10 @@ module.exports = {
   emailConfirmSchema,
   passwordUpdateSchema,
   planUpdateSchema,
+  workspaceUpdateSchema,
+  workspaceInviteSchema,
+  workspaceMemberRoleSchema,
+  workspaceAlertAssignmentSchema,
   watchlistBulkSchema,
   tradeLogSchema,
   balanceChangeSchema,

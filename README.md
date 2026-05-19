@@ -4,6 +4,66 @@ Zenin is a multi-asset trading dashboard that combines portfolio management, opt
 
 This README reflects the current implementation in this repository.
 
+## Render Postgres -> Supabase migration
+
+Zenin now supports migrating the existing Render-hosted PostgreSQL database into Supabase without changing application code.
+
+### 1) Create the Supabase database
+
+- Create a Supabase project and copy:
+  - the runtime connection string you want the backend to use after cutover
+  - the direct database connection string for admin/migration operations
+
+Recommended env layout in `backend/.env` or your deployment secrets:
+
+```bash
+DATABASE_URL=postgresql://...runtime-or-pooler-url...
+SUPABASE_DIRECT_URL=postgresql://...direct-db-url...
+MIGRATION_SOURCE_DATABASE_URL=postgresql://...old-render-db-url...
+MIGRATION_TARGET_DATABASE_URL=postgresql://...supabase-direct-db-url...
+PGSSLMODE=require
+PGSSL_REJECT_UNAUTHORIZED=true
+```
+
+### 2) Run the migration script
+
+From `backend/`:
+
+```bash
+npm run db:migrate:supabase
+```
+
+That performs a dry run and validates both connections. To execute the copy:
+
+```bash
+npm run db:migrate:supabase -- --yes
+```
+
+What the script does:
+
+- dumps the `public` schema from the old database with `pg_dump`
+- restores it into Supabase with `pg_restore`
+- avoids ownership/privilege replay to stay compatible with managed Postgres
+
+Requirements:
+
+- PostgreSQL client tools installed locally (`pg_dump`, `pg_restore`)
+- the destination should be the Supabase direct database URL, not a read-only proxy
+
+### 3) Cut over the app
+
+- Point backend `DATABASE_URL` at the Supabase runtime connection string.
+- Keep `SUPABASE_DIRECT_URL` available for future admin scripts and maintenance.
+- Restart the backend and confirm:
+  - `GET /health`
+  - auth/session flows
+  - portfolio/watchlist persistence
+  - options calculations and journal writes
+
+### 4) Render deployment note
+
+The Render blueprint now expects `DATABASE_URL` to be provided as an external secret instead of provisioning a Render PostgreSQL instance automatically. Set the Supabase runtime URL in Render before the next deploy.
+
 ## Entry flows
 
 - `GET /` shows the public homepage (marketing/overview).
@@ -33,6 +93,8 @@ This README reflects the current implementation in this repository.
 - Portfolio performance chart with interval (`1D` to `MAX`) and mode controls (Area, Bar, Line)
 - Top positions by value with live price/gain overlays
 - Top movers (gainers/losers) with timeframe selector (`daily`, `weekly`, `quarterly`, `ytd`, `yearly`)
+- Saved Home actions now persist through workspace collections when signed in, with local browser fallback for guests
+- Home missing-data, volatility-alert, journal-note, saved-view, and rebalance-plan flows now report real save failures instead of demo-only success states
 
 ### 3) Watchlist
 - Category-based asset browsing (stocks, crypto, bonds, metals, commodities, indicators)
@@ -58,6 +120,8 @@ This README reflects the current implementation in this repository.
 - Portfolio charts and performance snapshots
 - Per-position entry-price aware gain calculations
 - Mobile-safe rebalancing table layout with improved horizontal overflow behavior
+- Saved Portfolio views, exposure alerts, journal insights, CSV exports, queued rebalance previews, and rebalance execution history now persist through workspace collections
+- Authenticated rebalance execution uses the existing backend trade execution hook; guest mode saves an explicit preview instead of pretending orders were placed
 
 ### 6) Options
 - Crypto options chain (Derive/Lyra-style provider route)
@@ -118,7 +182,7 @@ This README reflects the current implementation in this repository.
 - **Platform Health**: Live health indicators for API, Database, and Auth services.
 - **Audit Logging**: Comprehensive administrative audit trail and system error monitoring.
 
-## Current progress (as of May 3, 2026)
+## Current progress (as of May 18, 2026)
 
 - **Security Hardening (Post-Audit) shipped**:
   - **Injection Protection**: Parameterized passkey queries to prevent SQL injection.
@@ -142,13 +206,14 @@ This README reflects the current implementation in this repository.
 - **Watchlist earnings fetch optimization shipped**: Earnings calendar now uses extended caching windows (frontend + backend) to avoid unnecessary reload fetches.
 - **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
 - **Mobile responsiveness fixes shipped**: Cross-market Analytics pills now stack cleanly on small screens; Journal and Portfolio tables were hardened for mobile overflow and clipping scenarios.
+- **Home and Portfolio action persistence shipped**: Remaining demo-only save/export/rebalance flows now use workspace persistence or authenticated backend execution hooks, and failure states are surfaced instead of fake success messages.
 - **Zenin Admin Console finalized**:
   - **Production Deployment**: Hosted at `admin.zenin.capital` with dynamic API resolution.
   - **Premium Dashboard**: Custom-designed administrative interface for real-time system monitoring.
   - **Secure Access**: Integrated with central auth system (`/api/auth/me`) with strict `isAdmin` enforcement.
   - **Interactive Management**: Full CRUD capabilities for user accounts and platform settings.
 
-## Current limitations (as of May 3, 2026)
+## Current limitations (as of May 18, 2026)
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
 - **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
@@ -158,7 +223,6 @@ This README reflects the current implementation in this repository.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 - **Homepage device preview assets**: Footer laptop/phone visuals currently use themed mock content (not live in-app screenshots).
-- **Priority 2 unfinished UX actions**: Several Home and Portfolio action flows still simulate work with local progress states rather than executing real save/export/rebalance logic.
 - **Priority 3 unfinished UX actions**: Some secondary exports, empty-state CTAs, and settings/security controls still need backend-backed behavior or stronger product labeling.
 
 ## Data sources and integrations
@@ -387,8 +451,13 @@ Notes:
 - `PORT` (default `4000`)
 - `FRONTEND_URL` (CORS allowlist origin)
 - `DATABASE_URL` (recommended)
-- `AUTH_HASH_KEY` (recommended strong secret used for session/reset/OTP hashing; if omitted in production, Zenin derives a stable fallback from protected server config, but an explicit secret is preferred)
+- `AUTH_HASH_KEY` (required in production; use a 32+ character strong secret for session/reset/OTP hashing and workspace secret encryption)
 - `DERIVE_API_URL` (optional provider override)
+
+Render deployment note:
+- Set `DATABASE_URL` to the Supabase runtime connection string in Render.
+- Keep `SUPABASE_DIRECT_URL` available for admin scripts and one-off maintenance.
+- `getaddrinfo ENOTFOUND ...` usually means the configured database hostname is stale, misspelled, or not reachable from the deployment environment.
 
 Optional Postgres discrete vars (if not using `DATABASE_URL`):
 - `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`

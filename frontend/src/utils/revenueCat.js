@@ -1,7 +1,7 @@
 import { ErrorCode, LogLevel, Purchases, ReservedCustomerAttribute } from "@revenuecat/purchases-js";
 
 export const REVENUECAT_WEB_API_KEY =
-  import.meta.env.VITE_REVENUECAT_WEB_API_KEY || "test_ysZDybJhqnIhfXsmwRtUuHTghCv";
+  String(import.meta.env.VITE_REVENUECAT_WEB_API_KEY || "").trim();
 
 export const REVENUECAT_RECOMMENDED_SETUP = {
   entitlementIds: {

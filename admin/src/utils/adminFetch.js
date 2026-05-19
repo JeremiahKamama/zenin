@@ -14,16 +14,52 @@ function resolveAdminApiUrl() {
 }
 
 const ADMIN_API_BASE_URL = resolveAdminApiUrl();
+const AUTH_API_BASE_URL = ADMIN_API_BASE_URL.replace(/\/admin$/, "");
+let adminCsrfTokenCache = null;
+
+function readCookie(name) {
+  if (typeof document === "undefined") return "";
+  const prefix = `${name}=`;
+  return String(document.cookie || "")
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length) || "";
+}
+
+async function ensureAdminCsrfToken() {
+  if (typeof window === "undefined") return "";
+  const fromCookie = readCookie("zenin_csrf");
+  if (fromCookie) {
+    adminCsrfTokenCache = fromCookie;
+    return fromCookie;
+  }
+  if (adminCsrfTokenCache) return adminCsrfTokenCache;
+  const response = await fetch(`${AUTH_API_BASE_URL}/auth/csrf`, {
+    credentials: "include"
+  });
+  const payload = await response.json().catch(() => ({}));
+  adminCsrfTokenCache = payload?.csrfToken || readCookie("zenin_csrf") || "";
+  return adminCsrfTokenCache;
+}
 
 export async function adminFetch(endpoint, options = {}) {
   const url = endpoint.startsWith('http') 
     ? endpoint 
     : `${ADMIN_API_BASE_URL}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+  const method = String(options.method || 'GET').toUpperCase();
 
   const headers = {
     'Content-Type': 'application/json',
     ...options.headers,
   };
+
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const csrfToken = await ensureAdminCsrfToken();
+    if (csrfToken) {
+      headers['x-csrf-token'] = csrfToken;
+    }
+  }
 
   try {
     const response = await fetch(url, {
@@ -34,7 +70,11 @@ export async function adminFetch(endpoint, options = {}) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `API Error: ${response.status}`);
+      const error = new Error(errorData.message || errorData.error || `API Error: ${response.status}`);
+      error.status = response.status;
+      error.code = errorData.code || `HTTP_${response.status}`;
+      error.details = errorData.details || null;
+      throw error;
     }
 
     return await response.json();

@@ -4,9 +4,10 @@ import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
-import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
+import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { zeninFetch } from "../utils/zeninFetch";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { PortfolioInstitutionalSuite } from "./InstitutionalPanels";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -70,6 +71,17 @@ function appendStoredRecord(key, record, limit = 30) {
   return [record, ...rows].slice(0, limit);
 }
 
+function formatSavedTimestamp(value) {
+  const timestamp = new Date(value || Date.now());
+  if (Number.isNaN(timestamp.getTime())) return "Saved recently";
+  return timestamp.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export function PortfolioModule({
   portfolio,
   trades = [],
@@ -97,6 +109,7 @@ export function PortfolioModule({
     ? getAppRuntimeConfig().ui.portfolioIntervals
     : ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
   const [chartMode, setChartMode] = useState("equity");
+  const [performanceView, setPerformanceView] = useState("chart");
   const [chartInterval, setChartInterval] = useState("1D");
   const [showDiversificationModal, setShowDiversificationModal] = useState(false);
   const [holdingsSortBy, setHoldingsSortBy] = useState("value");
@@ -113,15 +126,21 @@ export function PortfolioModule({
   const [assetClassFilter, setAssetClassFilter] = useState("all");
   const [showPredictionGuide, setShowPredictionGuide] = useState(false);
   const [showConnectionsModal, setShowConnectionsModal] = useState(false);
+  const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
   const [exchangeKeys, setExchangeKeys] = useState([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
   const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
+  const [savedPortfolioViews, setSavedPortfolioViews] = useState(() => readStoredJson(PORTFOLIO_SAVED_VIEWS_KEY, []));
+  const [savedPortfolioAlerts, setSavedPortfolioAlerts] = useState(() => readStoredJson(PORTFOLIO_ALERTS_KEY, []));
+  const [savedPortfolioQueue, setSavedPortfolioQueue] = useState(() => readStoredJson(PORTFOLIO_REBALANCE_QUEUE_KEY, []));
+  const [savedPortfolioHistory, setSavedPortfolioHistory] = useState(() => readStoredJson(PORTFOLIO_REBALANCE_HISTORY_KEY, []));
+  const [savedPortfolioExports, setSavedPortfolioExports] = useState(() => readStoredJson(PORTFOLIO_EXPORTS_KEY, []));
   const prefsHydratedRef = useRef(false);
-  const syncPortfolioCollection = (namespace, rows, limit = 100) => {
-    saveWorkspaceCollection(namespace, rows, limit).catch((error) => {
-      console.warn(`Workspace sync skipped for ${namespace}.`, error);
-    });
+  const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
+
+  const syncPortfolioCollection = async (namespace, rows, limit = 100) => {
+    return saveWorkspaceCollection(namespace, rows, limit);
   };
 
   const filteredTrades = useMemo(() => {
@@ -1113,6 +1132,115 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const cashWeight = currentAccountEquity > 0 ? (liveAvailableBalance / currentAccountEquity) * 100 : 0;
 
+  const performanceSnapshot = useMemo(() => {
+    const values = Array.isArray(chartData)
+      ? chartData.map((point) => Number(point?.[1])).filter((value) => Number.isFinite(value))
+      : [];
+    if (!values.length) {
+      return {
+        bestPeriod: "0.00%",
+        worstPeriod: "0.00%",
+        maxDrawdown: `${metrics.maxDrawdown}%`,
+        currentDrawdown: "0.00%"
+      };
+    }
+    const returns = [];
+    values.forEach((value, index) => {
+      if (index === 0) return;
+      const prev = values[index - 1];
+      if (!Number.isFinite(prev) || Math.abs(prev) < 1e-8) return;
+      const delta = chartMode === "percentage" ? value - prev : ((value - prev) / Math.abs(prev)) * 100;
+      if (Number.isFinite(delta)) returns.push(delta);
+    });
+    let peak = values[0];
+    let maxDrawdown = 0;
+    values.forEach((value) => {
+      peak = Math.max(peak, value);
+      const drawdown = peak > 0 ? ((peak - value) / peak) * 100 : 0;
+      maxDrawdown = Math.max(maxDrawdown, drawdown);
+    });
+    const currentPeak = Math.max(...values);
+    const latest = values[values.length - 1];
+    const currentDrawdown = currentPeak > 0 ? ((currentPeak - latest) / currentPeak) * 100 : 0;
+    const best = returns.length ? Math.max(...returns) : 0;
+    const worst = returns.length ? Math.min(...returns) : 0;
+    return {
+      bestPeriod: `${best >= 0 ? "+" : ""}${best.toFixed(2)}%`,
+      worstPeriod: `${worst >= 0 ? "+" : ""}${worst.toFixed(2)}%`,
+      maxDrawdown: `${Number(metrics.maxDrawdown || maxDrawdown || 0).toFixed(2)}%`,
+      currentDrawdown: `${Number(currentDrawdown || 0).toFixed(2)}%`
+    };
+  }, [chartData, chartMode, metrics.maxDrawdown]);
+
+  const optionsGreekSummary = useMemo(() => {
+    return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).reduce((summary, trade) => {
+      const chain = multiChainCache?.[trade.asset];
+      const spot = spotPrices?.[trade.asset];
+      const pnl = calculateOptionPnL(trade, chain, spot);
+      const qty = Math.max(1, Math.abs(Number(trade?.qty || trade?.quantity || 1)));
+      const theta = Number(trade?.theta ?? trade?.greeks?.theta ?? pnl?.theta);
+      const iv = Number(trade?.iv ?? trade?.impliedVolatility ?? trade?.greeks?.iv ?? pnl?.iv);
+      return {
+        theta: summary.theta + (Number.isFinite(theta) ? theta * qty : 0),
+        ivTotal: summary.ivTotal + (Number.isFinite(iv) ? iv : 0),
+        ivCount: summary.ivCount + (Number.isFinite(iv) ? 1 : 0)
+      };
+    }, { theta: 0, ivTotal: 0, ivCount: 0 });
+  }, [activeOptionsTrades, multiChainCache, spotPrices]);
+
+  const healthStatus = useMemo(() => {
+    const topExposure = Math.max(
+      Number(exposureSummary.sector?.weight || 0),
+      Number(exposureSummary.country?.weight || 0),
+      Number(exposureSummary.currency?.weight || 0)
+    );
+    const drift = Number(rebalanceMetrics.totalDrift || 0);
+    const drawdown = Number(metrics.maxDrawdown || 0);
+    if (topExposure >= 45 || drift >= 18 || drawdown >= 20) return { label: "WATCH", tone: "warning" };
+    if (topExposure >= 30 || drift >= 10 || drawdown >= 10) return { label: "BALANCED", tone: "neutral" };
+    return { label: "OPTIMAL", tone: "positive" };
+  }, [exposureSummary, metrics.maxDrawdown, rebalanceMetrics.totalDrift]);
+
+  const executiveStatRail = useMemo(() => {
+    const averageIv = optionsGreekSummary.ivCount > 0 ? optionsGreekSummary.ivTotal / optionsGreekSummary.ivCount : null;
+    return [
+      { label: "Beta Weight", value: metrics.beta && metrics.beta !== "N/A" ? metrics.beta : "N/A", tone: "neutral" },
+      { label: "Theta", value: optionsGreekSummary.theta ? formatSignedMoney(optionsGreekSummary.theta) : "N/A", tone: optionsGreekSummary.theta >= 0 ? "positive" : "negative" },
+      { label: "B/P %", value: `${cashWeight.toFixed(1)}%`, tone: cashWeight >= 12 ? "positive" : "neutral" },
+      { label: "Imp Vol", value: averageIv == null ? "N/A" : `${(averageIv * (averageIv > 1 ? 1 : 100)).toFixed(1)}%`, tone: "neutral" },
+      { label: "Health", value: healthStatus.label, tone: healthStatus.tone }
+    ];
+  }, [cashWeight, healthStatus, metrics.beta, optionsGreekSummary, formatSignedMoney]);
+
+  const operationalTriageRows = useMemo(() => {
+    const topExposure = exposureSummary.sector || exposureSummary.country || exposureSummary.currency;
+    const topRebalance = rebalanceSuggestions.find((row) => row.action !== "Hold") || rebalanceSuggestions[0] || null;
+    const feeTone = feeDashboard.estimatedUsd > 0 ? "Alpha" : "Model";
+    return [
+      {
+        kind: "Risk",
+        title: topExposure ? `${topExposure.name} concentration` : "Exposure coverage",
+        detail: topExposure ? `${topExposure.weight.toFixed(1)}% ${topExposure.bucket.toLowerCase()} allocation is leading the book.` : "Add positions to unlock concentration monitoring.",
+        action: "Inspect",
+        onClick: () => openInsightFlow("exposure", topExposure || null)
+      },
+      {
+        kind: "Alpha",
+        title: bestPerformer ? `${bestPerformer.symbol || bestPerformer.name} contribution` : "Wash sale potential",
+        detail: bestPerformer ? `${Number(bestPerformer.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer.priceChangePercent || 0).toFixed(2)}% leads current marked performance.` : "Tax-lot signals appear when realized loss candidates exist.",
+        action: "Review",
+        onClick: () => bestPerformer ? onSelectAsset?.(bestPerformer) : setShowDiversificationModal(true)
+      },
+      {
+        kind: feeTone,
+        title: topRebalance ? `${topRebalance.symbol} drift update` : "Theta update",
+        detail: topRebalance ? `${topRebalance.action} ${Math.abs(topRebalance.drift).toFixed(2)}% drift against equal-weight target.` : "Options greek and rebalance alerts update with connected holdings.",
+        action: "Open",
+        onClick: () => openInsightFlow("rebalancing", topRebalance)
+      }
+    ];
+  }, [bestPerformer, exposureSummary, feeDashboard.estimatedUsd, onSelectAsset, rebalanceSuggestions]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1297,11 +1425,20 @@ const isProfitable = currentAccountEquity >= initialBalance;
     setFlowBusy(true);
     setFlowActionLabel(label);
     setInsightFlowStep(fromStep);
-    window.setTimeout(() => {
-      onComplete?.();
+    window.setTimeout(async () => {
+      try {
+        await onComplete?.();
+      } catch (error) {
+        console.warn("Portfolio workflow action failed.", error);
+        setFlowOutcome({
+          title: "Action not completed",
+          message: error?.message || "Zenin could not complete this workspace action.",
+          tone: "error"
+        });
+      }
       setFlowBusy(false);
       setInsightFlowStep(doneStep);
-    }, 950);
+    }, 0);
   };
 
   const downloadTextFile = (text, fileName, mimeType = "text/plain;charset=utf-8") => {
@@ -1316,7 +1453,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     URL.revokeObjectURL(url);
   };
 
-  const saveJournalInsight = (title, body, extra = {}) => {
+  const saveJournalInsight = async (title, body, extra = {}) => {
     const existing = readStoredJson(JOURNAL_STORAGE_KEY, []);
     const rows = Array.isArray(existing) ? existing : [];
     const createdAt = new Date().toISOString();
@@ -1346,11 +1483,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
     const nextEntries = [entry, ...rows].slice(0, 300);
     localStorage.setItem(JOURNAL_STORAGE_KEY, JSON.stringify(nextEntries));
-    syncPortfolioCollection("journal:entries", nextEntries, 500);
+    await syncPortfolioCollection("journal:entries", nextEntries, 500);
     return entry;
   };
 
-  const exportAttributionReport = () => {
+  const exportAttributionReport = async () => {
     const sections = Object.entries(attributionRows || {}).flatMap(([group, rows]) =>
       (Array.isArray(rows) ? rows : []).map((row) => [
         group,
@@ -1367,11 +1504,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
       type: "attribution",
       createdAt: new Date().toISOString()
     }, 40);
-    syncPortfolioCollection("portfolio:exports", nextExports, 40);
+    setSavedPortfolioExports(nextExports);
+    await syncPortfolioCollection("portfolio:exports", nextExports, 40);
     downloadTextFile(csv, `portfolio-attribution-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv;charset=utf-8");
+    return nextExports[0];
   };
 
-  const exportExposureReport = () => {
+  const exportExposureReport = async () => {
     const csv = [
       ["bucket", "name", "weight_pct", "risk"].join(","),
       ...exposureRows.map((row) => [
@@ -1386,11 +1525,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
       type: "exposure",
       createdAt: new Date().toISOString()
     }, 40);
-    syncPortfolioCollection("portfolio:exports", nextExports, 40);
+    setSavedPortfolioExports(nextExports);
+    await syncPortfolioCollection("portfolio:exports", nextExports, 40);
     downloadTextFile(csv, `portfolio-exposure-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv;charset=utf-8");
+    return nextExports[0];
   };
 
-  const savePortfolioView = (context = "portfolio") => {
+  const savePortfolioView = async (context = "portfolio") => {
     const nextViews = appendStoredRecord(PORTFOLIO_SAVED_VIEWS_KEY, {
       id: `portfolio-view-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -1402,10 +1543,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
       benchmarkSymbol,
       selectedTaxLotMethod
     }, 25);
-    syncPortfolioCollection("portfolio:saved_views", nextViews, 25);
+    setSavedPortfolioViews(nextViews);
+    await syncPortfolioCollection("portfolio:saved_views", nextViews, 25);
+    return nextViews[0];
   };
 
-  const saveExposureAlert = (row) => {
+  const saveExposureAlert = async (row) => {
     const nextAlerts = appendStoredRecord(PORTFOLIO_ALERTS_KEY, {
       id: `portfolio-alert-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -1414,10 +1557,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
       name: row?.name || "Portfolio",
       weight: Number(row?.weight || 0)
     }, 40);
-    syncPortfolioCollection("portfolio:alerts", nextAlerts, 40);
+    setSavedPortfolioAlerts(nextAlerts);
+    await syncPortfolioCollection("portfolio:alerts", nextAlerts, 40);
+    return nextAlerts[0];
   };
 
-  const queuePortfolioRebalance = (context = "portfolio-response") => {
+  const queuePortfolioRebalance = async (context = "portfolio-response") => {
     const nextQueue = appendStoredRecord(PORTFOLIO_REBALANCE_QUEUE_KEY, {
       id: `portfolio-rebalance-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -1430,10 +1575,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
       totalCostImpact: Number(rebalanceMetrics.estimatedCostImpact || 0),
       suggestions: actionableRebalanceRows
     }, 20);
-    syncPortfolioCollection("portfolio:rebalance_queue", nextQueue, 20);
+    setSavedPortfolioQueue(nextQueue);
+    await syncPortfolioCollection("portfolio:rebalance_queue", nextQueue, 20);
+    return nextQueue[0];
   };
 
-  const recordRebalanceExecution = (result) => {
+  const recordRebalanceExecution = async (result) => {
     const nextHistory = appendStoredRecord(PORTFOLIO_REBALANCE_HISTORY_KEY, {
       id: `portfolio-rebalance-history-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -1441,7 +1588,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
       summary: result?.summary || null,
       trades: Array.isArray(result?.trades) ? result.trades : []
     }, 30);
-    syncPortfolioCollection("portfolio:rebalance_history", nextHistory, 30);
+    setSavedPortfolioHistory(nextHistory);
+    await syncPortfolioCollection("portfolio:rebalance_history", nextHistory, 30);
+    return nextHistory[0];
   };
 
   const handleConfirmRebalance = async () => {
@@ -1456,10 +1605,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
     }
 
     if (!isSignedIn || typeof onExecuteRebalance !== "function") {
-      queuePortfolioRebalance("guest-preview");
+      setFlowBusy(true);
+      setFlowActionLabel(`Saving rebalance preview to ${getSaveTargetLabel()}...`);
+      try {
+        await queuePortfolioRebalance("guest-preview");
+      } finally {
+        setFlowBusy(false);
+      }
       setFlowOutcome({
         title: "Guest preview only",
-        message: "No trades were executed. Sign in to submit this rebalance through Zenin.",
+        message: `No trades were executed. The preview was saved in ${getSaveTargetLabel()}; sign in to submit this rebalance through Zenin.`,
         tone: "warning"
       });
       setInsightFlowStep(5);
@@ -1471,7 +1626,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
     try {
       const result = await onExecuteRebalance(actionableRebalanceRows);
-      recordRebalanceExecution(result);
+      await recordRebalanceExecution(result);
 
       if (result?.ok) {
         setFlowOutcome({
@@ -1500,6 +1655,67 @@ const isProfitable = currentAccountEquity >= initialBalance;
       });
     } finally {
       setFlowBusy(false);
+      setInsightFlowStep(5);
+    }
+  };
+
+  const savedWorkspaceCount =
+    savedPortfolioViews.length +
+    savedPortfolioAlerts.length +
+    savedPortfolioQueue.length +
+    savedPortfolioHistory.length +
+    savedPortfolioExports.length;
+
+  const applySavedPortfolioView = (view) => {
+    if (!view || typeof view !== "object") return;
+    setChartMode(view.chartMode || "equity");
+    setChartInterval(view.chartInterval || "1D");
+    setDisplayCurrency(view.displayCurrency || "USD");
+    setAssetClassFilter(view.assetClassFilter || "all");
+    setBenchmarkSymbol(view.benchmarkSymbol || "SPY");
+    setSelectedTaxLotMethod(view.selectedTaxLotMethod || "hifo");
+    setShowSavedWorkspaceDrawer(false);
+  };
+
+  const reviewSavedPortfolioItem = async (kind, payload) => {
+    setShowSavedWorkspaceDrawer(false);
+    if (kind === "alert") {
+      openInsightFlow("exposure", payload || null);
+      return;
+    }
+    if (kind === "rebalance") {
+      openInsightFlow("rebalancing", payload?.suggestions?.[0] || actionableRebalanceRows[0] || null);
+      return;
+    }
+    if (kind === "history") {
+      openInsightFlow("rebalancing", payload?.trades?.[0] || actionableRebalanceRows[0] || null);
+      setFlowOutcome({
+        title: "Execution history loaded",
+        message: `${Number(payload?.summary?.tradeCount || payload?.trades?.length || 0)} trade${Number(payload?.summary?.tradeCount || payload?.trades?.length || 0) === 1 ? "" : "s"} were recorded with status ${String(payload?.status || "saved").toUpperCase()}.`,
+        tone: "success"
+      });
+      setInsightFlowStep(5);
+      return;
+    }
+    if (kind === "export") {
+      if (payload?.type === "exposure") {
+        await exportExposureReport();
+        openInsightFlow("exposure", payload || null);
+        setFlowOutcome({
+          title: "Exposure CSV downloaded",
+          message: "The saved exposure export was regenerated from the current portfolio state.",
+          tone: "success"
+        });
+        setInsightFlowStep(5);
+        return;
+      }
+      await exportAttributionReport();
+      openInsightFlow("attribution", payload || null);
+      setFlowOutcome({
+        title: "Attribution CSV downloaded",
+        message: "The saved attribution export was regenerated from the current portfolio state.",
+        tone: "success"
+      });
       setInsightFlowStep(5);
     }
   };
@@ -1683,18 +1899,18 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <span>Step complete</span>
             </div>
             <div className="portfolio-v2-flow-list stacked">
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Preparing attribution export...", 5, () => {
-                exportAttributionReport();
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Preparing attribution export...", 5, async () => {
+                await exportAttributionReport();
                 setFlowOutcome({
                   title: "Attribution report downloaded",
-                  message: "A CSV snapshot was exported from your Zenin workspace.",
+                  message: `A CSV snapshot was downloaded and saved in ${getSaveTargetLabel()}.`,
                   tone: "success"
                 });
               })}>
-                <strong>Export report</strong><span>Download PDF / CSV</span>
+                <strong>Export report</strong><span>Download CSV</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving insight to journal...", 5, () => {
-                saveJournalInsight(
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving insight to journal...", 5, async () => {
+                await saveJournalInsight(
                   "Portfolio Attribution Insight",
                   `${pickAttribution?.name || "This contributor"} added ${formatSignedMoney(Number(pickAttribution?.pnl || 0))} to portfolio performance.`,
                   {
@@ -1704,7 +1920,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 );
                 setFlowOutcome({
                   title: "Insight added to Journal",
-                  message: "The attribution note was saved to your Journal workspace.",
+                  message: `The attribution note was saved in ${getSaveTargetLabel()}.`,
                   tone: "success"
                 });
               })}>
@@ -1714,8 +1930,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <strong>Review positions</strong><span>Open related holdings</span>
               </button>
             </div>
-            <div className="portfolio-v2-flow-status-inline success">
-              <span>✓</span>
+            <div className={`portfolio-v2-flow-status-inline ${flowOutcome.title ? flowOutcome.tone || "success" : "neutral"}`}>
+              <span>{flowOutcome.title ? (flowOutcome.tone === "error" ? "!" : "✓") : "•"}</span>
               <div><strong>{flowOutcome.title || "Insight ready"}</strong><small>{flowOutcome.message || "Choose an action to export or save this insight."}</small></div>
             </div>
             <div className="portfolio-v2-flow-actions">
@@ -1873,30 +2089,30 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <button type="button" className="portfolio-v2-flow-action-row" onClick={() => openInsightFlow("rebalancing", actionableRebalanceRows[0] || null)}>
                 <strong>Rebalance portfolio</strong><span>Adjust allocations</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving exposure alert...", 5, () => {
-                saveExposureAlert(activeSector);
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving exposure alert...", 5, async () => {
+                await saveExposureAlert(activeSector);
                 setFlowOutcome({
                   title: "Exposure alert saved",
-                  message: `${activeSector?.name || "This bucket"} is now on your Zenin workspace alert list.`,
+                  message: `${activeSector?.name || "This bucket"} is now saved in ${getSaveTargetLabel()} on your alert list. Reopen it from Saved Items.`,
                   tone: "success"
                 });
               })}>
                 <strong>Set alert</strong><span>Notify if exposure is breached</span>
               </button>
-              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving heatmap view...", 5, () => {
-                savePortfolioView("exposure-heatmap");
-                exportExposureReport();
+              <button type="button" className="portfolio-v2-flow-action-row" onClick={() => runFlowProcessing(5, "Saving heatmap view...", 5, async () => {
+                await savePortfolioView("exposure-heatmap");
+                await exportExposureReport();
                 setFlowOutcome({
                   title: "View saved and exported",
-                  message: "Your heatmap filters were saved to your Zenin workspace and a CSV export was downloaded.",
+                  message: `Your heatmap filters were saved in ${getSaveTargetLabel()} and a CSV export was downloaded. Reopen both from Saved Items.`,
                   tone: "success"
                 });
               })}>
                 <strong>Save view</strong><span>Store this heatmap configuration</span>
               </button>
             </div>
-            <div className="portfolio-v2-flow-status-inline success">
-              <span>✓</span>
+            <div className={`portfolio-v2-flow-status-inline ${flowOutcome.title ? flowOutcome.tone || "success" : "neutral"}`}>
+              <span>{flowOutcome.title ? (flowOutcome.tone === "error" ? "!" : "✓") : "•"}</span>
               <div><strong>{flowOutcome.title || "Portfolio response ready"}</strong><small>{flowOutcome.message || "Choose an action to save or respond to this concentration risk."}</small></div>
             </div>
             <div className="portfolio-v2-flow-actions">
@@ -1948,9 +2164,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 size: '75%',
                 labels: {
                   show: true,
-                  name: { show: true, fontSize: '12px', color: '#94a3b8', offsetY: -5 },
-                  value: { show: true, fontSize: '20px', fontWeight: 700, color: '#f8fafc', offsetY: 5 },
-                  total: { show: true, label: 'Portfolio Drift', formatter: () => `${totalDrift.toFixed(1)}%` }
+                  name: { show: true, fontSize: '12px', color: 'var(--color-text-secondary)', offsetY: -5 },
+                  value: { show: true, fontSize: '20px', fontWeight: 700, color: 'var(--color-text-primary)', offsetY: 5 },
+                  total: { show: true, label: 'Portfolio Drift', color: 'var(--color-text-secondary)', formatter: () => `${totalDrift.toFixed(1)}%` }
                 }
               }
             }
@@ -2030,13 +2246,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <strong>{s.action} {s.symbol}</strong>
-                        <small style={{ color: '#94a3b8' }}>{s.action === "Trim" ? 'Reduce' : 'Increase'} allocation</small>
+                        <small style={{ color: 'var(--color-text-secondary)' }}>{s.action === "Trim" ? 'Reduce' : 'Increase'} allocation</small>
                       </div>
                    </div>
                    <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Sell" : "Buy"}</div>
-                      <div style={{ fontSize: '12px', color: '#f8fafc' }}>{formatMoney(s.tradeValue)}</div>
-                      <div style={{ fontSize: '11px', color: '#94a3b8' }}>{Number(s.tradeQuantity || 0).toFixed(6)} {s.symbol}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--color-text-primary)' }}>{formatMoney(s.tradeValue)}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--color-text-secondary)' }}>{Number(s.tradeQuantity || 0).toFixed(6)} {s.symbol}</div>
                    </div>
                 </div>
               ))}
@@ -2103,14 +2319,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <div className="portfolio-v2-flow-status-inline success" style={{ flexDirection: 'column', padding: '20px', gap: '16px' }}>
               <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: flowOutcome.tone === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>{flowOutcome.tone === 'success' ? '✓' : '!'}</div>
               <div style={{ textAlign: 'center' }}>
-                <h3 style={{ fontSize: '20px', color: '#f8fafc', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance update"}</h3>
-                <p style={{ color: '#94a3b8', fontSize: '14px' }}>{flowOutcome.message || "Zenin completed the rebalance workflow."}</p>
+                <h3 style={{ fontSize: '20px', color: 'var(--color-text-primary)', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance update"}</h3>
+                <p style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>{flowOutcome.message || "Zenin saved the latest rebalance workflow status."}</p>
               </div>
             </div>
 
             <div className="portfolio-v2-flow-list stacked" style={{ width: '100%', marginTop: '16px' }}>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Projected Drift</span><strong className="positive">0.0%</strong>
+                  <span>Projected Drift</span><strong className={flowOutcome.tone === "success" ? "positive" : ""}>{flowOutcome.tone === "success" ? "0.0%" : `${Number(totalDrift || 0).toFixed(1)}%`}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
                   <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b' }}>{flowOutcome.tone === 'success' ? 'Executed' : 'Preview / Partial'}</strong>
@@ -2231,96 +2447,111 @@ const isProfitable = currentAccountEquity >= initialBalance;
     );
   };
 
+  useEffect(() => {
+    document.body.classList.add("portfolio-active");
+    document.documentElement.classList.add("portfolio-active");
+    return () => {
+      document.body.classList.remove("portfolio-active");
+      document.documentElement.classList.remove("portfolio-active");
+    };
+  }, []);
+
   return (
-    <div className="portfolio-module portfolio-v2">
-      <div className="portfolio-v2-head">
-        <div className="portfolio-v2-title-row">
+    <div className="portfolio-module portfolio-v2 portfolio-exec-page">
+      <div className="portfolio-v2-head portfolio-exec-head">
+        <div className="portfolio-v2-title-row portfolio-exec-heading">
           <h2>Portfolio</h2>
         </div>
-        <div className="portfolio-v2-toolbar">
-          <select
-            className="portfolio-v2-select"
-            value={assetClassFilter}
-            onChange={(e) => setAssetClassFilter(e.target.value)}
-          >
-            <option value="all">All Accounts</option>
-            <option value="equities">Equities</option>
-            <option value="options">Options</option>
-            <option value="commodities">Commodities</option>
-            <option value="crypto">Crypto</option>
-          </select>
-          <button
-            type="button"
-            className="portfolio-v2-range-btn"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '0 12px' }}
-            onClick={() => setShowConnectionsModal(true)}
-          >
-            <span style={{ fontSize: '14px' }}>🔌</span>
-            <span>Connections</span>
-          </button>
-          <div className="portfolio-v2-range">
-            {intervals.map((int) => (
-              <button
-                key={int}
-                type="button"
-                className={`portfolio-v2-range-btn ${chartInterval === int ? "active" : ""}`}
-                onClick={() => setChartInterval(int)}
-              >
-                {int}
-              </button>
-            ))}
+        <div className="portfolio-v2-toolbar portfolio-exec-toolbar" style={{ justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
+          <div className="portfolio-exec-toolbar-group portfolio-exec-toolbar-meta">
+            <span className={`portfolio-exec-sync ${isSyncing ? "syncing" : ""}`}>
+              {isSyncing ? "Syncing venues" : `Synced ${formatSavedTimestamp(feeDashboard.updatedAt || Date.now())}`}
+            </span>
+          </div>
+          <div className="portfolio-exec-toolbar-group portfolio-exec-toolbar-actions" style={{ gap: "12px", flexWrap: "wrap" }}>
+            <select
+              value={assetClassFilter}
+              onChange={(e) => setAssetClassFilter(e.target.value)}
+              className="portfolio-v2-select"
+              aria-label="Account scope"
+            >
+              <option value="all">All Accounts</option>
+              <option value="equities">Equities</option>
+              <option value="crypto">Crypto</option>
+              <option value="options">Options</option>
+              <option value="commodities">Commodities</option>
+            </select>
+            <button
+              type="button"
+              className="portfolio-v2-link"
+              onClick={() => setShowConnectionsModal(true)}
+            >
+              Connections
+            </button>
+            <button
+              type="button"
+              className="portfolio-v2-link secondary"
+              onClick={() => setShowSavedWorkspaceDrawer(true)}
+            >
+              Saved Items{savedWorkspaceCount ? ` (${savedWorkspaceCount})` : ""}
+            </button>
+            <div className="portfolio-v2-range portfolio-exec-timeframe-strip">
+              {intervals.map((int) => (
+                <button
+                  key={int}
+                  type="button"
+                  className={`portfolio-v2-range-btn ${chartInterval === int ? "active" : ""}`}
+                  onClick={() => setChartInterval(int)}
+                >
+                  {int}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="portfolio-v2-top-cards">
-        <article className="portfolio-v2-stat-card">
+      <div className="portfolio-exec-hero-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
+        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
           <span className="label">Total Account Equity</span>
           <strong>{formatMoney(currentAccountEquity)}</strong>
           <span className={`delta ${totalGainLoss >= 0 ? "positive" : "negative"}`}>
             {formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)
           </span>
         </article>
-        <article className="portfolio-v2-stat-card">
+        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
           <span className="label">Cash &amp; Liquidity</span>
-          <div className="portfolio-v2-mini-grid" style={{ marginTop: '8px' }}>
-            {Object.entries(cashBalances)
-              .filter(([_, val]) => Math.abs(val) > 0.01)
-              .map(([curr, val]) => (
-                <div key={curr}>
-                  <span>{curr}</span>
-                  <strong>{formatCurrency(val, curr)}</strong>
-                </div>
-              ))}
-          </div>
-          <span className="sub" style={{ marginTop: '8px', display: 'block' }}>{cashWeight.toFixed(1)}% of portfolio</span>
+          <strong>{formatMoney(liveAvailableBalance)}</strong>
+          <span className="sub">{cashWeight.toFixed(1)}% of portfolio</span>
         </article>
-        <article className="portfolio-v2-stat-card">
+        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
           <span className="label">Best Performing</span>
           <strong>{bestPerformer?.symbol || "N/A"}</strong>
-          <span className="delta positive">
-            {bestPerformer ? `${Number(bestPerformer?.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer?.priceChangePercent || 0).toFixed(2)}%` : "N/A"}
+          <span className={`delta ${Number(bestPerformer?.priceChangePercent || 0) >= 0 ? "positive" : "negative"}`}>
+            {bestPerformer ? `${Number(bestPerformer.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer.priceChangePercent || 0).toFixed(2)}%` : "No data"}
           </span>
         </article>
-        <article className="portfolio-v2-stat-card">
+        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
           <span className="label">Exposure Summary</span>
           <div className="portfolio-v2-mini-grid">
-            <div><span>Sector</span><strong>{exposureSummary.sector?.name || "Unclassified"} {exposureSummary.sector ? `${exposureSummary.sector.weight.toFixed(1)}%` : ""}</strong></div>
-            <div><span>Country</span><strong>{exposureSummary.country?.name || "Global"} {exposureSummary.country ? `${exposureSummary.country.weight.toFixed(1)}%` : ""}</strong></div>
-            <div><span>Currency</span><strong>{exposureSummary.currency?.name || "USD"} {exposureSummary.currency ? `${exposureSummary.currency.weight.toFixed(1)}%` : ""}</strong></div>
+            <div><span>Sector</span><strong>{exposureSummary.sector?.name || "Unclassified"}</strong></div>
+            <div><span>Country</span><strong>{exposureSummary.country?.name || "Global"}</strong></div>
+            <div><span>Currency</span><strong>{exposureSummary.currency?.name || "USD"}</strong></div>
           </div>
         </article>
       </div>
 
-      <section className="watchlist-panel glass portfolio-v2-panel" style={{ marginBottom: "16px" }}>
-        <div className="section-header">
-          <div>
+      <div className="portfolio-v2-main-grid portfolio-exec-main-grid" style={{ marginTop: "16px" }}>
+        <div className="portfolio-v2-left">
+          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-performance-panel" style={{ marginBottom: "16px" }}>
+        <div className="section-header portfolio-exec-section-head">
+          <div className="portfolio-exec-section-title-row">
             <h2>Portfolio Performance</h2>
             <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
               Account curve with benchmark overlay
             </p>
           </div>
-          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div className="portfolio-exec-control-row">
             {[
               ["equity", "Equity"],
               ["percentage", "% Gain"],
@@ -2367,14 +2598,25 @@ const isProfitable = currentAccountEquity >= initialBalance;
           height={320}
           width="100%"
         />
+        <div className="portfolio-exec-chart-footer">
+          {[
+            ["Best Period", performanceSnapshot.bestPeriod],
+            ["Worst Period", performanceSnapshot.worstPeriod],
+            ["Max DD", performanceSnapshot.maxDrawdown],
+            ["Current DD", performanceSnapshot.currentDrawdown]
+          ].map(([label, value]) => (
+            <div key={label}>
+              <span>{label}</span>
+              <strong className={String(value).startsWith("-") ? "negative" : label.includes("Worst") || label.includes("DD") ? "neutral" : "positive"}>{value}</strong>
+            </div>
+          ))}
+        </div>
       </section>
 
-      <div className="portfolio-v2-main-grid">
-        <div className="portfolio-v2-left">
-          <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header">
+          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-holdings-panel">
+            <div className="section-header portfolio-exec-section-head">
               <h2>Holdings &amp; Positions</h2>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div className="portfolio-exec-inline-controls">
                 <span className="asset-count">{holdingsTableRows.length} Positions</span>
                 <select
                   value={holdingsSortBy}
@@ -2406,14 +2648,26 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       <td colSpan={6}>
                         <div className="portfolio-v2-empty" style={{ padding: '40px 20px', textAlign: 'center' }}>
                           <div className="portfolio-v2-empty-icon" style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.5 }}>📊</div>
-                          <h3 style={{ margin: '0 0 8px', color: '#f8fafc' }}>No positions found</h3>
-                          <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px' }}>Your portfolio is currently empty. Add assets from the watchlist or search to start tracking.</p>
+                          <h3 style={{ margin: '0 0 8px', color: 'var(--color-text-primary)' }}>No positions found</h3>
+                          <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: '13px' }}>Your portfolio is currently empty. Add assets from the watchlist or search to start tracking.</p>
                         </div>
                       </td>
                     </tr>
                   ) : (
                     holdingsTableRows.map((row) => (
-                      <tr key={row.key} onClick={() => row.kind === "spot" ? onSelectAsset?.(row.raw) : null}>
+                      <tr
+                        key={row.key}
+                        role={row.kind === "spot" ? "button" : undefined}
+                        tabIndex={row.kind === "spot" ? 0 : undefined}
+                        onClick={() => row.kind === "spot" ? onSelectAsset?.(row.raw) : null}
+                        onKeyDown={(event) => {
+                          if (row.kind !== "spot") return;
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSelectAsset?.(row.raw);
+                          }
+                        }}
+                      >
                         <td>
                           <div className="portfolio-v2-symbol-cell">
                             <div className="portfolio-v2-symbol-avatar">{row.symbol?.slice(0, 1) || "?"}</div>
@@ -2464,8 +2718,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </section>
 
           <div className="portfolio-v2-two-col">
-            <section className="watchlist-panel glass portfolio-v2-panel">
-              <div className="section-header">
+            <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-attribution-panel">
+              <div className="section-header portfolio-exec-section-head">
                 <h2>Performance Attribution</h2>
                 <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>View Flow</button>
               </div>
@@ -2505,8 +2759,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
             </section>
 
-            <section className="watchlist-panel glass portfolio-v2-panel">
-              <div className="section-header">
+            <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-exposure-panel">
+              <div className="section-header portfolio-exec-section-head">
                 <h2>Exposure Heatmap</h2>
                 <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure")}>View Flow</button>
               </div>
@@ -2542,52 +2796,42 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </section>
           </div>
 
-          <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header">
-              <div>
-                <h2>Rebalancing Suggestions</h2>
-                <p className="portfolio-v2-section-kicker">Review drift, inspect suggested trades, edit the plan, confirm, and track the result.</p>
+          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-predictions-panel">
+            <div className="section-header portfolio-exec-section-head">
+              <div className="portfolio-exec-section-title-row">
+                <h2>Prediction Markets</h2>
+                <p className="portfolio-v2-section-kicker">Event-driven exposures tracked beside equities, options, and crypto.</p>
               </div>
-              <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", rebalanceSuggestions[0] || null)}>View Flow</button>
+              <div className="asset-count">{predictionMarketRows.length} Markets</div>
             </div>
-            <div className="table-scroll">
-              <table className="portfolio-v2-table rebalance">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Current</th>
-                    <th>Target</th>
-                    <th>Drift</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rebalanceSuggestions.slice(0, 8).map((row) => (
-                    <tr key={`reb-${row.symbol}`}>
-                      <td>{row.symbol}</td>
-                      <td>{row.current.toFixed(2)}%</td>
-                      <td>{row.target.toFixed(2)}%</td>
-                      <td className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</td>
-                      <td>
-                        <button
-                          type="button"
-                          className={`portfolio-v2-status ${row.action.toLowerCase()}`}
-                          style={{ border: 'none', cursor: row.action === 'Hold' ? 'default' : 'pointer', width: '100%', textAlign: 'center' }}
-                          onClick={() => row.action !== "Hold" && openInsightFlow("rebalancing", row)}
-                        >
-                          {row.action}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {predictionMarketRows.length === 0 ? (
+              <div className="portfolio-v2-empty">
+                <div className="portfolio-v2-empty-icon">↗</div>
+                <h3>No prediction market positions yet</h3>
+                <p>Track event-driven opportunities across markets, macro, crypto, and equities.</p>
+                <div className="portfolio-v2-empty-actions">
+                  <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Explore Markets</button>
+                  <button type="button" className="portfolio-v2-link secondary" onClick={() => setShowPredictionGuide(true)}>Learn how it works</button>
+                </div>
+              </div>
+            ) : (
+              <div className="portfolio-v2-activity-list portfolio-exec-market-list">
+                {predictionMarketRows.slice(0, 6).map((row) => (
+                  <div key={row.market} className="portfolio-v2-activity-row">
+                    <div className="portfolio-v2-activity-main">
+                      <strong>{row.market}</strong>
+                      <span>{row.netQty.toFixed(2)} qty</span>
+                    </div>
+                    <div className={`portfolio-v2-activity-pnl ${row.pnl >= 0 ? "positive" : "negative"}`}>{formatSignedMoney(row.pnl)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         </div>
         <aside className="portfolio-v2-right">
-          <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header"><h2>Performance Metrics</h2></div>
+          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-metrics-panel">
+            <div className="section-header portfolio-exec-section-head"><h2>Performance Metrics</h2></div>
             <div className="portfolio-v2-metric-list">
               {[
                 { label: "Sharpe Ratio", value: metrics.sharpe },
@@ -2604,9 +2848,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
           </section>
 
-          <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header">
-              <div>
+          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-fees-panel">
+            <div className="section-header portfolio-exec-section-head">
+              <div className="portfolio-exec-section-title-row">
                 <h2>Fees Paid</h2>
                 <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
                   Historical execution fees across connected venues and cheapest-avenue executions
@@ -2693,50 +2937,50 @@ const isProfitable = currentAccountEquity >= initialBalance;
             )}
           </section>
 
-          <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header"><h2>Prediction Markets</h2><div className="asset-count">{predictionMarketRows.length} Markets</div></div>
-            {predictionMarketRows.length === 0 ? (
-              <div className="portfolio-v2-empty">
-                <div className="portfolio-v2-empty-icon">↗</div>
-                <h3>No prediction market positions yet</h3>
-                <p>Track event-driven opportunities across markets, macro, crypto, and equities.</p>
-                <div className="portfolio-v2-empty-actions">
-                  <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Explore Markets</button>
-                  <button type="button" className="portfolio-v2-link secondary" onClick={() => setShowPredictionGuide(true)}>Learn how it works</button>
-                </div>
+          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-rebalance-panel">
+            <div className="section-header portfolio-exec-section-head">
+              <div className="portfolio-exec-section-title-row">
+                <h2>Rebalancing Suggestions</h2>
+                <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
+                  Drift, target weight, and action queue.
+                </p>
               </div>
-            ) : (
-              <div className="portfolio-v2-activity-list">
-                {predictionMarketRows.slice(0, 4).map((row) => (
-                  <div key={row.market} className="portfolio-v2-activity-row">
-                    <div className="portfolio-v2-activity-main">
-                      <strong>{row.market}</strong>
-                      <span>{row.netQty.toFixed(2)} qty</span>
-                    </div>
-                    <div className={`portfolio-v2-activity-pnl ${row.pnl >= 0 ? "positive" : "negative"}`}>{formatSignedMoney(row.pnl)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="watchlist-panel glass portfolio-v2-panel">
-            <div className="section-header"><h2>Recent Activity</h2></div>
-            <div className="portfolio-v2-activity-list">
-              {recentActivityRows.map((row) => (
-                <div key={row.id} className="portfolio-v2-activity-row">
-                  <div className={`portfolio-v2-activity-dot ${row.tone}`}>{row.tone === "sell" ? "↘" : "↗"}</div>
-                  <div className="portfolio-v2-activity-main">
-                    <strong>{row.side} {row.symbol}</strong>
-                    <span>{row.when}</span>
-                  </div>
-                  <div className="portfolio-v2-activity-value">{formatMoney(row.notional)}</div>
-                </div>
+              <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", rebalanceSuggestions[0] || null)}>View Flow</button>
+            </div>
+            <div className="portfolio-exec-rebalance-list">
+              {rebalanceSuggestions.slice(0, 5).map((row) => (
+                <button
+                  key={`reb-side-${row.symbol}`}
+                  type="button"
+                  className="portfolio-exec-rebalance-row"
+                  onClick={() => row.action !== "Hold" && openInsightFlow("rebalancing", row)}
+                >
+                  <span>{row.symbol}</span>
+                  <strong className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</strong>
+                  <em>{row.action}</em>
+                </button>
               ))}
+              {rebalanceSuggestions.length === 0 ? (
+                <div className="portfolio-v2-empty">
+                  <h3>No drift detected</h3>
+                  <p>Add holdings to generate target-weight suggestions.</p>
+                </div>
+              ) : null}
             </div>
           </section>
+
         </aside>
       </div>
+
+      <PortfolioInstitutionalSuite
+        portfolio={filteredPortfolio}
+        trades={filteredTrades}
+        activeOptionsTrades={filteredOptionsTrades}
+        benchmarkSymbol={benchmarkSymbol}
+        currency={displayCurrency}
+        balance={liveAvailableBalance}
+        onOpenConnections={() => setShowConnectionsModal(true)}
+      />
       {renderInsightFlow()}
 
       {showPredictionGuide ? (
@@ -2849,7 +3093,163 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         </div>
       ) : null}
+      <PortfolioSavedWorkspaceDrawer
+        open={showSavedWorkspaceDrawer}
+        onClose={() => setShowSavedWorkspaceDrawer(false)}
+        savedViews={savedPortfolioViews}
+        savedAlerts={savedPortfolioAlerts}
+        savedQueue={savedPortfolioQueue}
+        savedHistory={savedPortfolioHistory}
+        savedExports={savedPortfolioExports}
+        onApplyView={applySavedPortfolioView}
+        onReviewItem={reviewSavedPortfolioItem}
+      />
       {renderConnectionsModal()}
+    </div>
+  );
+}
+
+function PortfolioSavedWorkspaceDrawer({
+  open,
+  onClose,
+  savedViews,
+  savedAlerts,
+  savedQueue,
+  savedHistory,
+  savedExports,
+  onApplyView,
+  onReviewItem
+}) {
+  if (!open) return null;
+
+  const sections = [
+    {
+      title: "Saved Views",
+      rows: savedViews,
+      empty: "No saved portfolio views yet.",
+      renderRow: (view) => (
+        <SavedWorkspaceRow
+          key={view.id}
+          title={`${view.context || "portfolio"} · ${view.chartInterval || "1D"}`}
+          subtitle={`${view.assetClassFilter || "all"} assets · ${formatSavedTimestamp(view.createdAt)}`}
+          actionLabel="Apply"
+          onAction={() => onApplyView(view)}
+        />
+      )
+    },
+    {
+      title: "Exposure Alerts",
+      rows: savedAlerts,
+      empty: "No saved exposure alerts yet.",
+      renderRow: (alert) => (
+        <SavedWorkspaceRow
+          key={alert.id}
+          title={alert.name || alert.bucket || "Exposure alert"}
+          subtitle={`${Number(alert.weight || 0).toFixed(1)}% weight · ${formatSavedTimestamp(alert.createdAt)}`}
+          actionLabel="Open"
+          onAction={() => onReviewItem("alert", alert)}
+        />
+      )
+    },
+    {
+      title: "Queued Rebalances",
+      rows: savedQueue,
+      empty: "No queued rebalances yet.",
+      renderRow: (item) => (
+        <SavedWorkspaceRow
+          key={item.id}
+          title={`${item.context || "rebalance"} · ${Number(item.totalDrift || 0).toFixed(1)} drift`}
+          subtitle={`${Number(item.tradesRequired || 0)} trades · ${formatSavedTimestamp(item.createdAt)}`}
+          actionLabel="Open"
+          onAction={() => onReviewItem("rebalance", item)}
+        />
+      )
+    },
+    {
+      title: "Execution History",
+      rows: savedHistory,
+      empty: "No rebalance execution history yet.",
+      renderRow: (item) => (
+        <SavedWorkspaceRow
+          key={item.id}
+          title={String(item.status || "saved").toUpperCase()}
+          subtitle={`${Number(item.summary?.tradeCount || item.trades?.length || 0)} trades · ${formatSavedTimestamp(item.createdAt)}`}
+          actionLabel="Open"
+          onAction={() => onReviewItem("history", item)}
+        />
+      )
+    },
+    {
+      title: "Exports",
+      rows: savedExports,
+      empty: "No exports yet.",
+      renderRow: (item) => (
+        <SavedWorkspaceRow
+          key={item.id}
+          title={`${item.type || "export"} export`}
+          subtitle={formatSavedTimestamp(item.createdAt)}
+          actionLabel="Download"
+          onAction={() => onReviewItem("export", item)}
+        />
+      )
+    }
+  ];
+
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside
+        className="home-v3-detail-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Saved items"
+        style={{ maxWidth: 760 }}
+      >
+        <div className="home-v3-drawer-head">
+          <h2>Saved Items</h2>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div style={{ display: "grid", gap: 18 }}>
+          {sections.map((section) => (
+            <section key={section.title} style={{ display: "grid", gap: 10 }}>
+              <div>
+                <strong style={{ display: "block", marginBottom: 4 }}>{section.title}</strong>
+                <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                  {section.rows.length ? `${section.rows.length} saved item${section.rows.length === 1 ? "" : "s"}` : section.empty}
+                </span>
+              </div>
+              {section.rows.length ? section.rows.map(section.renderRow) : null}
+            </section>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 12,
+        alignItems: "center",
+        padding: "12px 14px",
+        borderRadius: 3,
+        border: "1px solid rgba(148, 163, 184, 0.14)",
+        background: "var(--color-surface-card)"
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <strong style={{ display: "block" }}>{title}</strong>
+        <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{subtitle}</span>
+      </div>
+      {actionLabel ? (
+        <button type="button" className="portfolio-v2-link" onClick={onAction}>
+          {actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -36,6 +36,10 @@ const {
   balanceChangeSchema,
   cashChangeSchema,
   exchangeKeySchema,
+  workspaceUpdateSchema,
+  workspaceInviteSchema,
+  workspaceMemberRoleSchema,
+  workspaceAlertAssignmentSchema,
   emailRequestSchema,
   emailConfirmSchema,
   passwordUpdateSchema,
@@ -86,6 +90,7 @@ const {
   watchlist,
   optionsCalculations,
   userAuth,
+  workspaces,
   userWorkspace,
   runAdminWorkspaceMigration,
   serviceSnapshots,
@@ -93,7 +98,8 @@ const {
   balance,
   trading,
   admin,
-  analytics
+  analytics,
+  describeDatabaseConfig
 } = require("./database");
 const { REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
 const { fetchFarsideEtfFlows: fetchLatestFarsideEtfFlows } = require("./farsideEtf");
@@ -304,8 +310,7 @@ app.use(helmet.contentSecurityPolicy({
     frameAncestors: ["'none'"],
     connectSrc: [
       "'self'",
-      "ws:",
-      "wss:",
+      ...(!IS_PRODUCTION ? ["ws:", "wss:"] : []),
       "https://*.onrender.com",
       "wss://*.onrender.com",
       "https://*.vercel.app",
@@ -318,7 +323,7 @@ app.use(helmet.contentSecurityPolicy({
     scriptSrc: ["'self'"],
     styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
     fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
-    imgSrc: ["'self'", "data:", "https:", "http:"],
+    imgSrc: ["'self'", "data:", "https:", ...(!IS_PRODUCTION ? ["http:"] : [])],
     frameSrc: ["'none'"],
     objectSrc: ["'none'"],
     upgradeInsecureRequests: []
@@ -432,6 +437,31 @@ app.use((req, res, next) => {
   return res.status(403).json({ error: "Origin not allowed." });
 });
 
+const CSRF_EXEMPT_PATHS = new Set([
+  "/api/auth/oauth/apple/callback"
+]);
+
+function shouldEnforceCsrf(req) {
+  const method = String(req.method || "").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return false;
+  if (CSRF_EXEMPT_PATHS.has(String(req.path || ""))) return false;
+  const hasOrigin = Boolean(String(req.headers.origin || "").trim());
+  const hasCookies = Boolean(String(req.headers.cookie || "").trim());
+  return hasOrigin || hasCookies;
+}
+
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(String(req.method || "").toUpperCase())) {
+    ensureCsrfCookie(req, res);
+  }
+  return next();
+});
+
+app.get("/api/auth/csrf", (req, res) => {
+  const token = ensureCsrfCookie(req, res);
+  return res.json({ csrfToken: token });
+});
+
 // Helper to fetch latest results from Dune Analytics
 async function fetchDuneLatestResults(queryId) {
   const apiKey = process.env.DUNE_API_KEY;
@@ -500,6 +530,16 @@ function enforceTrustedOriginForStateChanges(req, res, next) {
 
 app.use(enforceTrustedOriginForStateChanges);
 
+app.use((req, res, next) => {
+  if (!shouldEnforceCsrf(req)) return next();
+  const cookieToken = getCsrfTokenFromCookie(req);
+  const headerToken = String(req.headers["x-csrf-token"] || "").trim();
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    return res.status(403).json({ error: "CSRF token missing or invalid." });
+  }
+  return next();
+});
+
 // Rate limiting by route class
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -555,32 +595,16 @@ app.use([
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
+const ADMIN_REAUTH_TTL_MS = 15 * 60 * 1000;
+const SENSITIVE_REAUTH_TTL_MS = 15 * 60 * 1000;
+const CSRF_COOKIE_NAME = "zenin_csrf";
 const AUTH_HASH_KEY_RAW = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "").trim();
 const FALLBACK_SECRET = "zenin_default_secure_fallback_secret_32chars_min_9f2a1c77_placeholder";
 let AUTH_HASH_KEY = AUTH_HASH_KEY_RAW;
 
-function resolveStableAuthHashFallback() {
-  const productionSeed = String(
-    process.env.DATABASE_URL ||
-    process.env.RENDER_DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
-    process.env.ADMIN_MIGRATION_KEY ||
-    ""
-  ).trim();
-
-  if (productionSeed.length < 32) return "";
-  return crypto.createHash("sha256").update(`zenin-auth-hash:${productionSeed}`).digest("hex");
-}
-
 if (AUTH_HASH_KEY.length < 32) {
   if (IS_PRODUCTION) {
-    const derivedSecret = resolveStableAuthHashFallback();
-    if (!derivedSecret) {
-      throw new Error("AUTH_HASH_KEY or ZENIN_APP_SECRET must be set to a 32+ character secret in production.");
-    }
-    AUTH_HASH_KEY = derivedSecret;
-    console.warn("WARNING: AUTH_HASH_KEY is not set; deriving a stable production fallback from protected server config. Set AUTH_HASH_KEY explicitly to rotate onto a dedicated auth secret.");
+    throw new Error("AUTH_HASH_KEY or ZENIN_APP_SECRET must be set to a 32+ character secret in production.");
   } else {
     AUTH_HASH_KEY = FALLBACK_SECRET;
     console.warn("********************************************************************************");
@@ -590,7 +614,6 @@ if (AUTH_HASH_KEY.length < 32) {
 }
 const OAUTH_PROVIDERS = ["google", "github", "microsoft"];
 const ARCHIVED_OAUTH_PROVIDERS = new Set(["apple"]);
-const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@zenin.app").trim().toLowerCase();
 const ADMIN_MIGRATION_KEY = String(process.env.ADMIN_MIGRATION_KEY || "").trim();
 const ALLOW_DEV_AUTH_DEBUG =
   process.env.NODE_ENV !== "production" &&
@@ -598,7 +621,22 @@ const ALLOW_DEV_AUTH_DEBUG =
 const ALLOW_OAUTH_MOCK =
   process.env.NODE_ENV !== "production" &&
   String(process.env.ENABLE_OAUTH_MOCK || "").trim().toLowerCase() === "true";
+const ADMIN_ALLOWED_IPS = new Set(
+  String(process.env.ADMIN_ALLOWED_IPS || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+);
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+if (IS_PRODUCTION) {
+  if (String(process.env.ENABLE_OAUTH_MOCK || "").trim().toLowerCase() === "true") {
+    throw new Error("ENABLE_OAUTH_MOCK must never be enabled in production.");
+  }
+  if (String(process.env.ZENIN_ADMIN_BYPASS || "").trim().toLowerCase() === "true") {
+    throw new Error("ZENIN_ADMIN_BYPASS must never be enabled in production.");
+  }
+}
 
 function hashToken(token) {
   return crypto.createHmac("sha256", AUTH_HASH_KEY).update(String(token || "")).digest("hex");
@@ -753,9 +791,18 @@ function decryptWorkspaceData(stored) {
   }
 }
 
+const workspaceSecretProvider = {
+  encryptSecret(value) {
+    return encryptWorkspaceData(value);
+  },
+  decryptSecret(value) {
+    return decryptWorkspaceData(value);
+  }
+};
+
 function maskApiKey(key) {
   if (!key) return "";
-  const raw = decryptWorkspaceData(key); // Decrypt if it was encrypted
+  const raw = workspaceSecretProvider.decryptSecret(key); // Decrypt if it was encrypted
   if (raw.length <= 8) return "****";
   return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
 }
@@ -816,7 +863,62 @@ function sanitizeAuthUser(user = null) {
     currentPlan: String(user.currentPlan || "starter").trim().toLowerCase() || "starter",
     currentBillingCycle: String(user.currentBillingCycle || "monthly").trim().toLowerCase() || "monthly",
     planUpdatedAt: user.planUpdatedAt || null,
+    sessionReauthenticatedAt: user.sessionReauthenticatedAt || null,
+    adminReauthenticatedAt: user.adminReauthenticatedAt || null,
     createdAt: user.createdAt || null
+  };
+}
+
+function sanitizeWorkspace(workspace = null, membership = null) {
+  if (!workspace) return null;
+  return {
+    id: Number(workspace.id),
+    slug: String(workspace.slug || "").trim(),
+    name: String(workspace.name || "").trim(),
+    plan: String(workspace.plan || "starter").trim().toLowerCase(),
+    billingCycle: String(workspace.billingCycle || "monthly").trim().toLowerCase(),
+    seatLimit: Number(workspace.seatLimit || 1),
+    seatCount: Number(workspace.seatCount || 1),
+    seatsRemaining: Math.max(0, Number(workspace.seatLimit || 1) - Number(workspace.seatCount || 1)),
+    status: String(workspace.status || "active").trim().toLowerCase(),
+    ownerUserId: workspace.ownerUserId == null ? null : Number(workspace.ownerUserId),
+    createdAt: workspace.createdAt || null,
+    updatedAt: workspace.updatedAt || null,
+    membership: membership ? {
+      userId: Number(membership.userId),
+      role: String(membership.role || "member").trim().toLowerCase(),
+      status: String(membership.status || "active").trim().toLowerCase(),
+      joinedAt: membership.joinedAt || null,
+    } : null
+  };
+}
+
+function sanitizeWorkspaceMember(member = null) {
+  if (!member) return null;
+  return {
+    workspaceId: Number(member.workspaceId),
+    userId: Number(member.userId),
+    role: String(member.role || "member").trim().toLowerCase(),
+    status: String(member.status || "active").trim().toLowerCase(),
+    email: member.email || null,
+    displayName: member.displayName || null,
+    invitedAt: member.invitedAt || null,
+    joinedAt: member.joinedAt || null,
+  };
+}
+
+function sanitizeWorkspaceInvite(invite = null) {
+  if (!invite) return null;
+  return {
+    id: Number(invite.id),
+    workspaceId: Number(invite.workspaceId),
+    email: String(invite.email || "").trim().toLowerCase(),
+    role: String(invite.role || "member").trim().toLowerCase(),
+    status: String(invite.status || "pending").trim().toLowerCase(),
+    expiresAt: invite.expiresAt || null,
+    acceptedAt: invite.acceptedAt || null,
+    revokedAt: invite.revokedAt || null,
+    createdAt: invite.createdAt || null,
   };
 }
 
@@ -886,6 +988,12 @@ function getSessionTokenFromCookie(req) {
   return token || null;
 }
 
+function getCsrfTokenFromCookie(req) {
+  const cookies = parseCookies(req);
+  const token = String(cookies[CSRF_COOKIE_NAME] || "").trim();
+  return token || null;
+}
+
 function getRequestProtocol(req) {
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
   if (forwardedProto) return forwardedProto;
@@ -935,12 +1043,32 @@ function buildSessionCookieOptions(req, { expiresAt = null, persistent = true } 
   return options;
 }
 
+function buildCsrfCookieOptions(req) {
+  const secure = shouldUseSecureCookies(req);
+  return {
+    httpOnly: false,
+    secure,
+    sameSite: resolveSessionSameSite(req, secure),
+    path: "/"
+  };
+}
+
 function setSessionCookie(res, req, token, expiresAt, { persistent = true } = {}) {
   res.cookie(SESSION_COOKIE_NAME, token, buildSessionCookieOptions(req, { expiresAt, persistent }));
 }
 
 function clearSessionCookie(res, req) {
   res.clearCookie(SESSION_COOKIE_NAME, buildSessionCookieOptions(req, { persistent: false }));
+}
+
+function issueCsrfToken(res, req) {
+  const token = crypto.randomBytes(24).toString("hex");
+  res.cookie(CSRF_COOKIE_NAME, token, buildCsrfCookieOptions(req));
+  return token;
+}
+
+function ensureCsrfCookie(req, res) {
+  return getCsrfTokenFromCookie(req) || issueCsrfToken(res, req);
 }
 
 function resolveClientIp(req) {
@@ -1031,16 +1159,132 @@ app.use((req, res, next) => {
     }).catch((error) => {
       console.error("[Admin] Failed to persist system log:", error?.message || error);
     });
+
+    if (statusCode === 403 && String(req.path || "").startsWith("/api/workspaces/")) {
+      const attempts = trackSecurityAnomaly(`workspace-403:${resolveClientIp(req) || "unknown"}`);
+      if (attempts >= 5) {
+        logSecurityEvent(req, {
+          level: "warning",
+          message: "Repeated forbidden workspace access attempts detected.",
+          eventType: "workspace_forbidden_burst",
+          workspaceId: req.workspace?.workspace?.id || null,
+          context: {
+            attempts,
+            path: req.path
+          }
+        }).catch(() => {});
+      }
+    }
   });
 
   next();
 });
 
+function isRetryableStatus(status) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function apiError(res, status, options = {}) {
+  const normalizedStatus = Number(status) || 500;
+  const payload = {
+    error: String(options.error || "Request failed"),
+    message: String(options.message || options.error || "The request could not be completed."),
+    code: String(options.code || (normalizedStatus >= 500 ? "INTERNAL_SERVER_ERROR" : "REQUEST_FAILED")),
+    retryable: typeof options.retryable === "boolean" ? options.retryable : isRetryableStatus(normalizedStatus)
+  };
+
+  if (options.details != null) {
+    payload.details = options.details;
+  }
+  if (res.req?.requestId) {
+    payload.requestId = res.req.requestId;
+  }
+  if (options.meta && typeof options.meta === "object") {
+    payload.meta = options.meta;
+  }
+
+  return res.status(normalizedStatus).json(payload);
+}
+
 function requireSignedIn(req, res, next) {
   if (!req.auth || req.auth.isGuest) {
-    return res.status(401).json({ error: "Authentication required" });
+    return apiError(res, 401, {
+      error: "Authentication required",
+      message: "Sign in to continue.",
+      code: "AUTH_REQUIRED",
+      retryable: false
+    });
   }
   return next();
+}
+
+async function attachActiveWorkspace(req, _res, next) {
+  if (!req.auth || req.auth.isGuest || !req.auth.userId) {
+    return next();
+  }
+  try {
+    const active = await workspaces.getActiveForUser(req.auth.userId);
+    req.workspace = active || null;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function requireWorkspaceMember(req, res, next) {
+  if (!req.workspace?.workspace || !req.workspace?.membership) {
+    return apiError(res, 403, {
+      error: "Workspace access required.",
+      message: "Join or switch to a workspace with access before retrying.",
+      code: "WORKSPACE_ACCESS_REQUIRED",
+      retryable: false
+    });
+  }
+  return next();
+}
+
+function getRequiredWorkspaceContext(req) {
+  const workspaceId = Number(req.workspace?.workspace?.id || 0);
+  if (!workspaceId || !req.workspace?.membership) {
+    const error = new Error("Workspace access required.");
+    error.statusCode = 403;
+    throw error;
+  }
+  return {
+    id: workspaceId,
+    workspace: req.workspace.workspace,
+    membership: req.workspace.membership
+  };
+}
+
+function requireWorkspaceRole(...roles) {
+  const allowedRoles = roles.map((role) => String(role || "").trim().toLowerCase()).filter(Boolean);
+  return (req, res, next) => {
+    try {
+      const workspaceContext = getRequiredWorkspaceContext(req);
+      const role = String(workspaceContext.membership?.role || "").trim().toLowerCase();
+      if (!allowedRoles.includes(role)) {
+        return apiError(res, 403, {
+          error: "Workspace privileges required.",
+          message: "Your workspace role does not allow this action.",
+          code: "WORKSPACE_ROLE_REQUIRED",
+          retryable: false
+        });
+      }
+      return next();
+    } catch (error) {
+      return apiError(res, error.statusCode || 403, {
+        error: error.message || "Workspace access required.",
+        message: error.message || "Switch to an active workspace and retry.",
+        code: "WORKSPACE_ACCESS_REQUIRED",
+        retryable: false
+      });
+    }
+  };
+}
+
+function requireWorkspaceAdmin(req, res, next) {
+  return requireWorkspaceRole("owner", "admin")(req, res, next);
 }
 
 const PLAN_RANK = {
@@ -1058,16 +1302,20 @@ function requirePlan(minPlan) {
     if (isAdmin && !simulationPlan) return next();
     
     // Use the simulated plan if provided by an admin, otherwise use the actual user plan
-    const userPlan = (isAdmin && simulationPlan) 
+    const userPlan = (isAdmin && simulationPlan)
       ? simulationPlan 
       : (req.auth?.user?.currentPlan || "starter");
+    const workspacePlan = req.workspace?.workspace?.plan || "starter";
+    const effectivePlan = (PLAN_RANK[workspacePlan] || 0) > (PLAN_RANK[userPlan] || 0)
+      ? workspacePlan
+      : userPlan;
 
-    if ((PLAN_RANK[userPlan] || 0) < (PLAN_RANK[minPlan] || 0)) {
+    if ((PLAN_RANK[effectivePlan] || 0) < (PLAN_RANK[minPlan] || 0)) {
       return res.status(403).json({ 
         error: "Upgrade required", 
         message: `The ${minPlan} plan is required to access this feature.`,
         required: minPlan, 
-        current: userPlan,
+        current: effectivePlan,
         simulated: isAdmin && !!simulationPlan
       });
     }
@@ -1079,7 +1327,41 @@ function requireAdmin(req, res, next) {
   if (!isSignedInAdmin(req)) {
     return res.status(403).json({ error: "Admin privileges required" });
   }
+  if (!hasStrongAdminAuth(req.auth?.user)) {
+    return res.status(403).json({ error: "Admin MFA or passkey enrollment required.", code: "ADMIN_MFA_REQUIRED" });
+  }
+  if (IS_PRODUCTION && ADMIN_ALLOWED_IPS.size > 0) {
+    const ip = String(resolveClientIp(req) || "").trim();
+    if (!ADMIN_ALLOWED_IPS.has(ip)) {
+      return res.status(403).json({ error: "Admin IP address not allowed.", code: "ADMIN_IP_RESTRICTED" });
+    }
+  }
   return next();
+}
+
+function hasStrongAdminAuth(user = null) {
+  const passkeys = Array.isArray(user?.passkeys) ? user.passkeys : [];
+  return Boolean(user?.twoFactorEnabled) || passkeys.length > 0;
+}
+
+function hasRecentReauthAt(timestamp, ttlMs) {
+  if (!timestamp) return false;
+  const ts = new Date(timestamp).getTime();
+  return Number.isFinite(ts) && (Date.now() - ts) <= ttlMs;
+}
+
+function requireRecentAdminReauth(req, res, next) {
+  if (hasRecentReauthAt(req.auth?.user?.adminReauthenticatedAt, ADMIN_REAUTH_TTL_MS)) {
+    return next();
+  }
+  return res.status(428).json({ error: "Recent admin re-authentication required.", code: "ADMIN_REAUTH_REQUIRED" });
+}
+
+function requireRecentSensitiveReauth(req, res, next) {
+  if (hasRecentReauthAt(req.auth?.user?.sessionReauthenticatedAt, SENSITIVE_REAUTH_TTL_MS)) {
+    return next();
+  }
+  return res.status(428).json({ error: "Recent account confirmation required.", code: "SENSITIVE_REAUTH_REQUIRED" });
 }
 
 function isSignedInAdmin(req) {
@@ -1098,14 +1380,6 @@ function isSignedInAdmin(req) {
     return true;
   }
 
-  // Fallback to hardcoded ADMIN_EMAIL (legacy support)
-  const email = String(req?.auth?.user?.email || "").trim().toLowerCase();
-  const isHardcodedAdmin = Boolean(email) && email === ADMIN_EMAIL;
-  if (isHardcodedAdmin) {
-    console.log(`[Admin] User ${email} granted access via hardcoded email.`);
-    return true;
-  }
-
   return false;
 }
 
@@ -1115,12 +1389,73 @@ function hasValidMigrationKey(req) {
   return provided && provided === ADMIN_MIGRATION_KEY;
 }
 
+function buildSecurityDiff(before = {}, after = {}) {
+  return buildAuditDiff(before, after);
+}
+
+async function logSecurityEvent(req, {
+  level = "info",
+  message,
+  eventType,
+  workspaceId = null,
+  targetUserId = null,
+  context = {}
+} = {}) {
+  if (!message && !eventType) return null;
+  return admin.recordSystemLog({
+    level,
+    message: String(message || eventType || "security_event").slice(0, 600),
+    context: {
+      eventType: eventType || null,
+      workspaceId: workspaceId == null ? null : Number(workspaceId),
+      targetUserId: targetUserId == null ? null : Number(targetUserId),
+      ...context
+    },
+    requestId: req?.requestId || null,
+    ipAddress: resolveClientIp(req),
+    service: "Security",
+    endpoint: req?.method && req?.path ? `${req.method} ${req.path}` : "security-event",
+    statusCode: null,
+    userId: req?.auth?.userId || null,
+    sessionId: req?.auth?.user?.sessionId || null,
+    actorType: req?.auth?.isGuest ? "guest" : (req?.auth?.user?.isAdmin ? "admin" : "user")
+  });
+}
+
+const securityAnomalyState = new Map();
+
+function trackSecurityAnomaly(key, windowMs = 10 * 60 * 1000) {
+  const now = Date.now();
+  const existing = securityAnomalyState.get(key);
+  if (!existing || existing.expiresAt < now) {
+    const next = { count: 1, expiresAt: now + windowMs };
+    securityAnomalyState.set(key, next);
+    return next.count;
+  }
+  existing.count += 1;
+  return existing.count;
+}
 
 
 
-function handleServerError(res, context, error) {
+function handleServerError(res, context, error, options = {}) {
+  const status = Number(options.status || error?.statusCode || error?.status || 500);
+  const safeError = status >= 500
+    ? "Internal server error"
+    : (options.error || error?.error || error?.message || "Request failed");
+  const safeMessage = options.message || (status >= 500
+    ? "Something went wrong while processing this request. Please try again."
+    : error?.message || "The request could not be completed.");
+  const code = options.code || error?.code || (status >= 500 ? "INTERNAL_SERVER_ERROR" : "REQUEST_FAILED");
+
   console.error(`${context}:`, error?.message || error);
-  return res.status(500).json({ error: "Internal server error" });
+  return apiError(res, status, {
+    error: safeError,
+    message: safeMessage,
+    code,
+    details: options.details ?? error?.details,
+    retryable: options.retryable
+  });
 }
 
 function normalizeSnapshotParamValue(value) {
@@ -2422,20 +2757,30 @@ async function searchYahooFinance(query, type = "tradfi") {
 
 async function buildUserBootstrapPayload(userId, options = {}) {
   const tradeLimit = Math.max(200, Math.min(2000, Number(options.tradeLimit) || 1000));
+  const activeWorkspace = options.activeWorkspace || await workspaces.getActiveForUser(userId);
+  const activeWorkspaceId = activeWorkspace?.workspace?.id || null;
   const [balances, usdBalance, holdings, watchlistAssets, trades, feeSummary] = await Promise.all([
-    userWorkspace.cash.getAll(userId),
+    userWorkspace.cash.getAll(userId, activeWorkspaceId),
     userWorkspace.balance.get(userId),
-    userWorkspace.portfolio.getAll(userId),
-    userWorkspace.watchlist.getAll(userId),
-    userWorkspace.trades.getAll(userId, tradeLimit),
-    userWorkspace.tradeFills.getSummary(userId)
+    userWorkspace.portfolio.getAll(userId, activeWorkspaceId),
+    userWorkspace.watchlist.getAll(userId, activeWorkspaceId),
+    userWorkspace.trades.getAll(userId, tradeLimit, activeWorkspaceId),
+    userWorkspace.tradeFills.getSummary(userId, activeWorkspaceId)
   ]);
+  const [workspaceMembers, workspaceInvites, workspaceActivity, workspaceAccounts] = activeWorkspace?.workspace
+    ? await Promise.all([
+        workspaces.listMembers(activeWorkspace.workspace.id),
+        workspaces.listInvites(activeWorkspace.workspace.id),
+        workspaces.listActivity(activeWorkspace.workspace.id, 20),
+        userWorkspace.exchangeKeys.list(userId, activeWorkspace.workspace.id)
+      ])
+    : [[], [], [], []];
 
   const normalizedBalances = Array.isArray(balances) ? balances.slice() : [];
   if (!normalizedBalances.some((row) => row?.currency === "USD")) {
     normalizedBalances.unshift({
       currency: "USD",
-      balance: usdBalance,
+      balance: activeWorkspace?.workspace?.ownerUserId === Number(userId) ? usdBalance : 0,
       updatedAt: new Date().toISOString()
     });
   }
@@ -2447,6 +2792,32 @@ async function buildUserBootstrapPayload(userId, options = {}) {
     trades: Array.isArray(trades) ? trades : [],
     feeSummary: feeSummary || null,
     categories: Object.keys(watchlistData),
+    activeWorkspace: sanitizeWorkspace(activeWorkspace?.workspace, activeWorkspace?.membership),
+    workspaceMembers: workspaceMembers.map(sanitizeWorkspaceMember),
+    workspaceInvites: workspaceInvites.map(sanitizeWorkspaceInvite),
+    workspaceActivity,
+    workspaceAccounts: Array.isArray(workspaceAccounts) ? workspaceAccounts.map((item) => {
+      let parsedExtra = {};
+      try {
+        const rawExtra = typeof item.extraData === "string" ? workspaceSecretProvider.decryptSecret(item.extraData) : item.extraData;
+        parsedExtra = typeof rawExtra === "string" ? JSON.parse(rawExtra) : (rawExtra || {});
+      } catch {
+        parsedExtra = {};
+      }
+      return {
+        id: item.id,
+        exchange: item.exchange,
+        createdAt: item.createdAt || null,
+        permissionScope: item.permissionScope || "unknown",
+        canTrade: !!item.canTrade,
+        lastVerifiedScope: item.lastVerifiedScope || "unknown",
+        riskLevel: item.riskLevel || "standard",
+        extraData: parsedExtra,
+        lastSyncAt: item.lastSyncAt || null,
+        lastSyncStatus: item.lastSyncStatus || "idle",
+        lastSyncMeta: item.lastSyncMeta || {}
+      };
+    }) : [],
     appConfig: buildAppRuntimeConfig(),
     updatedAt: new Date().toISOString()
   };
@@ -2461,7 +2832,7 @@ app.get("/api/public/config", async (_req, res) => {
   });
 });
 
-app.get("/api/app/bootstrap", requireSignedIn, async (req, res) => {
+app.get("/api/app/bootstrap", requireSignedIn, attachActiveWorkspace, async (req, res) => {
   const tradeLimit = Math.max(200, Math.min(2000, Number(req.query.tradeLimit) || 1000));
   const snapshotParams = { userId: req.auth.userId, tradeLimit };
   const ttlMs = ROUTE_CACHE_TTLS_MS["app-bootstrap"];
@@ -2473,7 +2844,7 @@ app.get("/api/app/bootstrap", requireSignedIn, async (req, res) => {
     }
 
     const payload = await withInflightDedup("app-bootstrap", snapshotParams, async () => {
-      const nextPayload = await buildUserBootstrapPayload(req.auth.userId, { tradeLimit });
+      const nextPayload = await buildUserBootstrapPayload(req.auth.userId, { tradeLimit, activeWorkspace: req.workspace });
       await writeAllSnapshots("app-bootstrap", snapshotParams, nextPayload);
       return nextPayload;
     });
@@ -2490,6 +2861,288 @@ app.get("/api/app/bootstrap", requireSignedIn, async (req, res) => {
       });
     }
     return handleServerError(res, "Bootstrap fetch failed", error);
+  }
+});
+
+app.get("/api/workspaces/current", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceContext = getRequiredWorkspaceContext(req);
+    const members = await workspaces.listMembers(workspaceContext.id);
+    const invites = await workspaces.listInvites(workspaceContext.id);
+    return res.json({
+      workspace: sanitizeWorkspace(workspaceContext.workspace, workspaceContext.membership),
+      members: members.map(sanitizeWorkspaceMember),
+      invites: invites.map(sanitizeWorkspaceInvite)
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to load current workspace", error);
+  }
+});
+
+app.patch("/api/workspaces/current", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, validate(workspaceUpdateSchema), async (req, res) => {
+  try {
+    const workspaceContext = getRequiredWorkspaceContext(req);
+    const previousWorkspace = sanitizeWorkspace(workspaceContext.workspace, workspaceContext.membership);
+    const workspace = await workspaces.updateWorkspace(workspaceContext.id, req.body || {});
+    await workspaces.recordActivity({
+      workspaceId: workspaceContext.id,
+      actorUserId: req.auth.userId,
+      eventType: "workspace_updated",
+      entityType: "workspace",
+      entityId: workspaceContext.id,
+      details: req.body || {}
+    });
+    await logSecurityEvent(req, {
+      message: "Workspace settings updated.",
+      eventType: "workspace_updated",
+      workspaceId: workspaceContext.id,
+      context: {
+        diff: buildSecurityDiff(previousWorkspace, sanitizeWorkspace(workspace, workspaceContext.membership))
+      }
+    });
+    return res.json({ workspace: sanitizeWorkspace(workspace, req.workspace.membership) });
+  } catch (error) {
+    return handleServerError(res, "Failed to update workspace", error);
+  }
+});
+
+app.get("/api/workspaces/current/members", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const members = await workspaces.listMembers(req.workspace.workspace.id);
+    return res.json({ items: members.map(sanitizeWorkspaceMember) });
+  } catch (error) {
+    return handleServerError(res, "Failed to list workspace members", error);
+  }
+});
+
+app.get("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), async (req, res) => {
+  try {
+    const invites = await workspaces.listInvites(req.workspace.workspace.id);
+    return res.json({ items: invites.map(sanitizeWorkspaceInvite) });
+  } catch (error) {
+    return handleServerError(res, "Failed to list workspace invites", error);
+  }
+});
+
+app.post("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, validate(workspaceInviteSchema), async (req, res) => {
+  try {
+    const workspaceContext = getRequiredWorkspaceContext(req);
+    const members = await workspaces.listMembers(workspaceContext.id);
+    const invites = await workspaces.listInvites(workspaceContext.id);
+    const activeMembers = members.filter((item) => item.status === "active");
+    const pendingInvites = invites.filter((item) => item.status === "pending");
+    if ((activeMembers.length + pendingInvites.length) >= Number(workspaceContext.workspace.seatLimit || 1)) {
+      return res.status(400).json({ error: "Seat limit reached for this workspace." });
+    }
+    const { invite } = await workspaces.createInvite({
+      workspaceId: workspaceContext.id,
+      email: req.body.email,
+      role: req.body.role,
+      createdByUserId: req.auth.userId
+    });
+    await workspaces.recordActivity({
+      workspaceId: workspaceContext.id,
+      actorUserId: req.auth.userId,
+      eventType: "invite_created",
+      entityType: "workspace_invite",
+      entityId: invite.id,
+      details: { email: invite.email, role: invite.role }
+    });
+    const inviteBurstCount = trackSecurityAnomaly(`workspace-invite:${workspaceContext.id}`, 15 * 60 * 1000);
+    if (inviteBurstCount >= 5) {
+      await logSecurityEvent(req, {
+        level: "warning",
+        message: "High workspace invite volume detected.",
+        eventType: "workspace_invite_burst",
+        workspaceId: workspaceContext.id,
+        context: { count: inviteBurstCount }
+      });
+    }
+    return res.json({ invite: sanitizeWorkspaceInvite(invite) });
+  } catch (error) {
+    return handleServerError(res, "Failed to create workspace invite", error);
+  }
+});
+
+app.post("/api/workspaces/invites/:token/accept", requireSignedIn, writeLimiter, async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+    if (!token) {
+      return res.status(400).json({ error: "Invite token is required." });
+    }
+    const active = await workspaces.acceptInvite({ token, userId: req.auth.userId });
+    await workspaces.recordActivity({
+      workspaceId: active.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "invite_accepted",
+      entityType: "workspace_member",
+      entityId: req.auth.userId,
+      details: { role: active.membership?.role || "member" }
+    });
+    return res.json({
+      workspace: sanitizeWorkspace(active.workspace, active.membership),
+      membership: sanitizeWorkspaceMember(active.membership)
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to accept workspace invite", error);
+  }
+});
+
+app.patch("/api/workspaces/current/members/:userId/role", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, validate(workspaceMemberRoleSchema), async (req, res) => {
+  try {
+    const workspaceContext = getRequiredWorkspaceContext(req);
+    const targetUserId = Number(req.params.userId);
+    const beforeMember = (await workspaces.listMembers(workspaceContext.id)).find((item) => Number(item.userId) === targetUserId) || null;
+    const member = await workspaces.updateMemberRole({
+      workspaceId: workspaceContext.id,
+      targetUserId,
+      role: req.body.role
+    });
+    if (!member) {
+      return res.status(404).json({ error: "Workspace member not found." });
+    }
+    await workspaces.recordActivity({
+      workspaceId: workspaceContext.id,
+      actorUserId: req.auth.userId,
+      eventType: "member_role_updated",
+      entityType: "workspace_member",
+      entityId: targetUserId,
+      details: {
+        beforeRole: beforeMember?.role || null,
+        afterRole: member.role,
+        beforeStatus: beforeMember?.status || null,
+        afterStatus: member.status
+      }
+    });
+    const roleChangeBurst = trackSecurityAnomaly(`workspace-role:${workspaceContext.id}`, 10 * 60 * 1000);
+    if (roleChangeBurst >= 3) {
+      await logSecurityEvent(req, {
+        level: "warning",
+        message: "Repeated workspace role changes detected.",
+        eventType: "workspace_role_churn",
+        workspaceId: workspaceContext.id,
+        targetUserId,
+        context: {
+          count: roleChangeBurst,
+          beforeRole: beforeMember?.role || null,
+          afterRole: member.role
+        }
+      });
+    }
+    return res.json({ member: sanitizeWorkspaceMember(member) });
+  } catch (error) {
+    return handleServerError(res, "Failed to update workspace member role", error);
+  }
+});
+
+app.delete("/api/workspaces/current/members/:userId", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.userId);
+    const member = await workspaces.removeMember({
+      workspaceId: req.workspace.workspace.id,
+      targetUserId
+    });
+    if (!member) {
+      return res.status(404).json({ error: "Workspace member not found." });
+    }
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "member_removed",
+      entityType: "workspace_member",
+      entityId: targetUserId
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    return handleServerError(res, "Failed to remove workspace member", error);
+  }
+});
+
+app.get("/api/workspaces/current/activity", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const items = await workspaces.listActivity(req.workspace.workspace.id, Number(req.query.limit) || 50);
+    return res.json({ items });
+  } catch (error) {
+    return handleServerError(res, "Failed to load workspace activity", error);
+  }
+});
+
+app.get("/api/workspaces/current/alerts", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        id,
+        alert_key AS "alertKey",
+        assigned_to_user_id AS "assignedToUserId",
+        status,
+        snoozed_until AS "snoozedUntil",
+        archived_at AS "archivedAt",
+        notes_json AS notes,
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM workspace_alert_assignments
+      WHERE workspace_id = $1
+      ORDER BY updated_at DESC, id DESC;
+    `, [req.workspace.workspace.id]);
+    return res.json({ items: result.rows });
+  } catch (error) {
+    return handleServerError(res, "Failed to load workspace alerts", error);
+  }
+});
+
+app.put("/api/workspaces/current/alerts", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(workspaceAlertAssignmentSchema), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await pool.query(`
+      INSERT INTO workspace_alert_assignments (
+        workspace_id,
+        alert_key,
+        assigned_to_user_id,
+        status,
+        snoozed_until,
+        notes_json,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
+      ON CONFLICT (workspace_id, alert_key) DO UPDATE
+      SET
+        assigned_to_user_id = EXCLUDED.assigned_to_user_id,
+        status = EXCLUDED.status,
+        snoozed_until = EXCLUDED.snoozed_until,
+        notes_json = EXCLUDED.notes_json,
+        archived_at = CASE WHEN EXCLUDED.status = 'archived' THEN NOW() ELSE NULL END,
+        archived_by_user_id = CASE WHEN EXCLUDED.status = 'archived' THEN $7 ELSE NULL END,
+        updated_at = NOW()
+      RETURNING
+        id,
+        alert_key AS "alertKey",
+        assigned_to_user_id AS "assignedToUserId",
+        status,
+        snoozed_until AS "snoozedUntil",
+        archived_at AS "archivedAt",
+        notes_json AS notes,
+        created_at AS "createdAt",
+        updated_at AS "updatedAt";
+    `, [
+      req.workspace.workspace.id,
+      body.alertKey,
+      body.assignedToUserId || null,
+      body.status || "open",
+      body.snoozedUntil || null,
+      JSON.stringify(body.notes || {}),
+      req.auth.userId
+    ]);
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "alert_assignment_updated",
+      entityType: "workspace_alert",
+      entityId: body.alertKey,
+      details: { status: body.status || "open", assignedToUserId: body.assignedToUserId || null }
+    });
+    return res.json({ item: result.rows[0] });
+  } catch (error) {
+    return handleServerError(res, "Failed to update workspace alert assignment", error);
   }
 });
 
@@ -2518,14 +3171,19 @@ app.post("/api/db/balance", requireSignedIn, writeLimiter, validate(balanceChang
   }
 });
 
-app.get("/api/db/cash", requireSignedIn, async (req, res) => {
+app.get("/api/db/cash", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const balances = await userWorkspace.cash.getAll(req.auth.userId);
+    const workspaceId = req.workspace?.workspace?.id || null;
+    const balances = await userWorkspace.cash.getAll(req.auth.userId, workspaceId);
     if (!balances.some((row) => row.currency === "USD")) {
       const usdBalance = await userWorkspace.balance.get(req.auth.userId);
       return res.json({
         balances: [
-          { currency: "USD", balance: usdBalance, updatedAt: new Date().toISOString() },
+          {
+            currency: "USD",
+            balance: req.workspace?.workspace?.ownerUserId === Number(req.auth.userId) ? usdBalance : 0,
+            updatedAt: new Date().toISOString()
+          },
           ...balances
         ]
       });
@@ -2536,12 +3194,12 @@ app.get("/api/db/cash", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/cash", requireSignedIn, writeLimiter, validate(cashChangeSchema), async (req, res) => {
+app.post("/api/db/cash", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(cashChangeSchema), async (req, res) => {
   try {
     const { amount, type, currency = "USD" } = req.body || {};
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
     if (typeof amount !== "number" || amount <= 0 || !isFinite(amount)) return res.status(400).json({ error: "Invalid amount" });
-    const balanceAfter = await userWorkspace.cash.applyChange(req.auth.userId, currency, amount, type);
+    const balanceAfter = await userWorkspace.cash.applyChange(req.auth.userId, currency, amount, type, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json({ currency: String(currency || "USD").toUpperCase(), balance: balanceAfter });
   } catch (err) {
@@ -2552,46 +3210,46 @@ app.post("/api/db/cash", requireSignedIn, writeLimiter, validate(cashChangeSchem
   }
 });
 
-app.get("/api/db/workspace/docs/:namespace", requireSignedIn, async (req, res) => {
+app.get("/api/db/workspace/docs/:namespace", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
     if (!isWorkspaceNamespaceValid(namespace)) {
       return res.status(400).json({ error: "Invalid workspace namespace." });
     }
-    const result = await userWorkspace.docs.get(req.auth.userId, namespace, null);
+    const result = await userWorkspace.docs.get(req.auth.userId, namespace, null, req.workspace.workspace.id);
     return res.json(result);
   } catch (error) {
     return handleServerError(res, "Workspace document read failed", error);
   }
 });
 
-app.put("/api/db/workspace/docs/:namespace", requireSignedIn, writeLimiter, validate(workspaceDocSchema), async (req, res) => {
+app.put("/api/db/workspace/docs/:namespace", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(workspaceDocSchema), async (req, res) => {
   try {
     const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
     if (!isWorkspaceNamespaceValid(namespace)) {
       return res.status(400).json({ error: "Invalid workspace namespace." });
     }
-    const result = await userWorkspace.docs.set(req.auth.userId, namespace, req.body?.document ?? null);
+    const result = await userWorkspace.docs.set(req.auth.userId, namespace, req.body?.document ?? null, req.workspace.workspace.id);
     return res.json(result);
   } catch (error) {
     return handleServerError(res, "Workspace document update failed", error);
   }
 });
 
-app.get("/api/db/workspace/collections/:namespace", requireSignedIn, async (req, res) => {
+app.get("/api/db/workspace/collections/:namespace", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
     if (!isWorkspaceNamespaceValid(namespace)) {
       return res.status(400).json({ error: "Invalid workspace namespace." });
     }
-    const result = await userWorkspace.collections.get(req.auth.userId, namespace, []);
+    const result = await userWorkspace.collections.get(req.auth.userId, namespace, [], req.workspace.workspace.id);
     return res.json(result);
   } catch (error) {
     return handleServerError(res, "Workspace collection read failed", error);
   }
 });
 
-app.put("/api/db/workspace/collections/:namespace", requireSignedIn, writeLimiter, validate(workspaceCollectionSchema), async (req, res) => {
+app.put("/api/db/workspace/collections/:namespace", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(workspaceCollectionSchema), async (req, res) => {
   try {
     const namespace = decodeURIComponent(String(req.params.namespace || "").trim());
     if (!isWorkspaceNamespaceValid(namespace)) {
@@ -2601,7 +3259,7 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, writeLimite
       return res.status(400).json({ error: "items must be an array." });
     }
     const limit = Math.max(1, Math.min(2000, Number(req.body?.limit) || 500));
-    const result = await userWorkspace.collections.set(req.auth.userId, namespace, req.body.items, limit);
+    const result = await userWorkspace.collections.set(req.auth.userId, namespace, req.body.items, limit, req.workspace.workspace.id);
     return res.json(result);
   } catch (error) {
     return handleServerError(res, "Workspace collection update failed", error);
@@ -2611,16 +3269,16 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, writeLimite
 // ---------------------------------------------------------------------------
 // Exchange Keys Management
 // ---------------------------------------------------------------------------
-app.get("/api/db/exchange-keys", requireSignedIn, requirePlan("pro"), async (req, res) => {
+app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requirePlan("pro"), async (req, res) => {
   try {
-    const keys = await userWorkspace.exchangeKeys.list(req.auth.userId);
+    const keys = await userWorkspace.exchangeKeys.list(req.auth.userId, req.workspace.workspace.id);
     // Mask sensitive keys for the list view
     const maskedKeys = keys.map(k => {
       const maskedKey = maskApiKey(k.apiKey);
       let parsedExtra = {};
       try {
         // extraData might be a string (wenc:...) or already an object
-        const rawExtra = typeof k.extraData === "string" ? decryptWorkspaceData(k.extraData) : k.extraData;
+        const rawExtra = typeof k.extraData === "string" ? workspaceSecretProvider.decryptSecret(k.extraData) : k.extraData;
         parsedExtra = typeof rawExtra === "string" ? JSON.parse(rawExtra) : (rawExtra || {});
         // Mask address if present in extraData (common for Hyperliquid)
         if (parsedExtra.address && parsedExtra.address.length > 8) {
@@ -2633,8 +3291,15 @@ app.get("/api/db/exchange-keys", requireSignedIn, requirePlan("pro"), async (req
         id: k.id,
         exchange: k.exchange,
         apiKey: maskedKey,
+        permissionScope: k.permissionScope || "unknown",
+        canTrade: !!k.canTrade,
+        lastVerifiedScope: k.lastVerifiedScope || "unknown",
+        riskLevel: k.riskLevel || "standard",
         extraData: parsedExtra,
-        createdAt: k.createdAt
+        createdAt: k.createdAt,
+        lastSyncAt: k.lastSyncAt || null,
+        lastSyncStatus: k.lastSyncStatus || "idle",
+        lastSyncMeta: k.lastSyncMeta || {}
       };
     });
     res.json(maskedKeys);
@@ -2643,32 +3308,90 @@ app.get("/api/db/exchange-keys", requireSignedIn, requirePlan("pro"), async (req
   }
 });
 
-app.post("/api/db/exchange-keys", requireSignedIn, requirePlan("pro"), writeLimiter, validate(exchangeKeySchema), async (req, res) => {
+app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requirePlan("pro"), writeLimiter, validate(exchangeKeySchema), async (req, res) => {
   try {
-    const { exchange, apiKey, apiSecret, extraData } = req.body;
+    const { exchange, apiKey, apiSecret, extraData, permissionScope, canTrade, lastVerifiedScope, riskLevel } = req.body;
+    if (canTrade) {
+      if (!hasRecentReauthAt(req.auth?.user?.sessionReauthenticatedAt, SENSITIVE_REAUTH_TTL_MS)) {
+        return res.status(428).json({ error: "Recent account confirmation required for trading-capable credentials.", code: "SENSITIVE_REAUTH_REQUIRED" });
+      }
+    }
     // Encrypt sensitive data before storing (#EncryptionAtRest)
     const payload = {
       exchange,
-      apiKey: encryptWorkspaceData(apiKey),
-      apiSecret: encryptWorkspaceData(apiSecret),
-      extraData: extraData ? encryptWorkspaceData(JSON.stringify(extraData)) : null
+      apiKey: workspaceSecretProvider.encryptSecret(apiKey),
+      apiSecret: workspaceSecretProvider.encryptSecret(apiSecret),
+      extraData: extraData ? workspaceSecretProvider.encryptSecret(JSON.stringify(extraData)) : null,
+      permissionScope,
+      canTrade,
+      lastVerifiedScope,
+      riskLevel
     };
-    const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload);
+    const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload, req.workspace.workspace.id);
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "account_added",
+      entityType: "exchange_key",
+      entityId: key.id,
+      details: {
+        exchange: key.exchange,
+        venueType: extraData?.venueType || null,
+        username: extraData?.username || null,
+        permissionScope: key.permissionScope,
+        canTrade: !!key.canTrade,
+        riskLevel: key.riskLevel
+      }
+    });
+    await logSecurityEvent(req, {
+      level: key.canTrade ? "warning" : "info",
+      message: key.canTrade ? "Trading-capable exchange credential added." : "Exchange credential added.",
+      eventType: "exchange_key_added",
+      workspaceId: req.workspace.workspace.id,
+      context: {
+        exchange: key.exchange,
+        permissionScope: key.permissionScope,
+        canTrade: !!key.canTrade,
+        riskLevel: key.riskLevel
+      }
+    });
     res.json({
       id: key.id,
       exchange: key.exchange,
       apiKey: maskApiKey(key.apiKey),
-      extraData: extraData // Send back the original unencrypted extraData for immediate UI update
+      permissionScope: key.permissionScope || "unknown",
+      canTrade: !!key.canTrade,
+      lastVerifiedScope: key.lastVerifiedScope || "unknown",
+      riskLevel: key.riskLevel || "standard",
+      extraData: extraData,
+      createdAt: key.createdAt || null,
+      lastSyncAt: key.lastSyncAt || null,
+      lastSyncStatus: key.lastSyncStatus || "idle",
+      lastSyncMeta: key.lastSyncMeta || {}
     });
   } catch (err) {
     handleServerError(res, "Failed to add exchange key", err);
   }
 });
 
-app.delete("/api/db/exchange-keys/:id", requireSignedIn, writeLimiter, async (req, res) => {
+app.delete("/api/db/exchange-keys/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    await userWorkspace.exchangeKeys.remove(req.auth.userId, parseInt(id));
+    await userWorkspace.exchangeKeys.remove(req.auth.userId, parseInt(id), req.workspace.workspace.id);
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "account_removed",
+      entityType: "exchange_key",
+      entityId: id
+    });
+    await logSecurityEvent(req, {
+      level: "warning",
+      message: "Exchange credential removed.",
+      eventType: "exchange_key_removed",
+      workspaceId: req.workspace.workspace.id,
+      context: { keyId: Number(id) }
+    });
     res.json({ success: true });
   } catch (err) {
     handleServerError(res, "Failed to remove exchange key", err);
@@ -2676,19 +3399,19 @@ app.delete("/api/db/exchange-keys/:id", requireSignedIn, writeLimiter, async (re
 });
 
 // Exchange Sync Trigger
-app.post("/api/db/exchange-sync/:id", requireSignedIn, requirePlan("pro"), writeLimiter, async (req, res) => {
+app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requirePlan("pro"), writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id));
+    const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id), req.workspace.workspace.id);
     if (!keyRecord) return res.status(404).json({ error: "Exchange key not found" });
 
     // Decrypt credentials for sync
-    const apiKey = decryptWorkspaceData(keyRecord.apiKey);
-    const apiSecret = decryptWorkspaceData(keyRecord.apiSecret);
-    const extraDataStr = decryptWorkspaceData(keyRecord.extraData);
+    const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.apiKey);
+    const apiSecret = workspaceSecretProvider.decryptSecret(keyRecord.apiSecret);
+    const extraDataStr = workspaceSecretProvider.decryptSecret(keyRecord.extraData);
     const extraData = extraDataStr ? JSON.parse(extraDataStr) : {};
     const syncContext = {
-      knownSymbols: await userWorkspace.tradeFills.getKnownSymbols(req.auth.userId, keyRecord.exchange)
+      knownSymbols: await userWorkspace.tradeFills.getKnownSymbols(req.auth.userId, keyRecord.exchange, req.workspace.workspace.id)
     };
 
     let result;
@@ -2703,15 +3426,37 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, requirePlan("pro"), write
     }
 
     if (result) {
-      await userWorkspace.portfolio.sync(req.auth.userId, keyRecord.exchange, result.holdings);
+      await userWorkspace.portfolio.sync(req.auth.userId, keyRecord.exchange, result.holdings, req.workspace.workspace.id);
       if (Array.isArray(result.tradeFills) && result.tradeFills.length) {
-        await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills);
+        await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills, req.workspace.workspace.id);
       }
-      await userWorkspace.trades.sync(req.auth.userId, result.trades);
+      await userWorkspace.trades.sync(req.auth.userId, result.trades, req.workspace.workspace.id);
       if (result.currency && result.cashBalance != null) {
-        await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance);
+        await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance, req.workspace.workspace.id);
       }
       invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+      await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
+        status: "success",
+        syncedAt: new Date().toISOString(),
+        meta: {
+          holdingsCount: result?.holdings?.length || 0,
+          tradesCount: result?.trades?.length || 0,
+          tradeFillCount: result?.tradeFills?.length || 0,
+          currency: result?.currency || null
+        }
+      });
+      await workspaces.recordActivity({
+        workspaceId: req.workspace.workspace.id,
+        actorUserId: req.auth.userId,
+        eventType: "account_synced",
+        entityType: "exchange_key",
+        entityId: id,
+        details: {
+          exchange: keyRecord.exchange,
+          holdingsCount: result?.holdings?.length || 0,
+          tradesCount: result?.trades?.length || 0
+        }
+      });
     }
 
     res.json({
@@ -2723,6 +3468,31 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, requirePlan("pro"), write
       currency: result?.currency
     });
   } catch (err) {
+    if (req.workspace?.workspace?.id && req.params?.id) {
+      try {
+        await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(req.params.id), {
+          status: "error",
+          syncedAt: new Date().toISOString(),
+          meta: { error: err?.message || "Exchange sync failed" }
+        });
+      } catch {
+        // no-op
+      }
+    }
+    const burst = trackSecurityAnomaly(`exchange-sync-failure:${req.workspace?.workspace?.id || "unknown"}`, 10 * 60 * 1000);
+    if (burst >= 3) {
+      await logSecurityEvent(req, {
+        level: "warning",
+        message: "Repeated exchange sync failures detected.",
+        eventType: "exchange_sync_failure_burst",
+        workspaceId: req.workspace?.workspace?.id || null,
+        context: {
+          count: burst,
+          keyId: Number(req.params?.id || 0),
+          error: err?.message || "Exchange sync failed"
+        }
+      }).catch(() => {});
+    }
     handleServerError(res, "Exchange sync failed", err);
   }
 });
@@ -2741,12 +3511,40 @@ async function issueSessionForUser(userId, req, { persistent = true } = {}) {
   return { token: rawToken, expiresAt, persistent };
 }
 
-app.get("/api/auth/me", async (req, res) => {
+app.get("/api/auth/me", attachActiveWorkspace, async (req, res) => {
   if (!req.auth || req.auth.isGuest) {
     return res.json({ authenticated: false, user: null });
   }
   const user = await userAuth.findUserById(req.auth.userId);
-  return res.json({ authenticated: true, user: sanitizeAuthUser(user) });
+  return res.json({
+    authenticated: true,
+    user: sanitizeAuthUser(user),
+    workspace: sanitizeWorkspace(req.workspace?.workspace, req.workspace?.membership)
+  });
+});
+
+app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || "");
+    if (!currentPassword) {
+      return res.status(400).json({ error: "Current password is required." });
+    }
+    const currentUser = await userAuth.findUserById(req.auth.userId);
+    if (!currentUser || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+    const updatedSession = await userAuth.markSessionReauthenticated({
+      sessionId: req.auth?.user?.sessionId,
+      admin: false
+    });
+    await logSecurityEvent(req, {
+      message: "Sensitive account re-authentication completed.",
+      eventType: "account_reauth_completed"
+    });
+    return res.json({ success: true, reauthenticatedAt: updatedSession?.sessionReauthenticatedAt || new Date().toISOString() });
+  } catch (error) {
+    return handleServerError(res, "Re-authentication failed", error);
+  }
 });
 
 app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(emailRequestSchema), async (req, res) => {
@@ -2844,11 +3642,31 @@ const adminRateLimit = rateLimit({
   message: { error: "Too many administrative requests. Please try again later." }
 });
 
-function buildAdminRecoveryLink(token) {
-  return `${String(expectedOrigin || "").replace(/\/$/, "")}/reset-password?token=${encodeURIComponent(String(token || ""))}`;
-}
-
 app.use("/api/admin/*", adminRateLimit);
+
+app.post("/api/admin/reauth/verify", requireSignedIn, requireAdmin, authLimiter, async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || "");
+    if (!currentPassword) {
+      return res.status(400).json({ error: "Current password is required." });
+    }
+    const currentUser = await userAuth.findUserById(req.auth.userId);
+    if (!currentUser || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+    const updatedSession = await userAuth.markSessionReauthenticated({
+      sessionId: req.auth?.user?.sessionId,
+      admin: true
+    });
+    await logSecurityEvent(req, {
+      message: "Admin step-up authentication completed.",
+      eventType: "admin_reauth_completed"
+    });
+    return res.json({ success: true, reauthenticatedAt: updatedSession?.adminReauthenticatedAt || new Date().toISOString() });
+  } catch (error) {
+    return handleServerError(res, "Admin re-authentication failed", error);
+  }
+});
 
 app.get("/api/admin/users", requireAdmin, async (req, res) => {
   try {
@@ -2924,7 +3742,7 @@ app.get("/api/admin/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => {
+app.post("/api/admin/users", requireSignedIn, requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const displayName = String(req.body?.name || "").trim();
@@ -2961,7 +3779,7 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => 
     }
 
     const token = await admin.createPasswordResetToken(createdUser.id);
-    const recoveryLink = buildAdminRecoveryLink(token);
+    const recoveryEmailSent = await sendPasswordResetEmail(email, token);
 
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
@@ -2978,7 +3796,7 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, async (req, res) => 
       ipAddress: resolveClientIp(req)
     });
 
-    return res.status(201).json({ success: true, user: createdUser, recoveryLink });
+    return res.status(201).json({ success: true, user: createdUser, recoveryEmailSent });
   } catch (error) {
     return handleServerError(res, "Failed to create user", error);
   }
@@ -3149,7 +3967,7 @@ app.patch("/api/admin/users/:id/plan", requireAdmin, async (req, res) => {
   }
 });
 
-app.patch("/api/admin/users/:id/role", requireAdmin, async (req, res) => {
+app.patch("/api/admin/users/:id/role", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const reason = String(req.body?.reason || "Updated from admin dashboard").trim();
@@ -3178,12 +3996,16 @@ app.patch("/api/admin/users/:id/role", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, async (req, res) => {
+app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const reason = String(req.body?.reason || "Recovery link generated from admin dashboard").trim();
+    const targetUser = await admin.getUserSummary(id);
+    if (!targetUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
     const token = await admin.createPasswordResetToken(id);
-    const recoveryLink = buildAdminRecoveryLink(token);
+    const recoveryEmailSent = await sendPasswordResetEmail(targetUser.email, token);
 
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
@@ -3192,18 +4014,24 @@ app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, async (r
       details: {
         reason,
         requestId: req.requestId,
-        note: "Recovery link generated via dashboard"
+        note: recoveryEmailSent
+          ? "Recovery email sent via dashboard"
+          : "Recovery token created but email delivery failed"
       },
       ipAddress: resolveClientIp(req)
     });
 
-    return res.json({ success: true, recoveryLink });
+    if (!recoveryEmailSent) {
+      return res.status(503).json({ success: false, error: "Recovery email could not be sent." });
+    }
+
+    return res.json({ success: true, recoveryEmailSent: true });
   } catch (error) {
     return handleServerError(res, "Failed to generate recovery link", error);
   }
 });
 
-app.post("/api/admin/users/:id/suspend", requireAdmin, async (req, res) => {
+app.post("/api/admin/users/:id/suspend", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const { isSuspended } = req.body;
@@ -3230,7 +4058,7 @@ app.post("/api/admin/users/:id/suspend", requireAdmin, async (req, res) => {
   }
 });
 
-app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
+app.delete("/api/admin/users/:id", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const reason = String(req.body?.reason || "Deleted from admin dashboard").trim();
@@ -3258,7 +4086,7 @@ app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/admin/users/:id/sessions/revoke", requireAdmin, async (req, res) => {
+app.post("/api/admin/users/:id/sessions/revoke", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const reason = String(req.body?.reason || "Revoked by admin dashboard").trim();
@@ -3283,7 +4111,7 @@ app.post("/api/admin/users/:id/sessions/revoke", requireAdmin, async (req, res) 
   }
 });
 
-app.post("/api/admin/sessions/revoke-all", requireAdmin, async (req, res) => {
+app.post("/api/admin/sessions/revoke-all", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const reason = String(req.body?.reason || "Global session revocation from admin dashboard").trim();
     const excludeCurrentAdmin = Boolean(req.body?.excludeCurrentAdmin);
@@ -3309,7 +4137,7 @@ app.post("/api/admin/sessions/revoke-all", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/admin/users/bulk", requireAdmin, async (req, res) => {
+app.post("/api/admin/users/bulk", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const action = String(req.body?.action || "").trim().toLowerCase();
     const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
@@ -3530,14 +4358,29 @@ app.post("/api/account/plan", requireSignedIn, validate(planUpdateSchema), async
     const plan = normalizePlanInput(req.body?.plan);
     const billingCycle = normalizeBillingCycleInput(req.body?.billingCycle || "monthly");
     if (!plan) {
-      return res.status(400).json({ error: "Plan must be one of: starter, pro, desk." });
+      return apiError(res, 400, {
+        error: "Plan must be one of: starter, pro, desk.",
+        message: "Choose a valid subscription plan before retrying.",
+        code: "INVALID_PLAN",
+        retryable: false
+      });
     }
     if (!billingCycle) {
-      return res.status(400).json({ error: "Billing cycle must be one of: monthly, yearly." });
+      return apiError(res, 400, {
+        error: "Billing cycle must be one of: monthly, yearly.",
+        message: "Choose a valid billing cycle before retrying.",
+        code: "INVALID_BILLING_CYCLE",
+        retryable: false
+      });
     }
     const updatedUser = await userAuth.updateCurrentPlan(req.auth.userId, plan, billingCycle);
     if (!updatedUser) {
-      return res.status(404).json({ error: "User not found." });
+      return apiError(res, 404, {
+        error: "User not found.",
+        message: "We could not find an account to update for this session.",
+        code: "USER_NOT_FOUND",
+        retryable: false
+      });
     }
     return res.json({ success: true, user: sanitizeAuthUser(updatedUser) });
   } catch (error) {
@@ -3550,12 +4393,30 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
     const displayName = String(req.body?.displayName || "").trim() || null;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email." });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return apiError(res, 400, {
+        error: "Enter a valid email.",
+        message: "Use a valid email address to create your account.",
+        code: "INVALID_EMAIL",
+        retryable: false
+      });
+    }
     if (!isStrongPassword(password)) {
-      return res.status(400).json({ error: "Password must be 10+ chars with letters, numbers, and symbols." });
+      return apiError(res, 400, {
+        error: "Password must be 10+ chars with letters, numbers, and symbols.",
+        message: "Strengthen the password and try again.",
+        code: "WEAK_PASSWORD",
+        retryable: false
+      });
     }
     const existing = await userAuth.findUserByEmail(email);
-    if (existing) return res.status(409).json({ error: "An account with this email already exists." });
+    if (existing) {
+      return apiError(res, 409, {
+        error: "An account with this email already exists.",
+        message: "Sign in instead, or use a different email address.",
+        code: "EMAIL_ALREADY_EXISTS"
+      });
+    }
 
     const { hash } = derivePasswordHash(password);
     const created = await userAuth.createUser({
@@ -3589,15 +4450,32 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
-    if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
+    if (!email || !password) {
+      return apiError(res, 400, {
+        error: "Email and password are required.",
+        message: "Enter both email and password to continue.",
+        code: "MISSING_CREDENTIALS",
+        retryable: false
+      });
+    }
 
     const user = await userAuth.findUserByEmail(email);
-    if (!user) return res.status(401).json({ error: "Invalid email or password." });
+    if (!user) {
+      return apiError(res, 401, {
+        error: "Invalid email or password.",
+        message: "Check your credentials and try again.",
+        code: "INVALID_CREDENTIALS",
+        retryable: false
+      });
+    }
 
     // Check account lockout (#8)
     if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
-      return res.status(423).json({ 
-        error: "Account is temporarily locked due to multiple failed attempts. Please try again later." 
+      return apiError(res, 423, {
+        error: "Account is temporarily locked due to multiple failed attempts. Please try again later.",
+        message: "Too many failed attempts have temporarily locked this account.",
+        code: "ACCOUNT_LOCKED",
+        retryable: true
       });
     }
 
@@ -3608,7 +4486,12 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
         const lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
         await userAuth.lockAccountUntil(user.id, lockedUntil);
       }
-      return res.status(401).json({ error: "Invalid email or password." });
+      return apiError(res, 401, {
+        error: "Invalid email or password.",
+        message: "Check your credentials and try again.",
+        code: "INVALID_CREDENTIALS",
+        retryable: false
+      });
     }
 
     // Success - reset lockout
@@ -3625,12 +4508,20 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
 
       if (user.twoFactorMethod === "authenticator") {
         if (!user.twoFactorSecretHash) {
-           return res.status(500).json({ error: "MFA setup is incomplete." });
+           return apiError(res, 500, {
+             error: "Internal server error",
+             message: "Multi-factor authentication is not fully configured for this account.",
+             code: "MFA_SETUP_INCOMPLETE"
+           });
         }
         // Decrypt the TOTP secret before verification (#2)
         const decryptedSecret = decryptTotpSecret(user.twoFactorSecretHash);
         if (!decryptedSecret) {
-          return res.status(500).json({ error: "Could not decrypt MFA secret." });
+          return apiError(res, 500, {
+            error: "Internal server error",
+            message: "We could not verify the MFA secret for this account.",
+            code: "MFA_SECRET_UNAVAILABLE"
+          });
         }
         mfaValid = authenticator.verify({ token: verificationCode, secret: decryptedSecret });
       } else {
@@ -3657,7 +4548,12 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
       }
 
       if (!mfaValid) {
-        return res.status(401).json({ error: "Invalid verification code." });
+        return apiError(res, 401, {
+          error: "Invalid verification code.",
+          message: "Enter a valid verification or backup code.",
+          code: "INVALID_MFA_CODE",
+          retryable: false
+        });
       }
     }
     const rememberMe = req.body?.rememberMe !== false;
@@ -3688,7 +4584,14 @@ app.post("/api/auth/signout", async (req, res) => {
 app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(forgotPasswordRequestSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
-    if (!email) return res.status(400).json({ error: "Email is required." });
+    if (!email) {
+      return apiError(res, 400, {
+        error: "Email is required.",
+        message: "Enter the account email to request a password reset.",
+        code: "EMAIL_REQUIRED",
+        retryable: false
+      });
+    }
 
     const user = await userAuth.findUserByEmail(email);
     let devResetToken = null;
@@ -3720,12 +4623,31 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(for
   try {
     const token = String(req.body?.token || "").trim();
     const newPassword = String(req.body?.newPassword || "");
-    if (!token) return res.status(400).json({ error: "Reset token is required." });
+    if (!token) {
+      return apiError(res, 400, {
+        error: "Reset token is required.",
+        message: "Paste the reset token or open the reset link again.",
+        code: "RESET_TOKEN_REQUIRED",
+        retryable: false
+      });
+    }
     if (!isStrongPassword(newPassword)) {
-      return res.status(400).json({ error: "Password must be 10+ chars with letters, numbers, and symbols." });
+      return apiError(res, 400, {
+        error: "Password must be 10+ chars with letters, numbers, and symbols.",
+        message: "Strengthen the new password and retry.",
+        code: "WEAK_PASSWORD",
+        retryable: false
+      });
     }
     const consumed = await userAuth.consumePasswordResetToken(hashToken(token));
-    if (!consumed) return res.status(400).json({ error: "Reset token is invalid or expired." });
+    if (!consumed) {
+      return apiError(res, 400, {
+        error: "Reset token is invalid or expired.",
+        message: "Request a fresh reset link and try again.",
+        code: "RESET_TOKEN_INVALID",
+        retryable: false
+      });
+    }
 
     const { hash } = derivePasswordHash(newPassword);
     await userAuth.updatePassword(consumed.userId, hash);
@@ -3746,30 +4668,73 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(for
 app.post("/api/auth/verify-email", async (req, res) => {
   try {
     const { code } = req.body;
-    if (!code) return res.status(400).json({ error: "Verification code is required" });
+    if (!code) {
+      return apiError(res, 400, {
+        error: "Verification code is required",
+        message: "Enter the verification code that was sent to your email.",
+        code: "VERIFICATION_CODE_REQUIRED",
+        retryable: false
+      });
+    }
 
     const session = await resolveSessionFromRequest(req);
-    if (!session) return res.status(401).json({ error: "Session expired" });
+    if (!session) {
+      return apiError(res, 401, {
+        error: "Session expired",
+        message: "Sign in again before verifying your email.",
+        code: "SESSION_EXPIRED",
+        retryable: false
+      });
+    }
 
     const user = await userAuth.findUserById(session.userId);
-    if (!user) return res.status(404).json({ error: "User not found" });
-    if (user.emailVerified) return res.status(400).json({ error: "Email already verified" });
+    if (!user) {
+      return apiError(res, 404, {
+        error: "User not found",
+        message: "We could not find an account for this verification session.",
+        code: "USER_NOT_FOUND",
+        retryable: false
+      });
+    }
+    if (user.emailVerified) {
+      return apiError(res, 400, {
+        error: "Email already verified",
+        message: "This email is already verified.",
+        code: "EMAIL_ALREADY_VERIFIED",
+        retryable: false
+      });
+    }
 
     if (!user.emailVerificationCodeHash) {
-      return res.status(400).json({ error: "No verification code requested" });
+      return apiError(res, 400, {
+        error: "No verification code requested",
+        message: "Request a new verification code before retrying.",
+        code: "VERIFICATION_NOT_REQUESTED",
+        retryable: false
+      });
     }
 
     const [salt, storedHash] = user.emailVerificationCodeHash.split(":");
     const { hash: inputHash } = derivePasswordHash(code, salt);
     
     if (inputHash !== user.emailVerificationCodeHash) {
-      return res.status(400).json({ error: "Invalid verification code" });
+      return apiError(res, 400, {
+        error: "Invalid verification code",
+        message: "Check the code and try again.",
+        code: "INVALID_VERIFICATION_CODE",
+        retryable: false
+      });
     }
 
     // Check expiry (e.g. 15 minutes)
     const requestedAt = new Date(user.emailVerificationRequestedAt).getTime();
     if (Date.now() - requestedAt > 15 * 60 * 1000) {
-      return res.status(400).json({ error: "Verification code expired. Please request a new one." });
+      return apiError(res, 400, {
+        error: "Verification code expired. Please request a new one.",
+        message: "Request a fresh verification code and try again.",
+        code: "VERIFICATION_CODE_EXPIRED",
+        retryable: false
+      });
     }
 
     await userAuth.verifyUserEmail(user.id);
@@ -3787,17 +4752,42 @@ app.post("/api/auth/verify-email", async (req, res) => {
 app.post("/api/auth/resend-verification", async (req, res) => {
   try {
     const session = await resolveSessionFromRequest(req);
-    if (!session) return res.status(401).json({ error: "Session expired" });
+    if (!session) {
+      return apiError(res, 401, {
+        error: "Session expired",
+        message: "Sign in again before requesting another verification code.",
+        code: "SESSION_EXPIRED",
+        retryable: false
+      });
+    }
 
     const user = await userAuth.findUserById(session.userId);
-    if (!user) return res.status(404).json({ error: "User not found" });
-    if (user.emailVerified) return res.status(400).json({ error: "Email already verified" });
+    if (!user) {
+      return apiError(res, 404, {
+        error: "User not found",
+        message: "We could not find an account for this verification request.",
+        code: "USER_NOT_FOUND",
+        retryable: false
+      });
+    }
+    if (user.emailVerified) {
+      return apiError(res, 400, {
+        error: "Email already verified",
+        message: "This email is already verified.",
+        code: "EMAIL_ALREADY_VERIFIED",
+        retryable: false
+      });
+    }
 
     // Rate limit resends (e.g. 1 minute)
     if (user.emailVerificationRequestedAt) {
       const requestedAt = new Date(user.emailVerificationRequestedAt).getTime();
       if (Date.now() - requestedAt < 60 * 1000) {
-        return res.status(429).json({ error: "Please wait before requesting another code" });
+        return apiError(res, 429, {
+          error: "Please wait before requesting another code",
+          message: "A verification code was sent recently. Try again in a moment.",
+          code: "VERIFICATION_RESEND_RATE_LIMIT"
+        });
       }
     }
 
@@ -3841,7 +4831,12 @@ app.post("/api/auth/passkeys/authenticate/verify", authLimiter, async (req, res)
     
     if (!challengeEntry || challengeEntry.expiresAt < Date.now()) {
       if (challengeEntry) webAuthnChallenges.delete(`auth_${challengeId}`);
-      return res.status(400).json({ error: "Authentication session expired or invalid." });
+      return apiError(res, 400, {
+        error: "Authentication session expired or invalid.",
+        message: "Start passkey sign-in again and retry.",
+        code: "PASSKEY_AUTH_SESSION_INVALID",
+        retryable: false
+      });
     }
     const expectedChallenge = challengeEntry.challenge;
     
@@ -3855,14 +4850,24 @@ app.post("/api/auth/passkeys/authenticate/verify", authLimiter, async (req, res)
     `, [JSON.stringify([{ credentialID }])]);
     
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: "Passkey not recognized." });
+      return apiError(res, 401, {
+        error: "Passkey not recognized.",
+        message: "Use a registered passkey or sign in with email instead.",
+        code: "PASSKEY_NOT_RECOGNIZED",
+        retryable: false
+      });
     }
     
     const user = await userAuth.findUserById(result.rows[0].id);
     const passkey = user.passkeys.find(p => p.credentialID === credentialID);
     
     if (!passkey) {
-      return res.status(401).json({ error: "Passkey not found on user." });
+      return apiError(res, 401, {
+        error: "Passkey not found on user.",
+        message: "This passkey is no longer registered on your account.",
+        code: "PASSKEY_NOT_FOUND",
+        retryable: false
+      });
     }
     
     const verification = await verifyAuthenticationResponse({
@@ -3896,7 +4901,12 @@ app.post("/api/auth/passkeys/authenticate/verify", authLimiter, async (req, res)
       return res.json({ success: true, user: sanitizeAuthUser(user), expiresAt: session.expiresAt });
     }
     
-    return res.status(401).json({ error: "Passkey verification failed." });
+    return apiError(res, 401, {
+      error: "Passkey verification failed.",
+      message: "We could not verify this passkey response. Try again.",
+      code: "PASSKEY_AUTH_FAILED",
+      retryable: false
+    });
   } catch (error) {
     return handleServerError(res, "Verify Passkey Auth failed", error);
   }
@@ -4032,7 +5042,12 @@ app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, asy
     
     if (!challengeEntry || challengeEntry.expiresAt < Date.now()) {
       if (challengeEntry) webAuthnChallenges.delete(`reg_${user.id}`);
-      return res.status(400).json({ error: "Registration session expired or invalid." });
+      return apiError(res, 400, {
+        error: "Registration session expired or invalid.",
+        message: "Start passkey registration again and retry.",
+        code: "PASSKEY_REGISTRATION_SESSION_INVALID",
+        retryable: false
+      });
     }
     const expectedChallenge = challengeEntry.challenge;
     
@@ -4079,7 +5094,12 @@ app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, asy
       });
     }
     
-    return res.status(400).json({ error: "Passkey verification failed." });
+    return apiError(res, 400, {
+      error: "Passkey verification failed.",
+      message: "We could not complete passkey registration. Try again.",
+      code: "PASSKEY_REGISTRATION_FAILED",
+      retryable: false
+    });
   } catch (error) {
     return handleServerError(res, "Verify Passkey failed", error);
   }
@@ -5654,7 +6674,12 @@ app.get("/api/prices", validate(pricesQuerySchema, "query"), async (req, res) =>
   )].slice(0, 200);
 
   if (!symbols.length) {
-    return res.status(400).json({ error: "symbols query is required" });
+    return apiError(res, 400, {
+      error: "symbols query is required",
+      message: "Provide at least one symbol to load pricing data.",
+      code: "PRICE_SYMBOLS_REQUIRED",
+      retryable: false
+    });
   }
   const snapshotParams = { type, symbols: symbols.slice().sort() };
   const cached = await readServiceSnapshot("prices", snapshotParams);
@@ -7970,19 +8995,19 @@ app.get("/api/crypto-market", async (req, res) => {
 // ---------------------------------------------------------------------------
 // Portfolio Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/portfolio", requireSignedIn, async (req, res) => {
+app.get("/api/db/portfolio", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const holdings = await userWorkspace.portfolio.getAll(req.auth.userId);
+    const holdings = await userWorkspace.portfolio.getAll(req.auth.userId, req.workspace?.workspace?.id || null);
     res.json({ holdings });
   } catch (error) {
     handleServerError(res, "Portfolio read failed", error);
   }
 });
 
-app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validate(executeTradeSchema), async (req, res) => {
+app.post("/api/db/portfolio", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(executeTradeSchema), async (req, res) => {
   try {
     const holding = req.body;
-    const result = await userWorkspace.portfolio.add(req.auth.userId, holding);
+    const result = await userWorkspace.portfolio.add(req.auth.userId, holding, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(result);
   } catch (error) {
@@ -7990,12 +9015,12 @@ app.post("/api/db/portfolio", requireSignedIn, writeLimiter, validate(executeTra
   }
 });
 
-app.put("/api/db/portfolio/:id", requireSignedIn, writeLimiter, validate(portfolioUpdateSchema), async (req, res) => {
+app.put("/api/db/portfolio/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(portfolioUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: "Invalid id" });
     const holding = req.body;
-    const result = await userWorkspace.portfolio.update(req.auth.userId, id, holding);
+    const result = await userWorkspace.portfolio.update(req.auth.userId, id, holding, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json(result);
   } catch (error) {
@@ -8003,10 +9028,10 @@ app.put("/api/db/portfolio/:id", requireSignedIn, writeLimiter, validate(portfol
   }
 });
 
-app.delete("/api/db/portfolio/:id", requireSignedIn, writeLimiter, async (req, res) => {
+app.delete("/api/db/portfolio/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await userWorkspace.portfolio.delete(req.auth.userId, id);
+    const result = await userWorkspace.portfolio.delete(req.auth.userId, id, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json(result);
   } catch (error) {
@@ -8015,7 +9040,7 @@ app.delete("/api/db/portfolio/:id", requireSignedIn, writeLimiter, async (req, r
 });
 
 // Get portfolio items by symbol and marketType
-app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, async (req, res) => {
+app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50).toUpperCase();
     if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -8023,7 +9048,7 @@ app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, async (req, res) =>
     if (!marketType) {
       return res.status(400).json({ error: "marketType query parameter required" });
     }
-    const holdings = await userWorkspace.portfolio.findBySymbol(req.auth.userId, symbol, marketType);
+    const holdings = await userWorkspace.portfolio.findBySymbol(req.auth.userId, symbol, marketType, req.workspace?.workspace?.id || null);
     res.json({ holdings });
   } catch (error) {
     handleServerError(res, "Portfolio symbol lookup failed", error);
@@ -8033,25 +9058,25 @@ app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, async (req, res) =>
 // ---------------------------------------------------------------------------
 // Trade execution endpoints (Journal persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/trades", requireSignedIn, async (req, res) => {
+app.get("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const trades = await userWorkspace.trades.getAll(req.auth.userId, req.query.limit);
+    const trades = await userWorkspace.trades.getAll(req.auth.userId, req.query.limit, req.workspace?.workspace?.id || null);
     res.json({ trades });
   } catch (error) {
     handleServerError(res, "Trades read failed", error);
   }
 });
 
-app.get("/api/db/trade-fees/summary", requireSignedIn, async (req, res) => {
+app.get("/api/db/trade-fees/summary", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const summary = await userWorkspace.tradeFills.getSummary(req.auth.userId);
+    const summary = await userWorkspace.tradeFills.getSummary(req.auth.userId, req.workspace?.workspace?.id || null);
     res.json({ summary });
   } catch (error) {
     handleServerError(res, "Trade fee summary failed", error);
   }
 });
 
-app.post("/api/db/trades", requireSignedIn, writeLimiter, validate(tradeLogSchema), async (req, res) => {
+app.post("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(tradeLogSchema), async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.asset) {
@@ -8063,7 +9088,7 @@ app.post("/api/db/trades", requireSignedIn, writeLimiter, validate(tradeLogSchem
     if (!Number.isFinite(Number(payload.price)) || Number(payload.price) < 0) {
       return res.status(400).json({ error: "price must be a non-negative number" });
     }
-    const saved = await userWorkspace.trades.add(req.auth.userId, payload);
+    const saved = await userWorkspace.trades.add(req.auth.userId, payload, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(saved);
   } catch (error) {
@@ -8074,19 +9099,19 @@ app.post("/api/db/trades", requireSignedIn, writeLimiter, validate(tradeLogSchem
 // ---------------------------------------------------------------------------
 // Watchlist Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/watchlist", requireSignedIn, async (req, res) => {
+app.get("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const assets = await userWorkspace.watchlist.getAll(req.auth.userId);
+    const assets = await userWorkspace.watchlist.getAll(req.auth.userId, req.workspace?.workspace?.id || null);
     res.json({ assets });
   } catch (error) {
     handleServerError(res, "Watchlist read failed", error);
   }
 });
 
-app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validate(watchlistAssetSchema), async (req, res) => {
+app.post("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(watchlistAssetSchema), async (req, res) => {
   try {
     const asset = req.body;
-    const result = await userWorkspace.watchlist.add(req.auth.userId, asset);
+    const result = await userWorkspace.watchlist.add(req.auth.userId, asset, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(result);
   } catch (error) {
@@ -8094,28 +9119,43 @@ app.post("/api/db/watchlist", requireSignedIn, writeLimiter, validate(watchlistA
   }
 });
 
-app.post("/api/db/watchlist/bulk", requireSignedIn, writeLimiter, validate(watchlistBulkSchema), async (req, res) => {
+app.post("/api/db/watchlist/bulk", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(watchlistBulkSchema), async (req, res) => {
   try {
     const rawAssets = Array.isArray(req.body?.assets) ? req.body.assets : [];
     if (!rawAssets.length) {
-      return res.status(400).json({ error: "assets array required" });
+      return apiError(res, 400, {
+        error: "assets array required",
+        message: "Add at least one watchlist asset before importing.",
+        code: "WATCHLIST_ASSETS_REQUIRED",
+        retryable: false
+      });
     }
     if (rawAssets.length > 1000) {
-      return res.status(400).json({ error: "Too many assets" });
+      return apiError(res, 400, {
+        error: "Too many assets",
+        message: "Split large imports into smaller batches and retry.",
+        code: "WATCHLIST_IMPORT_TOO_LARGE",
+        retryable: false
+      });
     }
 
     const sanitizedAssets = [];
     for (const rawAsset of rawAssets) {
       const { asset, error } = sanitizeWatchlistAssetInput(rawAsset);
       if (error) {
-        return res.status(400).json({ error });
+        return apiError(res, 400, {
+          error,
+          message: error,
+          code: "WATCHLIST_ASSET_INVALID",
+          retryable: false
+        });
       }
       sanitizedAssets.push(asset);
     }
 
     const savedAssets = [];
     for (const asset of sanitizedAssets) {
-      savedAssets.push(await userWorkspace.watchlist.add(req.auth.userId, asset));
+      savedAssets.push(await userWorkspace.watchlist.add(req.auth.userId, asset, req.workspace?.workspace?.id || null));
     }
 
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
@@ -8125,15 +9165,27 @@ app.post("/api/db/watchlist/bulk", requireSignedIn, writeLimiter, validate(watch
   }
 });
 
-app.delete("/api/db/watchlist/:symbol", requireSignedIn, writeLimiter, async (req, res) => {
+app.delete("/api/db/watchlist/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50);
-    if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+    if (!symbol) {
+      return apiError(res, 400, {
+        error: "Invalid symbol",
+        message: "Use a valid watchlist symbol before retrying.",
+        code: "WATCHLIST_SYMBOL_INVALID",
+        retryable: false
+      });
+    }
     const { marketType, category = null, theme = null } = req.query;
     if (!marketType) {
-      return res.status(400).json({ error: "marketType query parameter required" });
+      return apiError(res, 400, {
+        error: "marketType query parameter required",
+        message: "Specify the market type for the watchlist item you want to remove.",
+        code: "WATCHLIST_MARKET_TYPE_REQUIRED",
+        retryable: false
+      });
     }
-    const result = await userWorkspace.watchlist.delete(req.auth.userId, symbol, marketType, category, theme);
+    const result = await userWorkspace.watchlist.delete(req.auth.userId, symbol, marketType, category, theme, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.json(result);
   } catch (error) {
@@ -8142,14 +9194,19 @@ app.delete("/api/db/watchlist/:symbol", requireSignedIn, writeLimiter, async (re
 });
 
 // Check if asset is in watchlist
-app.get("/api/db/watchlist/check/:symbol", requireSignedIn, async (req, res) => {
+app.get("/api/db/watchlist/check/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const { symbol } = req.params;
     const { marketType, category = null, theme = null } = req.query;
     if (!marketType) {
-      return res.status(400).json({ error: "marketType query parameter required" });
+      return apiError(res, 400, {
+        error: "marketType query parameter required",
+        message: "Specify the market type for the watchlist item you want to check.",
+        code: "WATCHLIST_MARKET_TYPE_REQUIRED",
+        retryable: false
+      });
     }
-    const exists = await userWorkspace.watchlist.exists(req.auth.userId, symbol, marketType, category, theme);
+    const exists = await userWorkspace.watchlist.exists(req.auth.userId, symbol, marketType, category, theme, req.workspace?.workspace?.id || null);
     res.json({ exists });
   } catch (error) {
     handleServerError(res, "Watchlist exists check failed", error);
@@ -8197,6 +9254,9 @@ app.get('/api/analytics/crypto', async (req, res) => {
     ]);
 
     const perpMetrics = [];
+    if (hlRes.status === "rejected") {
+      console.warn("[HL] Metadata fetch failed:", hlRes.reason?.message || hlRes.reason);
+    }
 
     if (hlRes.status === "fulfilled" && Array.isArray(hlRes.value)) {
       const [meta, contexts] = hlRes.value;
@@ -8216,6 +9276,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
           0
         ) || 0;
 
+        console.log(`[HL] Found ${symbol}: funding=${funding}, oi=${oiCoins * markPx}`);
         perpMetrics.push({
           symbol,
           openInterestUsd: oiCoins * markPx,
@@ -8446,12 +9507,24 @@ app.get('/api/analytics/crypto', async (req, res) => {
 });
 
 app.get('/api/analytics/options', async (req, res) => {
+  let finvizOptions = {};
   try {
     const fetch = await resolveFetch();
+    const finvizQuotes = await fetchFinvizQuotes(OPTIONS_FINVIZ_UNDERLYINGS).catch((error) => {
+      console.warn("[Analytics] Options Finviz enrichment skipped:", error?.message || error);
+      return new Map();
+    });
+    finvizOptions = buildFinvizOptionsRows(finvizQuotes);
 
     const [btcDeribit, ethDeribit] = await Promise.allSettled([
-      fetch("https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option").then(r => r.json()),
-      fetch("https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=ETH&kind=option").then(r => r.json())
+      fetch("https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option").then((r) => {
+        if (!r.ok) throw new Error(`Deribit BTC options failed: ${r.status}`);
+        return r.json();
+      }),
+      fetch("https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=ETH&kind=option").then((r) => {
+        if (!r.ok) throw new Error(`Deribit ETH options failed: ${r.status}`);
+        return r.json();
+      })
     ]);
 
     let totalOIUsd = 0;
@@ -8492,6 +9565,9 @@ app.get('/api/analytics/options', async (req, res) => {
         }
       });
     }
+    if (btcDeribit.status === "rejected") {
+      console.warn("[Analytics] Deribit BTC options skipped:", btcDeribit.reason?.message || btcDeribit.reason);
+    }
 
     // Process Deribit ETH
     if (ethDeribit.status === "fulfilled" && ethDeribit.value?.result) {
@@ -8500,27 +9576,37 @@ app.get('/api/analytics/options', async (req, res) => {
         ethVol += (item.volume_usd || 0);
       });
     }
+    if (ethDeribit.status === "rejected") {
+      console.warn("[Analytics] Deribit ETH options skipped:", ethDeribit.reason?.message || ethDeribit.reason);
+    }
+
+    const hasLiveDeribit = totalOIUsd > 0 || btcVol > 0 || ethVol > 0 || greeks.length > 0 || oiByStrike.length > 0;
+    if (!hasLiveDeribit) {
+      return res.json(buildFallbackOptionsPayload("deribit_options_unavailable", finvizOptions));
+    }
 
     res.json({
       updatedAt: new Date().toISOString(),
+      stale: false,
       totalOptionsOpenInterestUsd: totalOIUsd > 0 ? totalOIUsd : 4500000000,
       optionsVolumeByAsset: [
         { asset: "BTC", exchange: "Deribit", volumeUsd: btcVol > 0 ? btcVol : 1200000000 },
         { asset: "ETH", exchange: "Deribit", volumeUsd: ethVol > 0 ? ethVol : 600000000 }
-      ],
+      ].concat(finvizOptions.optionsVolumeByAsset || []),
       optionsMaxPain: [
         { asset: "BTC", expiry: "Next Friday", maxPain: 65000, exchange: "Deribit" },
         { asset: "ETH", expiry: "Next Friday", maxPain: 3500, exchange: "Deribit" }
-      ],
+      ].concat(finvizOptions.optionsMaxPain || []),
       volumeByExchangeRoute: [
         { exchange: "Deribit", route: "Direct", volume: btcVol + ethVol > 0 ? btcVol + ethVol : 1800000000 },
         { exchange: "Binance", route: "Direct", volume: 450000000 }
-      ],
-      greeks,
-      oiByStrike
+      ].concat(finvizOptions.volumeByExchangeRoute || []),
+      greeks: greeks.concat(finvizOptions.greeks || []),
+      oiByStrike: oiByStrike.concat(finvizOptions.oiByStrike || [])
     });
   } catch (error) {
-    handleServerError(res, "Analytics Options fetch failed", error);
+    console.error("[Analytics] Options fallback served:", error?.message || error);
+    res.json(buildFallbackOptionsPayload(error?.message || "options_fetch_failed", finvizOptions));
   }
 });
 
@@ -8601,30 +9687,183 @@ const COMMODITY_SOURCE_MAP = {
   },
 };
 
+const COMMODITY_FINVIZ_PROXY_MAP = {
+  CL: "USO",
+  NG: "UNG",
+  RB: "UGA",
+  GC: "GLD",
+  SI: "SLV",
+  HG: "CPER",
+  "ALI=F": "DBB",
+  "ZNC=F": "DBB",
+  "LED=F": "DBB",
+  "TIN=F": "DBB",
+  "TIO=F": "PICK",
+  LIT: "LIT",
+  "NI=F": "PICK",
+  REMX: "REMX",
+  ZC: "CORN",
+  ZW: "WEAT",
+  ZS: "SOYB",
+  "ZO=F": "DBA",
+  "ZR=F": "DBA",
+  "ZL=F": "DBA",
+  "ZM=F": "DBA",
+  KC: "JO",
+  CC: "NIB",
+  SB: "CANE",
+  CT: "BAL",
+  "OJ=F": "FUE",
+  "LBR=F": "WOOD",
+  "LE=F": "COW",
+  "GF=F": "COW",
+  "HE=F": "COW",
+  UAN: "MOO",
+};
+
 function getCommodity(symbol) {
   const key = String(symbol || "").toUpperCase();
   return COMMODITY_UNIVERSE.find((row) => row.symbol === key) || COMMODITY_UNIVERSE[0];
 }
 
+function getCommodityFinvizProxy(symbol) {
+  return COMMODITY_FINVIZ_PROXY_MAP[String(symbol || "").toUpperCase()] || null;
+}
+
+function buildFallbackCommodityRows(group = "all", reason = "commodity_provider_fallback") {
+  const selectedGroup = String(group || "all").toLowerCase();
+  return COMMODITY_UNIVERSE
+    .filter((row) => selectedGroup === "all" || row.group === selectedGroup)
+    .map((row) => ({
+      ...row,
+      currency: "USD",
+      proxySymbol: getCommodityFinvizProxy(row.symbol),
+      source: "Fallback commodity universe",
+      stale: true,
+      isFallback: true,
+      stale_reason: reason
+    }));
+}
+
+function buildCommodityFallbackSeries(item, range = "1Y", reason = "commodity_history_fallback") {
+  const periods = { "1M": 30, "3M": 90, "1Y": 252, YTD: 120, MAX: 260 };
+  const count = periods[String(range || "1Y").toUpperCase()] || 60;
+  const base = Number(item?.latestPrice);
+  const anchor = Number.isFinite(base) && base > 0 ? base : 100;
+  const seed = String(item?.symbol || "CMD").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return Array.from({ length: count }, (_, idx) => {
+    const daysAgo = count - idx - 1;
+    const wave = Math.sin((idx + seed) / 9) * 0.035;
+    const drift = ((idx - count) / Math.max(count, 1)) * 0.04;
+    const value = Number((anchor * (1 + wave + drift)).toFixed(2));
+    return {
+      date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      value,
+      volume: Math.round(25000 + ((idx + seed) % 21) * 1800),
+      isFallback: true,
+      stale_reason: reason
+    };
+  });
+}
+
+function buildFallbackCommodityFundamentals(item, reason = "commodity_fundamentals_fallback") {
+  return [
+    { metric: "Latest Price", value: item.latestPrice, unit: "USD", sourceType: "Fallback commodity universe", sourceWhy: "Static desk fallback used when upstream providers are unavailable", isFallback: true, stale_reason: reason },
+    { metric: "Daily Change", value: item.dailyChangePct, unit: "%", sourceType: "Fallback commodity universe", sourceWhy: "Preserves a usable momentum read during provider outages", isFallback: true, stale_reason: reason },
+    { metric: "YTD Return", value: item.ytdChangePct, unit: "%", sourceType: "Fallback commodity universe", sourceWhy: "Static baseline for analytics continuity", isFallback: true, stale_reason: reason },
+    { metric: "1Y Return", value: item.oneYearReturnPct, unit: "%", sourceType: "Fallback commodity universe", sourceWhy: "Static baseline for analytics continuity", isFallback: true, stale_reason: reason },
+    { metric: "Proxy Ticker", value: getCommodityFinvizProxy(item.symbol) || item.symbol, unit: "symbol", sourceType: "Fallback commodity mapping", sourceWhy: "Nearest configured listed proxy", isFallback: true, stale_reason: reason }
+  ].filter((row) => row.value !== null && row.value !== undefined);
+}
+
+function buildFallbackCommodityFlows(item, mode = "etf", reason = "commodity_flows_fallback") {
+  return buildCommodityFallbackSeries(item, "1M", reason).slice(-10).map((row, idx, arr) => ({
+    date: row.date,
+    type: mode === "futures" ? "Futures Volume" : "Price/Volume Proxy",
+    value: row.volume,
+    trend: idx > 0 && row.value > arr[idx - 1].value ? "Up volume with price gain" : "Fallback volume proxy",
+    sourceType: "Fallback commodity universe",
+    sourceWhy: "Deterministic price/volume proxy while provider data is unavailable",
+    isFallback: true,
+    stale_reason: reason
+  }));
+}
+
+function buildFallbackCommoditySeasonality(item, reason = "commodity_seasonality_fallback") {
+  const seed = String(item?.symbol || "CMD").charCodeAt(0) || 67;
+  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((month, idx) => {
+    const avgReturnPct = Number((Math.sin((idx + seed) / 2.7) * 2.4).toFixed(2));
+    return {
+      month,
+      avgReturnPct,
+      seasonalityScore: Number(Math.max(0, Math.min(1, 0.5 + avgReturnPct / 10)).toFixed(2)),
+      observations: 12,
+      sourceType: "Fallback seasonal model",
+      sourceWhy: "Deterministic fallback used when historical futures data is unavailable",
+      isFallback: true,
+      stale_reason: reason
+    };
+  });
+}
+
+function buildFallbackCommodityCurve(item, reason = "commodity_curve_fallback") {
+  const price = Number.isFinite(Number(item.latestPrice)) ? Number(item.latestPrice) : 100;
+  return [
+    { contract: "Front Month", price: roundMaybe(price), spread: 0, curveStructure: "Fallback front month", sourceType: "Fallback commodity universe", sourceWhy: "Static front-month baseline", isFallback: true, stale_reason: reason },
+    { contract: "3M", price: roundMaybe(price * 1.012), spread: roundMaybe(price * 0.012), curveStructure: "Fallback contango", sourceType: "Fallback commodity universe", sourceWhy: "Synthetic curve continuity during provider outages", isFallback: true, stale_reason: reason },
+    { contract: "6M", price: roundMaybe(price * 1.021), spread: roundMaybe(price * 0.021), curveStructure: "Fallback contango", sourceType: "Fallback commodity universe", sourceWhy: "Synthetic curve continuity during provider outages", isFallback: true, stale_reason: reason }
+  ];
+}
+
+function buildFallbackCommodityCalendar(group = "all", reason = "commodity_calendar_fallback") {
+  const selectedGroup = String(group || "all").toLowerCase();
+  return [
+    { id: "cmd-cal-energy", group: "energy", event: "EIA petroleum status report", importance: "high" },
+    { id: "cmd-cal-agriculture", group: "agriculture", event: "USDA crop progress / WASDE watch", importance: "medium" },
+    { id: "cmd-cal-metals", group: "metals", event: "Global PMI and inventory watch", importance: "medium" }
+  ]
+    .filter((event) => selectedGroup === "all" || event.group === selectedGroup)
+    .map((event, idx) => ({
+      ...event,
+      date: new Date(Date.now() + idx * 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      sourceType: "Fallback commodity calendar",
+      sourceWhy: "Canonical event watchlist used when live calendar data is unavailable",
+      isFallback: true,
+      stale_reason: reason
+    }));
+}
+
 async function fetchLiveCommodityRows(group = "all") {
   const livePrices = await fetchYFinancePrices(COMMODITY_UNIVERSE.map((row) => row.symbol));
-  return COMMODITY_UNIVERSE
+  const proxySymbols = [...new Set(COMMODITY_UNIVERSE.map((row) => getCommodityFinvizProxy(row.symbol)).filter(Boolean))];
+  const finvizQuotes = await fetchFinvizQuotes(proxySymbols).catch((error) => {
+    console.warn("[Commodities] Finviz proxy enrichment skipped:", error?.message || error);
+    return new Map();
+  });
+  const rows = COMMODITY_UNIVERSE
     .map((row) => {
       const quote = livePrices[row.symbol] || {};
+      const proxySymbol = getCommodityFinvizProxy(row.symbol);
+      const finvizSummary = proxySymbol ? finvizQuotes.get(proxySymbol)?.summary || {} : {};
       const latestPrice = Number(quote.price);
       const dailyChangePct = Number(quote.priceChangePercent);
+      const finvizPrice = parseFinvizScaledNumber(finvizSummary.Price);
+      const finvizDaily = parseFinvizPercent(finvizSummary.Change);
       return {
         ...row,
-        latestPrice: Number.isFinite(latestPrice) ? latestPrice : null,
-        dailyChangePct: Number.isFinite(dailyChangePct) ? dailyChangePct : null,
-        ytdChangePct: null,
-        oneYearReturnPct: null,
+        latestPrice: Number.isFinite(latestPrice) ? latestPrice : Number.isFinite(finvizPrice) ? roundMaybe(finvizPrice) : null,
+        dailyChangePct: Number.isFinite(dailyChangePct) ? roundMaybe(dailyChangePct) : Number.isFinite(finvizDaily) ? roundMaybe(finvizDaily) : null,
+        ytdChangePct: roundMaybe(parseFinvizPercent(finvizSummary["Perf YTD"])),
+        oneYearReturnPct: roundMaybe(parseFinvizPercent(finvizSummary["Perf Year"] ?? finvizSummary["Return% 1Y"])),
         currency: quote.currency || "USD",
-        source: "Yahoo Finance",
-        stale: !Number.isFinite(latestPrice)
+        proxySymbol,
+        source: proxySymbol ? "Yahoo Finance + Finviz proxy" : "Yahoo Finance",
+        stale: !Number.isFinite(latestPrice) && !Number.isFinite(finvizPrice)
       };
     })
     .filter((row) => group === "all" || row.group === group);
+  const hasUsableProviderData = rows.some((row) => Number.isFinite(Number(row.latestPrice)) && !row.stale);
+  return hasUsableProviderData ? rows : buildFallbackCommodityRows(group, "commodity_price_providers_unavailable");
 }
 
 function historyRowsToSeries(history = []) {
@@ -8670,9 +9909,12 @@ app.get("/api/commodities/overview", async (_req, res) => {
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {});
+    const usingFallbackRows = rows.some((row) => row?.isFallback || row?.stale);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: "Yahoo Finance",
+      source: usingFallbackRows ? "Fallback commodity universe" : "Yahoo Finance",
+      stale: usingFallbackRows || undefined,
+      stale_reason: usingFallbackRows ? rows.find((row) => row?.stale_reason)?.stale_reason || "commodity_price_providers_unavailable" : undefined,
       overview: {
         categoryCounts: byGroup,
         topMovers,
@@ -8682,13 +9924,18 @@ app.get("/api/commodities/overview", async (_req, res) => {
       },
     });
   } catch (error) {
+    const rows = buildFallbackCommodityRows("all", error?.message || "commodities_overview_fetch_failed");
+    const byGroup = rows.reduce((acc, row) => {
+      acc[row.group] = (acc[row.group] || 0) + 1;
+      return acc;
+    }, {});
+    const topMovers = [...rows].sort((a, b) => Math.abs(Number(b.dailyChangePct || 0)) - Math.abs(Number(a.dailyChangePct || 0))).slice(0, 5);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: "Yahoo Finance",
+      source: "Fallback commodity universe",
       stale: true,
-      unavailable: true,
       stale_reason: error?.message || "commodities_overview_fetch_failed",
-      overview: { categoryCounts: {}, topMovers: [], favorites: [], recentViews: [], dataSources: COMMODITY_SOURCE_MAP }
+      overview: { categoryCounts: byGroup, topMovers, favorites: topMovers.slice(0, 3).map((row) => row.symbol), recentViews: [], dataSources: COMMODITY_SOURCE_MAP }
     });
   }
 });
@@ -8706,18 +9953,26 @@ app.get("/api/commodities/list", async (req, res) => {
   try {
     const group = String(req.query.group || "all").toLowerCase();
     const items = await fetchLiveCommodityRows(group);
+    const usingFallbackRows = items.some((row) => row?.isFallback || row?.stale);
     console.log(`[Commodities] Fetched ${items.length} items for group: ${group}`);
-    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", items, list: items });
-  } catch (error) {
-    console.error("[Commodities] Error fetching list:", error);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: "Yahoo Finance",
+      source: usingFallbackRows ? "Fallback commodity universe" : "Yahoo Finance",
+      stale: usingFallbackRows || undefined,
+      stale_reason: usingFallbackRows ? items.find((row) => row?.stale_reason)?.stale_reason || "commodity_price_providers_unavailable" : undefined,
+      items,
+      list: items
+    });
+  } catch (error) {
+    console.error("[Commodities] Error fetching list:", error);
+    const items = buildFallbackCommodityRows(req.query.group || "all", error?.message || "commodities_list_fetch_failed");
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: "Fallback commodity universe",
       stale: true,
-      unavailable: true,
       stale_reason: error?.message || "commodities_list_fetch_failed",
-      items: [],
-      list: []
+      items,
+      list: items
     });
   }
 });
@@ -8728,16 +9983,20 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
   try {
     const stockHistory = await fetchHistoryFromYahoo(item.symbol, range);
     const series = historyRowsToSeries(stockHistory.history);
+    if (!series.length) {
+      const fallbackSeries = buildCommodityFallbackSeries(item, range, "commodity_price_series_empty");
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_price_series_empty", series: fallbackSeries });
+    }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: stockHistory.source || "yahoo", series });
   } catch (error) {
+    const series = buildCommodityFallbackSeries(item, range, error?.message || "commodity_price_fetch_failed");
     res.json({
       updatedAt: new Date().toISOString(),
       symbol: item.symbol,
-      source: "Yahoo Finance",
+      source: "Fallback commodity universe",
       stale: true,
-      unavailable: true,
       stale_reason: error?.message || "commodity_price_fetch_failed",
-      series: []
+      series
     });
   }
 });
@@ -8745,6 +10004,23 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
 app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
   const item = getCommodity(req.params.symbol);
   try {
+    const proxySymbol = getCommodityFinvizProxy(item.symbol);
+    const finvizQuote = proxySymbol ? await fetchFinvizQuote(proxySymbol).catch(() => null) : null;
+    const finvizSummary = finvizQuote?.summary || {};
+    const finvizMetrics = proxySymbol
+      ? [
+          { metric: "Proxy Ticker", value: proxySymbol, unit: "symbol", sourceType: "Finviz ETF proxy", sourceWhy: "Nearest liquid proxy available for the commodity complex" },
+          { metric: "Proxy Price", value: roundMaybe(parseFinvizScaledNumber(finvizSummary.Price)), unit: "USD", sourceType: "Finviz quote snapshot", sourceWhy: "Latest proxy mark for the commodity or commodity basket" },
+          { metric: "Perf Week", value: roundMaybe(parseFinvizPercent(finvizSummary["Perf Week"])), unit: "%", sourceType: "Finviz quote snapshot", sourceWhy: "Short-term momentum read from the proxy instrument" },
+          { metric: "Perf Month", value: roundMaybe(parseFinvizPercent(finvizSummary["Perf Month"])), unit: "%", sourceType: "Finviz quote snapshot", sourceWhy: "1-month trend on the listed proxy" },
+          { metric: "Perf YTD", value: roundMaybe(parseFinvizPercent(finvizSummary["Perf YTD"])), unit: "%", sourceType: "Finviz quote snapshot", sourceWhy: "Calendar-year return from the proxy" },
+          { metric: "1Y Return", value: roundMaybe(parseFinvizPercent(finvizSummary["Perf Year"] ?? finvizSummary["Return% 1Y"])), unit: "%", sourceType: "Finviz quote snapshot", sourceWhy: "Trailing one-year return from the proxy instrument" },
+          { metric: "Flow % (1M)", value: roundMaybe(parseFinvizPercent(finvizSummary["Flows% 1M"])), unit: "%", sourceType: "Finviz quote snapshot", sourceWhy: "Shows whether capital is entering or leaving the proxy fund" },
+          { metric: "RSI (14)", value: roundMaybe(parseFinvizScaledNumber(finvizSummary["RSI (14)"])), unit: "index", sourceType: "Finviz quote snapshot", sourceWhy: "Momentum gauge sourced from the proxy quote page" },
+          { metric: "ATR (14)", value: roundMaybe(parseFinvizScaledNumber(finvizSummary["ATR (14)"])), unit: "USD", sourceType: "Finviz quote snapshot", sourceWhy: "Average trading range of the proxy instrument" }
+        ].filter((row) => row.value !== null && row.value !== undefined)
+      : [];
+
     const stockHistory = await fetchHistoryFromYahoo(item.symbol, "1Y");
     const series = historyRowsToSeries(stockHistory.history);
     const values = series.map((row) => Number(row.value)).filter(Number.isFinite);
@@ -8761,17 +10037,22 @@ app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
       { metric: "Annualized Volatility", value: annualizedVolFromSeries(series), unit: "%", sourceType: "Yahoo Finance historical futures data", sourceWhy: "Computed from sourced daily returns" },
       { metric: "Latest Volume", value: volume, unit: "contracts", sourceType: "Yahoo Finance futures quote", sourceWhy: "Latest reported volume when available" }
     ].filter((row) => Number.isFinite(Number(row.value)));
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", metrics, items: metrics });
+    const items = [...finvizMetrics, ...metrics];
+    if (!items.length) {
+      const fallbackItems = buildFallbackCommodityFundamentals(item, "commodity_fundamentals_empty");
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_fundamentals_empty", metrics: fallbackItems, items: fallbackItems });
+    }
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: proxySymbol ? "Yahoo Finance + Finviz" : "Yahoo Finance", metrics: items, items });
   } catch (error) {
+    const items = buildFallbackCommodityFundamentals(item, error?.message || "commodity_fundamentals_fetch_failed");
     res.json({
       updatedAt: new Date().toISOString(),
       symbol: item.symbol,
-      source: "Yahoo Finance",
+      source: "Fallback commodity universe",
       stale: true,
-      unavailable: true,
       stale_reason: error?.message || "commodity_fundamentals_fetch_failed",
-      metrics: [],
-      items: []
+      metrics: items,
+      items
     });
   }
 });
@@ -8797,9 +10078,14 @@ app.get("/api/commodities/:symbol/flows", async (req, res) => {
           sourceWhy: "Uses sourced volume/price as a transparent proxy when fund-flow or COT data is unavailable"
         };
       });
+    if (!items.length) {
+      const fallbackItems = buildFallbackCommodityFlows(item, mode, "commodity_flows_empty");
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_flows_empty", items: fallbackItems, flows: fallbackItems });
+    }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", items, flows: items });
   } catch (error) {
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_flows_fetch_failed", items: [], flows: [] });
+    const items = buildFallbackCommodityFlows(item, mode, error?.message || "commodity_flows_fetch_failed");
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Fallback commodity universe", stale: true, stale_reason: error?.message || "commodity_flows_fetch_failed", items, flows: items });
   }
 });
 
@@ -8830,9 +10116,14 @@ app.get("/api/commodities/:symbol/seasonality", async (req, res) => {
         sourceWhy: "Average monthly return computed from sourced closes"
       };
     }).filter((row) => Number.isFinite(Number(row.avgReturnPct)));
+    if (!items.length) {
+      const fallbackItems = buildFallbackCommoditySeasonality(item, "commodity_seasonality_empty");
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback seasonal model", stale: true, stale_reason: "commodity_seasonality_empty", items: fallbackItems, seasonality: fallbackItems });
+    }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", items, seasonality: items });
   } catch (error) {
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_seasonality_fetch_failed", items: [], seasonality: [] });
+    const items = buildFallbackCommoditySeasonality(item, error?.message || "commodity_seasonality_fetch_failed");
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback seasonal model", stale: true, stale_reason: error?.message || "commodity_seasonality_fetch_failed", items, seasonality: items });
   }
 });
 
@@ -8845,9 +10136,14 @@ app.get("/api/commodities/:symbol/curve", async (req, res) => {
     const points = Number.isFinite(price)
       ? [{ contract: "Front Month", price, spread: 0, curveStructure: "Front-month quote", sourceType: "Yahoo Finance front-month futures", sourceWhy: "Only sourced front-month contract is available through the current free feed" }]
       : [];
+    if (!points.length) {
+      const fallbackPoints = buildFallbackCommodityCurve(item, "commodity_curve_empty");
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_curve_empty", points: fallbackPoints, curve: fallbackPoints });
+    }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", points, curve: points });
   } catch (error) {
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_curve_fetch_failed", points: [], curve: [] });
+    const points = buildFallbackCommodityCurve(item, error?.message || "commodity_curve_fetch_failed");
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: error?.message || "commodity_curve_fetch_failed", points, curve: points });
   }
 });
 
@@ -8870,9 +10166,43 @@ app.get("/api/commodities/compare", async (req, res) => {
         volatility: null,
         source: row.source
       }));
-    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", rows, compare: rows });
+    const usingFallbackRows = rows.some((row) => /fallback/i.test(String(row.source || "")));
+    if (!rows.length) {
+      const fallbackRows = buildFallbackCommodityRows("all", "commodity_compare_empty")
+        .filter((row) => selected.includes(row.symbol))
+        .map((row) => ({
+          symbol: row.symbol,
+          name: row.name,
+          dailyChangePct: row.dailyChangePct,
+          ytdChangePct: row.ytdChangePct,
+          volatility: null,
+          source: row.source,
+          isFallback: true
+        }));
+      return res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity universe", stale: true, stale_reason: "commodity_compare_empty", rows: fallbackRows, compare: fallbackRows });
+    }
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: usingFallbackRows ? "Fallback commodity universe" : "Yahoo Finance",
+      stale: usingFallbackRows || undefined,
+      stale_reason: usingFallbackRows ? "commodity_price_providers_unavailable" : undefined,
+      rows,
+      compare: rows
+    });
   } catch (error) {
-    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_compare_fetch_failed", rows: [], compare: [] });
+    const selected = symbols.length ? symbols : ["GC", "CL"];
+    const rows = buildFallbackCommodityRows("all", error?.message || "commodity_compare_fetch_failed")
+      .filter((row) => selected.includes(row.symbol))
+      .map((row) => ({
+        symbol: row.symbol,
+        name: row.name,
+        dailyChangePct: row.dailyChangePct,
+        ytdChangePct: row.ytdChangePct,
+        volatility: null,
+        source: row.source,
+        isFallback: true
+      }));
+    res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity universe", stale: true, stale_reason: error?.message || "commodity_compare_fetch_failed", rows, compare: rows });
   }
 });
 
@@ -8900,9 +10230,14 @@ app.get("/api/commodities/calendar", async (req, res) => {
         sourceType: "ForexFactory economic calendar",
         sourceWhy: "Release timing sourced from the live calendar feed"
       }));
+    if (!events.length) {
+      const fallbackEvents = buildFallbackCommodityCalendar(group, "commodity_calendar_empty");
+      return res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity calendar", stale: true, stale_reason: "commodity_calendar_empty", events: fallbackEvents, calendar: fallbackEvents });
+    }
     res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", events, calendar: events });
   } catch (error) {
-    res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", stale: true, unavailable: true, stale_reason: error?.message || "commodity_calendar_fetch_failed", events: [], calendar: [] });
+    const events = buildFallbackCommodityCalendar(group, error?.message || "commodity_calendar_fetch_failed");
+    res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity calendar", stale: true, stale_reason: error?.message || "commodity_calendar_fetch_failed", events, calendar: events });
   }
 });
 
@@ -8941,9 +10276,21 @@ app.get("/api/commodities/correlation", async (req, res) => {
       coefficient = stdX && stdY ? Number((cov / (stdX * stdY)).toFixed(2)) : null;
     }
     const rows = [{ pair: `${symbol} vs ${asset}`, coefficient, window: "1y", observations: pairs.length, source: "Yahoo Finance" }];
-    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", rows, correlation: rows });
+    if (!Number.isFinite(Number(coefficient))) {
+      rows[0] = { pair: `${symbol} vs ${asset}`, coefficient: 0.12, window: "1y", observations: pairs.length, source: "Fallback correlation proxy", stale: true, isFallback: true };
+    }
+    const usingFallbackRows = rows.some((row) => row?.isFallback || row?.stale);
+    res.json({
+      updatedAt: new Date().toISOString(),
+      source: usingFallbackRows ? "Fallback correlation proxy" : "Yahoo Finance",
+      stale: usingFallbackRows || undefined,
+      stale_reason: usingFallbackRows ? "commodity_correlation_insufficient_overlap" : undefined,
+      rows,
+      correlation: rows
+    });
   } catch (error) {
-    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_correlation_fetch_failed", rows: [], correlation: [] });
+    const rows = [{ pair: `${symbol} vs ${asset}`, coefficient: 0.12, window: "1y", observations: 0, source: "Fallback correlation proxy", isFallback: true }];
+    res.json({ updatedAt: new Date().toISOString(), source: "Fallback correlation proxy", stale: true, stale_reason: error?.message || "commodity_correlation_fetch_failed", rows, correlation: rows });
   }
 });
 
@@ -9220,17 +10567,527 @@ async function runPythonScript(scriptPath, args = []) {
   });
 }
 
-const EQUITIES_ANALYTICS_SNAPSHOT_SCOPE = "analytics-equities-v2";
+const FINVIZ_QUOTE_CACHE_TTL_MS = 20 * 60 * 1000;
+const finvizQuoteCache = new Map();
+
+const EQUITY_FINVIZ_SECTOR_PROXIES = [
+  { symbol: "XLC", sector: "Communication Services" },
+  { symbol: "XLY", sector: "Consumer Discretionary" },
+  { symbol: "XLP", sector: "Consumer Staples" },
+  { symbol: "XLE", sector: "Energy" },
+  { symbol: "XLF", sector: "Financials" },
+  { symbol: "XLV", sector: "Health Care" },
+  { symbol: "XLI", sector: "Industrials" },
+  { symbol: "XLB", sector: "Materials" },
+  { symbol: "XLRE", sector: "Real Estate" },
+  { symbol: "XLK", sector: "Technology" },
+  { symbol: "XLU", sector: "Utilities" },
+];
+
+const EQUITY_FINVIZ_REGIONAL_PROXIES = [
+  { symbol: "SPY", region: "United States", currency: "USD" },
+  { symbol: "EFA", region: "Developed ex-US", currency: "USD" },
+  { symbol: "EEM", region: "Emerging Markets", currency: "USD" },
+  { symbol: "EWJ", region: "Japan", currency: "JPY" },
+  { symbol: "EWU", region: "United Kingdom", currency: "GBP" },
+  { symbol: "FXI", region: "China", currency: "CNY" },
+];
+
+const EQUITY_FINVIZ_STYLE_PROXIES = [
+  { symbol: "VUG", factor: "Growth" },
+  { symbol: "VTV", factor: "Value" },
+  { symbol: "IWM", factor: "Small Cap" },
+  { symbol: "QUAL", factor: "Quality" },
+  { symbol: "MTUM", factor: "Momentum" },
+  { symbol: "SPHQ", factor: "High Quality" },
+];
+
+const EQUITY_FINVIZ_FLOW_PROXIES = [
+  { symbol: "SPY", segment: "US Large Cap", assetClass: "Equity", region: "United States" },
+  { symbol: "QQQ", segment: "US Growth", assetClass: "Equity", region: "United States" },
+  { symbol: "IWM", segment: "US Small Cap", assetClass: "Equity", region: "United States" },
+  { symbol: "EFA", segment: "Developed Markets", assetClass: "Equity", region: "Global" },
+  { symbol: "EEM", segment: "Emerging Markets", assetClass: "Equity", region: "Global" },
+  { symbol: "GLD", segment: "Gold", assetClass: "Commodity", region: "Global" },
+  { symbol: "AGG", segment: "Core Bonds", assetClass: "Fixed Income", region: "United States" },
+  { symbol: "BIL", segment: "Treasury Bills", assetClass: "Cash", region: "United States" },
+  { symbol: "VNQ", segment: "REITs", assetClass: "Real Assets", region: "United States" },
+];
+
+const EQUITY_FINVIZ_EARNINGS_PROXIES = [
+  { symbol: "AAPL", company: "Apple" },
+  { symbol: "MSFT", company: "Microsoft" },
+  { symbol: "NVDA", company: "NVIDIA" },
+  { symbol: "AMZN", company: "Amazon" },
+  { symbol: "META", company: "Meta" },
+  { symbol: "GOOGL", company: "Alphabet" },
+  { symbol: "TSLA", company: "Tesla" },
+  { symbol: "JPM", company: "JPMorgan" },
+];
+
+const MACRO_FINVIZ_FX_PROXIES = [
+  { symbol: "UUP", pair: "DXY", displayName: "US Dollar Basket" },
+  { symbol: "FXE", pair: "EUR/USD", displayName: "Euro" },
+  { symbol: "FXY", pair: "JPY/USD", displayName: "Japanese Yen" },
+  { symbol: "FXB", pair: "GBP/USD", displayName: "British Pound" },
+  { symbol: "FXC", pair: "CAD/USD", displayName: "Canadian Dollar" },
+  { symbol: "FXA", pair: "AUD/USD", displayName: "Australian Dollar" },
+  { symbol: "CYB", pair: "CNY/USD", displayName: "Chinese Yuan" },
+];
+
+const OPTIONS_FINVIZ_UNDERLYINGS = [
+  "SPY",
+  "QQQ",
+  "AAPL",
+  "MSFT",
+  "NVDA",
+  "AMZN",
+  "META",
+  "TSLA",
+];
+
+function normalizeFinvizTicker(symbol) {
+  return String(symbol || "").trim().replace(/\./g, "-").toUpperCase();
+}
+
+function parseFinvizScaledNumber(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "-" || /^n\/a$/i.test(raw)) return null;
+  const cleaned = raw.replace(/,/g, "");
+  const match = cleaned.match(/(-?\d+(?:\.\d+)?)([KMBT])?/i);
+  if (!match) return null;
+  const base = Number(match[1]);
+  if (!Number.isFinite(base)) return null;
+  const suffix = String(match[2] || "").toUpperCase();
+  const scale =
+    suffix === "T"
+      ? 1e12
+      : suffix === "B"
+      ? 1e9
+      : suffix === "M"
+      ? 1e6
+      : suffix === "K"
+      ? 1e3
+      : 1;
+  return base * scale;
+}
+
+function parseFinvizPercent(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "-" || /^n\/a$/i.test(raw)) return null;
+  const match = raw.match(/-?\d+(?:\.\d+)?(?=%)/);
+  return match ? Number(match[0]) : null;
+}
+
+function parseFinvizPair(value) {
+  const matches = String(value ?? "").match(/-?\d+(?:\.\d+)?/g) || [];
+  return matches.slice(0, 2).map((entry) => Number(entry));
+}
+
+function roundMaybe(value, digits = 2) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(digits)) : null;
+}
+
+function inferSignalFromChange(changePct) {
+  const value = Number(changePct);
+  if (!Number.isFinite(value)) return "Flat";
+  if (value >= 1.5) return "Breakout";
+  if (value >= 0.35) return "Bid";
+  if (value <= -1.5) return "Stress";
+  if (value <= -0.35) return "Offered";
+  return "Balanced";
+}
+
+function buildFinvizCacheFallbackPaths(symbol) {
+  const normalized = normalizeFinvizTicker(symbol).toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]+/g, "");
+  const variants = [
+    path.join(__dirname, `${normalized}_finviz.json`),
+    path.join(__dirname, `${compact}_finviz.json`),
+  ];
+  return [...new Set(variants)];
+}
+
+function readFinvizFallback(symbol) {
+  for (const filePath of buildFinvizCacheFallbackPaths(symbol)) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (parsed && typeof parsed === "object" && !parsed.error) return parsed;
+    } catch (error) {
+      console.warn("[Analytics] Finviz fallback read failed:", filePath, error?.message || error);
+    }
+  }
+  return null;
+}
+
+async function fetchFinvizQuote(symbol, { forceRefresh = false } = {}) {
+  const key = normalizeFinvizTicker(symbol);
+  const now = Date.now();
+  const cached = finvizQuoteCache.get(key);
+  if (!forceRefresh && cached && now - cached.cachedAt < FINVIZ_QUOTE_CACHE_TTL_MS) {
+    return cached.payload;
+  }
+
+  try {
+    const payload = await runPythonScript("scripts/fetch_finviz.py", [key]);
+    if (payload && !payload.error) {
+      finvizQuoteCache.set(key, { cachedAt: now, payload });
+      return payload;
+    }
+  } catch (error) {
+    console.warn("[Analytics] Live Finviz quote failed:", key, error?.message || error);
+  }
+
+  const fallback = readFinvizFallback(key);
+  if (fallback) {
+    finvizQuoteCache.set(key, { cachedAt: now, payload: fallback });
+    return fallback;
+  }
+
+  if (cached?.payload) return cached.payload;
+  return null;
+}
+
+async function fetchFinvizQuotes(symbols = []) {
+  const uniqueSymbols = [...new Set((Array.isArray(symbols) ? symbols : []).map(normalizeFinvizTicker).filter(Boolean))];
+  const settled = await Promise.allSettled(uniqueSymbols.map((symbol) => fetchFinvizQuote(symbol)));
+  return uniqueSymbols.reduce((acc, symbol, index) => {
+    const result = settled[index];
+    const payload = result?.status === "fulfilled" ? result.value : null;
+    if (payload && payload.summary) acc.set(symbol, payload);
+    return acc;
+  }, new Map());
+}
+
+function buildEquitiesSectorRows(finvizQuotes) {
+  return EQUITY_FINVIZ_SECTOR_PROXIES.map((item) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    return {
+      symbol: item.symbol,
+      sector: item.sector,
+      daily: roundMaybe(parseFinvizPercent(summary.Change)),
+      ytd: roundMaybe(parseFinvizPercent(summary["Perf YTD"])),
+      yr1: roundMaybe(parseFinvizPercent(summary["Perf Year"] ?? summary["Return% 1Y"])),
+      flowUsdBn: roundMaybe(((parseFinvizScaledNumber(summary.AUM) || 0) * (parseFinvizPercent(summary["Flows% 1M"]) || 0)) / 100 / 1e9),
+      source: "Finviz ETF snapshot",
+    };
+  }).filter((row) =>
+    [row.daily, row.ytd, row.yr1, row.flowUsdBn].some((value) => Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0.001)
+  );
+}
+
+function buildEquitiesRegionalRows(finvizQuotes) {
+  return EQUITY_FINVIZ_REGIONAL_PROXIES.map((item) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    return {
+      symbol: item.symbol,
+      region: item.region,
+      currency: item.currency,
+      daily: roundMaybe(parseFinvizPercent(summary.Change)),
+      ytd: roundMaybe(parseFinvizPercent(summary["Perf YTD"])),
+      yr1: roundMaybe(parseFinvizPercent(summary["Perf Year"] ?? summary["Return% 1Y"])),
+      yr3: roundMaybe(parseFinvizPercent(summary["Perf 3Y"] ?? summary["Return% 3Y"])),
+      source: "Finviz ETF snapshot",
+    };
+  }).filter((row) =>
+    [row.daily, row.ytd, row.yr1, row.yr3].some((value) => Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0.001)
+  );
+}
+
+function buildEquitiesStyleRows(finvizQuotes) {
+  return EQUITY_FINVIZ_STYLE_PROXIES.map((item) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    return {
+      symbol: item.symbol,
+      factor: item.factor,
+      daily: roundMaybe(parseFinvizPercent(summary.Change)),
+      ytd: roundMaybe(parseFinvizPercent(summary["Perf YTD"])),
+      yr1: roundMaybe(parseFinvizPercent(summary["Perf Year"] ?? summary["Return% 1Y"])),
+      volatility: roundMaybe(parseFinvizPair(summary.Volatility)[1]),
+      relVolume: roundMaybe(parseFinvizScaledNumber(summary["Rel Volume"])),
+      signal: inferSignalFromChange(parseFinvizPercent(summary.Change)),
+      source: "Finviz ETF snapshot",
+    };
+  }).filter((row) =>
+    [row.daily, row.ytd, row.yr1].some((value) => Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0.001)
+  );
+}
+
+function buildEquitiesFlowRows(finvizQuotes) {
+  return EQUITY_FINVIZ_FLOW_PROXIES.map((item) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    const aum = parseFinvizScaledNumber(summary.AUM);
+    const flowPct = parseFinvizPercent(summary["Flows% 1M"]);
+    const flow3mPct = parseFinvizPercent(summary["Flows% 3M"]);
+    const rows = [];
+    if (Number.isFinite(aum) && Number.isFinite(flowPct)) {
+      rows.push({
+        symbol: item.symbol,
+        segment: item.segment,
+        assetClass: item.assetClass,
+        region: item.region,
+        period: "1M",
+        netFlowUsdBn: roundMaybe((aum * flowPct) / 100 / 1e9),
+        source: "Finviz ETF snapshot",
+      });
+    }
+    if (Number.isFinite(aum) && Number.isFinite(flow3mPct)) {
+      rows.push({
+        symbol: item.symbol,
+        segment: item.segment,
+        assetClass: item.assetClass,
+        region: item.region,
+        period: "3M",
+        netFlowUsdBn: roundMaybe((aum * flow3mPct) / 100 / 1e9),
+        source: "Finviz ETF snapshot",
+      });
+    }
+    return rows;
+  }).flat();
+}
+
+function buildEquitiesBreadth(finvizQuotes) {
+  const breadthSymbols = [
+    ...EQUITY_FINVIZ_SECTOR_PROXIES.map((item) => item.symbol),
+    ...EQUITY_FINVIZ_STYLE_PROXIES.map((item) => item.symbol),
+    ...EQUITY_FINVIZ_REGIONAL_PROXIES.map((item) => item.symbol),
+  ];
+  const rows = breadthSymbols
+    .map((symbol) => finvizQuotes.get(symbol)?.summary || null)
+    .filter(Boolean);
+  if (!rows.length) return null;
+
+  const positives = rows.filter((summary) => Number(parseFinvizPercent(summary.Change)) > 0).length;
+  const negatives = rows.filter((summary) => Number(parseFinvizPercent(summary.Change)) < 0).length;
+  const newHighs = rows.filter((summary) => {
+    const raw = String(summary["52W High"] || "");
+    const parts = raw.split(" ");
+    return Number.isFinite(Number(parseFinvizPercent(parts[1]))) && Number(parseFinvizPercent(parts[1])) >= -2;
+  }).length;
+  const newLows = rows.filter((summary) => {
+    const raw = String(summary["52W Low"] || "");
+    const parts = raw.split(" ");
+    return Number.isFinite(Number(parseFinvizPercent(parts[1]))) && Number(parseFinvizPercent(parts[1])) <= 5;
+  }).length;
+  const above50 = rows.filter((summary) => Number(parseFinvizPercent(summary.SMA50)) > 0).length;
+  const above200 = rows.filter((summary) => Number(parseFinvizPercent(summary.SMA200)) > 0).length;
+
+  return {
+    adLine: positives - negatives,
+    newHighs,
+    newLows,
+    above50dmaPct: roundMaybe((above50 / rows.length) * 100),
+    above200dmaPct: roundMaybe((above200 / rows.length) * 100),
+    source: "Finviz ETF proxy breadth",
+  };
+}
+
+function buildEquitiesEarningsRows(finvizQuotes) {
+  return EQUITY_FINVIZ_EARNINGS_PROXIES.map((item) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    const earnings = String(summary.earnings || summary.Earnings || "").trim();
+    if (!earnings) return null;
+    return {
+      symbol: item.symbol,
+      company: item.company,
+      date: earnings,
+      period: "Next report",
+      revisionTrend: inferSignalFromChange(parseFinvizPercent(summary.Change)),
+      source: "Finviz quote snapshot",
+    };
+  }).filter(Boolean);
+}
+
+function buildMacroFxRows(finvizQuotes) {
+  return MACRO_FINVIZ_FX_PROXIES.map((item) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    return {
+      symbol: item.symbol,
+      pair: item.pair,
+      name: item.displayName,
+      rate: roundMaybe(parseFinvizScaledNumber(summary.Price), 4),
+      daily: roundMaybe(parseFinvizPercent(summary.Change)),
+      weekly: roundMaybe(parseFinvizPercent(summary["Perf Week"])),
+      source: "Finviz ETF proxy",
+    };
+  }).filter((row) => Number.isFinite(Number(row.rate)) && Number(row.rate) > 0.01);
+}
+
+function buildForexMoverRows(fxRows) {
+  const gainers = [...fxRows]
+    .filter((row) => Number.isFinite(Number(row.daily)) && Number(row.daily) > 0)
+    .sort((a, b) => Number(b.daily) - Number(a.daily))
+    .slice(0, 4)
+    .map((row) => ({ ...row, moveType: "Gainer" }));
+  const losers = [...fxRows]
+    .filter((row) => Number.isFinite(Number(row.daily)) && Number(row.daily) < 0)
+    .sort((a, b) => Number(a.daily) - Number(b.daily))
+    .slice(0, 4)
+    .map((row) => ({ ...row, moveType: "Loser" }));
+  return { gainers, losers };
+}
+
+function buildFinvizOptionsRows(finvizQuotes) {
+  const underlyings = OPTIONS_FINVIZ_UNDERLYINGS.map((symbol) => {
+    const quote = finvizQuotes.get(symbol);
+    const summary = quote?.summary || {};
+    const [weeklyVol, monthlyVol] = parseFinvizPair(summary.Volatility);
+    const price = parseFinvizScaledNumber(summary.Price);
+    const rawVolume = parseFinvizScaledNumber(summary.Volume);
+    const changePct = parseFinvizPercent(summary.Change);
+    const targetPrice = parseFinvizScaledNumber(summary["Target Price"] || summary.target_price);
+    const atr = parseFinvizScaledNumber(summary["ATR (14)"]);
+    const earnings = String(summary.earnings || summary.Earnings || "Next catalyst").trim();
+    const volumeUsd = Number.isFinite(price) && Number.isFinite(rawVolume) ? price * rawVolume : null;
+    return {
+      symbol,
+      price,
+      rawVolume,
+      volumeUsd: roundMaybe(volumeUsd, 0),
+      changePct: roundMaybe(changePct),
+      targetPrice,
+      atr: roundMaybe(atr),
+      weeklyVol: roundMaybe(weeklyVol),
+      monthlyVol: roundMaybe(monthlyVol),
+      earnings,
+      optionability: String(summary["Option/Short"] || "").trim() || "Yes / Yes",
+      industry: quote?.header_meta?.industry || "Underlying",
+    };
+  }).filter((row) => Number.isFinite(Number(row.price)));
+
+  return {
+    optionsVolumeByAsset: underlyings.map((row) => ({
+      asset: row.symbol,
+      exchange: "Finviz",
+      route: "Optionable proxy",
+      volumeUsd: row.volumeUsd,
+    })),
+    optionsMaxPain: underlyings.map((row) => ({
+      asset: row.symbol,
+      exchange: "Finviz",
+      expiry: row.earnings,
+      maxPain: row.targetPrice ?? row.price,
+    })),
+    volumeByExchangeRoute: underlyings.map((row) => ({
+      asset: row.symbol,
+      exchange: "Finviz",
+      route: row.optionability,
+      volumeUsd: row.volumeUsd,
+    })),
+    greeks: underlyings.map((row) => ({
+      instrument: `${row.symbol} · Finviz proxy`,
+      asset: row.symbol,
+      exchange: "Finviz",
+      delta: roundMaybe(Math.max(-0.99, Math.min(0.99, Number(row.changePct || 0) / 10)), 2),
+      gamma: roundMaybe(Number(row.atr || 0) / Math.max(Number(row.price || 1), 1), 2),
+      vega: roundMaybe(row.monthlyVol, 2),
+      theta: roundMaybe(-(row.weeklyVol || 0), 2),
+      iv: roundMaybe(row.monthlyVol, 2),
+    })),
+    oiByStrike: underlyings.map((row) => ({
+      asset: row.symbol,
+      exchange: "Finviz",
+      expiry: row.earnings,
+      strike: row.targetPrice ?? row.price,
+      type: Number(row.targetPrice || 0) >= Number(row.price || 0) ? "C" : "P",
+      oi: row.rawVolume,
+    })),
+  };
+}
+
+function normalizeAnalyticsRows(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function buildFallbackOptionsPayload(reason = "options_provider_fallback", finvizOptions = {}) {
+  const finvizVolumeRows = normalizeAnalyticsRows(finvizOptions.optionsVolumeByAsset);
+  const finvizMaxPainRows = normalizeAnalyticsRows(finvizOptions.optionsMaxPain);
+  const finvizRouteRows = normalizeAnalyticsRows(finvizOptions.volumeByExchangeRoute);
+  const finvizGreeksRows = normalizeAnalyticsRows(finvizOptions.greeks);
+  const finvizOiRows = normalizeAnalyticsRows(finvizOptions.oiByStrike);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    stale: true,
+    isFallback: true,
+    stale_reason: reason,
+    source: finvizVolumeRows.length ? "Fallback options tape + Finviz equity-option proxies" : "Fallback options tape",
+    totalOptionsOpenInterestUsd: 4500000000,
+    optionsVolumeByAsset: [
+      { asset: "BTC", exchange: "Deribit", volumeUsd: 1200000000, isFallback: true },
+      { asset: "ETH", exchange: "Deribit", volumeUsd: 600000000, isFallback: true },
+      ...finvizVolumeRows
+    ],
+    optionsMaxPain: [
+      { asset: "BTC", expiry: "Next Friday", maxPain: 65000, exchange: "Deribit", isFallback: true },
+      { asset: "ETH", expiry: "Next Friday", maxPain: 3500, exchange: "Deribit", isFallback: true },
+      ...finvizMaxPainRows
+    ],
+    volumeByExchangeRoute: [
+      { exchange: "Deribit", route: "Direct", volume: 1800000000, volumeUsd: 1800000000, isFallback: true },
+      { exchange: "Binance", route: "Direct", volume: 450000000, volumeUsd: 450000000, isFallback: true },
+      ...finvizRouteRows
+    ],
+    greeks: [
+      { instrument: "BTC fallback ATM call", asset: "BTC", exchange: "Deribit", delta: 0.45, gamma: 0.02, vega: 10.5, theta: -1.2, iv: 62, isFallback: true },
+      { instrument: "ETH fallback ATM call", asset: "ETH", exchange: "Deribit", delta: 0.43, gamma: 0.03, vega: 7.4, theta: -0.8, iv: 58, isFallback: true },
+      ...finvizGreeksRows
+    ],
+    oiByStrike: [
+      { asset: "BTC", exchange: "Deribit", expiry: "Next Friday", strike: 65000, type: "C", oi: 12500, isFallback: true },
+      { asset: "ETH", exchange: "Deribit", expiry: "Next Friday", strike: 3500, type: "C", oi: 18800, isFallback: true },
+      ...finvizOiRows
+    ]
+  };
+}
+
+const EQUITIES_ANALYTICS_SNAPSHOT_SCOPE = "analytics-equities-v3";
 const EQUITIES_ANALYTICS_SNAPSHOT_PARAMS = { scope: "equities" };
 const EQUITIES_ANALYTICS_TTL_MS = 15 * 60 * 1000;
 
 async function buildEquitiesAnalyticsPayload() {
   console.log("[Analytics] Fetching live equities data...");
-  const analyticsPayload = await runPythonScript("scripts/fetch_equities_analytics.py");
+  let analyticsPayload = null;
+  try {
+    analyticsPayload = await runPythonScript("scripts/fetch_equities_analytics.py");
+  } catch (err) {
+    console.warn("[Analytics] Python equities fetch failed:", err?.message || err);
+  }
+
   const [macroData, riskIndicators] = await Promise.all([
-    analytics.fetchAnalyticsMacroRows("USA").catch(() => []),
+    fetchAnalyticsMacroRows("USA").catch(() => []),
     fetchAnalyticsRiskIndicators().catch(() => [])
   ]);
+
+  const finvizSymbols = [
+    ...EQUITY_FINVIZ_SECTOR_PROXIES.map((item) => item.symbol),
+    ...EQUITY_FINVIZ_REGIONAL_PROXIES.map((item) => item.symbol),
+    ...EQUITY_FINVIZ_STYLE_PROXIES.map((item) => item.symbol),
+    ...EQUITY_FINVIZ_FLOW_PROXIES.map((item) => item.symbol),
+    ...EQUITY_FINVIZ_EARNINGS_PROXIES.map((item) => item.symbol),
+    ...MACRO_FINVIZ_FX_PROXIES.map((item) => item.symbol),
+  ];
+  const finvizQuotes = await fetchFinvizQuotes(finvizSymbols).catch((error) => {
+    console.warn("[Analytics] Finviz enrichment skipped:", error?.message || error);
+    return new Map();
+  });
+  const sectorPerformance = buildEquitiesSectorRows(finvizQuotes);
+  const regionalPerformance = buildEquitiesRegionalRows(finvizQuotes);
+  const styleFactors = buildEquitiesStyleRows(finvizQuotes);
+  const fundFlows = buildEquitiesFlowRows(finvizQuotes);
+  const earningsCalendar = buildEquitiesEarningsRows(finvizQuotes);
+  const marketBreadth = buildEquitiesBreadth(finvizQuotes);
+  const fxRates = buildMacroFxRows(finvizQuotes);
+  const forexMovers = buildForexMoverRows(fxRates);
 
   return {
     updatedAt: analyticsPayload?.updatedAt || new Date().toISOString(),
@@ -9242,17 +11099,17 @@ async function buildEquitiesAnalyticsPayload() {
     volatilityMetrics: Array.isArray(analyticsPayload?.volatilityMetrics) ? analyticsPayload.volatilityMetrics : [],
     valuationData: Array.isArray(analyticsPayload?.valuationData) ? analyticsPayload.valuationData : [],
     annualReturns: Array.isArray(analyticsPayload?.annualReturns) ? analyticsPayload.annualReturns : [],
-    sectorPerformance: [],
-    regionalPerformance: [],
-    styleFactors: [],
+    sectorPerformance,
+    regionalPerformance,
+    styleFactors,
     rebalanceSignals: [],
     dividendData: [],
-    earningsCalendar: [],
+    earningsCalendar,
     macroData,
-    fundFlows: [],
-    fxRates: [],
-    forexMovers: { gainers: [], losers: [] },
-    marketBreadth: null,
+    fundFlows,
+    fxRates,
+    forexMovers,
+    marketBreadth,
     riskIndicators,
     corporateActions: [],
     reitData: REIT_DATA,
@@ -9305,13 +11162,13 @@ app.get('/api/analytics/equities', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Atomic trade execution (portfolio + balance + trade journal)
 // ---------------------------------------------------------------------------
-app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validate(executeTradeSchema), async (req, res) => {
+app.post("/api/db/execute-trade", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(executeTradeSchema), async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.clientId || typeof payload.clientId !== "string" || payload.clientId.trim().length > 120) {
       return res.status(400).json({ error: "clientId is required for idempotent execution." });
     }
-    const result = await userWorkspace.trading.executeTrade(req.auth.userId, payload);
+    const result = await userWorkspace.trading.executeTrade(req.auth.userId, payload, req.workspace?.workspace?.id || null);
     invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
     res.status(201).json(result);
   } catch (error) {
@@ -9328,7 +11185,7 @@ app.post("/api/db/execute-trade", requireSignedIn, writeLimiter, validate(execut
   }
 });
 
-app.post("/api/db/execute-trade/estimate", requireSignedIn, writeLimiter, validate(tradeEstimateBatchSchema), async (req, res) => {
+app.post("/api/db/execute-trade/estimate", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(tradeEstimateBatchSchema), async (req, res) => {
   try {
     const payloads = Array.isArray(req.body?.trades) ? req.body.trades : [];
     const estimate = await userWorkspace.trading.estimateTrades(payloads);
@@ -9593,7 +11450,18 @@ async function stopServer() {
 
 if (require.main === module) {
   startServer().catch((error) => {
-    console.error("Failed to initialize PostgreSQL database:", error.message);
+    const dbConfig = describeDatabaseConfig();
+    console.error(
+      "Failed to initialize PostgreSQL database:",
+      error.message,
+      "| config:",
+      JSON.stringify(dbConfig)
+    );
+    if (/ENOTFOUND|getaddrinfo/i.test(String(error?.message || ""))) {
+      console.error(
+        "Database hostname could not be resolved. Verify that DATABASE_URL (or the active Supabase/managed Postgres URL) points at a live database endpoint and that the host is reachable from this deployment."
+      );
+    }
     process.exit(1);
   });
 }
@@ -9602,14 +11470,14 @@ module.exports = {
   app,
   server,
   startServer,
-  stopServer
+stopServer
 };
 
 // ---------------------------------------------------------------------------
 // Analytics Module - Macro Routes (Compatibility for AnalyticsModule.jsx)
 // ---------------------------------------------------------------------------
 
-app.get("/api/macro/geographies", requireSignedIn, (req, res) => {
+app.get("/api/macro/geographies", (req, res) => {
   const query = String(req.query.query || "").toLowerCase();
   const macroRegions = [
     { type: "Global", name: "Global", code: "GLOBAL", parent: null },
@@ -9619,12 +11487,12 @@ app.get("/api/macro/geographies", requireSignedIn, (req, res) => {
     { type: "Region", name: "Middle East & Africa", code: "MEA", parent: "Global" }
   ];
   const countryRows = FALLBACK_COUNTRY_CATALOG_SEED.map(([cca3, cca2, name]) => ({
-      type: "Country",
-      name: name,
-      code: cca3,
-      regionCode: cca2,
-      parent: "Global"
-    }));
+    type: "Country",
+    name: name,
+    code: cca3,
+    regionCode: cca2,
+    parent: "Global"
+  }));
   const results = [...macroRegions, ...countryRows].filter((row) => {
     if (!query) return true;
     return [row.code, row.regionCode, row.name, row.type]
@@ -9634,20 +11502,15 @@ app.get("/api/macro/geographies", requireSignedIn, (req, res) => {
   res.json(results);
 });
 
-app.get("/api/macro/indicators", requireSignedIn, (req, res) => {
-  res.json(MACRO_INDICATOR_CONFIG.map(c => ({
-    code: c.key.toUpperCase(),
-    name: c.label,
-    category: c.category || "growth",
-    unit: c.unit
-  })));
+app.get("/api/macro/indicators", (req, res) => {
+  res.json(MACRO_INDICATOR_CONFIG);
 });
 
-app.get("/api/macro/alerts", requireSignedIn, (req, res) => {
+app.get("/api/macro/alerts", (req, res) => {
   res.json([]);
 });
 
-app.get("/api/macro/global/overview", requireSignedIn, async (req, res) => {
+app.get("/api/macro/global/overview", async (req, res) => {
   try {
     const metrics = await aggregateMacroMetricsForCountries(MACRO_REGION_MEMBERS.GLB);
     res.json(buildMacroOverviewPayload("GLOBAL", "Global", metrics));
@@ -9660,7 +11523,7 @@ app.get("/api/macro/global/overview", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/region/:code/overview", requireSignedIn, async (req, res) => {
+app.get("/api/macro/region/:code/overview", async (req, res) => {
   const code = String(req.params.code || "REGION").trim().toUpperCase();
   const members = MACRO_REGION_MEMBERS[code] || [];
   if (!members.length) {
@@ -9686,7 +11549,7 @@ app.get("/api/macro/region/:code/overview", requireSignedIn, async (req, res) =>
   }
 });
 
-app.get("/api/macro/country/:code/overview", requireSignedIn, async (req, res) => {
+app.get("/api/macro/country/:code/overview", async (req, res) => {
   const code = String(req.params.code || "USA").trim().toUpperCase();
   try {
     const metrics = sanitizeMacroMetrics(await fetchWorldBankMacroMetrics(code));
@@ -9700,7 +11563,7 @@ app.get("/api/macro/country/:code/overview", requireSignedIn, async (req, res) =
   }
 });
 
-app.get("/api/macro/timeseries", requireSignedIn, async (req, res) => {
+app.get("/api/macro/timeseries", async (req, res) => {
   const geo = String(req.query.geo || "").trim().toUpperCase();
   const indicator = String(req.query.indicator || "").trim();
   const range = normalizeMacroRange(req.query.range);
@@ -9739,7 +11602,7 @@ app.get("/api/macro/timeseries", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/compare", requireSignedIn, async (req, res) => {
+app.get("/api/macro/compare", async (req, res) => {
   const geos = String(req.query.geos || "")
     .split(",")
     .map((geo) => geo.trim().toUpperCase())
@@ -9767,7 +11630,7 @@ app.get("/api/macro/compare", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/calendar", requireSignedIn, async (req, res) => {
+app.get("/api/macro/calendar", async (req, res) => {
   const geo = String(req.query.geo || "").trim().toUpperCase();
   const from = String(req.query.from || "").trim();
   const to = String(req.query.to || "").trim();
@@ -9802,7 +11665,7 @@ app.get("/api/macro/calendar", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/map", requireSignedIn, async (req, res) => {
+app.get("/api/macro/map", async (req, res) => {
   const indicator = String(req.query.indicator || "").trim();
   try {
     const rows = (await Promise.all(MACRO_MAP_COUNTRIES.map(async (countryCode, idx) => {
@@ -9826,7 +11689,7 @@ app.get("/api/macro/map", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/rankings", requireSignedIn, async (req, res) => {
+app.get("/api/macro/rankings", async (req, res) => {
   const indicator = String(req.query.indicator || "").trim();
   const sort = String(req.query.sort || "value_desc").trim().toLowerCase();
   try {
@@ -9861,7 +11724,7 @@ app.get("/api/macro/rankings", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/forecast", requireSignedIn, (_req, res) => {
+app.get("/api/macro/forecast", (_req, res) => {
   res.json({
     updatedAt: new Date().toISOString(),
     source: "Unavailable",
@@ -9871,9 +11734,10 @@ app.get("/api/macro/forecast", requireSignedIn, (_req, res) => {
   });
 });
 
-app.get("/api/macro/source/:indicator", requireSignedIn, (req, res) => {
+app.get("/api/macro/source/:indicator", (req, res) => {
   const config = getMacroIndicatorConfig(req.params.indicator);
   res.json({
+    indicator: req.params.indicator,
     source: "World Bank",
     provider: "World Bank Open Data",
     updatedAt: new Date().toISOString(),
@@ -9884,7 +11748,7 @@ app.get("/api/macro/source/:indicator", requireSignedIn, (req, res) => {
   });
 });
 
-app.get("/api/macro/regime", requireSignedIn, async (req, res) => {
+app.get("/api/macro/regime", async (req, res) => {
   const geo = String(req.query.geo || "USA").trim().toUpperCase();
   try {
     const country = await resolveCountryReference(geo);
@@ -9929,7 +11793,7 @@ app.get("/api/macro/regime", requireSignedIn, async (req, res) => {
   }
 });
 
-app.get("/api/macro/correlation", requireSignedIn, async (req, res) => {
+app.get("/api/macro/correlation", async (req, res) => {
   const geo = String(req.query.geo || "USA").trim().toUpperCase();
   const indicator = String(req.query.indicator || "").trim();
   const asset = String(req.query.asset || "SPY").trim().toUpperCase();
@@ -9962,6 +11826,58 @@ app.get("/api/macro/correlation", requireSignedIn, async (req, res) => {
     res.json({ updatedAt: new Date().toISOString(), source: "World Bank + Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "macro_correlation_fetch_failed", rows: [] });
   }
 });
+
+app.get('/api/analytics/equities', async (req, res) => {
+  try {
+    const payload = await getEquitiesAnalyticsPayload();
+    res.json(payload);
+  } catch (error) {
+    console.error("[Analytics] Equities error:", error);
+    const stale = await readServiceSnapshot(
+      EQUITIES_ANALYTICS_SNAPSHOT_SCOPE,
+      EQUITIES_ANALYTICS_SNAPSHOT_PARAMS
+    );
+    if (stale?.payload) {
+      return res.json(stale.payload);
+    }
+    res.status(500).json({ error: "Failed to fetch equities analytics" });
+  }
+});
+
+app.post("/api/db/execute-trade", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(executeTradeSchema), async (req, res) => {
+  try {
+    const payload = req.body || {};
+    if (!payload.clientId || typeof payload.clientId !== "string" || payload.clientId.trim().length > 120) {
+      return res.status(400).json({ error: "clientId is required for idempotent execution." });
+    }
+    const result = await userWorkspace.trading.executeTrade(req.auth.userId, payload, req.workspace?.workspace?.id || null);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    res.status(201).json(result);
+  } catch (error) {
+    if (error?.code === "INSUFFICIENT_BALANCE") {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+    if (error?.code === "INVALID_CLIENT_ID") {
+      return res.status(400).json({ error: "clientId is required for idempotent execution." });
+    }
+    if (error?.code === "INSUFFICIENT_POSITION" || error?.code === "NO_POSITION") {
+      return res.status(400).json({ error: error.message });
+    }
+    handleServerError(res, "Atomic trade execution failed", error);
+  }
+});
+
+app.post("/api/db/execute-trade/estimate", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(tradeEstimateBatchSchema), async (req, res) => {
+  try {
+    const payloads = Array.isArray(req.body?.trades) ? req.body.trades : [];
+    const estimate = await userWorkspace.trading.estimateTrades(payloads);
+    res.json(estimate);
+  } catch (error) {
+    handleServerError(res, "Trade execution estimate failed", error);
+  }
+});
+
+
 
 function deterministicMacroOffset(seed, span = 1) {
   const str = String(seed || "");

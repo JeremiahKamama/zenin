@@ -12,6 +12,11 @@ export function getPostAuthRedirectPath({ search = null, fallback = "/app" } = {
   return queryNext || storedNext || fallback;
 }
 
+export function getGuestWorkspacePath({ search = null, fallback = "/app" } = {}) {
+  const candidate = sanitizeInternalPath(getPostAuthRedirectPath({ search, fallback }), fallback);
+  return candidate.startsWith("/app") ? candidate : fallback;
+}
+
 export function storePostAuthRedirect(path, fallback = "/app") {
   if (typeof window === "undefined") return fallback;
   const target = sanitizeInternalPath(path, fallback);

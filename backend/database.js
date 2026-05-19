@@ -19,6 +19,11 @@ function isRenderEnvironment(connectionString) {
   return /render\.com/i.test(String(connectionString || ""));
 }
 
+function isSupabaseEnvironment(connectionString) {
+  if (String(process.env.SUPABASE_URL || "").trim()) return true;
+  return /supabase\.(co|in)|supabase\.red/i.test(String(connectionString || ""));
+}
+
 function resolveRejectUnauthorized(connectionString) {
   const explicit = process.env.PGSSL_REJECT_UNAUTHORIZED;
   if (explicit != null && String(explicit).trim() !== "") {
@@ -31,10 +36,11 @@ function resolveRejectUnauthorized(connectionString) {
   }
 
   // In production we always verify TLS certificates unless explicitly overridden.
-  if (process.env.NODE_ENV === "production" && !isRenderEnvironment(connectionString)) {
+  if (process.env.NODE_ENV === "production") {
     return true;
   }
 
+  // Local Render-like development tunnels sometimes need relaxed verification.
   if (isRenderEnvironment(connectionString)) {
     return false;
   }
@@ -43,13 +49,8 @@ function resolveRejectUnauthorized(connectionString) {
 }
 
 function createPoolConfig() {
-  const connectionString = (
-    process.env.DATABASE_URL ||
-    process.env.RENDER_DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
-    null
-  );
+  const connectionEnv = resolveConnectionEnv();
+  const connectionString = connectionEnv.value;
   const rejectUnauthorized = resolveRejectUnauthorized(connectionString);
   const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized } : false;
 
@@ -62,7 +63,7 @@ function createPoolConfig() {
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "Missing PostgreSQL connection string. Set DATABASE_URL (or RENDER_DATABASE_URL/POSTGRES_URL) in production."
+      "Missing PostgreSQL connection string. Set DATABASE_URL (or SUPABASE_DIRECT_URL / SUPABASE_DB_URL / RENDER_DATABASE_URL / POSTGRES_URL) in production."
     );
   }
 
@@ -73,6 +74,63 @@ function createPoolConfig() {
     user: process.env.PGUSER || "postgres",
     password: process.env.PGPASSWORD || "postgres",
     ssl
+  };
+}
+
+function resolveConnectionEnv() {
+  const candidates = [
+    ["DATABASE_URL", process.env.DATABASE_URL],
+    ["SUPABASE_DB_URL", process.env.SUPABASE_DB_URL],
+    ["SUPABASE_DATABASE_URL", process.env.SUPABASE_DATABASE_URL],
+    ["SUPABASE_DIRECT_URL", process.env.SUPABASE_DIRECT_URL],
+    ["RENDER_DATABASE_URL", process.env.RENDER_DATABASE_URL],
+    ["POSTGRES_URL", process.env.POSTGRES_URL],
+    ["POSTGRES_PRISMA_URL", process.env.POSTGRES_PRISMA_URL]
+  ];
+  const match = candidates.find(([, value]) => String(value || "").trim());
+  return {
+    name: match?.[0] || null,
+    value: match ? String(match[1]).trim() : null
+  };
+}
+
+function describeDatabaseConfig() {
+  const connectionEnv = resolveConnectionEnv();
+  if (connectionEnv.value) {
+    try {
+      const parsed = new URL(connectionEnv.value);
+      return {
+        source: connectionEnv.name,
+        provider: isSupabaseEnvironment(connectionEnv.value)
+          ? "supabase"
+          : isRenderEnvironment(connectionEnv.value)
+            ? "render"
+            : "postgresql",
+        host: parsed.hostname || null,
+        database: parsed.pathname ? parsed.pathname.replace(/^\//, "") : null,
+        ssl: shouldUseSsl(connectionEnv.value)
+      };
+    } catch {
+      return {
+        source: connectionEnv.name,
+        provider: isSupabaseEnvironment(connectionEnv.value)
+          ? "supabase"
+          : isRenderEnvironment(connectionEnv.value)
+            ? "render"
+            : "postgresql",
+        host: "invalid connection string",
+        database: null,
+        ssl: shouldUseSsl(connectionEnv.value)
+      };
+    }
+  }
+
+  return {
+    source: process.env.NODE_ENV === "production" ? null : "PGHOST/PGDATABASE",
+    provider: "postgresql",
+    host: process.env.NODE_ENV === "production" ? null : (process.env.PGHOST || "127.0.0.1"),
+    database: process.env.NODE_ENV === "production" ? null : (process.env.PGDATABASE || "zenin"),
+    ssl: shouldUseSsl(null)
   };
 }
 
@@ -116,7 +174,85 @@ function mapAuthUserRow(row) {
     passkeys: parseJsonPayload(row.passkeys, []),
     backupCodes: parseJsonPayload(row.backupCodes, []),
     emailVerificationCodeHash: row.emailVerificationCodeHash || row.email_verification_code_hash || null,
-    emailVerificationRequestedAt: row.emailVerificationRequestedAt || row.email_verification_requested_at || null
+    emailVerificationRequestedAt: row.emailVerificationRequestedAt || row.email_verification_requested_at || null,
+    activeWorkspaceId: row.activeWorkspaceId || row.active_workspace_id || null,
+    sessionReauthenticatedAt: row.sessionReauthenticatedAt || row.session_reauthenticated_at || null,
+    adminReauthenticatedAt: row.adminReauthenticatedAt || row.admin_reauthenticated_at || null
+  };
+}
+
+function mapExchangeKeyRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    canTrade: Boolean(row.canTrade ?? row.can_trade),
+    permissionScope: String(row.permissionScope || row.permission_scope || "unknown").trim().toLowerCase(),
+    lastVerifiedScope: String(row.lastVerifiedScope || row.last_verified_scope || "unknown").trim().toLowerCase(),
+    riskLevel: String(row.riskLevel || row.risk_level || "standard").trim().toLowerCase(),
+  };
+}
+
+function mapWorkspaceRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    slug: String(row.slug || "").trim(),
+    name: String(row.name || "").trim(),
+    plan: normalizePlanValue(row.plan),
+    billingCycle: normalizeBillingCycleValue(row.billingCycle || row.billing_cycle),
+    seatLimit: Number(row.seatLimit || row.seat_limit || 1),
+    seatCount: Number(row.seatCount || row.seat_count || 1),
+    status: String(row.status || "active").trim().toLowerCase(),
+    ownerUserId: row.ownerUserId == null ? null : Number(row.ownerUserId || row.owner_user_id),
+    createdAt: toIsoString(row.createdAt || row.created_at),
+    updatedAt: toIsoString(row.updatedAt || row.updated_at),
+  };
+}
+
+function mapWorkspaceMemberRow(row) {
+  if (!row) return null;
+  return {
+    workspaceId: Number(row.workspaceId || row.workspace_id),
+    userId: Number(row.userId || row.user_id),
+    role: String(row.role || "member").trim().toLowerCase(),
+    status: String(row.status || "active").trim().toLowerCase(),
+    invitedByUserId: row.invitedByUserId == null ? null : Number(row.invitedByUserId || row.invited_by_user_id),
+    invitedAt: toIsoString(row.invitedAt || row.invited_at),
+    joinedAt: toIsoString(row.joinedAt || row.joined_at),
+    email: row.email || null,
+    displayName: row.displayName || row.display_name || null,
+  };
+}
+
+function mapWorkspaceInviteRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    workspaceId: Number(row.workspaceId || row.workspace_id),
+    email: String(row.email || "").trim().toLowerCase(),
+    role: String(row.role || "member").trim().toLowerCase(),
+    status: row.acceptedAt || row.accepted_at ? "accepted" : row.revokedAt || row.revoked_at ? "revoked" : "pending",
+    expiresAt: toIsoString(row.expiresAt || row.expires_at),
+    acceptedAt: toIsoString(row.acceptedAt || row.accepted_at),
+    revokedAt: toIsoString(row.revokedAt || row.revoked_at),
+    createdByUserId: row.createdByUserId == null ? null : Number(row.createdByUserId || row.created_by_user_id),
+    createdAt: toIsoString(row.createdAt || row.created_at),
+  };
+}
+
+function mapWorkspaceActivityRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    workspaceId: Number(row.workspaceId || row.workspace_id),
+    actorUserId: row.actorUserId == null ? null : Number(row.actorUserId || row.actor_user_id),
+    actorEmail: row.actorEmail || null,
+    actorDisplayName: row.actorDisplayName || row.actor_display_name || null,
+    eventType: String(row.eventType || row.event_type || "").trim(),
+    entityType: String(row.entityType || row.entity_type || "").trim(),
+    entityId: row.entityId || row.entity_id || null,
+    details: parseJsonPayload(row.details || row.details_json, {}),
+    createdAt: toIsoString(row.createdAt || row.created_at),
   };
 }
 
@@ -510,6 +646,16 @@ function normalizeBillingCycleValue(billingCycle) {
   return "monthly";
 }
 
+function slugifyWorkspaceName(value, fallback = "desk") {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+  return slug || fallback;
+}
+
 function normalizeAdminRoleValue(role) {
   const value = String(role || "").trim().toLowerCase();
   if (["user", "support_admin", "billing_admin", "ops_admin", "super_admin"].includes(value)) {
@@ -637,13 +783,15 @@ async function runAdminWorkspaceMigrationTx(client, { force = false, markRun = t
   if (adminPortfolioCount === 0) {
     const portfolioFromGuestResult = await client.query(`
       INSERT INTO user_workspace_portfolio (
-        user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+        user_id, workspace_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
       )
       SELECT
-        $1, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+        $1,
+        (SELECT active_workspace_id FROM app_users WHERE id = $1),
+        symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
       FROM user_workspace_portfolio
       WHERE user_id = 1 AND quantity > $2
-      ON CONFLICT (user_id, symbol, market_type, strategy_name) DO NOTHING;
+      ON CONFLICT (workspace_id, symbol, market_type, strategy_name) DO NOTHING;
     `, [adminUserId, QTY_EPSILON]);
     insertedPortfolio = Number(portfolioFromGuestResult.rowCount || 0);
     copiedPortfolioFrom = insertedPortfolio > 0 ? "guest_workspace" : null;
@@ -651,13 +799,15 @@ async function runAdminWorkspaceMigrationTx(client, { force = false, markRun = t
     if (insertedPortfolio === 0) {
       const portfolioFromLegacyResult = await client.query(`
         INSERT INTO user_workspace_portfolio (
-          user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+          user_id, workspace_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
         )
         SELECT
-          $1, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
+          $1,
+          (SELECT active_workspace_id FROM app_users WHERE id = $1),
+          symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added
         FROM portfolio_holdings
         WHERE quantity > $2
-        ON CONFLICT (user_id, symbol, market_type, strategy_name) DO NOTHING;
+        ON CONFLICT (workspace_id, symbol, market_type, strategy_name) DO NOTHING;
       `, [adminUserId, QTY_EPSILON]);
       insertedPortfolio = Number(portfolioFromLegacyResult.rowCount || 0);
       copiedPortfolioFrom = insertedPortfolio > 0 ? "legacy_portfolio_holdings" : null;
@@ -676,13 +826,15 @@ async function runAdminWorkspaceMigrationTx(client, { force = false, markRun = t
   if (adminWatchlistCount === 0) {
     const watchlistFromGuestResult = await client.query(`
       INSERT INTO user_workspace_watchlist (
-        user_id, symbol, name, type, category, theme, market_type, date_added
+        user_id, workspace_id, symbol, name, type, category, theme, market_type, date_added
       )
       SELECT
-        $1, symbol, name, type, category, theme, market_type, date_added
+        $1,
+        (SELECT active_workspace_id FROM app_users WHERE id = $1),
+        symbol, name, type, category, theme, market_type, date_added
       FROM user_workspace_watchlist
       WHERE user_id = 1
-      ON CONFLICT (user_id, symbol, market_type, category, theme) DO NOTHING;
+      ON CONFLICT (workspace_id, symbol, market_type, category, theme) DO NOTHING;
     `, [adminUserId]);
     insertedWatchlist = Number(watchlistFromGuestResult.rowCount || 0);
     copiedWatchlistFrom = insertedWatchlist > 0 ? "guest_workspace" : null;
@@ -690,12 +842,14 @@ async function runAdminWorkspaceMigrationTx(client, { force = false, markRun = t
     if (insertedWatchlist === 0) {
       const watchlistFromLegacyResult = await client.query(`
         INSERT INTO user_workspace_watchlist (
-          user_id, symbol, name, type, category, theme, market_type, date_added
+          user_id, workspace_id, symbol, name, type, category, theme, market_type, date_added
         )
         SELECT
-          $1, symbol, name, type, category, theme, market_type, date_added
+          $1,
+          (SELECT active_workspace_id FROM app_users WHERE id = $1),
+          symbol, name, type, category, theme, market_type, date_added
         FROM watchlist_assets
-        ON CONFLICT (user_id, symbol, market_type, category, theme) DO NOTHING;
+        ON CONFLICT (workspace_id, symbol, market_type, category, theme) DO NOTHING;
       `, [adminUserId]);
       insertedWatchlist = Number(watchlistFromLegacyResult.rowCount || 0);
       copiedWatchlistFrom = insertedWatchlist > 0 ? "legacy_watchlist_assets" : null;
@@ -1030,7 +1184,88 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS active_workspace_id INTEGER;
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
       ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspaces (
+        id SERIAL PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        owner_user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        plan TEXT NOT NULL DEFAULT 'starter',
+        billing_cycle TEXT NOT NULL DEFAULT 'monthly',
+        seat_limit INTEGER NOT NULL DEFAULT 1,
+        seat_count INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspace_members (
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        status TEXT NOT NULL DEFAULT 'active',
+        invited_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        invited_at TIMESTAMPTZ,
+        joined_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (workspace_id, user_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspace_invites (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        accepted_at TIMESTAMPTZ,
+        revoked_at TIMESTAMPTZ,
+        created_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspace_activity_log (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        actor_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        event_type TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id TEXT,
+        details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspace_alert_assignments (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        alert_key TEXT NOT NULL,
+        assigned_to_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        snoozed_until TIMESTAMPTZ,
+        archived_at TIMESTAMPTZ,
+        archived_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        notes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (workspace_id, alert_key)
+      );
     `);
 
     await client.query(`
@@ -1114,10 +1349,18 @@ async function initializeDatabase() {
         token_hash TEXT NOT NULL UNIQUE,
         ip_address TEXT,
         user_agent TEXT,
+        session_reauthenticated_at TIMESTAMPTZ,
+        admin_reauthenticated_at TIMESTAMPTZ,
         expires_at TIMESTAMPTZ NOT NULL,
         revoked_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE auth_sessions
+      ADD COLUMN IF NOT EXISTS session_reauthenticated_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS admin_reauthenticated_at TIMESTAMPTZ;
     `);
 
     await client.query(`
@@ -1142,6 +1385,7 @@ async function initializeDatabase() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_workspace_cash (
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         currency TEXT NOT NULL,
         balance DOUBLE PRECISION NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1152,14 +1396,26 @@ async function initializeDatabase() {
     // Migrate existing balance to USD cash if not already there
     await client.query(`
       INSERT INTO user_workspace_cash (user_id, currency, balance)
-      SELECT user_id, 'USD', balance FROM user_workspace_balance
-      ON CONFLICT (user_id, currency) DO NOTHING;
+      SELECT b.user_id, 'USD', b.balance
+      FROM user_workspace_balance b
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM user_workspace_cash c
+        WHERE c.user_id = b.user_id
+          AND c.currency = 'USD'
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_cash
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE;
     `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_workspace_portfolio (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         symbol TEXT NOT NULL,
         name TEXT NOT NULL,
         price DOUBLE PRECISION NOT NULL,
@@ -1177,6 +1433,7 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
+      ALTER TABLE user_workspace_portfolio ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE;
       ALTER TABLE user_workspace_portfolio ADD COLUMN IF NOT EXISTS funding_rate DOUBLE PRECISION;
       ALTER TABLE user_workspace_portfolio ADD COLUMN IF NOT EXISTS open_interest DOUBLE PRECISION;
     `);
@@ -1185,6 +1442,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS user_workspace_watchlist (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         symbol TEXT NOT NULL,
         name TEXT NOT NULL,
         type TEXT NOT NULL,
@@ -1197,9 +1455,15 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
+      ALTER TABLE user_workspace_watchlist
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE;
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_workspace_trades (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         client_id TEXT,
         date DATE NOT NULL,
         executed_at TIMESTAMPTZ,
@@ -1250,6 +1514,7 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE user_workspace_trades
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
       ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'zenin',
       ADD COLUMN IF NOT EXISTS fee DOUBLE PRECISION,
       ADD COLUMN IF NOT EXISTS fee_currency TEXT,
@@ -1263,6 +1528,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS user_workspace_trade_fills (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         trade_client_id TEXT,
         platform TEXT NOT NULL,
         platform_trade_id TEXT,
@@ -1288,6 +1554,7 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE user_workspace_trade_fills
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
       ADD COLUMN IF NOT EXISTS trade_client_id TEXT,
       ADD COLUMN IF NOT EXISTS platform_trade_id TEXT,
       ADD COLUMN IF NOT EXISTS symbol TEXT,
@@ -1309,6 +1576,7 @@ async function initializeDatabase() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_workspace_documents (
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         namespace TEXT NOT NULL,
         payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1317,13 +1585,237 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
+      ALTER TABLE user_workspace_documents
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE;
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_workspace_collections (
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         namespace TEXT NOT NULL,
         items_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (user_id, namespace)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_collections
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspace_documents (
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        namespace TEXT NOT NULL,
+        payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (workspace_id, namespace)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS workspace_collections (
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        namespace TEXT NOT NULL,
+        items_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (workspace_id, namespace)
+      );
+    `);
+
+    await client.query(`
+      INSERT INTO workspaces (slug, name, owner_user_id, plan, billing_cycle, seat_limit, seat_count, status)
+      SELECT
+        'workspace-' || u.id::text,
+        COALESCE(NULLIF(u.display_name, ''), split_part(u.email, '@', 1) || ' Workspace'),
+        u.id,
+        COALESCE(NULLIF(u.current_plan, ''), 'starter'),
+        COALESCE(NULLIF(u.current_billing_cycle, ''), 'monthly'),
+        CASE WHEN COALESCE(NULLIF(u.current_plan, ''), 'starter') = 'desk' THEN 5 ELSE 1 END,
+        1,
+        'active'
+      FROM app_users u
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM workspaces w
+        WHERE w.owner_user_id = u.id
+      );
+    `);
+
+    await client.query(`
+      INSERT INTO workspace_members (workspace_id, user_id, role, status, invited_by_user_id, invited_at, joined_at)
+      SELECT w.id, w.owner_user_id, 'owner', 'active', w.owner_user_id, w.created_at, w.created_at
+      FROM workspaces w
+      ON CONFLICT (workspace_id, user_id) DO NOTHING;
+    `);
+
+    await client.query(`
+      UPDATE app_users u
+      SET active_workspace_id = w.id
+      FROM workspaces w
+      WHERE w.owner_user_id = u.id
+        AND u.active_workspace_id IS NULL;
+    `);
+
+    await client.query(`
+      UPDATE workspaces w
+      SET
+        plan = u.current_plan,
+        billing_cycle = u.current_billing_cycle,
+        seat_limit = CASE WHEN u.current_plan = 'desk' THEN 5 ELSE 1 END,
+        updated_at = NOW()
+      FROM app_users u
+      WHERE w.owner_user_id = u.id;
+    `);
+
+    await assignWorkspaceCashRows(client);
+
+    await client.query(`
+      UPDATE user_workspace_portfolio p
+      SET workspace_id = u.active_workspace_id
+      FROM app_users u
+      WHERE p.user_id = u.id
+        AND u.active_workspace_id IS NOT NULL
+        AND p.workspace_id IS NULL;
+    `);
+
+    await client.query(`
+      UPDATE user_workspace_watchlist wv
+      SET workspace_id = u.active_workspace_id
+      FROM app_users u
+      WHERE wv.user_id = u.id
+        AND u.active_workspace_id IS NOT NULL
+        AND wv.workspace_id IS NULL;
+    `);
+
+    await client.query(`
+      UPDATE user_workspace_trades t
+      SET workspace_id = u.active_workspace_id
+      FROM app_users u
+      WHERE t.user_id = u.id
+        AND u.active_workspace_id IS NOT NULL
+        AND t.workspace_id IS NULL;
+    `);
+
+    await client.query(`
+      UPDATE user_workspace_trade_fills tf
+      SET workspace_id = u.active_workspace_id
+      FROM app_users u
+      WHERE tf.user_id = u.id
+        AND u.active_workspace_id IS NOT NULL
+        AND tf.workspace_id IS NULL;
+    `);
+
+    await mergeWorkspaceCashDuplicates(client);
+    await mergeWorkspacePortfolioDuplicates(client);
+    await mergeWorkspaceWatchlistDuplicates(client);
+    await mergeWorkspaceTradeDuplicates(client);
+    await mergeWorkspaceTradeFillDuplicates(client);
+
+    await client.query(`
+      ALTER TABLE user_workspace_cash
+      DROP CONSTRAINT IF EXISTS user_workspace_cash_pkey;
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_portfolio
+      DROP CONSTRAINT IF EXISTS user_workspace_portfolio_user_id_symbol_market_type_strategy_name_key;
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_watchlist
+      DROP CONSTRAINT IF EXISTS user_workspace_watchlist_user_id_symbol_market_type_category_theme_key;
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_trades
+      DROP CONSTRAINT IF EXISTS user_workspace_trades_user_id_client_id_key;
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_trade_fills
+      DROP CONSTRAINT IF EXISTS user_workspace_trade_fills_user_id_platform_platform_fill_id_key;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_cash_workspace_currency
+      ON user_workspace_cash (workspace_id, currency);
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_portfolio_workspace_symbol_market_strategy
+      ON user_workspace_portfolio (workspace_id, symbol, market_type, strategy_name);
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_watchlist_workspace_symbol_market_category_theme
+      ON user_workspace_watchlist (workspace_id, symbol, market_type, category, theme);
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_trades_workspace_client
+      ON user_workspace_trades (workspace_id, client_id)
+      WHERE client_id IS NOT NULL;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_trade_fills_workspace_platform_fill
+      ON user_workspace_trade_fills (workspace_id, platform, platform_fill_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_workspace_portfolio_workspace_lookup
+      ON user_workspace_portfolio (workspace_id, date_added DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_workspace_watchlist_workspace_lookup
+      ON user_workspace_watchlist (workspace_id, date_added DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_workspace_trades_workspace_lookup
+      ON user_workspace_trades (workspace_id, executed_at DESC, id DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_workspace_trade_fills_workspace_lookup
+      ON user_workspace_trade_fills (workspace_id, executed_at DESC, id DESC);
+    `);
+
+    await client.query(`
+      INSERT INTO workspace_documents (workspace_id, namespace, payload_json, updated_at)
+      SELECT u.active_workspace_id, d.namespace, d.payload_json, d.updated_at
+      FROM user_workspace_documents d
+      JOIN app_users u ON u.id = d.user_id
+      WHERE u.active_workspace_id IS NOT NULL
+      ON CONFLICT (workspace_id, namespace) DO UPDATE
+      SET payload_json = EXCLUDED.payload_json, updated_at = EXCLUDED.updated_at;
+    `);
+
+    await client.query(`
+      INSERT INTO workspace_collections (workspace_id, namespace, items_json, updated_at)
+      SELECT u.active_workspace_id, c.namespace, c.items_json, c.updated_at
+      FROM user_workspace_collections c
+      JOIN app_users u ON u.id = c.user_id
+      WHERE u.active_workspace_id IS NOT NULL
+      ON CONFLICT (workspace_id, namespace) DO UPDATE
+      SET items_json = EXCLUDED.items_json, updated_at = EXCLUDED.updated_at;
+    `);
+
+    await client.query(`
+      UPDATE workspaces w
+      SET seat_count = members.count,
+          updated_at = NOW()
+      FROM (
+        SELECT workspace_id, COUNT(*)::int AS count
+        FROM workspace_members
+        WHERE status = 'active'
+        GROUP BY workspace_id
+      ) members
+      WHERE members.workspace_id = w.id;
     `);
 
     await client.query(`
@@ -1342,10 +1834,14 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS user_exchange_keys (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
         exchange TEXT NOT NULL,
         api_key TEXT NOT NULL,
         api_secret TEXT,
         extra_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        last_sync_at TIMESTAMPTZ,
+        last_sync_status TEXT,
+        last_sync_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -1362,6 +1858,27 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(date, asset, ticker)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE user_exchange_keys
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+      ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS last_sync_status TEXT,
+      ADD COLUMN IF NOT EXISTS last_sync_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS permission_scope TEXT NOT NULL DEFAULT 'unknown',
+      ADD COLUMN IF NOT EXISTS can_trade BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS last_verified_scope TEXT NOT NULL DEFAULT 'unknown',
+      ADD COLUMN IF NOT EXISTS risk_level TEXT NOT NULL DEFAULT 'standard';
+    `);
+
+    await client.query(`
+      UPDATE user_exchange_keys k
+      SET workspace_id = u.active_workspace_id
+      FROM app_users u
+      WHERE k.user_id = u.id
+        AND u.active_workspace_id IS NOT NULL
+        AND k.workspace_id IS NULL;
     `);
 
     await client.query(`
@@ -1399,15 +1916,16 @@ async function initializeDatabase() {
     const guestWatchlistCountResult = await client.query(`
       SELECT COUNT(*)::int AS count
       FROM user_workspace_watchlist
-      WHERE user_id = 1;
+      WHERE workspace_id = (SELECT active_workspace_id FROM app_users WHERE id = 1);
     `);
 
     const guestWatchlistCount = Number(guestWatchlistCountResult.rows[0]?.count || 0);
     if (guestWatchlistCount === 0) {
       await client.query(`
-        INSERT INTO user_workspace_watchlist (user_id, symbol, name, type, category, theme, market_type, date_added)
+        INSERT INTO user_workspace_watchlist (user_id, workspace_id, symbol, name, type, category, theme, market_type, date_added)
         SELECT
           1 AS user_id,
+          (SELECT active_workspace_id FROM app_users WHERE id = 1) AS workspace_id,
           symbol,
           name,
           type,
@@ -2463,6 +2981,871 @@ const analytics = {
   }
 };
 
+function seatLimitForPlan(plan) {
+  return normalizePlanValue(plan) === "desk" ? 5 : 1;
+}
+
+async function backfillWorkspaceScopedRecords(client, userId, workspaceId) {
+  await client.query(`
+    UPDATE user_exchange_keys
+    SET workspace_id = $2
+    WHERE user_id = $1 AND workspace_id IS NULL;
+  `, [toUserId(userId), Number(workspaceId)]);
+}
+
+async function mergeWorkspaceCashDuplicates(client) {
+  const duplicateGroups = await client.query(`
+    SELECT workspace_id AS "workspaceId", currency
+    FROM user_workspace_cash
+    WHERE workspace_id IS NOT NULL
+    GROUP BY workspace_id, currency
+    HAVING COUNT(*) > 1;
+  `);
+
+  for (const group of duplicateGroups.rows) {
+    const rows = await client.query(`
+      SELECT
+        c.user_id AS "userId",
+        c.balance,
+        c.updated_at AS "updatedAt",
+        w.owner_user_id AS "ownerUserId"
+      FROM user_workspace_cash c
+      JOIN workspaces w ON w.id = c.workspace_id
+      WHERE c.workspace_id = $1 AND c.currency = $2
+      ORDER BY
+        CASE WHEN c.user_id = w.owner_user_id THEN 0 ELSE 1 END,
+        c.updated_at DESC,
+        c.user_id ASC;
+    `, [group.workspaceId, group.currency]);
+
+    if (rows.rows.length <= 1) continue;
+
+    const keeper = rows.rows[0];
+    const totalBalance = rows.rows.reduce((sum, row) => sum + toNumber(row.balance), 0);
+    const updatedAt = rows.rows.reduce((latest, row) => {
+      const current = row.updatedAt ? new Date(row.updatedAt).getTime() : 0;
+      return current > latest ? current : latest;
+    }, 0);
+
+    await client.query(`
+      UPDATE user_workspace_cash
+      SET balance = $3, updated_at = $4
+      WHERE user_id = $1 AND currency = $2;
+    `, [
+      Number(keeper.userId),
+      group.currency,
+      totalBalance,
+      updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString()
+    ]);
+
+    const duplicateUserIds = rows.rows.slice(1).map((row) => Number(row.userId));
+    if (duplicateUserIds.length) {
+      await client.query(`
+        DELETE FROM user_workspace_cash
+        WHERE workspace_id = $1
+          AND currency = $2
+          AND user_id = ANY($3::int[]);
+      `, [group.workspaceId, group.currency, duplicateUserIds]);
+    }
+  }
+}
+
+async function assignWorkspaceCashRows(client) {
+  const pendingGroups = await client.query(`
+    SELECT u.active_workspace_id AS "workspaceId", c.currency
+    FROM user_workspace_cash c
+    JOIN app_users u ON u.id = c.user_id
+    WHERE c.workspace_id IS NULL
+      AND u.active_workspace_id IS NOT NULL
+    GROUP BY u.active_workspace_id, c.currency;
+  `);
+
+  for (const group of pendingGroups.rows) {
+    const existingRows = await client.query(`
+      SELECT
+        c.user_id AS "userId",
+        c.balance,
+        c.updated_at AS "updatedAt",
+        w.owner_user_id AS "ownerUserId",
+        true AS "isAssigned"
+      FROM user_workspace_cash c
+      JOIN workspaces w ON w.id = c.workspace_id
+      WHERE c.workspace_id = $1 AND c.currency = $2
+    `, [group.workspaceId, group.currency]);
+
+    const pendingRows = await client.query(`
+      SELECT
+        c.user_id AS "userId",
+        c.balance,
+        c.updated_at AS "updatedAt",
+        w.owner_user_id AS "ownerUserId",
+        false AS "isAssigned"
+      FROM user_workspace_cash c
+      JOIN app_users u ON u.id = c.user_id
+      JOIN workspaces w ON w.id = u.active_workspace_id
+      WHERE c.workspace_id IS NULL
+        AND u.active_workspace_id = $1
+        AND c.currency = $2
+    `, [group.workspaceId, group.currency]);
+
+    const combined = [...existingRows.rows, ...pendingRows.rows].sort((a, b) => {
+      const aOwner = Number(a.userId) === Number(a.ownerUserId) ? 0 : 1;
+      const bOwner = Number(b.userId) === Number(b.ownerUserId) ? 0 : 1;
+      if (aOwner !== bOwner) return aOwner - bOwner;
+      const aAssigned = a.isAssigned ? 0 : 1;
+      const bAssigned = b.isAssigned ? 0 : 1;
+      if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+      const aUpdated = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+      const bUpdated = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+      return bUpdated - aUpdated || Number(a.userId) - Number(b.userId);
+    });
+
+    if (!combined.length) continue;
+
+    const keeper = combined[0];
+    const totalBalance = combined.reduce((sum, row) => sum + toNumber(row.balance), 0);
+    const latestUpdatedAt = combined.reduce((latest, row) => {
+      const current = row.updatedAt ? new Date(row.updatedAt).getTime() : 0;
+      return current > latest ? current : latest;
+    }, 0);
+    const nextUpdatedAt = latestUpdatedAt ? new Date(latestUpdatedAt).toISOString() : new Date().toISOString();
+
+    await client.query(`
+      UPDATE user_workspace_cash
+      SET workspace_id = $3, balance = $4, updated_at = $5
+      WHERE user_id = $1 AND currency = $2;
+    `, [
+      Number(keeper.userId),
+      group.currency,
+      Number(group.workspaceId),
+      totalBalance,
+      nextUpdatedAt
+    ]);
+
+    const otherAssignedUserIds = existingRows.rows
+      .filter((row) => Number(row.userId) !== Number(keeper.userId))
+      .map((row) => Number(row.userId));
+    if (otherAssignedUserIds.length) {
+      await client.query(`
+        DELETE FROM user_workspace_cash
+        WHERE workspace_id = $1
+          AND currency = $2
+          AND user_id = ANY($3::int[]);
+      `, [group.workspaceId, group.currency, otherAssignedUserIds]);
+    }
+
+    const pendingDeleteUserIds = pendingRows.rows
+      .filter((row) => Number(row.userId) !== Number(keeper.userId))
+      .map((row) => Number(row.userId));
+    if (pendingDeleteUserIds.length) {
+      await client.query(`
+        DELETE FROM user_workspace_cash
+        WHERE workspace_id IS NULL
+          AND currency = $1
+          AND user_id = ANY($2::int[]);
+      `, [group.currency, pendingDeleteUserIds]);
+    }
+  }
+}
+
+async function mergeWorkspacePortfolioDuplicates(client) {
+  const duplicateGroups = await client.query(`
+    SELECT workspace_id AS "workspaceId", symbol, market_type AS "marketType", strategy_name AS "strategyName"
+    FROM user_workspace_portfolio
+    WHERE workspace_id IS NOT NULL
+    GROUP BY workspace_id, symbol, market_type, strategy_name
+    HAVING COUNT(*) > 1;
+  `);
+
+  for (const group of duplicateGroups.rows) {
+    const rows = await client.query(`
+      SELECT
+        id,
+        user_id AS "userId",
+        symbol,
+        name,
+        price,
+        quantity,
+        entry_price AS "entryPrice",
+        opened_at AS "openedAt",
+        type,
+        market_type AS "marketType",
+        order_type AS "orderType",
+        strategy_name AS "strategyName",
+        legs_json AS "legsJson",
+        date_added,
+        funding_rate AS "fundingRate",
+        open_interest AS "openInterest"
+      FROM user_workspace_portfolio
+      WHERE workspace_id = $1
+        AND symbol = $2
+        AND market_type = $3
+        AND strategy_name IS NOT DISTINCT FROM $4
+      ORDER BY date_added DESC, id DESC;
+    `, [group.workspaceId, group.symbol, group.marketType, group.strategyName]);
+
+    if (rows.rows.length <= 1) continue;
+
+    const keeper = rows.rows[0];
+    const totalQuantity = rows.rows.reduce((sum, row) => sum + toNumber(row.quantity), 0);
+    if (Math.abs(totalQuantity) <= QTY_EPSILON) {
+      await client.query(`
+        DELETE FROM user_workspace_portfolio
+        WHERE workspace_id = $1
+          AND symbol = $2
+          AND market_type = $3
+          AND strategy_name IS NOT DISTINCT FROM $4;
+      `, [group.workspaceId, group.symbol, group.marketType, group.strategyName]);
+      continue;
+    }
+
+    const weightedEntryNumerator = rows.rows.reduce((sum, row) => {
+      const quantity = Math.abs(toNumber(row.quantity));
+      const price = row.entryPrice == null ? toNumber(row.price) : toNumber(row.entryPrice);
+      return sum + (price * quantity);
+    }, 0);
+    const weightedEntry = weightedEntryNumerator / Math.max(rows.rows.reduce((sum, row) => sum + Math.abs(toNumber(row.quantity)), 0), QTY_EPSILON);
+
+    await client.query(`
+      UPDATE user_workspace_portfolio
+      SET
+        user_id = $2,
+        name = $3,
+        price = $4,
+        quantity = $5,
+        entry_price = $6,
+        opened_at = $7,
+        type = $8,
+        market_type = $9,
+        order_type = $10,
+        strategy_name = $11,
+        legs_json = $12::jsonb,
+        date_added = $13,
+        funding_rate = $14,
+        open_interest = $15,
+        updated_at = NOW()
+      WHERE id = $1;
+    `, [
+      Number(keeper.id),
+      Number(keeper.userId),
+      String(keeper.name || keeper.symbol || ""),
+      toNumber(keeper.price),
+      totalQuantity,
+      weightedEntry,
+      keeper.openedAt || null,
+      String(keeper.type || "stock"),
+      String(keeper.marketType || "spot"),
+      String(keeper.orderType || "buy"),
+      keeper.strategyName || null,
+      JSON.stringify(parseJsonPayload(keeper.legsJson, {})),
+      keeper.date_added || new Date().toISOString(),
+      keeper.fundingRate == null ? null : toNumber(keeper.fundingRate),
+      keeper.openInterest == null ? null : toNumber(keeper.openInterest)
+    ]);
+
+    const duplicateIds = rows.rows.slice(1).map((row) => Number(row.id));
+    if (duplicateIds.length) {
+      await client.query(`DELETE FROM user_workspace_portfolio WHERE id = ANY($1::int[]);`, [duplicateIds]);
+    }
+  }
+}
+
+async function mergeWorkspaceWatchlistDuplicates(client) {
+  const duplicateGroups = await client.query(`
+    SELECT workspace_id AS "workspaceId", symbol, market_type AS "marketType", category, theme
+    FROM user_workspace_watchlist
+    WHERE workspace_id IS NOT NULL
+    GROUP BY workspace_id, symbol, market_type, category, theme
+    HAVING COUNT(*) > 1;
+  `);
+
+  for (const group of duplicateGroups.rows) {
+    const rows = await client.query(`
+      SELECT id
+      FROM user_workspace_watchlist
+      WHERE workspace_id = $1
+        AND symbol = $2
+        AND market_type = $3
+        AND category IS NOT DISTINCT FROM $4
+        AND theme IS NOT DISTINCT FROM $5
+      ORDER BY date_added DESC, id DESC;
+    `, [group.workspaceId, group.symbol, group.marketType, group.category, group.theme]);
+    const duplicateIds = rows.rows.slice(1).map((row) => Number(row.id));
+    if (duplicateIds.length) {
+      await client.query(`DELETE FROM user_workspace_watchlist WHERE id = ANY($1::int[]);`, [duplicateIds]);
+    }
+  }
+}
+
+async function mergeWorkspaceTradeDuplicates(client) {
+  const duplicateGroups = await client.query(`
+    SELECT workspace_id AS "workspaceId", client_id AS "clientId"
+    FROM user_workspace_trades
+    WHERE workspace_id IS NOT NULL AND client_id IS NOT NULL
+    GROUP BY workspace_id, client_id
+    HAVING COUNT(*) > 1;
+  `);
+
+  for (const group of duplicateGroups.rows) {
+    const rows = await client.query(`
+      SELECT id
+      FROM user_workspace_trades
+      WHERE workspace_id = $1 AND client_id = $2
+      ORDER BY COALESCE(executed_at, date::timestamptz) DESC, id DESC;
+    `, [group.workspaceId, group.clientId]);
+    const duplicateIds = rows.rows.slice(1).map((row) => Number(row.id));
+    if (duplicateIds.length) {
+      await client.query(`DELETE FROM user_workspace_trades WHERE id = ANY($1::int[]);`, [duplicateIds]);
+    }
+  }
+}
+
+async function mergeWorkspaceTradeFillDuplicates(client) {
+  const duplicateGroups = await client.query(`
+    SELECT workspace_id AS "workspaceId", platform, platform_fill_id AS "platformFillId"
+    FROM user_workspace_trade_fills
+    WHERE workspace_id IS NOT NULL
+    GROUP BY workspace_id, platform, platform_fill_id
+    HAVING COUNT(*) > 1;
+  `);
+
+  for (const group of duplicateGroups.rows) {
+    const rows = await client.query(`
+      SELECT id
+      FROM user_workspace_trade_fills
+      WHERE workspace_id = $1 AND platform = $2 AND platform_fill_id = $3
+      ORDER BY COALESCE(executed_at, created_at) DESC, id DESC;
+    `, [group.workspaceId, group.platform, group.platformFillId]);
+    const duplicateIds = rows.rows.slice(1).map((row) => Number(row.id));
+    if (duplicateIds.length) {
+      await client.query(`DELETE FROM user_workspace_trade_fills WHERE id = ANY($1::int[]);`, [duplicateIds]);
+    }
+  }
+}
+
+const workspaces = {
+  ensurePersonalWorkspace: async (userId) => {
+    const resolvedUserId = toUserId(userId);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const userResult = await client.query(`
+        SELECT
+          id,
+          email,
+          display_name AS "displayName",
+          current_plan AS "currentPlan",
+          current_billing_cycle AS "currentBillingCycle",
+          active_workspace_id AS "activeWorkspaceId"
+        FROM app_users
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE;
+      `, [resolvedUserId]);
+      const user = userResult.rows[0];
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      let workspaceRow = null;
+      if (user.activeWorkspaceId) {
+        const existing = await client.query(`
+          SELECT
+            id,
+            slug,
+            name,
+            plan,
+            billing_cycle AS "billingCycle",
+            seat_limit AS "seatLimit",
+            seat_count AS "seatCount",
+            status,
+            owner_user_id AS "ownerUserId",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+          FROM workspaces
+          WHERE id = $1
+          LIMIT 1;
+        `, [user.activeWorkspaceId]);
+        workspaceRow = existing.rows[0] || null;
+        if (workspaceRow && Number(workspaceRow.ownerUserId) !== resolvedUserId) {
+          const membershipResult = await client.query(`
+            SELECT role, status
+            FROM workspace_members
+            WHERE workspace_id = $1 AND user_id = $2
+            LIMIT 1;
+          `, [workspaceRow.id, resolvedUserId]);
+          const membership = membershipResult.rows[0] || null;
+          const status = String(membership?.status || "").trim().toLowerCase();
+          if (!membership || status !== "active") {
+            workspaceRow = null;
+          }
+        }
+      }
+
+      if (!workspaceRow) {
+        const ownerWorkspace = await client.query(`
+          SELECT
+            id,
+            slug,
+            name,
+            plan,
+            billing_cycle AS "billingCycle",
+            seat_limit AS "seatLimit",
+            seat_count AS "seatCount",
+            status,
+            owner_user_id AS "ownerUserId",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+          FROM workspaces
+          WHERE owner_user_id = $1
+          ORDER BY id ASC
+          LIMIT 1;
+        `, [resolvedUserId]);
+        workspaceRow = ownerWorkspace.rows[0] || null;
+      }
+
+      if (!workspaceRow) {
+        const fallbackName = String(user.displayName || user.email || `Workspace ${resolvedUserId}`).trim();
+        const localPart = String(user.email || "").split("@")[0] || `user-${resolvedUserId}`;
+        const slugBase = slugifyWorkspaceName(localPart, `workspace-${resolvedUserId}`);
+        const insertWorkspace = await client.query(`
+          INSERT INTO workspaces (
+            slug,
+            name,
+            owner_user_id,
+            plan,
+            billing_cycle,
+            seat_limit,
+            seat_count,
+            status
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, 1, 'active')
+          RETURNING
+            id,
+            slug,
+            name,
+            plan,
+            billing_cycle AS "billingCycle",
+            seat_limit AS "seatLimit",
+            seat_count AS "seatCount",
+            status,
+            owner_user_id AS "ownerUserId",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt";
+        `, [
+          `${slugBase}-${resolvedUserId}`,
+          fallbackName,
+          resolvedUserId,
+          normalizePlanValue(user.currentPlan),
+          normalizeBillingCycleValue(user.currentBillingCycle),
+          seatLimitForPlan(user.currentPlan)
+        ]);
+        workspaceRow = insertWorkspace.rows[0];
+      }
+
+      if (Number(workspaceRow.ownerUserId) === resolvedUserId) {
+        await client.query(`
+          INSERT INTO workspace_members (
+            workspace_id,
+            user_id,
+            role,
+            status,
+            invited_by_user_id,
+            invited_at,
+            joined_at
+          )
+          VALUES ($1, $2, 'owner', 'active', $2, NOW(), NOW())
+          ON CONFLICT (workspace_id, user_id) DO UPDATE
+          SET role = CASE
+            WHEN workspace_members.role = 'owner' THEN workspace_members.role
+            ELSE 'owner'
+          END,
+          status = 'active',
+          joined_at = COALESCE(workspace_members.joined_at, NOW());
+        `, [workspaceRow.id, resolvedUserId]);
+      } else {
+        await client.query(`
+          INSERT INTO workspace_members (
+            workspace_id,
+            user_id,
+            role,
+            status,
+            invited_by_user_id,
+            invited_at,
+            joined_at
+          )
+          VALUES ($1, $2, 'member', 'active', NULL, NOW(), NOW())
+          ON CONFLICT (workspace_id, user_id) DO UPDATE
+          SET
+            status = 'active',
+            joined_at = COALESCE(workspace_members.joined_at, NOW()),
+            role = workspace_members.role;
+        `, [workspaceRow.id, resolvedUserId]);
+      }
+
+      await client.query(`
+        UPDATE app_users
+        SET active_workspace_id = $2, updated_at = NOW()
+        WHERE id = $1;
+      `, [resolvedUserId, workspaceRow.id]);
+
+      await backfillWorkspaceScopedRecords(client, resolvedUserId, workspaceRow.id);
+
+      if (Number(workspaceRow.ownerUserId) === resolvedUserId) {
+        await client.query(`
+          UPDATE workspaces
+          SET
+            seat_count = (
+              SELECT COUNT(*)::int
+              FROM workspace_members
+              WHERE workspace_id = $1 AND status = 'active'
+            ),
+            plan = $2,
+            billing_cycle = $3,
+            seat_limit = $4,
+            updated_at = NOW()
+          WHERE id = $1;
+        `, [
+          workspaceRow.id,
+          normalizePlanValue(user.currentPlan),
+          normalizeBillingCycleValue(user.currentBillingCycle),
+          seatLimitForPlan(user.currentPlan)
+        ]);
+      } else {
+        await client.query(`
+          UPDATE workspaces
+          SET
+            seat_count = (
+              SELECT COUNT(*)::int
+              FROM workspace_members
+              WHERE workspace_id = $1 AND status = 'active'
+            ),
+            updated_at = NOW()
+          WHERE id = $1;
+        `, [workspaceRow.id]);
+      }
+
+      const refreshed = await client.query(`
+        SELECT
+          id,
+          slug,
+          name,
+          plan,
+          billing_cycle AS "billingCycle",
+          seat_limit AS "seatLimit",
+          seat_count AS "seatCount",
+          status,
+          owner_user_id AS "ownerUserId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM workspaces
+        WHERE id = $1
+        LIMIT 1;
+      `, [workspaceRow.id]);
+
+      await client.query("COMMIT");
+      return mapWorkspaceRow(refreshed.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  getActiveForUser: async (userId) => {
+    const workspace = await workspaces.ensurePersonalWorkspace(userId);
+    if (!workspace) return null;
+    const membership = await pool.query(`
+      SELECT
+        wm.workspace_id AS "workspaceId",
+        wm.user_id AS "userId",
+        wm.role,
+        wm.status,
+        wm.invited_by_user_id AS "invitedByUserId",
+        wm.invited_at AS "invitedAt",
+        wm.joined_at AS "joinedAt",
+        u.email,
+        u.display_name AS "displayName"
+      FROM workspace_members wm
+      JOIN app_users u ON u.id = wm.user_id
+      WHERE wm.workspace_id = $1 AND wm.user_id = $2
+      LIMIT 1;
+    `, [workspace.id, toUserId(userId)]);
+    return {
+      workspace,
+      membership: mapWorkspaceMemberRow(membership.rows[0]),
+    };
+  },
+
+  listMembers: async (workspaceId) => {
+    const result = await pool.query(`
+      SELECT
+        wm.workspace_id AS "workspaceId",
+        wm.user_id AS "userId",
+        wm.role,
+        wm.status,
+        wm.invited_by_user_id AS "invitedByUserId",
+        wm.invited_at AS "invitedAt",
+        wm.joined_at AS "joinedAt",
+        u.email,
+        u.display_name AS "displayName"
+      FROM workspace_members wm
+      JOIN app_users u ON u.id = wm.user_id
+      WHERE wm.workspace_id = $1
+      ORDER BY
+        CASE wm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+        COALESCE(u.display_name, u.email) ASC;
+    `, [Number(workspaceId)]);
+    return result.rows.map(mapWorkspaceMemberRow);
+  },
+
+  listInvites: async (workspaceId) => {
+    const result = await pool.query(`
+      SELECT
+        id,
+        workspace_id AS "workspaceId",
+        email,
+        role,
+        expires_at AS "expiresAt",
+        accepted_at AS "acceptedAt",
+        revoked_at AS "revokedAt",
+        created_by_user_id AS "createdByUserId",
+        created_at AS "createdAt"
+      FROM workspace_invites
+      WHERE workspace_id = $1
+      ORDER BY created_at DESC;
+    `, [Number(workspaceId)]);
+    return result.rows.map(mapWorkspaceInviteRow);
+  },
+
+  updateWorkspace: async (workspaceId, payload = {}) => {
+    const current = await pool.query(`
+      SELECT id, slug, name, plan, billing_cycle AS "billingCycle", seat_limit AS "seatLimit", seat_count AS "seatCount", status, owner_user_id AS "ownerUserId", created_at AS "createdAt", updated_at AS "updatedAt"
+      FROM workspaces
+      WHERE id = $1
+      LIMIT 1;
+    `, [Number(workspaceId)]);
+    if (!current.rows[0]) return null;
+    const existing = current.rows[0];
+    const nextName = payload.name ? String(payload.name).trim() : existing.name;
+    const nextSlug = payload.slug ? slugifyWorkspaceName(payload.slug, existing.slug) : existing.slug;
+    const result = await pool.query(`
+      UPDATE workspaces
+      SET name = $2, slug = $3, updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, slug, name, plan, billing_cycle AS "billingCycle", seat_limit AS "seatLimit", seat_count AS "seatCount", status, owner_user_id AS "ownerUserId", created_at AS "createdAt", updated_at AS "updatedAt";
+    `, [Number(workspaceId), nextName, nextSlug]);
+    return mapWorkspaceRow(result.rows[0]);
+  },
+
+  createInvite: async ({ workspaceId, email, role = "member", createdByUserId = null }) => {
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedRole = String(role || "member").trim().toLowerCase() === "admin" ? "admin" : "member";
+    const token = crypto.randomBytes(24).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const result = await pool.query(`
+      INSERT INTO workspace_invites (
+        workspace_id,
+        email,
+        role,
+        token_hash,
+        expires_at,
+        created_by_user_id
+      )
+      VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days', $5)
+      RETURNING
+        id,
+        workspace_id AS "workspaceId",
+        email,
+        role,
+        expires_at AS "expiresAt",
+        accepted_at AS "acceptedAt",
+        revoked_at AS "revokedAt",
+        created_by_user_id AS "createdByUserId",
+        created_at AS "createdAt";
+    `, [Number(workspaceId), normalizedEmail, normalizedRole, tokenHash, createdByUserId ? toUserId(createdByUserId) : null]);
+    const invite = mapWorkspaceInviteRow(result.rows[0]);
+    return { invite, token };
+  },
+
+  acceptInvite: async ({ token, userId }) => {
+    const tokenHash = crypto.createHash("sha256").update(String(token || "")).digest("hex");
+    const resolvedUserId = toUserId(userId);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const inviteResult = await client.query(`
+        SELECT
+          wi.id,
+          wi.workspace_id AS "workspaceId",
+          wi.email,
+          wi.role,
+          wi.expires_at AS "expiresAt",
+          wi.accepted_at AS "acceptedAt",
+          wi.revoked_at AS "revokedAt",
+          wi.created_by_user_id AS "createdByUserId",
+          wi.created_at AS "createdAt",
+          u.email AS "userEmail"
+        FROM workspace_invites wi
+        JOIN app_users u ON u.id = $2
+        WHERE wi.token_hash = $1
+        LIMIT 1
+        FOR UPDATE;
+      `, [tokenHash, resolvedUserId]);
+      const invite = inviteResult.rows[0];
+      if (!invite) throw new Error("Invite not found");
+      if (invite.revokedAt || invite.acceptedAt) throw new Error("Invite is no longer available");
+      if (new Date(invite.expiresAt).getTime() < Date.now()) throw new Error("Invite has expired");
+      if (String(invite.email || "").trim().toLowerCase() !== String(invite.userEmail || "").trim().toLowerCase()) {
+        throw new Error("Invite email does not match the signed-in user.");
+      }
+
+      await client.query(`
+        INSERT INTO workspace_members (
+          workspace_id,
+          user_id,
+          role,
+          status,
+          invited_by_user_id,
+          invited_at,
+          joined_at
+        )
+        VALUES ($1, $2, $3, 'active', $4, NOW(), NOW())
+        ON CONFLICT (workspace_id, user_id) DO UPDATE
+        SET role = EXCLUDED.role, status = 'active', joined_at = COALESCE(workspace_members.joined_at, NOW());
+      `, [invite.workspaceId, resolvedUserId, invite.role, invite.createdByUserId || null]);
+
+      await client.query(`
+        UPDATE workspace_invites
+        SET accepted_at = NOW()
+        WHERE id = $1;
+      `, [invite.id]);
+
+      await client.query(`
+        UPDATE app_users
+        SET active_workspace_id = $2, updated_at = NOW()
+        WHERE id = $1;
+      `, [resolvedUserId, invite.workspaceId]);
+
+      await backfillWorkspaceScopedRecords(client, resolvedUserId, invite.workspaceId);
+
+      await client.query(`
+        UPDATE workspaces
+        SET seat_count = (
+          SELECT COUNT(*)::int
+          FROM workspace_members
+          WHERE workspace_id = $1 AND status = 'active'
+        ),
+        updated_at = NOW()
+        WHERE id = $1;
+      `, [invite.workspaceId]);
+
+      await client.query("COMMIT");
+      return workspaces.getActiveForUser(resolvedUserId);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  updateMemberRole: async ({ workspaceId, targetUserId, role }) => {
+    const normalizedRole = String(role || "member").trim().toLowerCase() === "admin" ? "admin" : "member";
+    const result = await pool.query(`
+      UPDATE workspace_members
+      SET role = $3
+      WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'
+      RETURNING workspace_id AS "workspaceId", user_id AS "userId", role, status, invited_by_user_id AS "invitedByUserId", invited_at AS "invitedAt", joined_at AS "joinedAt";
+    `, [Number(workspaceId), toUserId(targetUserId), normalizedRole]);
+    return mapWorkspaceMemberRow(result.rows[0]);
+  },
+
+  removeMember: async ({ workspaceId, targetUserId }) => {
+    const result = await pool.query(`
+      DELETE FROM workspace_members
+      WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'
+      RETURNING workspace_id AS "workspaceId", user_id AS "userId", role, status, invited_by_user_id AS "invitedByUserId", invited_at AS "invitedAt", joined_at AS "joinedAt";
+    `, [Number(workspaceId), toUserId(targetUserId)]);
+    await pool.query(`
+      UPDATE workspaces
+      SET seat_count = (
+        SELECT COUNT(*)::int
+        FROM workspace_members
+        WHERE workspace_id = $1 AND status = 'active'
+      ),
+      updated_at = NOW()
+      WHERE id = $1;
+    `, [Number(workspaceId)]);
+    return mapWorkspaceMemberRow(result.rows[0]);
+  },
+
+  recordActivity: async ({ workspaceId, actorUserId = null, eventType, entityType = null, entityId = null, details = {} }) => {
+    const result = await pool.query(`
+      INSERT INTO workspace_activity_log (
+        workspace_id,
+        actor_user_id,
+        event_type,
+        entity_type,
+        entity_id,
+        details_json
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+      RETURNING id, workspace_id AS "workspaceId", actor_user_id AS "actorUserId", event_type AS "eventType", entity_type AS "entityType", entity_id AS "entityId", details_json AS details, created_at AS "createdAt";
+    `, [
+      Number(workspaceId),
+      actorUserId ? toUserId(actorUserId) : null,
+      String(eventType || "").trim(),
+      entityType ? String(entityType).trim() : null,
+      entityId == null ? null : String(entityId),
+      JSON.stringify(details || {})
+    ]);
+    return mapWorkspaceActivityRow(result.rows[0]);
+  },
+
+  listActivity: async (workspaceId, limit = 50) => {
+    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+    const result = await pool.query(`
+      SELECT
+        wal.id,
+        wal.workspace_id AS "workspaceId",
+        wal.actor_user_id AS "actorUserId",
+        au.email AS "actorEmail",
+        au.display_name AS "actorDisplayName",
+        wal.event_type AS "eventType",
+        wal.entity_type AS "entityType",
+        wal.entity_id AS "entityId",
+        wal.details_json AS details,
+        wal.created_at AS "createdAt"
+      FROM workspace_activity_log wal
+      LEFT JOIN app_users au ON au.id = wal.actor_user_id
+      WHERE wal.workspace_id = $1
+      ORDER BY wal.created_at DESC, wal.id DESC
+      LIMIT $2;
+    `, [Number(workspaceId), safeLimit]);
+    return result.rows.map(mapWorkspaceActivityRow);
+  }
+};
+
+async function resolveWorkspaceScope(userId, workspaceId = null) {
+  const resolvedUserId = toUserId(userId);
+  if (workspaceId != null) {
+    const parsedWorkspaceId = Number(workspaceId);
+    if (!Number.isInteger(parsedWorkspaceId) || parsedWorkspaceId <= 0) {
+      const error = new Error("Invalid workspace id");
+      error.code = "INVALID_WORKSPACE_ID";
+      throw error;
+    }
+    return { resolvedUserId, resolvedWorkspaceId: parsedWorkspaceId };
+  }
+  const personalWorkspace = await workspaces.ensurePersonalWorkspace(resolvedUserId);
+  return {
+    resolvedUserId,
+    resolvedWorkspaceId: Number(personalWorkspace?.workspace?.id)
+  };
+}
+
 const userAuth = {
   createUser: async ({ email, passwordHash, displayName = null, authProvider = "email", emailVerified = false }) => {
     const result = await pool.query(`
@@ -2506,6 +3889,8 @@ const userAuth = {
       VALUES ($1, $2)
       ON CONFLICT (user_id) DO NOTHING;
     `, [result.rows[0].id, DEFAULT_BALANCE]);
+
+    await workspaces.ensurePersonalWorkspace(result.rows[0].id);
 
     return mapAuthUserRow(result.rows[0]);
   },
@@ -2665,6 +4050,8 @@ const userAuth = {
         u.current_plan AS "currentPlan",
         u.current_billing_cycle AS "currentBillingCycle",
         u.plan_updated_at AS "planUpdatedAt",
+        s.session_reauthenticated_at AS "sessionReauthenticatedAt",
+        s.admin_reauthenticated_at AS "adminReauthenticatedAt",
         u.created_at AS "createdAt"
       FROM auth_sessions s
       JOIN app_users u ON u.id = s.user_id
@@ -2713,6 +4100,21 @@ const userAuth = {
       SET revoked_at = NOW()
       WHERE user_id = $1 AND revoked_at IS NULL;
     `, [toUserId(userId)]);
+  },
+
+  markSessionReauthenticated: async ({ sessionId, admin = false } = {}) => {
+    const resolvedSessionId = Number(sessionId);
+    if (!Number.isFinite(resolvedSessionId) || resolvedSessionId <= 0) return null;
+    const field = admin ? "admin_reauthenticated_at" : "session_reauthenticated_at";
+    const result = await pool.query(`
+      UPDATE auth_sessions
+      SET ${field} = NOW()
+      WHERE id = $1 AND revoked_at IS NULL
+      RETURNING id,
+        session_reauthenticated_at AS "sessionReauthenticatedAt",
+        admin_reauthenticated_at AS "adminReauthenticatedAt";
+    `, [resolvedSessionId]);
+    return result.rows[0] || null;
   },
 
   updatePassword: async (userId, passwordHash) => {
@@ -2986,6 +4388,12 @@ const userAuth = {
     `, [toUserId(userId), normalizedPlan, normalizedBillingCycle]);
     const row = result.rows[0];
     if (!row) return null;
+    await workspaces.ensurePersonalWorkspace(userId);
+    await pool.query(`
+      UPDATE workspaces
+      SET plan = $2, billing_cycle = $3, seat_limit = $4, updated_at = NOW()
+      WHERE owner_user_id = $1;
+    `, [toUserId(userId), normalizedPlan, normalizedBillingCycle, seatLimitForPlan(normalizedPlan)]);
     return mapAuthUserRow(row);
   },
 
@@ -3020,37 +4428,129 @@ const userAuth = {
 
 const userWorkspace = {
   exchangeKeys: {
-    list: async (userId) => {
+    list: async (userId, workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       const result = await pool.query(`
-        SELECT id, exchange, api_key AS "apiKey", extra_data AS "extraData", created_at AS "createdAt"
+        SELECT
+          id,
+          exchange,
+          api_key AS "apiKey",
+          extra_data AS "extraData",
+          permission_scope AS "permissionScope",
+          can_trade AS "canTrade",
+          last_verified_scope AS "lastVerifiedScope",
+          risk_level AS "riskLevel",
+          created_at AS "createdAt",
+          last_sync_at AS "lastSyncAt",
+          last_sync_status AS "lastSyncStatus",
+          last_sync_meta AS "lastSyncMeta"
         FROM user_exchange_keys
-        WHERE user_id = $1
+        WHERE workspace_id = $1
         ORDER BY created_at DESC;
-      `, [toUserId(userId)]);
-      return result.rows;
+      `, [Number(resolvedWorkspaceId)]);
+      return result.rows.map(mapExchangeKeyRow);
     },
-    add: async (userId, payload) => {
-      const { exchange, apiKey, apiSecret, extraData } = payload;
+    add: async (userId, payload, workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
+      const {
+        exchange,
+        apiKey,
+        apiSecret,
+        extraData,
+        permissionScope = "unknown",
+        canTrade = false,
+        lastVerifiedScope = "unknown",
+        riskLevel = "standard"
+      } = payload;
       const result = await pool.query(`
-        INSERT INTO user_exchange_keys (user_id, exchange, api_key, api_secret, extra_data)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, exchange, api_key AS "apiKey", extra_data AS "extraData";
-      `, [toUserId(userId), exchange, apiKey, apiSecret, extraData || {}]);
-      return result.rows[0];
+        INSERT INTO user_exchange_keys (
+          user_id,
+          workspace_id,
+          exchange,
+          api_key,
+          api_secret,
+          extra_data,
+          permission_scope,
+          can_trade,
+          last_verified_scope,
+          risk_level
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING
+          id,
+          exchange,
+          api_key AS "apiKey",
+          extra_data AS "extraData",
+          permission_scope AS "permissionScope",
+          can_trade AS "canTrade",
+          last_verified_scope AS "lastVerifiedScope",
+          risk_level AS "riskLevel",
+          created_at AS "createdAt",
+          last_sync_at AS "lastSyncAt",
+          last_sync_status AS "lastSyncStatus",
+          last_sync_meta AS "lastSyncMeta";
+      `, [
+        toUserId(userId),
+        Number(resolvedWorkspaceId),
+        exchange,
+        apiKey,
+        apiSecret,
+        extraData || {},
+        permissionScope,
+        Boolean(canTrade),
+        lastVerifiedScope,
+        riskLevel
+      ]);
+      return mapExchangeKeyRow(result.rows[0]);
     },
-    remove: async (userId, id) => {
+    remove: async (userId, id, workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       await pool.query(`
         DELETE FROM user_exchange_keys
-        WHERE id = $1 AND user_id = $2;
-      `, [id, toUserId(userId)]);
+        WHERE id = $1 AND workspace_id = $2;
+      `, [id, Number(resolvedWorkspaceId)]);
     },
-    getById: async (userId, id) => {
+    getById: async (userId, id, workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       const result = await pool.query(`
-        SELECT id, exchange, api_key AS "apiKey", api_secret AS "apiSecret", extra_data AS "extraData"
+        SELECT
+          id,
+          exchange,
+          api_key AS "apiKey",
+          api_secret AS "apiSecret",
+          extra_data AS "extraData",
+          permission_scope AS "permissionScope",
+          can_trade AS "canTrade",
+          last_verified_scope AS "lastVerifiedScope",
+          risk_level AS "riskLevel",
+          last_sync_at AS "lastSyncAt",
+          last_sync_status AS "lastSyncStatus",
+          last_sync_meta AS "lastSyncMeta"
         FROM user_exchange_keys
-        WHERE id = $1 AND user_id = $2;
-      `, [id, toUserId(userId)]);
-      return result.rows[0];
+        WHERE id = $1 AND workspace_id = $2;
+      `, [id, Number(resolvedWorkspaceId)]);
+      return mapExchangeKeyRow(result.rows[0]);
+    },
+    updateSyncStatus: async (workspaceId, id, { status = "unknown", syncedAt = new Date().toISOString(), meta = {} } = {}) => {
+      const result = await pool.query(`
+        UPDATE user_exchange_keys
+        SET last_sync_at = $3, last_sync_status = $4, last_sync_meta = $5::jsonb, updated_at = NOW()
+        WHERE workspace_id = $1 AND id = $2
+        RETURNING
+          id,
+          exchange,
+          api_key AS "apiKey",
+          extra_data AS "extraData",
+          permission_scope AS "permissionScope",
+          can_trade AS "canTrade",
+          last_verified_scope AS "lastVerifiedScope",
+          risk_level AS "riskLevel",
+          created_at AS "createdAt",
+          last_sync_at AS "lastSyncAt",
+          last_sync_status AS "lastSyncStatus",
+          last_sync_meta AS "lastSyncMeta";
+      `, [Number(workspaceId), Number(id), syncedAt, String(status || "unknown").trim().toLowerCase(), JSON.stringify(meta || {})]);
+      return mapExchangeKeyRow(result.rows[0]) || null;
     }
   },
 
@@ -3113,12 +4613,12 @@ const userWorkspace = {
   },
 
   portfolio: {
-    getAll: async (userId) => {
-      const resolvedUserId = toUserId(userId);
+    getAll: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       await pool.query(`
         DELETE FROM user_workspace_portfolio
-        WHERE user_id = $1 AND ABS(quantity) <= $2;
-      `, [resolvedUserId, QTY_EPSILON]);
+        WHERE workspace_id = $1 AND ABS(quantity) <= $2;
+      `, [resolvedWorkspaceId, QTY_EPSILON]);
       const result = await pool.query(`
         SELECT
           id,
@@ -3135,33 +4635,33 @@ const userWorkspace = {
           legs_json AS "legsJson",
           date_added
         FROM user_workspace_portfolio
-        WHERE user_id = $1 AND quantity > $2
+        WHERE workspace_id = $1 AND quantity > $2
         ORDER BY date_added DESC;
-      `, [resolvedUserId, QTY_EPSILON]);
+      `, [resolvedWorkspaceId, QTY_EPSILON]);
       return result.rows.map(mapPortfolioRow);
     },
-    sync: async (userId, exchange, holdings) => {
-      const resolvedUserId = toUserId(userId);
+    sync: async (userId, exchange, holdings, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
         const strategyPrefix = `${exchange}%`;
         await client.query(`
           DELETE FROM user_workspace_portfolio
-          WHERE user_id = $1 AND strategy_name LIKE $2;
-        `, [resolvedUserId, strategyPrefix]);
+          WHERE workspace_id = $1 AND strategy_name LIKE $2;
+        `, [resolvedWorkspaceId, strategyPrefix]);
         for (const h of holdings) {
           await client.query(`
             INSERT INTO user_workspace_portfolio (
-              user_id, symbol, name, price, quantity, entry_price, opened_at, type,
+              user_id, workspace_id, symbol, name, price, quantity, entry_price, opened_at, type,
               market_type, order_type, strategy_name, legs_json, date_added, funding_rate, open_interest
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            ON CONFLICT (user_id, symbol, market_type, strategy_name) DO UPDATE
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (workspace_id, symbol, market_type, strategy_name) DO UPDATE
             SET quantity = EXCLUDED.quantity, price = EXCLUDED.price, entry_price = EXCLUDED.entry_price,
                 funding_rate = EXCLUDED.funding_rate, open_interest = EXCLUDED.open_interest, updated_at = NOW();
           `, [
-            resolvedUserId, h.symbol, h.name, h.price || 0, h.quantity, h.entry_price || h.price || 0,
+            resolvedUserId, resolvedWorkspaceId, h.symbol, h.name, h.price || 0, h.quantity, h.entry_price || h.price || 0,
             h.opened_at || new Date().toISOString(), h.type, h.market_type, h.order_type, h.strategyName,
             JSON.stringify(h.legs_json || {}), h.date_added || new Date().toISOString(),
             h.fundingRate || null, h.openInterest || null
@@ -3176,8 +4676,8 @@ const userWorkspace = {
       }
     },
 
-    add: async (userId, holding) => {
-      const resolvedUserId = toUserId(userId);
+    add: async (userId, holding, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const symbol = String(holding.symbol || "").trim().toUpperCase();
       const type = String(holding.type || "stock").trim().toLowerCase();
       const marketType = normalizeMarketType(type, holding.marketType);
@@ -3209,12 +4709,12 @@ const userWorkspace = {
             legs_json AS "legsJson",
             date_added
           FROM user_workspace_portfolio
-          WHERE user_id = $1
+          WHERE workspace_id = $1
             AND symbol = $2
             AND market_type = $3
             AND (strategy_name IS NOT DISTINCT FROM $4)
           FOR UPDATE;
-        `, [resolvedUserId, symbol, marketType, strategyName]);
+        `, [resolvedWorkspaceId, symbol, marketType, strategyName]);
 
         const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
         if (existing) {
@@ -3222,8 +4722,8 @@ const userWorkspace = {
           if (nextQuantity <= QTY_EPSILON) {
             await client.query(`
               DELETE FROM user_workspace_portfolio
-              WHERE id = $1 AND user_id = $2;
-            `, [existing.id, resolvedUserId]);
+              WHERE id = $1 AND workspace_id = $2;
+            `, [existing.id, resolvedWorkspaceId]);
             await client.query("COMMIT");
             return { id: existing.id, symbol, marketType, quantity: 0, closed: true };
           }
@@ -3238,7 +4738,7 @@ const userWorkspace = {
           const updatedResult = await client.query(`
             UPDATE user_workspace_portfolio
             SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
-            WHERE id = $10 AND user_id = $11
+            WHERE id = $10 AND workspace_id = $11
             RETURNING
               id,
               symbol,
@@ -3253,7 +4753,7 @@ const userWorkspace = {
               strategy_name AS "strategyName",
               legs_json AS "legsJson",
               date_added;
-          `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedUserId]);
+          `, [nextQuantity, price, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedWorkspaceId]);
           await client.query("COMMIT");
           return mapPortfolioRow(updatedResult.rows[0]);
         }
@@ -3263,8 +4763,8 @@ const userWorkspace = {
         }
 
         const insertedResult = await client.query(`
-          INSERT INTO user_workspace_portfolio (user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          INSERT INTO user_workspace_portfolio (user_id, workspace_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           RETURNING
             id,
             symbol,
@@ -3279,7 +4779,7 @@ const userWorkspace = {
             strategy_name AS "strategyName",
             legs_json AS "legsJson",
             date_added;
-        `, [resolvedUserId, symbol, name, price, quantity, price, dateAdded, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
+        `, [resolvedUserId, resolvedWorkspaceId, symbol, name, price, quantity, price, dateAdded, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
         await client.query("COMMIT");
         return mapPortfolioRow(insertedResult.rows[0]);
       } catch (error) {
@@ -3290,14 +4790,14 @@ const userWorkspace = {
       }
     },
 
-    update: async (userId, id, holding) => {
-      const resolvedUserId = toUserId(userId);
+    update: async (userId, id, holding, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const price = toNumber(holding.price);
       const quantity = toNumber(holding.quantity);
       const result = await pool.query(`
         UPDATE user_workspace_portfolio
         SET price = $1, quantity = $2
-        WHERE id = $3 AND user_id = $4
+        WHERE id = $3 AND workspace_id = $4
         RETURNING
           id,
           symbol,
@@ -3312,21 +4812,22 @@ const userWorkspace = {
           strategy_name AS "strategyName",
           legs_json AS "legsJson",
           date_added;
-      `, [price, quantity, id, resolvedUserId]);
+      `, [price, quantity, id, resolvedWorkspaceId]);
       if (result.rows.length === 0) throw new Error("Holding not found");
       return mapPortfolioRow(result.rows[0]);
     },
 
-    delete: async (userId, id) => {
+    delete: async (userId, id, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       await pool.query(`
         DELETE FROM user_workspace_portfolio
-        WHERE id = $1 AND user_id = $2;
-      `, [id, toUserId(userId)]);
+        WHERE id = $1 AND workspace_id = $2;
+      `, [id, resolvedWorkspaceId]);
       return { success: true, id: Number(id) };
     },
 
-    findBySymbol: async (userId, symbol, marketType) => {
-      const resolvedUserId = toUserId(userId);
+    findBySymbol: async (userId, symbol, marketType, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const cleanSymbol = String(symbol || "").trim().toUpperCase();
       const cleanMarketType = String(marketType || "").trim().toLowerCase();
       const result = await pool.query(`
@@ -3345,31 +4846,35 @@ const userWorkspace = {
           legs_json AS "legsJson",
           date_added
         FROM user_workspace_portfolio
-        WHERE user_id = $1 AND symbol = $2 AND market_type = $3
+        WHERE workspace_id = $1 AND symbol = $2 AND market_type = $3
         ORDER BY date_added DESC;
-      `, [resolvedUserId, cleanSymbol, cleanMarketType]);
+      `, [resolvedWorkspaceId, cleanSymbol, cleanMarketType]);
       return result.rows.map(mapPortfolioRow);
     }
   },
 
   cash: {
-    getAll: async (userId) => {
-      const resolvedUserId = toUserId(userId);
+    getAll: async (userId, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const result = await pool.query(`
         SELECT currency, balance, updated_at AS "updatedAt"
         FROM user_workspace_cash
-        WHERE user_id = $1
+        WHERE workspace_id = $1
         ORDER BY currency ASC;
-      `, [resolvedUserId]);
-      return result.rows.map(row => ({
+      `, [resolvedWorkspaceId]);
+      if (!result.rows.length && resolvedWorkspaceId && resolvedUserId) {
+        const legacyBalance = await userWorkspace.balance.get(resolvedUserId);
+        return [{ currency: "USD", balance: legacyBalance, updatedAt: new Date().toISOString() }];
+      }
+      return result.rows.map((row) => ({
         currency: row.currency,
         balance: toNumber(row.balance),
         updatedAt: toIsoString(row.updatedAt)
       }));
     },
 
-    applyChange: async (userId, currency, amount, type = "deposit") => {
-      const resolvedUserId = toUserId(userId);
+    applyChange: async (userId, currency, amount, type = "deposit", workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const cur = String(currency || "USD").toUpperCase();
       const val = Math.abs(toNumber(amount));
       const client = await pool.connect();
@@ -3377,9 +4882,9 @@ const userWorkspace = {
         await client.query("BEGIN");
         const row = await client.query(`
           SELECT balance FROM user_workspace_cash
-          WHERE user_id = $1 AND currency = $2
+          WHERE workspace_id = $1 AND currency = $2
           FOR UPDATE;
-        `, [resolvedUserId, cur]);
+        `, [resolvedWorkspaceId, cur]);
 
         let current = row.rows[0] ? toNumber(row.rows[0].balance) : 0;
         const next = type === "deposit" ? current + val : current - val;
@@ -3390,11 +4895,11 @@ const userWorkspace = {
         }
 
         await client.query(`
-          INSERT INTO user_workspace_cash (user_id, currency, balance)
-          VALUES ($1, $2, $3)
-          ON CONFLICT (user_id, currency) DO UPDATE
+          INSERT INTO user_workspace_cash (user_id, workspace_id, currency, balance)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (workspace_id, currency) DO UPDATE
           SET balance = EXCLUDED.balance, updated_at = NOW();
-        `, [resolvedUserId, cur, next]);
+        `, [resolvedUserId, resolvedWorkspaceId, cur, next]);
 
         if (cur === "USD") {
           await client.query(`UPDATE user_workspace_balance SET balance = $2 WHERE user_id = $1`, [resolvedUserId, next]);
@@ -3410,16 +4915,16 @@ const userWorkspace = {
       }
     },
 
-    set: async (userId, currency, balance) => {
-      const resolvedUserId = toUserId(userId);
+    set: async (userId, currency, balance, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const cur = String(currency || "USD").toUpperCase();
       const val = toNumber(balance);
       await pool.query(`
-        INSERT INTO user_workspace_cash (user_id, currency, balance)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (user_id, currency) DO UPDATE
+        INSERT INTO user_workspace_cash (user_id, workspace_id, currency, balance)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (workspace_id, currency) DO UPDATE
         SET balance = EXCLUDED.balance, updated_at = NOW();
-      `, [resolvedUserId, cur, val]);
+      `, [resolvedUserId, resolvedWorkspaceId, cur, val]);
       if (cur === "USD" || cur === "USDT" || cur === "USDC") {
         // Update legacy balance if it's a USD-peg
         await pool.query(`UPDATE user_workspace_balance SET balance = $2 WHERE user_id = $1`, [resolvedUserId, val]);
@@ -3429,8 +4934,8 @@ const userWorkspace = {
   },
 
   tradeFills: {
-    sync: async (userId, fills = []) => {
-      const resolvedUserId = toUserId(userId);
+    sync: async (userId, fills = [], workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const rows = Array.isArray(fills) ? fills : [];
       for (const fill of rows) {
         const normalized = {
@@ -3460,12 +4965,12 @@ const userWorkspace = {
 
         await pool.query(`
           INSERT INTO user_workspace_trade_fills (
-            user_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
+            user_id, workspace_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
             quantity, price, notional, fee_amount, fee_currency, fee_source, liquidity_role, executed_at,
             reference_price, raw_payload_json, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
-          ON CONFLICT (user_id, platform, platform_fill_id) DO UPDATE
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+          ON CONFLICT (workspace_id, platform, platform_fill_id) DO UPDATE
           SET
             trade_client_id = COALESCE(EXCLUDED.trade_client_id, user_workspace_trade_fills.trade_client_id),
             platform_trade_id = COALESCE(EXCLUDED.platform_trade_id, user_workspace_trade_fills.platform_trade_id),
@@ -3485,6 +4990,7 @@ const userWorkspace = {
             updated_at = NOW();
         `, [
           resolvedUserId,
+          resolvedWorkspaceId,
           normalized.tradeClientId,
           normalized.platform,
           normalized.platformTradeId,
@@ -3506,8 +5012,8 @@ const userWorkspace = {
       }
     },
 
-    getSummary: async (userId) => {
-      const resolvedUserId = toUserId(userId);
+    getSummary: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const result = await pool.query(`
         SELECT
           id,
@@ -3529,14 +5035,14 @@ const userWorkspace = {
           reference_price AS "referencePrice",
           raw_payload_json AS "rawPayload"
         FROM user_workspace_trade_fills
-        WHERE user_id = $1 AND ABS(COALESCE(fee_amount, 0)) > 0
+        WHERE workspace_id = $1 AND ABS(COALESCE(fee_amount, 0)) > 0
         ORDER BY COALESCE(executed_at, created_at) DESC, id DESC;
-      `, [resolvedUserId]);
+      `, [resolvedWorkspaceId]);
       return summarizeFeeBreakdown(result.rows);
     },
 
-    getKnownSymbols: async (userId, platform) => {
-      const resolvedUserId = toUserId(userId);
+    getKnownSymbols: async (userId, platform, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const normalizedPlatform = normalizePlatformValue(platform, "");
       if (!normalizedPlatform) {
         return { all: [], spot: [], perp: [], options: [] };
@@ -3544,12 +5050,12 @@ const userWorkspace = {
       const result = await pool.query(`
         SELECT DISTINCT symbol, market_type AS "marketType"
         FROM user_workspace_trade_fills
-        WHERE user_id = $1 AND platform = $2
+        WHERE workspace_id = $1 AND platform = $2
         UNION
         SELECT DISTINCT asset AS symbol, market_type AS "marketType"
         FROM user_workspace_trades
-        WHERE user_id = $1 AND platform = $2;
-      `, [resolvedUserId, normalizedPlatform]);
+        WHERE workspace_id = $1 AND platform = $2;
+      `, [resolvedWorkspaceId, normalizedPlatform]);
 
       const buckets = { all: [], spot: [], perp: [], options: [] };
       const seen = new Set();
@@ -3568,8 +5074,8 @@ const userWorkspace = {
   },
 
   trades: {
-    getAll: async (userId, limit = 1000) => {
-      const resolvedUserId = toUserId(userId);
+    getAll: async (userId, limit = 1000, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 1000));
       const result = await pool.query(`
         SELECT
@@ -3597,22 +5103,22 @@ const userWorkspace = {
           strategy_name AS "strategyName",
           legs_json AS "legsJson"
         FROM user_workspace_trades
-        WHERE user_id = $1
+        WHERE workspace_id = $1
         ORDER BY COALESCE(executed_at, date::timestamptz) DESC, id DESC
         LIMIT $2;
-      `, [resolvedUserId, safeLimit]);
+      `, [resolvedWorkspaceId, safeLimit]);
       return result.rows.map(mapTradeRow);
     },
-    sync: async (userId, trades) => {
-      const resolvedUserId = toUserId(userId);
+    sync: async (userId, trades, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       for (const t of trades) {
         await pool.query(`
           INSERT INTO user_workspace_trades (
-            user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
+            user_id, workspace_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
             quantity, price, notional, platform, fee, fee_currency, fee_source, slippage, reference_price, execution_meta_json, strategy_name, legs_json
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
-          ON CONFLICT (user_id, client_id) DO UPDATE
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+          ON CONFLICT (workspace_id, client_id) DO UPDATE
           SET
             date = EXCLUDED.date,
             executed_at = COALESCE(EXCLUDED.executed_at, user_workspace_trades.executed_at),
@@ -3635,7 +5141,7 @@ const userWorkspace = {
             strategy_name = COALESCE(EXCLUDED.strategy_name, user_workspace_trades.strategy_name),
             legs_json = COALESCE(EXCLUDED.legs_json, user_workspace_trades.legs_json);
         `, [
-          resolvedUserId, t.clientId, t.date, t.executedAt, t.asset, t.name, t.type, t.side,
+          resolvedUserId, resolvedWorkspaceId, t.clientId, t.date, t.executedAt, t.asset, t.name, t.type, t.side,
           t.marketType, t.status, t.quantity, t.price, t.notional,
           normalizePlatformValue(t.platform, "zenin"),
           Number.isFinite(Number(t.fee)) ? Number(t.fee) : null,
@@ -3653,8 +5159,8 @@ const userWorkspace = {
       }
     },
 
-    add: async (userId, trade) => {
-      const resolvedUserId = toUserId(userId);
+    add: async (userId, trade, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const normalized = {
         client_id: trade.clientId || null,
         date: toDateString(trade.date || new Date().toISOString()) || new Date().toISOString().slice(0, 10),
@@ -3691,12 +5197,12 @@ const userWorkspace = {
       try {
         const result = await pool.query(`
           INSERT INTO user_workspace_trades (
-            user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
+            user_id, workspace_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
             quantity, price, notional, platform, fee, fee_currency, fee_source, slippage, reference_price, execution_meta_json,
             balance_after, portfolio_value_after, account_equity_after, position_after,
             strategy_name, legs_json
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
           RETURNING
             id,
             client_id AS "clientId",
@@ -3726,6 +5232,7 @@ const userWorkspace = {
             legs_json AS "legsJson";
         `, [
           resolvedUserId,
+          resolvedWorkspaceId,
           normalized.client_id,
           normalized.date,
           normalized.executed_at,
@@ -3771,7 +5278,7 @@ const userWorkspace = {
             executedAt: normalized.executed_at || savedTrade.executedAt || `${normalized.date}T00:00:00.000Z`,
             referencePrice: normalized.reference_price,
             rawPayload: normalized.execution_meta_json || {}
-          }]);
+          }], resolvedWorkspaceId);
         }
         return savedTrade;
       } catch (error) {
@@ -3805,9 +5312,9 @@ const userWorkspace = {
               strategy_name AS "strategyName",
               legs_json AS "legsJson"
             FROM user_workspace_trades
-            WHERE user_id = $1 AND client_id = $2
+            WHERE workspace_id = $1 AND client_id = $2
             LIMIT 1;
-          `, [resolvedUserId, normalized.client_id]);
+          `, [resolvedWorkspaceId, normalized.client_id]);
           if (existing.rows[0]) return mapTradeRow(existing.rows[0]);
         }
         throw error;
@@ -3816,7 +5323,8 @@ const userWorkspace = {
   },
 
   watchlist: {
-    getAll: async (userId) => {
+    getAll: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const result = await pool.query(`
         SELECT
           id,
@@ -3828,14 +5336,14 @@ const userWorkspace = {
           market_type AS "marketType",
           date_added
         FROM user_workspace_watchlist
-        WHERE user_id = $1
+        WHERE workspace_id = $1
         ORDER BY date_added DESC;
-      `, [toUserId(userId)]);
+      `, [resolvedWorkspaceId]);
       return result.rows.map(mapWatchlistRow);
     },
 
-    add: async (userId, asset) => {
-      const resolvedUserId = toUserId(userId);
+    add: async (userId, asset, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const symbol = String(asset.symbol || "").trim().toUpperCase();
       const type = String(asset.type || "stock").trim().toLowerCase();
       const category = String(asset.category || "").trim().toLowerCase() || null;
@@ -3850,7 +5358,7 @@ const userWorkspace = {
           category = $5,
           theme = $6,
           date_added = $8
-        WHERE user_id = $1
+        WHERE workspace_id = $1
           AND symbol = $2
           AND market_type = $7
           AND COALESCE(category, '') = COALESCE($5, '')
@@ -3864,13 +5372,13 @@ const userWorkspace = {
           theme,
           market_type AS "marketType",
           date_added;
-      `, [resolvedUserId, symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
+      `, [resolvedWorkspaceId, symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
       if (updateResult.rows[0]) return mapWatchlistRow(updateResult.rows[0]);
 
       const insertResult = await pool.query(`
-        INSERT INTO user_workspace_watchlist (user_id, symbol, name, type, category, theme, market_type, date_added)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (user_id, symbol, market_type, category, theme)
+        INSERT INTO user_workspace_watchlist (user_id, workspace_id, symbol, name, type, category, theme, market_type, date_added)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (workspace_id, symbol, market_type, category, theme)
         DO UPDATE SET
           name = EXCLUDED.name,
           type = EXCLUDED.type,
@@ -3884,12 +5392,12 @@ const userWorkspace = {
           theme,
           market_type AS "marketType",
           date_added;
-      `, [resolvedUserId, symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
+      `, [resolvedUserId, resolvedWorkspaceId, symbol, String(asset.name || symbol), type, category, theme, marketType, dateAdded]);
       return mapWatchlistRow(insertResult.rows[0]);
     },
 
-    delete: async (userId, symbol, marketType, category = null, theme = null) => {
-      const resolvedUserId = toUserId(userId);
+    delete: async (userId, symbol, marketType, category = null, theme = null, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const cleanSymbol = String(symbol || "").trim().toUpperCase();
       const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
       const cleanCategory = String(category || "").trim().toLowerCase() || null;
@@ -3897,23 +5405,23 @@ const userWorkspace = {
       if (cleanCategory || cleanTheme) {
         await pool.query(`
           DELETE FROM user_workspace_watchlist
-          WHERE user_id = $1
+          WHERE workspace_id = $1
             AND symbol = $2
             AND market_type = $3
             AND COALESCE(category, '') = COALESCE($4, '')
             AND COALESCE(theme, '') = COALESCE($5, '');
-        `, [resolvedUserId, cleanSymbol, cleanMarketType, cleanCategory, cleanTheme]);
+        `, [resolvedWorkspaceId, cleanSymbol, cleanMarketType, cleanCategory, cleanTheme]);
         return { success: true, symbol: cleanSymbol, marketType: cleanMarketType, category: cleanCategory, theme: cleanTheme };
       }
       await pool.query(`
         DELETE FROM user_workspace_watchlist
-        WHERE user_id = $1 AND symbol = $2 AND market_type = $3;
-      `, [resolvedUserId, cleanSymbol, cleanMarketType]);
+        WHERE workspace_id = $1 AND symbol = $2 AND market_type = $3;
+      `, [resolvedWorkspaceId, cleanSymbol, cleanMarketType]);
       return { success: true, symbol: cleanSymbol, marketType: cleanMarketType, category: null, theme: null };
     },
 
-    exists: async (userId, symbol, marketType, category = null, theme = null) => {
-      const resolvedUserId = toUserId(userId);
+    exists: async (userId, symbol, marketType, category = null, theme = null, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const cleanSymbol = String(symbol || "").trim().toUpperCase();
       const cleanMarketType = String(marketType || "spot").trim().toLowerCase();
       const cleanCategory = String(category || "").trim().toLowerCase() || null;
@@ -3922,19 +5430,19 @@ const userWorkspace = {
         ? await pool.query(`
             SELECT id
             FROM user_workspace_watchlist
-            WHERE user_id = $1
+            WHERE workspace_id = $1
               AND symbol = $2
               AND market_type = $3
               AND COALESCE(category, '') = COALESCE($4, '')
               AND COALESCE(theme, '') = COALESCE($5, '')
             LIMIT 1
-          `, [resolvedUserId, cleanSymbol, cleanMarketType, cleanCategory, cleanTheme])
+          `, [resolvedWorkspaceId, cleanSymbol, cleanMarketType, cleanCategory, cleanTheme])
         : await pool.query(`
             SELECT id
             FROM user_workspace_watchlist
-            WHERE user_id = $1 AND symbol = $2 AND market_type = $3
+            WHERE workspace_id = $1 AND symbol = $2 AND market_type = $3
             LIMIT 1;
-          `, [resolvedUserId, cleanSymbol, cleanMarketType]);
+          `, [resolvedWorkspaceId, cleanSymbol, cleanMarketType]);
       return result.rows.length > 0;
     }
   },
@@ -4003,32 +5511,65 @@ const userWorkspace = {
   },
 
   docs: {
-    get: async (userId, namespace, fallback = null) => {
+    get: async (userId, namespace, fallback = null, workspaceId = null) => {
+      const resolvedNamespace = String(namespace || "").trim();
+      if (resolvedNamespace === "settings:preferences") {
+        const result = await pool.query(`
+          SELECT payload_json AS payload, updated_at AS "updatedAt"
+          FROM user_workspace_documents
+          WHERE user_id = $1 AND namespace = $2
+          LIMIT 1;
+        `, [toUserId(userId), resolvedNamespace]);
+        if (!result.rows[0]) {
+          return { namespace: resolvedNamespace, document: fallback, updatedAt: null };
+        }
+        return {
+          namespace: resolvedNamespace,
+          document: parseJsonPayload(result.rows[0].payload, fallback),
+          updatedAt: toIsoString(result.rows[0].updatedAt)
+        };
+      }
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       const result = await pool.query(`
         SELECT payload_json AS payload, updated_at AS "updatedAt"
-        FROM user_workspace_documents
-        WHERE user_id = $1 AND namespace = $2
+        FROM workspace_documents
+        WHERE workspace_id = $1 AND namespace = $2
         LIMIT 1;
-      `, [toUserId(userId), String(namespace || "").trim()]);
+      `, [Number(resolvedWorkspaceId), resolvedNamespace]);
       if (!result.rows[0]) {
-        return { namespace: String(namespace || "").trim(), document: fallback, updatedAt: null };
+        return { namespace: resolvedNamespace, document: fallback, updatedAt: null };
       }
       return {
-        namespace: String(namespace || "").trim(),
+        namespace: resolvedNamespace,
         document: parseJsonPayload(result.rows[0].payload, fallback),
         updatedAt: toIsoString(result.rows[0].updatedAt)
       };
     },
 
-    set: async (userId, namespace, document) => {
+    set: async (userId, namespace, document, workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       const resolvedNamespace = String(namespace || "").trim();
+      if (resolvedNamespace === "settings:preferences") {
+        const result = await pool.query(`
+          INSERT INTO user_workspace_documents (user_id, namespace, payload_json, updated_at)
+          VALUES ($1, $2, $3::jsonb, NOW())
+          ON CONFLICT (user_id, namespace) DO UPDATE
+          SET payload_json = EXCLUDED.payload_json, updated_at = NOW()
+          RETURNING payload_json AS payload, updated_at AS "updatedAt";
+        `, [toUserId(userId), resolvedNamespace, JSON.stringify(document ?? null)]);
+        return {
+          namespace: resolvedNamespace,
+          document: parseJsonPayload(result.rows[0]?.payload, document ?? null),
+          updatedAt: toIsoString(result.rows[0]?.updatedAt)
+        };
+      }
       const result = await pool.query(`
-        INSERT INTO user_workspace_documents (user_id, namespace, payload_json, updated_at)
+        INSERT INTO workspace_documents (workspace_id, namespace, payload_json, updated_at)
         VALUES ($1, $2, $3::jsonb, NOW())
-        ON CONFLICT (user_id, namespace) DO UPDATE
+        ON CONFLICT (workspace_id, namespace) DO UPDATE
         SET payload_json = EXCLUDED.payload_json, updated_at = NOW()
         RETURNING payload_json AS payload, updated_at AS "updatedAt";
-      `, [toUserId(userId), resolvedNamespace, JSON.stringify(document ?? null)]);
+      `, [Number(resolvedWorkspaceId), resolvedNamespace, JSON.stringify(document ?? null)]);
       return {
         namespace: resolvedNamespace,
         document: parseJsonPayload(result.rows[0]?.payload, document ?? null),
@@ -4038,13 +5579,14 @@ const userWorkspace = {
   },
 
   collections: {
-    get: async (userId, namespace, fallback = []) => {
+    get: async (userId, namespace, fallback = [], workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       const result = await pool.query(`
         SELECT items_json AS items, updated_at AS "updatedAt"
-        FROM user_workspace_collections
-        WHERE user_id = $1 AND namespace = $2
+        FROM workspace_collections
+        WHERE workspace_id = $1 AND namespace = $2
         LIMIT 1;
-      `, [toUserId(userId), String(namespace || "").trim()]);
+      `, [Number(resolvedWorkspaceId), String(namespace || "").trim()]);
       if (!result.rows[0]) {
         return { namespace: String(namespace || "").trim(), items: Array.isArray(fallback) ? fallback : [], updatedAt: null };
       }
@@ -4056,16 +5598,17 @@ const userWorkspace = {
       };
     },
 
-    set: async (userId, namespace, items, limit = 500) => {
+    set: async (userId, namespace, items, limit = 500, workspaceId = null) => {
+      const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
       const resolvedNamespace = String(namespace || "").trim();
       const normalizedItems = Array.isArray(items) ? items.slice(0, Math.max(1, Math.min(2000, Number(limit) || 500))) : [];
       const result = await pool.query(`
-        INSERT INTO user_workspace_collections (user_id, namespace, items_json, updated_at)
+        INSERT INTO workspace_collections (workspace_id, namespace, items_json, updated_at)
         VALUES ($1, $2, $3::jsonb, NOW())
-        ON CONFLICT (user_id, namespace) DO UPDATE
+        ON CONFLICT (workspace_id, namespace) DO UPDATE
         SET items_json = EXCLUDED.items_json, updated_at = NOW()
         RETURNING items_json AS items, updated_at AS "updatedAt";
-      `, [toUserId(userId), resolvedNamespace, JSON.stringify(normalizedItems)]);
+      `, [Number(resolvedWorkspaceId), resolvedNamespace, JSON.stringify(normalizedItems)]);
       return {
         namespace: resolvedNamespace,
         items: parseJsonPayload(result.rows[0]?.items, normalizedItems),
@@ -4121,8 +5664,8 @@ const userWorkspace = {
       return { estimates: resolvedEstimates, summary };
     },
 
-    executeTrade: async (userId, payload) => {
-      const resolvedUserId = toUserId(userId);
+    executeTrade: async (userId, payload, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const symbol = String(payload.symbol || "").trim().toUpperCase();
       const name = String(payload.name || symbol || "UNKNOWN");
       const type = String(payload.type || "stock").trim().toLowerCase();
@@ -4189,15 +5732,15 @@ const userWorkspace = {
             execution_meta_json AS "executionMeta",
             balance_after AS "balanceAfter",
             portfolio_value_after AS "portfolioValueAfter",
-            account_equity_after AS "accountEquityAfter",
-            position_after AS "positionAfter",
-            strategy_name AS "strategyName",
-            legs_json AS "legsJson"
+          account_equity_after AS "accountEquityAfter",
+          position_after AS "positionAfter",
+          strategy_name AS "strategyName",
+          legs_json AS "legsJson"
           FROM user_workspace_trades
-          WHERE user_id = $1 AND client_id = $2
+          WHERE workspace_id = $1 AND client_id = $2
           LIMIT 1
           FOR UPDATE;
-        `, [resolvedUserId, clientId]);
+        `, [resolvedWorkspaceId, clientId]);
 
         if (existingTradeResult.rows[0]) {
           const balanceSnapshot = await client.query(`
@@ -4220,11 +5763,11 @@ const userWorkspace = {
               order_type AS "orderType",
               strategy_name AS "strategyName",
               legs_json AS "legsJson",
-              date_added
+            date_added
             FROM user_workspace_portfolio
-            WHERE user_id = $1 AND quantity > $2
+            WHERE workspace_id = $1 AND quantity > $2
             ORDER BY date_added DESC;
-          `, [resolvedUserId, QTY_EPSILON]);
+          `, [resolvedWorkspaceId, QTY_EPSILON]);
           await client.query("COMMIT");
           return {
             balance: toNumber(balanceSnapshot.rows[0]?.balance, DEFAULT_BALANCE),
@@ -4248,9 +5791,9 @@ const userWorkspace = {
         const cashRow = await client.query(`
           SELECT balance
           FROM user_workspace_cash
-          WHERE user_id = $1 AND currency = $2
+          WHERE workspace_id = $1 AND currency = $2
           FOR UPDATE;
-        `, [resolvedUserId, buyCurrency]);
+        `, [resolvedWorkspaceId, buyCurrency]);
 
         let currentCashBalance = cashRow.rows[0]?.balance;
         if (currentCashBalance == null) {
@@ -4258,10 +5801,18 @@ const userWorkspace = {
           if (buyCurrency === "USD") {
              const legacyRow = await client.query(`SELECT balance FROM user_workspace_balance WHERE user_id = $1`, [resolvedUserId]);
              currentCashBalance = legacyRow.rows[0]?.balance ?? DEFAULT_BALANCE;
-             await client.query(`INSERT INTO user_workspace_cash (user_id, currency, balance) VALUES ($1, 'USD', $2) ON CONFLICT DO NOTHING`, [resolvedUserId, currentCashBalance]);
+             await client.query(`
+               INSERT INTO user_workspace_cash (user_id, workspace_id, currency, balance)
+               VALUES ($1, $2, 'USD', $3)
+               ON CONFLICT (workspace_id, currency) DO NOTHING
+             `, [resolvedUserId, resolvedWorkspaceId, currentCashBalance]);
           } else {
              currentCashBalance = 0;
-             await client.query(`INSERT INTO user_workspace_cash (user_id, currency, balance) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING`, [resolvedUserId, buyCurrency]);
+             await client.query(`
+               INSERT INTO user_workspace_cash (user_id, workspace_id, currency, balance)
+               VALUES ($1, $2, $3, 0)
+               ON CONFLICT (workspace_id, currency) DO NOTHING
+             `, [resolvedUserId, resolvedWorkspaceId, buyCurrency]);
           }
         }
 
@@ -4308,12 +5859,12 @@ const userWorkspace = {
             legs_json AS "legsJson",
             date_added
           FROM user_workspace_portfolio
-          WHERE user_id = $1
+          WHERE workspace_id = $1
             AND symbol = $2
             AND market_type = $3
             AND (strategy_name IS NOT DISTINCT FROM $4)
           FOR UPDATE;
-        `, [resolvedUserId, symbol, marketType, strategyName]);
+        `, [resolvedWorkspaceId, symbol, marketType, strategyName]);
 
         const existing = existingResult.rows[0] ? mapPortfolioRow(existingResult.rows[0]) : null;
         let positionAfter = 0;
@@ -4327,8 +5878,8 @@ const userWorkspace = {
           if (nextQuantity <= QTY_EPSILON) {
             await client.query(`
               DELETE FROM user_workspace_portfolio
-              WHERE id = $1 AND user_id = $2;
-            `, [existing.id, resolvedUserId]);
+              WHERE id = $1 AND workspace_id = $2;
+            `, [existing.id, resolvedWorkspaceId]);
             positionAfter = 0;
           } else {
             const existingEntry = Number.isFinite(Number(existing.entryPrice))
@@ -4341,9 +5892,9 @@ const userWorkspace = {
             const updated = await client.query(`
               UPDATE user_workspace_portfolio
               SET quantity = $1, price = $2, entry_price = $3, opened_at = $4, order_type = $5, date_added = $6, type = $7, name = $8, legs_json = $9
-              WHERE id = $10 AND user_id = $11
+              WHERE id = $10 AND workspace_id = $11
               RETURNING quantity;
-            `, [nextQuantity, executedPrice, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedUserId]);
+            `, [nextQuantity, executedPrice, nextEntryPrice, nextOpenedAt, orderType, dateAdded, type, name, JSON.stringify(legsJson), existing.id, resolvedWorkspaceId]);
             positionAfter = toNumber(updated.rows[0]?.quantity, 0);
           }
         } else {
@@ -4353,18 +5904,18 @@ const userWorkspace = {
             throw err;
           }
           const inserted = await client.query(`
-            INSERT INTO user_workspace_portfolio (user_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            INSERT INTO user_workspace_portfolio (user_id, workspace_id, symbol, name, price, quantity, entry_price, opened_at, type, market_type, order_type, strategy_name, legs_json, date_added)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING quantity;
-          `, [resolvedUserId, symbol, name, executedPrice, quantity, executedPrice, executionTimestamp, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
+          `, [resolvedUserId, resolvedWorkspaceId, symbol, name, executedPrice, quantity, executedPrice, executionTimestamp, type, marketType, orderType, strategyName, JSON.stringify(legsJson), dateAdded]);
           positionAfter = toNumber(inserted.rows[0]?.quantity, 0);
         }
 
         await client.query(`
           UPDATE user_workspace_cash
           SET balance = $3, updated_at = NOW()
-          WHERE user_id = $1 AND currency = $2;
-        `, [resolvedUserId, buyCurrency, nextCashBalance]);
+          WHERE workspace_id = $1 AND currency = $2;
+        `, [resolvedWorkspaceId, buyCurrency, nextCashBalance]);
 
         // Also update legacy balance for compatibility (USD total equivalent maybe? No, just keep it synced for now if USD)
         if (buyCurrency === "USD") {
@@ -4387,20 +5938,20 @@ const userWorkspace = {
             legs_json AS "legsJson",
             date_added
           FROM user_workspace_portfolio
-          WHERE user_id = $1 AND quantity > $2
+          WHERE workspace_id = $1 AND quantity > $2
           ORDER BY date_added DESC;
-        `, [resolvedUserId, QTY_EPSILON]);
+        `, [resolvedWorkspaceId, QTY_EPSILON]);
         const holdings = holdingsResult.rows.map(mapPortfolioRow);
         const portfolioValueAfter = holdings.reduce((total, h) => total + (toNumber(h.price) * toNumber(h.quantity)), 0);
 
         const tradeResult = await client.query(`
           INSERT INTO user_workspace_trades (
-            user_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
+            user_id, workspace_id, client_id, date, executed_at, asset, name, type, side, market_type, status,
             quantity, price, notional, platform, fee, fee_currency, fee_source, slippage, reference_price, execution_meta_json,
             balance_after, portfolio_value_after, account_equity_after, position_after,
             strategy_name, legs_json
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
           RETURNING
             id,
             client_id AS "clientId",
@@ -4430,6 +5981,7 @@ const userWorkspace = {
             legs_json AS "legsJson";
         `, [
           resolvedUserId,
+          resolvedWorkspaceId,
           clientId,
           executionDate,
           executionTimestamp,
@@ -4459,12 +6011,12 @@ const userWorkspace = {
 
         await client.query(`
           INSERT INTO user_workspace_trade_fills (
-            user_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
+            user_id, workspace_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
             quantity, price, notional, fee_amount, fee_currency, fee_source, liquidity_role, executed_at,
             reference_price, raw_payload_json, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
-          ON CONFLICT (user_id, platform, platform_fill_id) DO UPDATE
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+          ON CONFLICT (workspace_id, platform, platform_fill_id) DO UPDATE
           SET
             trade_client_id = EXCLUDED.trade_client_id,
             platform_trade_id = EXCLUDED.platform_trade_id,
@@ -4484,6 +6036,7 @@ const userWorkspace = {
             updated_at = NOW();
         `, [
           resolvedUserId,
+          resolvedWorkspaceId,
           clientId,
           platform,
           clientId,
@@ -5842,6 +7395,7 @@ module.exports = {
   watchlist,
   optionsCalculations,
   userAuth,
+  workspaces,
   userWorkspace,
   serviceSnapshots,
   tradeExecutions,
@@ -5849,5 +7403,6 @@ module.exports = {
   admin,
   analytics,
   clearAllData,
-  closeDatabase
+  closeDatabase,
+  describeDatabaseConfig
 };

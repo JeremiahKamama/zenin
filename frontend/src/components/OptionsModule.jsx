@@ -1,13 +1,37 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { OptionsCalculator } from "./OptionsCalculator";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
+import { OptionsInstitutionalPanel } from "./InstitutionalPanels";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { zeninFetch } from "../utils/zeninFetch";
+import { zeninFetchJson } from "../utils/zeninFetch";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { GuidedEmptyState } from "./CompactWorkspaceUI";
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
+const OPTIONS_SAVED_VIEWS_KEY = "zenin_options_saved_views";
+
+function readStoredOptionViews() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OPTIONS_SAVED_VIEWS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatSavedTimestamp(value) {
+  if (!value) return "Saved recently";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Saved recently";
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 const StrategySimulatorCard = ({
   activeAsset,
@@ -19,6 +43,7 @@ const StrategySimulatorCard = ({
   showToast,
   loading = false,
   availableExpiries = [],
+  error = "",
 }) => {
   const supportedAssets = Array.isArray(getAppRuntimeConfig()?.options?.supportedAssets)
     ? getAppRuntimeConfig().options.supportedAssets
@@ -28,8 +53,8 @@ const StrategySimulatorCard = ({
     : supportedAssets;
 
   return (
-    <div className="watchlist-panel glass strategy-simulator-panel">
-      <div className="section-header">
+    <div className="watchlist-panel glass strategy-simulator-panel options-exec-panel options-exec-strategy-panel">
+      <div className="section-header options-exec-panel-head">
         <div className="header-left">
           <h2>Strategy Simulator for {activeAsset}</h2>
           <span className="asset-count">
@@ -58,6 +83,21 @@ const StrategySimulatorCard = ({
       </div>
 
       <div className="strategy-simulator-body">
+        {error ? (
+          <GuidedEmptyState
+            eyebrow="Execution recovery"
+            title="Strategy execution needs attention"
+            description={error}
+            steps={[
+              "Reduce notional or free up available balance before retrying.",
+              "Keep the chain synced so entry pricing reflects the latest market marks.",
+            ]}
+            cta="Retry after review"
+            onAction={() => showToast?.("Review size, balance, and chain pricing before retrying.", "info")}
+            tone="warning"
+            className="guided-empty-state--compact"
+          />
+        ) : null}
         <OptionsStrategySimulator
           underlying={activeAsset}
           chain={chain}
@@ -115,10 +155,14 @@ export const OptionsModule = ({
   const [whalePage, setWhalePage] = useState(1);
   const [whaleMinNotional, setWhaleMinNotional] = useState(10000);
   const [whaleSource, setWhaleSource] = useState("telegram");
+  const [chainRefreshTick, setChainRefreshTick] = useState(0);
+  const [whaleRefreshTick, setWhaleRefreshTick] = useState(0);
   const lastSyncToastRef = useRef(null); // Ref to track the last toasted request key
   const [simulatorError, setSimulatorError] = useState("");
   const [strikeWindow, setStrikeWindow] = useState("all");
   const [earningsCalendar, setEarningsCalendar] = useState([]);
+  const [showSavedItemsDrawer, setShowSavedItemsDrawer] = useState(false);
+  const [savedOptionViews, setSavedOptionViews] = useState(() => readStoredOptionViews());
   const [termIvByExpiry, setTermIvByExpiry] = useState({});
   const supplementalFetchStateRef = useRef({
     chainInFlight: new Set(),
@@ -324,9 +368,7 @@ useEffect(() => {
   let cancelled = false;
   const loadEarnings = async () => {
     try {
-      const res = await zeninFetch(`/earnings-calendar`);
-      if (!res.ok) return;
-      const payload = await res.json();
+      const payload = await zeninFetchJson(`/earnings-calendar`);
       if (cancelled) return;
       const rows = Array.isArray(payload?.events)
         ? payload.events
@@ -371,12 +413,11 @@ useEffect(() => {
         }
         fetchState.chainInFlight.add(symbol);
         fetchState.lastChainFetchAt[symbol] = now;
-        zeninFetch(`/options/crypto`, {
+        zeninFetchJson(`/options/crypto`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ currency: symbol })
         })
-          .then(res => res.json())
           .then(data => {
             if (data && data.chain) {
               setMultiChainCache(prev => ({ ...prev, [symbol]: data.chain }));
@@ -407,8 +448,7 @@ useEffect(() => {
       if (fetchState.spotInFlight.has(symbol) || now - lastFetchAt < 120000) return;
       fetchState.spotInFlight.add(symbol);
       fetchState.lastSpotFetchAt[symbol] = now;
-      zeninFetch(`/prices?type=crypto&symbols=${symbol}`)
-          .then(res => res.json())
+      zeninFetchJson(`/prices?type=crypto&symbols=${symbol}`)
           .then(data => {
              const price = Number(data?.prices?.[symbol]?.price);
              if (price) {
@@ -458,9 +498,7 @@ useEffect(() => {
 
   const getHyperliquidFallbackSpot = async (assetSymbol) => {
     try {
-      const res = await zeninFetch(`/crypto-market`, { signal: controller.signal });
-      if (!res.ok) return null;
-      const data = await res.json();
+      const data = await zeninFetchJson(`/crypto-market`, { signal: controller.signal });
       if (controller.signal.aborted) return null;
       const rows = Array.isArray(data?.assets) ? data.assets : [];
       const match = rows.find(
@@ -502,22 +540,15 @@ useEffect(() => {
       setLoading(true);
       try {
         setOptionsError("");
-        const res = await zeninFetch(`/options/crypto`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          currency: activeAsset || "BTC",
-          expiry: activeExpiry || null
-        })
-      });
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`HTTP ${res.status}: ${errorText}`);
-      }
-
-      const data = await res.json();
+        const data = await zeninFetchJson(`/options/crypto`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            currency: activeAsset || "BTC",
+            expiry: activeExpiry || null
+          })
+        });
 
       if (!isMounted || controller.signal.aborted) return;
       const latestRequestKey = `${String(activeAsset || "").trim().toUpperCase()}:${activeExpiry || "latest"}`;
@@ -590,12 +621,12 @@ useEffect(() => {
       }
 
     } catch (err) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || err?.code === "REQUEST_ABORTED") return;
       console.warn("Options chain unavailable; simulator is using fallback pricing.", err);
       if (isMounted) {
-        setOptionsError("");
+        setOptionsError(cached?.payload ? "" : (err?.message || "Options data is temporarily unavailable."));
         setOptionsStale(true);
-        setOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
+        setOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : (err?.message || ""));
         setMarketStructure(inferredMarketStructure);
         setMarketStructureLabel(inferredMarketStructureLabel);
         setMarketStructureNote(inferredMarketStructureNote);
@@ -630,7 +661,7 @@ useEffect(() => {
     clearInterval(interval);
   };
 
-}, [activeAsset, activeExpiry]);
+}, [activeAsset, activeExpiry, chainRefreshTick]);
 
 useEffect(() => {
   let isMounted = true;
@@ -651,12 +682,7 @@ useEffect(() => {
         minNotional: String(whaleMinNotional),
         source: whaleSource
       });
-      const res = await zeninFetch(`/options/whale-trades?${params.toString()}`);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
-      }
-      const data = await res.json();
+      const data = await zeninFetchJson(`/options/whale-trades?${params.toString()}`);
       if (!isMounted) return;
       let parsedTrades = Array.isArray(data?.trades) ? data.trades : [];
       if (whaleSource === "telegram") {
@@ -677,7 +703,7 @@ useEffect(() => {
       if (!isMounted) return;
       setWhaleStale(true);
       setWhaleMeta((prev) => prev || {});
-      setWhaleNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
+      setWhaleNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : (err?.message || "Whale trade data is temporarily unavailable."));
     } finally {
       if (isMounted) setWhaleLoading(false);
     }
@@ -690,7 +716,7 @@ useEffect(() => {
     isMounted = false;
     clearInterval(interval);
   };
-}, [whaleMinNotional, whaleSource]);
+}, [whaleMinNotional, whaleSource, whaleRefreshTick]);
 
   const whalePageSize = 10;
   const whaleTotalPages = Math.max(1, Math.ceil(whaleTrades.length / whalePageSize));
@@ -786,6 +812,69 @@ useEffect(() => {
   const emptyChainText = activeUsesRfq
     ? `${activeAsset} is currently exposed through ${marketStructureLabel} on Derive, so a full chain snapshot may be partial or unavailable here.`
     : `Waiting for options data for ${activeAsset}.`;
+
+  const handleRefreshOptionsView = () => {
+    setChainRefreshTick((tick) => tick + 1);
+    setWhaleRefreshTick((tick) => tick + 1);
+    if (showToast) showToast("Refreshing options workspace.", "success");
+  };
+
+  const optionsRecoveryDescription = optionsError
+    ? optionsError
+    : optionsStale && optionsNotice
+      ? optionsNotice
+      : emptyChainText;
+
+  const handleJumpToSavedItems = () => {
+    if (!savedOptionViews.length && !(activeOptionsTrades && activeOptionsTrades.length > 0)) {
+      if (showToast) showToast("No saved options items yet.", "info");
+      return;
+    }
+    setShowSavedItemsDrawer(true);
+  };
+
+  const handleSaveOptionsView = () => {
+    try {
+      const nextViews = [
+        {
+          id: `options-view-${Date.now()}`,
+          activeAsset,
+          activeExpiry,
+          strikeWindow,
+          whaleMinNotional,
+          whaleSource,
+          savedAt: new Date().toISOString(),
+        },
+        ...savedOptionViews,
+      ].slice(0, 12);
+      localStorage.setItem(OPTIONS_SAVED_VIEWS_KEY, JSON.stringify(nextViews));
+      setSavedOptionViews(nextViews);
+      setShowSavedItemsDrawer(true);
+      if (showToast) showToast("Options view saved to Saved Items.", "success");
+    } catch {
+      if (showToast) showToast("Couldn't save this view locally.", "error");
+    }
+  };
+
+  const applySavedOptionsView = (view) => {
+    if (!view || typeof view !== "object") return;
+    setActiveAsset(String(view.activeAsset || activeAsset).trim().toUpperCase() || activeAsset);
+    setActiveExpiry(view.activeExpiry || null);
+    setStrikeWindow(view.strikeWindow || "all");
+    setWhaleMinNotional(Number(view.whaleMinNotional) || 10000);
+    setWhaleSource(view.whaleSource || "telegram");
+    setShowSavedItemsDrawer(false);
+    if (showToast) showToast("Saved options view applied.", "success");
+  };
+
+  const openActiveTradesFromSavedItems = () => {
+    setShowSavedItemsDrawer(false);
+    if (activeTradesRef.current) {
+      activeTradesRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    if (showToast) showToast("No active options trades saved yet.", "info");
+  };
 
   const activeSpot = Number(spotPrices?.[activeAsset] || 0);
   const filteredChain = useMemo(() => {
@@ -929,13 +1018,11 @@ useEffect(() => {
         state.inFlight.add(cacheKey);
         state.lastFetchedAt[cacheKey] = Date.now();
         try {
-          const res = await zeninFetch(`/options/crypto`, {
+          const payload = await zeninFetchJson(`/options/crypto`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ currency: activeAsset, expiry: expiryTs })
           });
-          if (!res.ok) continue;
-          const payload = await res.json();
           if (cancelled) return;
           const iv = Number(payload?.market_metrics?.iv);
           const chainIv = deriveIvFromChain(payload?.chain || []);
@@ -1007,29 +1094,59 @@ useEffect(() => {
   }, [activeOptionsTrades, multiChainCache, chain, spotPrices, activeAsset]);
 
   return (
-    <div className="view-container options-terminal">
-      <div className="portfolio-analytics-row">
-        <div className="metric-card glass">
+    <div className="view-container options-terminal options-exec">
+      <header className="options-exec-header">
+        <div>
+          <div className="options-exec-eyebrow">Options</div>
+          <h1>Options</h1>
+          <p>Whale Options Trades</p>
+        </div>
+        <span className="options-exec-live-badge">
+          <span aria-hidden="true" />
+          Live
+        </span>
+        <div className="options-exec-header-actions" aria-label="Options view actions">
+          <div className="options-exec-segmented-actions">
+            <button type="button" className="active" onClick={handleJumpToSavedItems}>
+              Saved Items
+            </button>
+            <button type="button" onClick={handleRefreshOptionsView} disabled={loading || whaleLoading}>
+              Refresh
+            </button>
+          </div>
+          <button type="button" className="options-exec-secondary-action" onClick={handleSaveOptionsView}>
+            Save View
+          </button>
+        </div>
+      </header>
+
+      <div className="portfolio-analytics-row options-exec-metrics">
+        <div className="metric-card glass options-exec-metric-card">
           <label>Implied Volatility <span className="live-pill">Live</span></label>
           <div className="value">{(metrics.iv * 100).toFixed(1)}%</div>
           <div className="change positive">▲ Real-time</div>
         </div>
-        <div className="metric-card glass">
+        <div className="metric-card glass options-exec-metric-card">
           <label>Put/Call Ratio</label>
           <div className="value">{metrics.pcr.toFixed(2)}</div>
           <div className="change negative">▼ 0.05</div>
         </div>
-        <div className="metric-card glass">
+        <div className="metric-card glass options-exec-metric-card">
           <label>Market Skew</label>
           <div className="value">{metrics.skew}</div>
           <div className="change positive">+14.2</div>
+        </div>
+        <div className="metric-card glass options-exec-metric-card options-exec-session-card">
+          <label>Session Status</label>
+          <div className="value">{activeUsesRfq ? "RFQ" : "Open Flow"}</div>
+          <div className="change info">{allAssets.slice(0, 3).join(" / ")}</div>
         </div>
       </div>
 
       {/* NEW: Active Options Trades Card */}
       {activeOptionsTrades && activeOptionsTrades.length > 0 && (
-        <div ref={activeTradesRef} className="watchlist-panel glass" style={{ marginBottom: "16px", padding: "16px" }}>
-          <div className="section-header">
+        <div ref={activeTradesRef} className="watchlist-panel glass options-exec-panel" style={{ marginBottom: "16px", padding: "16px" }}>
+          <div className="section-header options-exec-panel-head">
             <h2>Active Options Trades</h2>
           </div>
           <div className="active-trades-table-container scrollbar-thin">
@@ -1120,8 +1237,8 @@ useEffect(() => {
         error={simulatorError}
       />
 
-      <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
-        <div className="section-header">
+      <div className="watchlist-panel glass options-exec-panel options-exec-greeks-panel" style={{ marginBottom: "16px" }}>
+        <div className="section-header options-exec-panel-head">
           <h2>Greeks & Volatility Context</h2>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
             <span className="asset-count">Strike Window</span>
@@ -1156,7 +1273,7 @@ useEffect(() => {
           ))}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
-          <div style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
+          <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
             <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>IV / OI Heatmap (sample)</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {filteredChain.slice(0, 8).map((row) => {
@@ -1164,16 +1281,21 @@ useEffect(() => {
                 const callOi = Number(row?.call?.openInterest || row?.call?.oi || 0);
                 const intensity = Math.min(1, Math.max(0.08, (callIv / 120) + (callOi / 100000)));
                 return (
-                  <div 
+                  <button
+                    type="button"
                     key={`heat-${row.strike}`} 
                     onClick={() => scrollToStrike(row.strike)}
+                    className="options-exec-heat-row"
                     style={{ 
+                      width: "100%",
+                      border: "none",
                       borderRadius: "6px", 
                       padding: "6px 8px", 
                       background: `rgba(56,189,248,${intensity.toFixed(2)})`, 
                       display: "flex", 
                       justifyContent: "space-between", 
                       fontSize: "12px",
+                      color: "#e2e8f0",
                       cursor: "pointer",
                       transition: "transform 0.1s"
                     }}
@@ -1182,24 +1304,30 @@ useEffect(() => {
                   >
                     <span>{Number(row.strike).toLocaleString()}</span>
                     <span>IV {callIv.toFixed(1)}% · OI {callOi.toLocaleString()}</span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
-          <div style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
+          <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
             <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>Volatility Term Structure</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {termStructureRows.slice(0, 8).map((row) => (
-                  <div 
+                  <button
+                    type="button"
                     key={`term-${row.expiryTs}`} 
                     onClick={() => setActiveExpiry(row.expiryTs)}
+                    className="options-exec-term-row"
                     style={{ 
+                      width: "100%",
+                      border: "none",
                       display: "grid", 
                       gridTemplateColumns: "68px 1fr 48px", 
                       gap: "8px", 
                       alignItems: "center", 
                       fontSize: "12px",
+                      color: "inherit",
+                      background: "transparent",
                       cursor: "pointer",
                       padding: "2px 4px",
                       borderRadius: "4px",
@@ -1213,7 +1341,7 @@ useEffect(() => {
                     <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: activeExpiry === row.expiryTs ? "linear-gradient(90deg, #38bdf8, #60a5fa)" : "linear-gradient(90deg, #22c55e, #38bdf8)" }} />
                   </div>
                   <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit" }}>{(row.impliedVol * 100).toFixed(1)}%</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -1221,8 +1349,8 @@ useEffect(() => {
       </div>
 
       {(upcomingEarningsForAsset.length > 0 || assignmentReminders.length > 0) ? (
-        <div className="watchlist-panel glass" style={{ marginBottom: "16px" }}>
-          <div className="section-header">
+        <div className="watchlist-panel glass options-exec-panel" style={{ marginBottom: "16px" }}>
+          <div className="section-header options-exec-panel-head">
             <h2>Event Risk Warnings</h2>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -1240,8 +1368,8 @@ useEffect(() => {
         </div>
       ) : null}
 
-      <div className="watchlist-panel glass">
-        <div className="section-header">
+      <div className="watchlist-panel glass options-exec-panel options-exec-chain-panel">
+        <div className="section-header options-exec-panel-head">
           <div className="header-left">
             <h2>{activeAsset} Option Chain <span className="live-pill">Live</span></h2>
             <div className="options-market-context">
@@ -1293,9 +1421,21 @@ useEffect(() => {
           {filteredChain.length === 0 && loading ? (
             <div className="loading-state">{activeUsesRfq ? `Syncing ${activeAsset} RFQ references...` : `Syncing ${activeAsset} with Lyra Protocol...`}</div>
           ) : filteredChain.length === 0 ? (
-            <div className="loading-state">{emptyChainText}</div>
+            <GuidedEmptyState
+              eyebrow="Options workflow"
+              title={`No ${activeAsset} chain rows ready yet`}
+              description={optionsRecoveryDescription}
+              steps={[
+                "Retry the chain snapshot or switch to a different underlying with live rows.",
+                "Use the strategy simulator only after the ladder and spot reference are in sync.",
+              ]}
+              cta="Retry snapshot"
+              onAction={handleRefreshOptionsView}
+              tone={optionsStale || optionsError ? "warning" : "default"}
+              className="guided-empty-state--compact options-guided-empty"
+            />
           ) : (
-            <div className="table-scroll options-chain-scroll" style={{ maxHeight: "320px", overflowY: "auto", scrollBehavior: "smooth" }} ref={chainScrollRef}>
+            <div className="table-scroll options-chain-scroll options-exec-table-scroll" style={{ maxHeight: "320px", overflowY: "auto", scrollBehavior: "smooth" }} ref={chainScrollRef}>
               <table className="option-chain-table">
                 <thead>
                   <tr>
@@ -1342,18 +1482,27 @@ useEffect(() => {
               </table>
             </div>
           )}
-          {optionsError && (
-            <div className="loading-state" style={{ marginTop: "8px", color: "#f59e0b" }}>
-              {optionsError}
+          {optionsError || (optionsStale && optionsNotice) ? (
+            <div style={{ marginTop: "10px" }}>
+              <GuidedEmptyState
+                eyebrow="Recovery"
+                title={optionsError ? "Chain snapshot needs review" : "Showing a previous chain snapshot"}
+                description={optionsRecoveryDescription}
+                steps={[
+                  "Refresh the workspace to pull a fresh chain and whale snapshot.",
+                  "If the warning persists, switch expiries or underlyings before executing.",
+                ]}
+                cta="Refresh options"
+                onAction={handleRefreshOptionsView}
+                tone="warning"
+                className="guided-empty-state--compact options-guided-empty"
+              />
             </div>
-          )}
-          {optionsStale && optionsNotice ? (
-            <div className="snapshot-inline-note">{optionsNotice}</div>
           ) : null}
       </div>
 
-      <div className="watchlist-panel glass whale-trades-panel" style={{ marginTop: "16px", padding: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "10px" }}>
+      <div className="watchlist-panel glass whale-trades-panel options-exec-panel options-exec-whale-panel" style={{ marginTop: "16px", padding: "16px" }}>
+        <div className="section-header options-exec-panel-head" style={{ marginBottom: "10px" }}>
           <div className="header-left">
             <h2>Whale Options Trades <span className="live-pill">Live</span></h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -1397,7 +1546,7 @@ useEffect(() => {
         ) : pagedWhaleTrades.length === 0 ? (
           <div className="loading-state">{whaleEmptyStateText}</div>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll options-exec-table-scroll">
             <table className="option-chain-table whale-trades-table">
               <thead>
                 <tr>
@@ -1413,6 +1562,14 @@ useEffect(() => {
                   <tr 
                     key={trade.id} 
                     onClick={() => handleWhaleTradeClick(trade)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleWhaleTradeClick(trade);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
                     style={{ cursor: "pointer" }}
                     onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(148,163,184,0.08)'}
                     onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
@@ -1464,6 +1621,131 @@ useEffect(() => {
         activeExpiry={activeExpiry}
       />
 
+      <OptionsInstitutionalPanel
+        chain={filteredChain}
+        activeOptionsTrades={activeOptionsTrades || []}
+        activeAsset={activeAsset}
+      />
+
+      <OptionsSavedItemsDrawer
+        open={showSavedItemsDrawer}
+        onClose={() => setShowSavedItemsDrawer(false)}
+        savedViews={savedOptionViews}
+        activeTrades={activeOptionsTrades || []}
+        assignmentReminders={assignmentReminders}
+        onApplyView={applySavedOptionsView}
+        onOpenActiveTrades={openActiveTradesFromSavedItems}
+      />
+
+    </div>
+  );
+}
+
+function OptionsSavedItemsDrawer({
+  open,
+  onClose,
+  savedViews,
+  activeTrades,
+  assignmentReminders,
+  onApplyView,
+  onOpenActiveTrades,
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside
+        className="home-v3-detail-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Saved items"
+        style={{ maxWidth: 720 }}
+      >
+        <div className="home-v3-drawer-head">
+          <h2>Saved Items</h2>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div style={{ display: "grid", gap: 18 }}>
+          <section style={{ display: "grid", gap: 10 }}>
+            <div>
+              <strong style={{ display: "block", marginBottom: 4 }}>Saved Views</strong>
+              <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                {savedViews.length ? `${savedViews.length} saved view${savedViews.length === 1 ? "" : "s"}` : "No saved options views yet."}
+              </span>
+            </div>
+            {savedViews.map((view) => (
+              <SavedOptionsRow
+                key={view.id}
+                title={`${view.activeAsset || "Asset"} · ${String(view.strikeWindow || "all").toUpperCase()} strikes`}
+                subtitle={`${view.whaleMinNotional ? `$${Number(view.whaleMinNotional).toLocaleString()} min notional` : "Whale flow"} · ${formatSavedTimestamp(view.savedAt)}`}
+                actionLabel="Apply"
+                onAction={() => onApplyView(view)}
+              />
+            ))}
+          </section>
+          <section style={{ display: "grid", gap: 10 }}>
+            <div>
+              <strong style={{ display: "block", marginBottom: 4 }}>Active Trades</strong>
+              <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                {activeTrades.length ? `${activeTrades.length} live position${activeTrades.length === 1 ? "" : "s"}` : "No active options trades yet."}
+              </span>
+            </div>
+            {activeTrades.length ? (
+              <SavedOptionsRow
+                title="Open positions"
+                subtitle={`${activeTrades.slice(0, 3).map((trade) => trade.asset).join(" / ")}${activeTrades.length > 3 ? "…" : ""}`}
+                actionLabel="Open"
+                onAction={onOpenActiveTrades}
+              />
+            ) : null}
+          </section>
+          {assignmentReminders.length ? (
+            <section style={{ display: "grid", gap: 10 }}>
+              <div>
+                <strong style={{ display: "block", marginBottom: 4 }}>Assignment Reminders</strong>
+                <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                  {assignmentReminders.length} expiring position{assignmentReminders.length === 1 ? "" : "s"} under watch.
+                </span>
+              </div>
+              {assignmentReminders.slice(0, 5).map((item) => (
+                <SavedOptionsRow
+                  key={item.id}
+                  title={item.label}
+                  subtitle={`Expires in ${item.hoursToExpiry}h${item.inTheMoneyRisk ? " · ITM risk elevated" : ""}`}
+                  actionLabel="Open"
+                  onAction={onOpenActiveTrades}
+                />
+              ))}
+            </section>
+          ) : null}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function SavedOptionsRow({ title, subtitle, actionLabel, onAction }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 12,
+        alignItems: "center",
+        padding: "12px 14px",
+        borderRadius: 12,
+        border: "1px solid rgba(148, 163, 184, 0.18)",
+        background: "rgba(15, 23, 42, 0.45)",
+      }}
+    >
+      <div style={{ display: "grid", gap: 4 }}>
+        <strong>{title}</strong>
+        <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{subtitle}</span>
+      </div>
+      <button type="button" className="options-exec-secondary-action" onClick={onAction}>
+        {actionLabel}
+      </button>
     </div>
   );
 }

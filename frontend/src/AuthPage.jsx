@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import "./public.css";
 import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
-import { zeninFetch } from "./utils/zeninFetch";
+import { zeninFetchJson } from "./utils/zeninFetch";
 import { ZeninLogo } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
@@ -101,26 +101,20 @@ async function applyRequestedPlanIfAny() {
   const plan = getRequestedPlan();
   if (!plan) return;
   const billingCycle = getRequestedBillingCycle();
-  const res = await zeninFetch("/account/plan", {
-    method: "POST",
-    body: JSON.stringify({ plan, billingCycle })
-  });
-  if (!res.ok) return;
-  const data = await res.json().catch(() => ({}));
-  if (data?.user) {
-    localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-    if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
+  try {
+    const data = await zeninFetchJson("/account/plan", {
+      method: "POST",
+      body: JSON.stringify({ plan, billingCycle })
+    });
+    if (data?.user) {
+      localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+      if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
+    }
+  } catch (error) {
+    console.warn("Unable to apply requested plan after authentication.", error);
   }
   localStorage.removeItem("zenin_pending_plan");
   localStorage.removeItem("zenin_pending_billing_cycle");
-}
-
-async function readJson(res) {
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data?.error || `Request failed (${res.status})`);
-  }
-  return data;
 }
 
 export default function AuthPage() {
@@ -204,11 +198,10 @@ export default function AuthPage() {
 
   useEffect(() => {
     let mounted = true;
-    zeninFetch("/auth/me")
-      .then((res) => res.json().catch(() => ({})).then((data) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => {
+    zeninFetchJson("/auth/me")
+      .then((data) => {
         if (!mounted) return;
-        if (ok && data?.authenticated && data?.user) {
+        if (data?.authenticated && data?.user) {
           localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
           if (data.user.email) localStorage.setItem("zenin_email", data.user.email);
           const target = getPostAuthRedirectPath();
@@ -220,7 +213,9 @@ export default function AuthPage() {
         localStorage.removeItem("zenin_auth_expires_at");
       })
       .catch(() => {
-        // no-op, user can continue auth flow
+        if (!mounted) return;
+        localStorage.removeItem("zenin_auth_user");
+        localStorage.removeItem("zenin_auth_expires_at");
       });
 
     return () => {
@@ -289,7 +284,7 @@ export default function AuthPage() {
 
   const onCreateAccount = () => runAction(async () => {
     if (!isValidEmail(signupForm.email)) throw new Error("Enter a valid email address.");
-    const res = await zeninFetch("/auth/signup", {
+    const data = await zeninFetchJson("/auth/signup", {
       method: "POST",
       body: JSON.stringify({
         email: signupForm.email,
@@ -297,7 +292,6 @@ export default function AuthPage() {
         displayName: signupForm.displayName
       })
     });
-    const data = await readJson(res);
     persistAuth(data);
     if (data.requiresVerification) {
       setSignupStep("verify");
@@ -308,20 +302,18 @@ export default function AuthPage() {
 
   const onVerifyEmail = () => runAction(async () => {
     if (!/^\d{6}$/.test(verifyCode.trim())) throw new Error("Enter a 6-digit verification code.");
-    const res = await zeninFetch("/auth/verify-email", {
+    const data = await zeninFetchJson("/auth/verify-email", {
       method: "POST",
       body: JSON.stringify({ code: verifyCode.trim() })
     });
-    const data = await readJson(res);
     persistAuth(data);
     setSignupStep("created");
   });
 
   const onResendVerification = () => runAction(async () => {
-    const res = await zeninFetch("/auth/resend-verification", {
+    const data = await zeninFetchJson("/auth/resend-verification", {
       method: "POST"
     });
-    const data = await readJson(res);
     setMessage(data.message || "Verification code resent.");
   });
 
@@ -336,11 +328,10 @@ export default function AuthPage() {
     };
     const code = overrideCode || mfaCode;
     if (code) payload.verificationCode = code;
-    const res = await zeninFetch("/auth/signin", {
+    const data = await zeninFetchJson("/auth/signin", {
       method: "POST",
       body: JSON.stringify(payload)
     });
-    const data = await readJson(res);
     if (data.requiresMfa) {
       setMfaMethod(data.method || "authenticator");
       setMfaCode("");
@@ -357,27 +348,23 @@ export default function AuthPage() {
   });
 
   const onPasskeySignin = () => runAction(async () => {
-    const optionsRes = await zeninFetch("/auth/passkeys/authenticate/generate-options");
-    const options = await optionsRes.json();
-    if (!optionsRes.ok) throw new Error(options?.error || "Failed to get passkey options.");
+    const options = await zeninFetchJson("/auth/passkeys/authenticate/generate-options");
     const { challengeId, ...webAuthnOptions } = options;
     const assertion = await startAuthentication(webAuthnOptions);
-    const verifyRes = await zeninFetch("/auth/passkeys/authenticate/verify", {
+    const data = await zeninFetchJson("/auth/passkeys/authenticate/verify", {
       method: "POST",
       body: JSON.stringify({ response: assertion, challengeId, rememberMe }),
     });
-    const data = await readJson(verifyRes);
     persistAuth(data);
     await redirectToApp();
   });
 
   const onForgotRequest = () => runAction(async () => {
     if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
-    const res = await zeninFetch("/auth/forgot-password/request", {
+    const data = await zeninFetchJson("/auth/forgot-password/request", {
       method: "POST",
       body: JSON.stringify({ email: forgotForm.email })
     });
-    const data = await readJson(res);
     if (data?.devResetToken) {
       setMessage(`Dev reset token: ${data.devResetToken}`);
     }
@@ -387,17 +374,16 @@ export default function AuthPage() {
   const onForgotConfirm = () => runAction(async () => {
     if (!forgotForm.token.trim()) throw new Error("Enter your reset token.");
     if (!forgotForm.newPassword.trim()) throw new Error("Enter a new password.");
-    const res = await zeninFetch("/auth/forgot-password/confirm", {
+    const data = await zeninFetchJson("/auth/forgot-password/confirm", {
       method: "POST",
       body: JSON.stringify({ token: forgotForm.token, newPassword: forgotForm.newPassword })
     });
-    const data = await readJson(res);
     persistAuth(data);
     await redirectToApp();
   });
 
   const onOAuthStart = (provider) => runAction(async () => {
-    const res = await zeninFetch("/auth/oauth/start", {
+    const data = await zeninFetchJson("/auth/oauth/start", {
       method: "POST",
       body: JSON.stringify({
         provider,
@@ -406,7 +392,6 @@ export default function AuthPage() {
         authMode: mode
       })
     });
-    const data = await readJson(res);
     if (data.authorizationUrl) {
       window.location.href = data.authorizationUrl;
     } else {
@@ -415,11 +400,9 @@ export default function AuthPage() {
   });
 
   const onRegisterPasskey = () => runAction(async () => {
-    const optionsRes = await zeninFetch("/auth/passkeys/register/generate-options");
-    const options = await optionsRes.json();
-    if (!optionsRes.ok) throw new Error(options?.error || "Failed to get registration options.");
+    const options = await zeninFetchJson("/auth/passkeys/register/generate-options");
     const attResp = await startRegistration(options);
-    const verifyRes = await zeninFetch("/auth/passkeys/register/verify", {
+    const data = await zeninFetchJson("/auth/passkeys/register/verify", {
       method: "POST",
       body: JSON.stringify({
         response: attResp,
@@ -427,7 +410,6 @@ export default function AuthPage() {
         provider: passkeyForm.provider
       })
     });
-    const data = await readJson(verifyRes);
     if (data?.user) localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
     setMessage("Passkey registered successfully.");
   });
@@ -441,14 +423,18 @@ export default function AuthPage() {
     <div className="auth-v2-shell">
       <div className="auth-v2-bg" aria-hidden="true" />
       <main className="auth-v2-main">
-        <a className="auth-v2-logo" href="/" aria-label="Zenin Capital homepage">
-          <ZeninLogo size="md" />
-        </a>
+        {/* Removed branding logo per request */}
 
         <section className="auth-v2-card">
           <button className="auth-v2-back" onClick={() => { window.location.href = "/"; }}>
             ← Back to homepage
           </button>
+
+          <div className="auth-v2-desk-strip" aria-label="Workspace status">
+            <span>ZENIN ID</span>
+            <strong>{mode === "signin" ? "Workspace Access" : mode === "forgot" ? "Recovery Desk" : "Account Setup"}</strong>
+            <em>{loading ? "Processing" : "Live"}</em>
+          </div>
 
           {mode === "signup" && signupStep === "email" && (
             <>
@@ -781,6 +767,40 @@ export default function AuthPage() {
             </div>
           ) : null}
         </section>
+
+        <aside className="auth-v2-context-panel" aria-label="Zenin workspace preview">
+          <div className="auth-v2-context-header">
+            <ZeninLogo size="sm" />
+            <div>
+              <span>Operator Console</span>
+              <strong>Global Desk</strong>
+            </div>
+          </div>
+          <div className="auth-v2-terminal-card">
+            <div className="auth-v2-terminal-row">
+              <span>Market State</span>
+              <strong>Live</strong>
+            </div>
+            <div className="auth-v2-terminal-row">
+              <span>Session</span>
+              <strong>Encrypted</strong>
+            </div>
+            <div className="auth-v2-terminal-row">
+              <span>Workspace</span>
+              <strong>{getRequestedPlan() ? `${getRequestedPlan().toUpperCase()} Plan` : "Starter Plan"}</strong>
+            </div>
+          </div>
+          <div className="auth-v2-context-grid" aria-hidden="true">
+            <div><span>PORTFOLIO</span><strong>$158.4K</strong><em>+2.14%</em></div>
+            <div><span>WATCHLIST</span><strong>32</strong><em>Synced</em></div>
+            <div><span>RISK</span><strong>Normal</strong><em>08:42 ET</em></div>
+            <div><span>DATA</span><strong>Fallback</strong><em>Ready</em></div>
+          </div>
+          <div className="auth-v2-context-foot">
+            <span />
+            <p>Secure access for portfolio monitoring, research workflows, and account operations.</p>
+          </div>
+        </aside>
       </main>
       <AuthLegalModal doc={legalDoc} onClose={closeLegalDoc} />
       <SpeedInsights />
@@ -812,19 +832,43 @@ function AuthLegalModal({ doc, onClose }) {
         </div>
         <div className="home-v3-drawer-rows" style={{ gap: 16 }}>
           {isTerms ? (
-            <>
-              <div><span>Access</span><strong>Use the workspace for lawful research, portfolio tracking, and analytics only.</strong></div>
-              <div><span>Accounts</span><strong>You are responsible for credentials, connected accounts, and read-only API usage.</strong></div>
-              <div><span>Market data</span><strong>Quotes, tax estimates, and analytics are informational and may be delayed or incomplete.</strong></div>
-              <div><span>Not advice</span><strong>Nothing in Zenin Capital is investment, legal, or tax advice.</strong></div>
-            </>
+            <div style={{ color: "#94a3b8", display: "flex", flexDirection: "column", gap: 24 }}>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>1. Agreement to Terms</h3>
+                <p>By accessing or using Zenin Capital, you agree to be bound by these Terms. We provide a workspace for financial data research, portfolio tracking, and market analytics for informational purposes only.</p>
+              </section>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>2. Accounts & Security</h3>
+                <p>You are responsible for your credentials and all activities under your account. Zenin Capital is not liable for unauthorized access or usage resulting from compromised credentials.</p>
+              </section>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>3. Not Financial Advice</h3>
+                <p>Nothing on this platform constitutes investment, legal, or tax advice. We do not guarantee the accuracy of market data, which may be delayed or incomplete.</p>
+              </section>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>4. Prohibited Use</h3>
+                <p>Reverse engineering, automated scraping of our backend, or using the service for any illegal financial activities is strictly prohibited.</p>
+              </section>
+            </div>
           ) : (
-            <>
-              <div><span>Data stored</span><strong>Email, workspace preferences, saved calculations, and locally cached portfolio context.</strong></div>
-              <div><span>Connected sources</span><strong>Read-only keys and linked accounts are used to display holdings and analytics inside your workspace.</strong></div>
-              <div><span>Security</span><strong>Use least-privilege credentials and avoid providing withdrawal-enabled keys.</strong></div>
-              <div><span>Control</span><strong>You can remove local session data by signing out or clearing browser storage.</strong></div>
-            </>
+            <div style={{ color: "#94a3b8", display: "flex", flexDirection: "column", gap: 24 }}>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>1. Data Collection</h3>
+                <p>We collect your email for authentication and store workspace preferences, locally cached portfolio context, and saved calculations to provide a persistent experience.</p>
+              </section>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>2. Connected Sources</h3>
+                <p>When linking read-only API keys, we use this data solely to display your holdings and generate analytics inside your private workspace.</p>
+              </section>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>3. Data Sharing</h3>
+                <p>We do not sell your personal information. We use minimal third-party analytics to understand interaction patterns and improve platform performance.</p>
+              </section>
+              <section>
+                <h3 style={{ color: "#f8fafc", fontSize: "1rem", marginBottom: 8 }}>4. Control & Deletion</h3>
+                <p>You may request account deletion at any time. Signing out removes local session data, and clearing browser storage removes cached workspace context.</p>
+              </section>
+            </div>
           )}
         </div>
       </aside>

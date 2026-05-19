@@ -3,7 +3,7 @@ import ReactApexChart from "react-apexcharts";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
+import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
@@ -16,6 +16,8 @@ const HOME_SAVED_VIEWS_STORAGE_KEY = "zenin_home_saved_views";
 const HOME_ALERTS_STORAGE_KEY = "zenin_home_alerts";
 const HOME_TASKS_STORAGE_KEY = "zenin_home_workspace_tasks";
 const HOME_REBALANCE_STORAGE_KEY = "zenin_home_rebalance_queue";
+const HOME_SIGNAL_ARCHIVE_STORAGE_KEY = "zenin_home_signal_archive";
+const HOME_SIGNAL_SNOOZE_STORAGE_KEY = "zenin_home_signal_snooze";
 const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
 
 function readStoredJson(key, fallback) {
@@ -32,6 +34,33 @@ function appendStoredRecord(key, record, limit = 30) {
   const rows = Array.isArray(existing) ? existing : [];
   localStorage.setItem(key, JSON.stringify([record, ...rows].slice(0, limit)));
   return [record, ...rows].slice(0, limit);
+}
+
+function downloadHomeCsv(fileName, rows) {
+  if (!Array.isArray(rows) || !rows.length || typeof document === "undefined") return;
+  const csv = rows
+    .map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function formatSavedTimestamp(value) {
+  const timestamp = new Date(value || Date.now());
+  if (Number.isNaN(timestamp.getTime())) return "Saved recently";
+  return timestamp.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 export function HomeModule({
@@ -79,8 +108,8 @@ export function HomeModule({
   const [quickActionFeedback, setQuickActionFeedback] = useState("");
   const [activeAttentionFlow, setActiveAttentionFlow] = useState(null);
   const [attentionFlowStep, setAttentionFlowStep] = useState(1);
-  const [dismissedAttentionCards, setDismissedAttentionCards] = useState([]);
-  const [snoozedAttentionCards, setSnoozedAttentionCards] = useState([]);
+  const [archivedAttentionCards, setArchivedAttentionCards] = useState(() => readStoredJson(HOME_SIGNAL_ARCHIVE_STORAGE_KEY, []));
+  const [snoozedAttentionCards, setSnoozedAttentionCards] = useState(() => readStoredJson(HOME_SIGNAL_SNOOZE_STORAGE_KEY, []));
   const [flowSelection, setFlowSelection] = useState(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [flowActionLabel, setFlowActionLabel] = useState("");
@@ -98,14 +127,50 @@ export function HomeModule({
   const [macroData, setMacroData] = useState([]);
   const [eventsData, setEventsData] = useState([]);
   const [marketDataLoading, setMarketDataLoading] = useState(false);
+  const [showSavedItemsDrawer, setShowSavedItemsDrawer] = useState(false);
+  const [showSignalArchiveDrawer, setShowSignalArchiveDrawer] = useState(false);
+  const [savedHomeViews, setSavedHomeViews] = useState(() => readStoredJson(HOME_SAVED_VIEWS_STORAGE_KEY, []));
+  const [savedHomeAlerts, setSavedHomeAlerts] = useState(() => readStoredJson(HOME_ALERTS_STORAGE_KEY, []));
+  const [savedHomeTasks, setSavedHomeTasks] = useState(() => readStoredJson(HOME_TASKS_STORAGE_KEY, []));
+  const [savedHomeRebalances, setSavedHomeRebalances] = useState(() => readStoredJson(HOME_REBALANCE_STORAGE_KEY, []));
   const moversPerfCacheRef = useRef(new Map());
   const flowTimerRef = useRef(null);
   const homePrefsHydratedRef = useRef(false);
-  const [flowOutcome, setFlowOutcome] = useState({ title: "", message: "" });
+  const [flowOutcome, setFlowOutcome] = useState({ title: "", message: "", tone: "success" });
 
-  const syncHomeCollection = (namespace, rows, limit = 100) => {
-    saveWorkspaceCollection(namespace, rows, limit).catch((error) => {
-      console.warn(`Workspace sync skipped for ${namespace}.`, error);
+  const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
+
+  const syncHomeCollection = async (namespace, rows, limit = 100) => {
+    return saveWorkspaceCollection(namespace, rows, limit);
+  };
+
+  const archiveAttentionCard = (card, reason = "dismissed") => {
+    if (!card?.id) return;
+    setArchivedAttentionCards((prev) => {
+      const remaining = Array.isArray(prev) ? prev.filter((entry) => entry?.id !== card.id) : [];
+      return [{
+        id: card.id,
+        title: card.title,
+        severity: card.severity,
+        reason,
+        archivedAt: new Date().toISOString()
+      }, ...remaining].slice(0, 50);
+    });
+    setSnoozedAttentionCards((prev) => Array.isArray(prev) ? prev.filter((entry) => entry?.id !== card.id) : []);
+  };
+
+  const snoozeAttentionCard = (card, hours = 24) => {
+    if (!card?.id) return;
+    const snoozeUntil = new Date(Date.now() + (hours * 60 * 60 * 1000)).toISOString();
+    setSnoozedAttentionCards((prev) => {
+      const remaining = Array.isArray(prev) ? prev.filter((entry) => entry?.id !== card.id) : [];
+      return [{
+        id: card.id,
+        title: card.title,
+        severity: card.severity,
+        snoozedAt: new Date().toISOString(),
+        snoozeUntil
+      }, ...remaining].slice(0, 50);
     });
   };
 
@@ -482,7 +547,7 @@ export function HomeModule({
   const quickActions = [
     { id: "trade", label: "Add Trade", action: () => onSelectAsset?.(gainers[0] || moversUniverse[0] || null) },
     { id: "rebalance", label: "Rebalance", action: () => openAttentionFlow("rebalance") },
-    { id: "alert", label: "Set Alert", action: () => {
+    { id: "alert", label: "Set Alert", action: async () => {
       const leader = gainers[0] || moversUniverse[0];
       if (!leader) {
         setQuickActionFeedback("Add holdings or watchlist assets before creating alerts.");
@@ -496,10 +561,16 @@ export function HomeModule({
         context: "home-top-mover",
         message: `${leader.symbol} moved ${formatSignedPercent(Number(leader.__moverChange || 0))} on the ${moversHorizons[moversHorizon]?.label || "selected"} horizon.`
       }, 50);
-      syncHomeCollection("home:alerts", nextAlerts, 50);
-      setQuickActionFeedback(`Alert saved to your Zenin workspace for ${leader.symbol}.`);
+      setSavedHomeAlerts(nextAlerts);
+      try {
+        await syncHomeCollection("home:alerts", nextAlerts, 50);
+        setQuickActionFeedback(`Alert saved for ${leader.symbol} in ${getSaveTargetLabel()}. Open Saved Items to review it anytime.`);
+      } catch (error) {
+        console.warn("Home alert save failed.", error);
+        setQuickActionFeedback(`Could not sync the alert for ${leader.symbol}: ${error?.message || "workspace save failed"}`);
+      }
     } },
-    { id: "journal", label: "Journal Note", action: () => {
+    { id: "journal", label: "Journal Note", action: async () => {
       const leader = gainers[0] || moversUniverse[0];
       const existing = readStoredJson(JOURNAL_STORAGE_KEY, []);
       const rows = Array.isArray(existing) ? existing : [];
@@ -532,19 +603,25 @@ export function HomeModule({
       };
       const nextRows = [note, ...rows].slice(0, 300);
       localStorage.setItem(JOURNAL_STORAGE_KEY, JSON.stringify(nextRows));
-      syncHomeCollection("journal:entries", nextRows, 500);
-      setQuickActionFeedback(`Journal note created in your Zenin workspace for ${symbol}.`);
+      try {
+        await syncHomeCollection("journal:entries", nextRows, 500);
+        setQuickActionFeedback(`Journal note saved in ${getSaveTargetLabel()} for ${symbol}.`);
+      } catch (error) {
+        console.warn("Home journal note save failed.", error);
+        setQuickActionFeedback(`Could not sync the journal note for ${symbol}: ${error?.message || "workspace save failed"}`);
+      }
     } }
   ];
 
-  const queueWorkspaceTask = (kind, payload = {}) => {
+  const queueWorkspaceTask = async (kind, payload = {}) => {
     const nextTasks = appendStoredRecord(HOME_TASKS_STORAGE_KEY, {
       id: `home-task-${Date.now()}`,
       kind,
       createdAt: new Date().toISOString(),
       ...payload
     }, 60);
-    syncHomeCollection("home:tasks", nextTasks, 60);
+    await syncHomeCollection("home:tasks", nextTasks, 60);
+    return nextTasks;
   };
 
   const handleRefreshDashboard = (toastMessage = "Dashboard refreshed.") => {
@@ -553,7 +630,7 @@ export function HomeModule({
     setHomeToast(toastMessage);
   };
 
-  const handleSaveHomeView = () => {
+  const handleSaveHomeView = async () => {
     const nextViews = appendStoredRecord(HOME_SAVED_VIEWS_STORAGE_KEY, {
       id: `home-view-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -565,26 +642,33 @@ export function HomeModule({
       marketRegion,
       marketSortBy
     }, 25);
-    syncHomeCollection("home:saved_views", nextViews, 25);
-    setHomeToast("View saved to your Zenin workspace.");
+    setSavedHomeViews(nextViews);
+    try {
+      await syncHomeCollection("home:saved_views", nextViews, 25);
+      setHomeToast(`View saved in ${getSaveTargetLabel()}. Open Saved Items to reapply it later.`);
+    } catch (error) {
+      console.warn("Home view save failed.", error);
+      setHomeToast(`Could not sync the view: ${error?.message || "workspace save failed"}`);
+    }
   };
 
   const handleMissingDataAction = (mode) => {
     const symbol = String(flowSelection?.symbol || "ASSET").toUpperCase();
     const issue = flowSelection?.issue || "Missing price data";
-    queueWorkspaceTask("missing-data", { mode, symbol, issue });
     runFlowProcessing(
       4,
       mode === "source" ? `Refreshing ${symbol} market data...` : `Saving manual review for ${symbol}...`,
       3,
-      1100,
-      () => {
+      0,
+      async () => {
+        const nextTasks = await queueWorkspaceTask("missing-data", { mode, symbol, issue });
+        setSavedHomeTasks(nextTasks);
         handleRefreshDashboard("");
         setFlowOutcome({
           title: mode === "source" ? "Refresh queued" : "Manual review saved",
           message: mode === "source"
-            ? `${symbol} was added to your Zenin workspace refresh queue and will re-check pricing on the next sync.`
-            : `${symbol} was marked for manual follow-up in your Zenin workspace.`
+            ? `${symbol} was saved to ${getSaveTargetLabel()} for refresh follow-up. You can review it from Saved Items.`
+            : `${symbol} was saved to ${getSaveTargetLabel()} for manual follow-up. You can review it from Saved Items.`
         });
       }
     );
@@ -598,12 +682,13 @@ export function HomeModule({
       estimatedCost: Number(rebalancePlanRows.cost || 0),
       plan: rebalancePlanRows.rows
     }, 20);
-    syncHomeCollection("home:rebalance_queue", nextQueue, 20);
-    runFlowProcessing(4, "Saving rebalance plan to your workspace...", 3, 1100, () => {
+    setSavedHomeRebalances(nextQueue);
+    runFlowProcessing(4, `Saving rebalance plan to ${getSaveTargetLabel()}...`, 3, 0, async () => {
+      await syncHomeCollection("home:rebalance_queue", nextQueue, 20);
       setHomeLastUpdatedAt(Date.now());
       setFlowOutcome({
         title: "Rebalance queued",
-        message: "The rebalance plan was saved to your Zenin workspace for later execution."
+        message: `The rebalance plan was saved in ${getSaveTargetLabel()}. Open Saved Items when you want to revisit it.`
       });
     });
   };
@@ -619,22 +704,28 @@ export function HomeModule({
         context: "action-center",
         message: `${symbol} volatility exceeded your recent baseline.`
       }, 50);
-      syncHomeCollection("home:alerts", nextAlerts, 50);
+      setSavedHomeAlerts(nextAlerts);
     } else {
-      queueWorkspaceTask(action === "hedge" ? "hedge-review" : "position-review", {
-        symbol,
-        context: "volatility",
-        volatility24h: Number(flowSelection?.volatility24h || 0)
-      });
+      // Persisted in the processing step so errors can be shown in the flow.
     }
-    runFlowProcessing(4, `Saving ${symbol} ${action} workflow...`, 3, 950, () => {
+    runFlowProcessing(4, `Saving ${symbol} ${action} workflow...`, 3, 0, async () => {
+      if (action === "alert") {
+        await syncHomeCollection("home:alerts", readStoredJson(HOME_ALERTS_STORAGE_KEY, []), 50);
+      } else {
+        const nextTasks = await queueWorkspaceTask(action === "hedge" ? "hedge-review" : "position-review", {
+          symbol,
+          context: "volatility",
+          volatility24h: Number(flowSelection?.volatility24h || 0)
+        });
+        setSavedHomeTasks(nextTasks);
+      }
       setFlowOutcome({
         title: action === "alert" ? "Alert saved" : action === "hedge" ? "Hedge task queued" : "Review queued",
         message: action === "alert"
-          ? `${symbol} will stay on your Zenin workspace alert list.`
+          ? `${symbol} was saved to ${getSaveTargetLabel()} on your alert list. Open Saved Items to revisit it.`
           : action === "hedge"
-            ? `${symbol} was added to your Zenin workspace hedge review queue.`
-            : `${symbol} was added to your Zenin workspace position review queue.`
+            ? `${symbol} was saved to ${getSaveTargetLabel()} for hedge review. Open Saved Items to revisit it.`
+            : `${symbol} was saved to ${getSaveTargetLabel()} for position review. Open Saved Items to revisit it.`
       });
     });
   };
@@ -740,6 +831,32 @@ export function HomeModule({
   }, [homeToast]);
 
   useEffect(() => {
+    const activeRows = Array.isArray(snoozedAttentionCards)
+      ? snoozedAttentionCards.filter((entry) => {
+        const until = new Date(entry?.snoozeUntil || 0).getTime();
+        return Number.isFinite(until) && until > Date.now();
+      })
+      : [];
+    if (activeRows.length !== (Array.isArray(snoozedAttentionCards) ? snoozedAttentionCards.length : 0)) {
+      setSnoozedAttentionCards(activeRows);
+    }
+  }, [snoozedAttentionCards]);
+
+  useEffect(() => {
+    localStorage.setItem(HOME_SIGNAL_ARCHIVE_STORAGE_KEY, JSON.stringify(archivedAttentionCards));
+    syncHomeCollection("home:signal_archive", archivedAttentionCards, 50).catch((error) => {
+      console.warn("Signal archive sync skipped.", error);
+    });
+  }, [archivedAttentionCards]);
+
+  useEffect(() => {
+    localStorage.setItem(HOME_SIGNAL_SNOOZE_STORAGE_KEY, JSON.stringify(snoozedAttentionCards));
+    syncHomeCollection("home:signal_snooze", snoozedAttentionCards, 50).catch((error) => {
+      console.warn("Signal snooze sync skipped.", error);
+    });
+  }, [snoozedAttentionCards]);
+
+  useEffect(() => {
     if (!activeAttentionFlow && !selectedHoldingDetail && !selectedActivityDetail && !showAllActivity && !marketDetailOpen) return;
     const handleKeydown = (event) => {
       if (event.key === "Escape") {
@@ -783,22 +900,13 @@ export function HomeModule({
       });
       return acc;
     }, []);
-
-    if (rows.length > 0) return rows.slice(0, 6);
-
-    const fallback = (Array.isArray(portfolio) ? portfolio : []).slice(0, 4).map((item, idx) => ({
-      symbol: String(item?.symbol || "ASSET").toUpperCase(),
-      name: item?.name || item?.symbol || "Asset",
-      type: String(item?.type || "Stock"),
-      issue: idx % 2 === 0 ? "Price data missing" : "Reference data missing",
-      updatedAt: relativeAgeLabel(item?.updatedAt || item?.date_added, idx + 2)
-    }));
-    return fallback;
-  }, [moversHorizon, moversUniverse, moversPerformanceByKey, portfolio]);
+    return rows.slice(0, 6);
+  }, [moversHorizon, moversUniverse, moversPerformanceByKey]);
 
   const volatilityFlowRows = useMemo(() => {
     const rows = [...(Array.isArray(moversWithChange) ? moversWithChange : [])]
       .sort((a, b) => Math.abs(Number(b.__moverChange || 0)) - Math.abs(Number(a.__moverChange || 0)))
+      .filter((row) => Math.abs(Number(row.__moverChange || 0)) >= 5)
       .slice(0, 5)
       .map((row, idx) => {
         const absMove = Math.abs(Number(row.__moverChange || 0));
@@ -811,26 +919,19 @@ export function HomeModule({
           riskLabel: idx < 2 ? "High" : idx < 4 ? "Moderate" : "Watch"
         };
       });
+    return rows;
+  }, [moversWithChange]);
 
-    if (rows.length > 0) return rows;
-
-    return (Array.isArray(alerts) ? alerts : []).slice(0, 4).map((row, idx) => ({
-      symbol: row?.id?.split("-")?.[1]?.toUpperCase?.() || `SYM${idx + 1}`,
-      asset: row?.text || "Volatility signal",
-      volatility24h: 62 - idx * 8,
-      change: idx % 2 === 0 ? -3.4 : 2.6,
-      riskLabel: "Watch"
-    }));
-  }, [moversWithChange, alerts]);
-
-  const openAttentionFlow = (flowKind) => {
+  const openAttentionFlow = (flowKind, selection = null, initialStep = 1) => {
     if (!flowKind) return;
     setActiveAttentionFlow(flowKind);
-    setAttentionFlowStep(1);
+    setAttentionFlowStep(initialStep);
     setFlowBusy(false);
     setFlowActionLabel("");
-    setFlowOutcome({ title: "", message: "" });
-    if (flowKind === "missing") {
+    setFlowOutcome({ title: "", message: "", tone: "success" });
+    if (selection) {
+      setFlowSelection(selection);
+    } else if (flowKind === "missing") {
       setFlowSelection(missingFlowRows[0] || null);
     } else if (flowKind === "rebalance") {
       setFlowSelection(rebalancePlanRows.rows[0] || null);
@@ -843,7 +944,7 @@ export function HomeModule({
     setActiveAttentionFlow(null);
     setFlowBusy(false);
     setFlowActionLabel("");
-    setFlowOutcome({ title: "", message: "" });
+    setFlowOutcome({ title: "", message: "", tone: "success" });
   };
 
   const runFlowProcessing = (nextStep, actionLabel, processingStep = 3, delayMs = 1300, onComplete = null) => {
@@ -851,8 +952,17 @@ export function HomeModule({
     setFlowBusy(true);
     setAttentionFlowStep(processingStep);
     if (flowTimerRef.current) clearTimeout(flowTimerRef.current);
-    flowTimerRef.current = setTimeout(() => {
-      onComplete?.();
+    flowTimerRef.current = setTimeout(async () => {
+      try {
+        await onComplete?.();
+      } catch (error) {
+        console.warn("Home workflow action failed.", error);
+        setFlowOutcome({
+          title: "Action not saved",
+          message: error?.message || "Zenin could not save this action. Please try again.",
+          tone: "error"
+        });
+      }
       setFlowBusy(false);
       setAttentionFlowStep(nextStep);
     }, delayMs);
@@ -1389,16 +1499,21 @@ export function HomeModule({
       const diffDays = Math.floor(diffHours / 24);
       const when = diffDays >= 1 ? `${diffDays}d ago` : diffHours >= 1 ? `${diffHours}h ago` : "just now";
       const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "Sell" : "Buy";
+      const orderType = String(trade?.orderType || trade?.order_type || "MKT").trim().toUpperCase();
       const symbol = String(trade?.asset || trade?.symbol || "Asset").toUpperCase();
       const notional = Number(trade?.notional || (Number(trade?.price || 0) * Number(trade?.quantity || 0)));
+      const stamp = new Date(trade.__ts);
+      const timestampLabel = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, "0")}-${String(stamp.getDate()).padStart(2, "0")} ${String(stamp.getHours()).padStart(2, "0")}:${String(stamp.getMinutes()).padStart(2, "0")}`;
       return {
         id: trade.id || `${symbol}-${trade.__ts}`,
         title: `${side} ${symbol}`,
         action: side.toUpperCase(),
+        instruction: `${side.toUpperCase()}_${orderType}`,
         symbol,
         when,
+        timestampLabel,
         value: Number.isFinite(notional) ? notional : 0,
-        status: trade?.status || "Filled",
+        status: String(trade?.status || "Filled").toUpperCase(),
         raw: trade,
         tone: side === "Sell" ? "sell" : "buy"
       };
@@ -1423,7 +1538,7 @@ export function HomeModule({
   const totalGainLoss = realizedPnl + unrealizedPnl;
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const dailyChangePct = initialBalance > 0 ? (dailyChange / initialBalance) * 100 : 0;
-  const chartModeButtons = [["equity", "Equity Curve"], ["percentage", "% Gain"], ["pnl", "Cash PnL"]];
+  const chartModeButtons = [["equity", "Chart"], ["percentage", "Return"], ["pnl", "P&L"]];
   const heroIntervals = ["Today", "1W", "1M", "YTD", "1Y"];
   const chartValues = chartData.map((point) => Number(point?.[1])).filter(Number.isFinite);
   const bestDay = chartValues.length > 1 ? Math.max(...chartValues.slice(1).map((value, idx) => value - chartValues[idx])) : 0;
@@ -1434,39 +1549,90 @@ export function HomeModule({
     const peak = Math.max(...chartValues.slice(0, idx + 1));
     return Math.min(maxDd, value - peak);
   }, 0);
+  const cashWeightPct = totalAccountEquity > 0 ? (allocationBreakdown.cashValue / totalAccountEquity) * 100 : 0;
+  const positionsCount = (Array.isArray(portfolio) ? portfolio.length : 0) + (Array.isArray(activeOptionsTrades) ? activeOptionsTrades.length : 0);
+  const betaProxy = Math.max(0, Math.min(1.5, (100 - cashWeightPct) / 100));
+  const optionsTheta = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).reduce(
+    (sum, trade) => sum + Number(trade?.theta || trade?.greeks?.theta || 0),
+    0
+  );
+  const buyingPowerPct = totalAccountEquity > 0 ? (liveAvailableBalance / totalAccountEquity) * 100 : 0;
+  const impliedVolDisplay = Number.isFinite(Number(todayView.vix))
+    ? `${Number(todayView.vix).toFixed(1)}`
+    : volatilityFlowRows.length
+    ? `${(
+      volatilityFlowRows.reduce((sum, row) => sum + Number(row?.volatility24h || 0), 0) /
+      Math.max(1, volatilityFlowRows.length)
+    ).toFixed(1)}`
+    : "—";
+  const executiveStatRows = [
+    { label: "Beta Weight", value: `SPY ${betaProxy.toFixed(2)}`, tone: "neutral" },
+    { label: "Theta", value: Math.abs(optionsTheta) > 0.01 ? formatSignedMoney(optionsTheta) : "—", tone: Math.abs(optionsTheta) > 0.01 ? "positive" : "neutral" },
+    { label: "B/P %", value: `${buyingPowerPct.toFixed(2)}%`, tone: "neutral" },
+    { label: "Imp. Vol", value: impliedVolDisplay === "—" ? "—" : `${impliedVolDisplay}%`, tone: Number(impliedVolDisplay) >= 25 ? "risk" : "neutral" }
+  ];
+  const rangeSpread = Math.max(1, Number(dayRange.high || 0) - Number(dayRange.low || 0));
+  const rangeNeedlePct = Math.max(
+    0,
+    Math.min(100, ((Number(totalAccountEquity || 0) - Number(dayRange.low || 0)) / rangeSpread) * 100)
+  );
+  const marketContextAvailable = Boolean(
+    needsAttention.length ||
+    quickActionFeedback ||
+    moversLoading ||
+    gainers.length ||
+    losers.length ||
+    todayView.headlines.length ||
+    eventRows.length ||
+    quickActions.length
+  );
 
   const attentionCards = [
-    {
+    ...(missingFlowRows.length ? [{
       id: "missing",
       variant: "warn",
       severity: "WARNING",
-      title: `${moversCoverage.unavailable || 250} assets missing data`,
-      text: "Update pricing and reference data to improve tracking accuracy.",
-      cta: "Fix Data",
-      meta: `Affected assets: ${moversCoverage.unavailable || 250} · Last checked: just now · Impact: Medium`
-    },
-    {
+      title: `${missingFlowRows.length} asset${missingFlowRows.length === 1 ? "" : "s"} missing data`,
+      text: "Review data gaps and queue the right follow-up without leaving the workspace.",
+      cta: "Resolve",
+      meta: `Affected assets: ${missingFlowRows.length} · Last checked: just now · Impact: Medium`
+    }] : []),
+    ...(rebalanceDriftPct >= 5 ? [{
       id: "rebalance",
       variant: "info",
       severity: "INFO",
       title: "Rebalancing suggested",
       text: `Your allocation is ${Math.abs(allocationBreakdown.cryptoPercent - 50).toFixed(1)}% away from target.`,
-      cta: "View Plan",
-      meta: `Affected assets: ${Math.max(1, topHoldingsRows.length)} · Last checked: just now · Impact: Medium`
-    },
-    {
+      cta: "Review Plan",
+      meta: `Plan rows: ${rebalancePlanRows.rows.length} · Last checked: just now · Impact: Medium`
+    }] : []),
+    ...(volatilityFlowRows.length ? [{
       id: "volatility",
       variant: "risk",
       severity: "CRITICAL",
       title: "High volatility alert",
-      text: `${moversCoverage.unavailable || 250} symbols have missing interval data or unusual movement.`,
+      text: `${volatilityFlowRows.length} symbol${volatilityFlowRows.length === 1 ? "" : "s"} moved beyond the current risk threshold.`,
       cta: "Review Alerts",
-      meta: `Affected assets: ${volatilityFlowRows.length || 250} · Last checked: just now · Impact: High`
-    }
+      meta: `Affected assets: ${volatilityFlowRows.length} · Last checked: just now · Impact: High`
+    }] : [])
   ];
-  const visibleAttentionCards = attentionCards.filter(
-    (card) => !dismissedAttentionCards.includes(card.id) && !snoozedAttentionCards.includes(card.id)
+  const archivedAttentionIds = new Set((Array.isArray(archivedAttentionCards) ? archivedAttentionCards : []).map((entry) => entry?.id));
+  const snoozedAttentionIds = new Set(
+    (Array.isArray(snoozedAttentionCards) ? snoozedAttentionCards : [])
+      .filter((entry) => new Date(entry?.snoozeUntil || 0).getTime() > Date.now())
+      .map((entry) => entry?.id)
   );
+  const visibleAttentionCards = attentionCards.filter(
+    (card) => !archivedAttentionIds.has(card.id) && !snoozedAttentionIds.has(card.id)
+  );
+  const signalArchiveCount = (Array.isArray(archivedAttentionCards) ? archivedAttentionCards.length : 0) +
+    (Array.isArray(snoozedAttentionCards) ? snoozedAttentionCards.length : 0);
+  const healthState = visibleAttentionCards.some((card) => card.variant === "risk")
+    ? "Monitor"
+    : visibleAttentionCards.length > 0
+      ? "Watch"
+      : "Optimal";
+  const healthTone = healthState === "Optimal" ? "optimal" : healthState === "Watch" ? "watch" : "risk";
 
   const attentionFlowSteps = {
     missing: ["Missing Data List", "Asset Detail", "Updating", "Success"],
@@ -1531,8 +1697,8 @@ export function HomeModule({
               <div><strong>How to fix</strong><p>Reconnect your data source or update this asset manually.</p></div>
             </div>
             <div className="home-v2-flow-actions">
-              <button type="button" className="home-v2-flow-btn primary warn" onClick={() => handleMissingDataAction("source")}>Update Source</button>
-              <button type="button" className="home-v2-flow-btn" onClick={() => handleMissingDataAction("manual")}>Update Manually</button>
+              <button type="button" className="home-v2-flow-btn primary warn" onClick={() => handleMissingDataAction("source")}>Queue Source Refresh</button>
+              <button type="button" className="home-v2-flow-btn" onClick={() => handleMissingDataAction("manual")}>Save Manual Review</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(1)}>Back</button>
             </div>
           </div>
@@ -1547,10 +1713,10 @@ export function HomeModule({
         );
       } else {
         flowBody = (
-          <div className="home-v2-flow-status-card success">
-            <div className="home-v2-flow-success-mark">✓</div>
+          <div className={`home-v2-flow-status-card ${flowOutcome.tone === "error" ? "warning" : "success"}`}>
+            <div className="home-v2-flow-success-mark">{flowOutcome.tone === "error" ? "!" : "✓"}</div>
             <h3>{flowOutcome.title || "Data task completed"}</h3>
-            <p>{flowOutcome.message || `${selectedSymbol || "Asset"} data is now up to date.`}</p>
+            <p>{flowOutcome.message || `${selectedSymbol || "Asset"} follow-up was saved.`}</p>
             <div className="home-v2-flow-actions">
               <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(1)}>Back to Missing Data</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
@@ -1590,8 +1756,8 @@ export function HomeModule({
             </div>
             <div className="home-v2-flow-summary">Estimated cost: <strong>{formatMoney(rebalancePlanRows.cost)}</strong></div>
             <div className="home-v2-flow-actions">
-              <button type="button" className="home-v2-flow-btn primary" onClick={() => setAttentionFlowStep(3)}>Apply Plan</button>
-              <button type="button" className="home-v2-flow-btn ghost" onClick={() => setQuickActionFeedback("Plan editor opened in preview mode.")}>Edit Plan</button>
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => setAttentionFlowStep(3)}>Continue</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(1)}>Back</button>
             </div>
           </div>
         );
@@ -1599,10 +1765,10 @@ export function HomeModule({
         flowBody = (
           <div className="home-v2-flow-card">
             <div className="home-v2-flow-headline"><h3>Confirm Rebalance</h3><span>{buyCount} Buys, {sellCount} Sell</span></div>
-            <p>You are about to place the following trades.</p>
+            <p>You are about to save this rebalance plan for review.</p>
             <div className="home-v2-flow-summary">This will reduce drift from <strong>{rebalanceDriftPct.toFixed(1)}%</strong> to <strong>{Math.max(0, rebalanceDriftPct * 0.08).toFixed(1)}%</strong>.</div>
             <div className="home-v2-flow-actions">
-              <button type="button" className="home-v2-flow-btn primary" onClick={handleQueueHomeRebalance}>Confirm</button>
+              <button type="button" className="home-v2-flow-btn primary" onClick={handleQueueHomeRebalance}>Queue Plan</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={() => setAttentionFlowStep(2)}>Cancel</button>
             </div>
           </div>
@@ -1611,16 +1777,16 @@ export function HomeModule({
         flowBody = (
           <div className="home-v2-flow-status-card">
             <div className="home-v2-flow-spinner" />
-            <h3>Submitting rebalance...</h3>
-            <p>{flowActionLabel || "Placing orders now."}</p>
+            <h3>Saving rebalance...</h3>
+            <p>{flowActionLabel || "Saving this plan now."}</p>
           </div>
         );
       } else {
         flowBody = (
-          <div className="home-v2-flow-status-card success">
-            <div className="home-v2-flow-success-mark">✓</div>
-            <h3>{flowOutcome.title || "Rebalance submitted"}</h3>
-            <p>{flowOutcome.message || "Your trades have been submitted successfully."}</p>
+          <div className={`home-v2-flow-status-card ${flowOutcome.tone === "error" ? "warning" : "success"}`}>
+            <div className="home-v2-flow-success-mark">{flowOutcome.tone === "error" ? "!" : "✓"}</div>
+            <h3>{flowOutcome.title || "Rebalance queued"}</h3>
+            <p>{flowOutcome.message || "The rebalance plan was saved for review."}</p>
             <div className="home-v2-flow-actions">
               <button type="button" className="home-v2-flow-btn primary" onClick={() => { onViewAllPositions?.(); closeAttentionFlow(); }}>View Portfolio</button>
               <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
@@ -1671,18 +1837,18 @@ export function HomeModule({
             <li>Position variance is above your rolling baseline.</li>
           </ul>
           <div className="home-v2-flow-actions">
-            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("review")}>Review Position</button>
-            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("alert")}>Set Alert</button>
-            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("hedge")}>Hedge Position</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("review")}>Queue Review</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("alert")}>Save Alert</button>
+            <button type="button" className="home-v2-flow-btn" onClick={() => handleVolatilityAction("hedge")}>Queue Hedge Review</button>
           </div>
         </div>
       );
     } else {
       flowBody = (
-        <div className="home-v2-flow-status-card success">
-          <div className="home-v2-flow-success-mark">✓</div>
+        <div className={`home-v2-flow-status-card ${flowOutcome.tone === "error" ? "warning" : "success"}`}>
+          <div className="home-v2-flow-success-mark">{flowOutcome.tone === "error" ? "!" : "✓"}</div>
           <h3>{flowOutcome.title || "Alert reviewed"}</h3>
-          <p>{flowOutcome.message || "We&apos;ll continue monitoring this symbol for you."}</p>
+          <p>{flowOutcome.message || "This action was saved for follow-up."}</p>
           <div className="home-v2-flow-actions">
             <button type="button" className="home-v2-flow-btn" onClick={() => setAttentionFlowStep(1)}>Back to Alerts</button>
             <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
@@ -1730,12 +1896,81 @@ export function HomeModule({
     setHomeToast("Market context refreshed.");
   };
 
-  const openAllActivityDrawer = () => {
-    if (!recentActivityRows.length) {
-      setHomeToast("No recent activity to show yet.");
+  const savedItemsCount =
+    savedHomeViews.length +
+    savedHomeAlerts.length +
+    savedHomeTasks.length +
+    savedHomeRebalances.length;
+
+  const applySavedHomeView = (view) => {
+    if (!view || typeof view !== "object") return;
+    setChartMode(view.chartMode || "equity");
+    setChartInterval(view.chartInterval || "1D");
+    setMoversHorizon(view.moversHorizon || "daily");
+    setMarketScope(view.marketScope || "all");
+    setMarketDetailTab(view.marketDetailTab || "equities");
+    setMarketRegion(view.marketRegion || "global");
+    setMarketSortBy(view.marketSortBy || "marketCap");
+    setShowSavedItemsDrawer(false);
+    setHomeToast("View applied from Saved Items.");
+  };
+
+  const reviewSavedHomeItem = (kind, payload) => {
+    setShowSavedItemsDrawer(false);
+    if (kind === "rebalance") {
+      openAttentionFlow("rebalance", payload?.plan?.[0] || payload || null, 2);
       return;
     }
-    setShowAllActivity(true);
+    if (kind === "task") {
+      const taskKind = String(payload?.kind || "").toLowerCase();
+      const symbol = String(payload?.symbol || "").trim().toUpperCase();
+      if (taskKind === "hedge-review" || taskKind === "position-review") {
+        const match = volatilityFlowRows.find((row) => String(row?.symbol || "").trim().toUpperCase() === symbol);
+        openAttentionFlow("volatility", match || payload || null, match ? 2 : 1);
+      } else {
+        const match = missingFlowRows.find((row) => String(row?.symbol || "").trim().toUpperCase() === symbol);
+        openAttentionFlow("missing", match || payload || null, match ? 2 : 1);
+      }
+      return;
+    }
+    if (kind === "alert") {
+      const symbol = String(payload?.symbol || "").trim().toUpperCase();
+      const volatilityMatch = volatilityFlowRows.find((row) => String(row?.symbol || "").trim().toUpperCase() === symbol);
+      if (volatilityMatch) {
+        openAttentionFlow("volatility", volatilityMatch, 2);
+        return;
+      }
+      const match = [portfolio, watchlistAssets, assets, moversUniverse]
+        .flat()
+        .find((entry) => String(entry?.symbol || "").trim().toUpperCase() === symbol);
+      if (match) {
+        onSelectAsset?.(match);
+      } else {
+        setHomeToast(symbol ? `Saved alert for ${symbol} is ready for review.` : "Saved alert is ready for review.");
+      }
+    }
+  };
+
+  const openAllActivityDrawer = () => {
+    if (!recentActivityRows.length) {
+      setHomeToast("No recent activity to export yet.");
+      return;
+    }
+    downloadHomeCsv(
+      `home-execution-log-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        ["timestamp", "symbol", "instruction", "notional_usd", "status", "relative_time"],
+        ...recentActivityRows.map((row) => [
+          row.timestampLabel,
+          row.symbol,
+          row.instruction,
+          Number(row.value || 0).toFixed(2),
+          row.status,
+          row.when,
+        ]),
+      ]
+    );
+    setHomeToast("Execution log CSV downloaded.");
   };
 
   if (marketDetailOpen) {
@@ -1926,26 +2161,53 @@ export function HomeModule({
   }
 
   return (
-    <div className="view-container home-dashboard home-v2">
+    <div className="view-container home-dashboard home-exec">
       {homeToast ? <div className="home-v3-toast" role="status">{homeToast}</div> : null}
-      <header className="home-v3-page-header">
-        <div>
-          <div className="home-v3-eyebrow">Portfolio</div>
+      <header className="home-exec-page-header">
+        <div className="home-exec-heading">
+          <div className="home-exec-eyebrow">Portfolio</div>
           <h2>Portfolio Overview</h2>
-          <p>Monitor portfolio value, risk alerts, allocation, holdings, and market context.</p>
+          <p>Compact command deck for monitoring portfolio value, exposures, signals, and recent execution.</p>
+          <div className="home-exec-header-meta" aria-label="Portfolio overview metadata">
+            <span>{positionsCount} tracked positions</span>
+            <span>{cashWeightPct.toFixed(1)}% cash weight</span>
+            <span>{visibleAttentionCards.length} active signals</span>
+          </div>
         </div>
-        <div className="home-v3-header-actions">
-          <span>Last updated {new Date(homeLastUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-          <button type="button" className="home-v3-btn secondary" onClick={() => handleRefreshDashboard("Dashboard refreshed.")}>Refresh</button>
-          <button type="button" className="home-v3-btn primary" onClick={handleSaveHomeView}>Save View</button>
+        <div className="home-exec-command-bar">
+          <div className="home-exec-sync-block home-exec-command-chip">
+            <span>Sync State</span>
+            <strong>{new Date(homeLastUpdatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</strong>
+          </div>
+          <div className="home-exec-header-actions">
+            <button type="button" className="home-exec-btn secondary" onClick={() => setShowSavedItemsDrawer(true)}>
+              Saved Items{savedItemsCount ? ` (${savedItemsCount})` : ""}
+            </button>
+            <button type="button" className="home-exec-btn secondary" onClick={() => handleRefreshDashboard("Dashboard refreshed.")}>Refresh</button>
+            <button type="button" className="home-exec-btn primary" onClick={handleSaveHomeView}>Save View</button>
+          </div>
         </div>
       </header>
 
-      <section className="home-v2-hero home-v3-hero glass">
-        <div className="home-v2-hero-left">
-          <div className="home-v3-hero-topline">
-            <div className="home-v2-label">Total Portfolio Value</div>
-            <div className="home-v3-timeframe">
+      <div className="home-exec-stage">
+        <section className="home-exec-top-grid">
+        <section className="home-exec-hero-panel home-exec-command-deck">
+          <div className="home-exec-command-head">
+            <div>
+              <div className="home-exec-label">Total Portfolio Value</div>
+              <div className="home-exec-hero-value-row home-exec-command-value-row">
+                <span className="home-exec-hero-value">{formatMoney(totalAccountEquity)}</span>
+                <span className={`home-exec-hero-chip ${dailyChange >= 0 ? "positive" : "negative"}`}>
+                  {dailyChange >= 0 ? "+" : ""}{dailyChangePct.toFixed(2)}%
+                </span>
+              </div>
+              <div className="home-exec-command-subline">
+                <span>Account equity live</span>
+                <span>Total return {totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%</span>
+                <span>{positionsCount} positions in scope</span>
+              </div>
+            </div>
+            <div className="home-exec-timeframe-strip home-exec-command-strip">
               {heroIntervals.map((item) => (
                 <button
                   key={item}
@@ -1958,63 +2220,98 @@ export function HomeModule({
               ))}
             </div>
           </div>
-          <div className="home-v2-hero-main">
-            <span className="home-v2-hero-value">{formatMoney(totalAccountEquity)}</span>
-            <div className="home-v2-hero-pnl-row">
-              <span className="home-v2-subtle">Today's P&amp;L</span>
-              <span className={`home-v2-hero-change ${dailyChange >= 0 ? "positive" : "negative"}`}>
-                {formatSignedMoney(dailyChange)} ({formatSignedPercent(dailyChangePct)})
-              </span>
+          <div className="home-exec-command-metrics">
+              <div className="home-exec-hero-side-metric home-exec-command-metric">
+                <span>Today&apos;s P&amp;L</span>
+                <strong className={dailyChange >= 0 ? "positive" : "negative"}>
+                  {formatSignedMoney(dailyChange)}
+                </strong>
+              </div>
+              <div className="home-exec-hero-side-metric home-exec-command-metric">
+                <span>Total G/L</span>
+                <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>
+                  {formatSignedMoney(totalGainLoss)}
+                </strong>
+              </div>
+              <div className="home-exec-hero-side-metric home-exec-command-metric">
+                <span>Buying Power</span>
+                <strong>{formatMoney(liveAvailableBalance)}</strong>
+                <em>{buyingPowerPct.toFixed(1)}% of equity</em>
+              </div>
+              <div className="home-exec-hero-side-metric home-exec-command-metric range">
+                <span>Day&apos;s Range</span>
+                <div className="home-exec-range-row">
+                  <strong>{`${formatCompactMoney(dayRange.low)} - ${formatCompactMoney(dayRange.high)}`}</strong>
+                  <div className="home-exec-range-track" aria-hidden="true">
+                    <span className="home-exec-range-fill" style={{ width: `${Math.max(14, rangeNeedlePct)}%` }} />
+                    <span className="home-exec-range-needle" style={{ left: `${rangeNeedlePct}%` }} />
+                  </div>
+                </div>
+                <em>Needle at {rangeNeedlePct.toFixed(0)}% of session range</em>
+              </div>
+          </div>
+        </section>
+
+        <aside className="home-exec-panel home-exec-monitor-panel">
+          <div className="home-exec-section-head home-exec-monitor-head">
+            <div className="home-exec-section-title-row">
+              <h2>Risk Monitor</h2>
+              <p>Exposure, optionality, and portfolio posture at a glance.</p>
             </div>
           </div>
-        </div>
-        <div className="home-v2-hero-stats">
-          <div className="home-v2-hero-stat">
-            <span>Buying Power</span>
-            <strong>{formatMoney(liveAvailableBalance)}</strong>
+          <div className="home-exec-monitor-stack">
+            {executiveStatRows.map((row) => (
+              <div key={row.label} className={`home-exec-monitor-row ${row.tone}`}>
+                <span>{row.label}</span>
+                <strong>{row.value}</strong>
+              </div>
+            ))}
+            <div className={`home-exec-health-card ${healthTone}`}>
+              <div>
+                <span>Health</span>
+                <strong>{healthState}</strong>
+              </div>
+              <em>{visibleAttentionCards.length ? `${visibleAttentionCards.length} active signals` : "No urgent issues"}</em>
+            </div>
           </div>
-          <div className="home-v2-hero-stat">
-            <span>Total Gain/Loss</span>
-            <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss)}</strong>
-          </div>
-          <div className="home-v2-hero-stat">
-            <span>Day's Range</span>
-            <strong>{`${formatCompactMoney(dayRange.low)} - ${formatCompactMoney(dayRange.high)}`}</strong>
-          </div>
-        </div>
+        </aside>
       </section>
 
-      <section className="home-v2-attention">
-        <div className="section-header">
-          <div>
-            <h2>Action Center</h2>
-            <p className="home-v2-section-kicker">Fix issues that affect portfolio accuracy, risk, and performance.</p>
+        <section className="home-exec-signal-tape">
+        <div className="home-exec-section-head">
+          <div className="home-exec-section-title-row">
+            <h2>Signal Tape</h2>
+            <p>Operational alerts compressed into a faster scan surface.</p>
           </div>
-          <button type="button" className="home-v2-link-btn" onClick={() => openAttentionFlow("missing")}>View All</button>
+          <button type="button" className="home-exec-link" onClick={() => setShowSignalArchiveDrawer(true)}>Archive ({signalArchiveCount})</button>
         </div>
-        <div className="home-v2-attention-grid">
+        <div className="home-exec-signal-list">
           {visibleAttentionCards.map((card) => (
-            <article key={card.id} className={`home-v2-attention-card ${card.variant}`}>
-              <div className="home-v2-attention-topline">
-                <span className={`home-v2-severity-badge ${card.variant}`}>{card.severity}</span>
-                <div className="home-v2-attention-tools">
-                  <button type="button" onClick={() => { setSnoozedAttentionCards((prev) => [...new Set([...prev, card.id])]); setHomeToast("Snoozed for 1 day."); }}>Snooze</button>
-                  <button type="button" onClick={() => { if (window.confirm("Dismiss this portfolio issue?")) setDismissedAttentionCards((prev) => [...new Set([...prev, card.id])]); }}>Dismiss</button>
+            <article key={card.id} className={`home-exec-signal-row ${card.variant}`}>
+              <div className="home-exec-signal-main">
+                <div className="home-exec-signal-head">
+                  <span className={`home-exec-severity ${card.variant}`}>{card.severity}</span>
+                  <h3>{card.title}</h3>
+                </div>
+                <p>{card.text}</p>
+                <div className="home-exec-signal-meta">{card.meta}</div>
+              </div>
+              <div className="home-exec-signal-actions">
+                <button type="button" className="home-exec-btn secondary small" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
+                <div className="home-exec-triage-tools">
+                  <button type="button" onClick={() => { snoozeAttentionCard(card, 24); setHomeToast("Signal snoozed for 24 hours."); }}>Snooze</button>
+                  <button type="button" onClick={() => { if (window.confirm("Archive this portfolio issue?")) { archiveAttentionCard(card, "dismissed"); setHomeToast("Signal archived."); } }}>Dismiss</button>
                 </div>
               </div>
-              <h3>{card.title}</h3>
-              <p>{card.text}</p>
-              <button type="button" className="home-v3-btn secondary" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
-              <div className="home-v3-attention-meta">{card.meta}</div>
             </article>
           ))}
           {visibleAttentionCards.length === 0 ? (
-            <article className="home-v2-attention-card empty">
+            <article className="home-exec-signal-row empty">
               <span className="home-v2-empty-icon">✓</span>
               <h3>All clear</h3>
               <p>No urgent portfolio issues are active right now.</p>
-              <button type="button" className="home-v2-link-btn" onClick={() => {
-                setDismissedAttentionCards([]);
+              <button type="button" className="home-exec-link" onClick={() => {
+                setArchivedAttentionCards([]);
                 setSnoozedAttentionCards([]);
               }}>Restore alerts</button>
             </article>
@@ -2022,25 +2319,31 @@ export function HomeModule({
         </div>
       </section>
 
-      <section className="home-v2-main-grid">
-        <div className="home-v2-left-col">
-          <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header">
-              <div>
-                <h2>Portfolio Performance</h2>
-                <p className="home-v2-section-kicker">Equity curve, gain/loss, and cash-adjusted performance</p>
+        <section className="home-exec-main-grid">
+        <div className="home-exec-primary-col">
+          <section className="home-exec-panel home-exec-performance-panel">
+            <div className="home-exec-section-head">
+              <div className="home-exec-performance-head-left">
+                <div className="home-exec-section-title-row">
+                  <h2>Performance Curve</h2>
+                  <p>Primary performance plane with benchmark context and drawdown stats.</p>
+                </div>
+                <div className="home-exec-toggle-row home-exec-toggle-row-compact">
+                  {chartModeButtons.map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`home-exec-toggle ${chartMode === mode ? "active" : ""}`}
+                      onClick={() => setChartMode(mode)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="home-v2-toggle-row">
-                {chartModeButtons.map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`home-v2-pill ${chartMode === mode ? "active" : ""}`}
-                    onClick={() => setChartMode(mode)}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="home-exec-performance-legend" aria-label="Chart legend">
+                <span><i className="home-exec-dot portfolio" />Portfolio</span>
+                <span><i className="home-exec-dot benchmark" />SP500_REF</span>
               </div>
             </div>
             <TradingViewChart
@@ -2052,67 +2355,114 @@ export function HomeModule({
               height={360}
               width="100%"
             />
-            <div className="home-v2-toggle-row home-v2-toggle-row-right">
-              {displayIntervals.map((int) => (
-                <button
-                  key={int}
-                  type="button"
-                  className={`home-v2-pill ${chartInterval === int ? "active" : ""}`}
-                  onClick={() => setChartInterval(int)}
-                >
-                  {int}
-                </button>
-              ))}
+            <div className="home-exec-performance-foot">
+              <div className="home-exec-toggle-row home-exec-toggle-row-right">
+                {displayIntervals.map((int) => (
+                  <button
+                    key={int}
+                    type="button"
+                    className={`home-exec-toggle ${chartInterval === int ? "active" : ""}`}
+                    onClick={() => setChartInterval(int)}
+                  >
+                    {int}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="home-v3-chart-insights">
-              <div><span>Best day</span><strong className={bestDay >= 0 ? "positive" : "negative"}>{formatSignedMoney(bestDay)}</strong></div>
-              <div><span>Worst day</span><strong className="negative">{formatSignedMoney(worstDay)}</strong></div>
-              <div><span>Max drawdown</span><strong className="negative">{formatSignedMoney(maxDrawdown)}</strong></div>
-              <div><span>Current drawdown</span><strong className={currentDrawdown >= 0 ? "positive" : "negative"}>{formatSignedMoney(currentDrawdown)}</strong></div>
+            <div className="home-exec-chart-stats">
+              <div><span>Best Period</span><strong className={bestDay >= 0 ? "positive" : "negative"}>{formatSignedMoney(bestDay)}</strong></div>
+              <div><span>Worst Period</span><strong className="negative">{formatSignedMoney(worstDay)}</strong></div>
+              <div><span>Max DD</span><strong className="negative">{formatSignedMoney(maxDrawdown)}</strong></div>
+              <div><span>Current DD</span><strong className={currentDrawdown >= 0 ? "positive" : "negative"}>{formatSignedMoney(currentDrawdown)}</strong></div>
             </div>
-          </div>
+          </section>
 
-          <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header">
-              <h2>Top Holdings</h2>
+          <section className="home-exec-panel home-exec-log-panel">
+            <div className="home-exec-section-head">
+              <div className="home-exec-section-title-row">
+                <h2>Execution Log</h2>
+                <p>Recent orders and fills, compressed into a terminal-style ledger.</p>
+              </div>
+              <button type="button" className="home-exec-link" onClick={openAllActivityDrawer}>CSV Export</button>
+            </div>
+            {recentActivityRows.length ? (
+              <div className="home-exec-log-table-wrap">
+                <table className="home-exec-log-table">
+                  <thead>
+                    <tr>
+                      <th>Timestamp</th>
+                      <th>Asset_Ticker</th>
+                      <th>Instruction</th>
+                      <th>Notional_Amt</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentActivityRows.map((row) => (
+                      <tr key={row.id} onClick={() => setSelectedActivityDetail(row)} tabIndex={0} role="button" onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedActivityDetail(row);
+                        }
+                      }}>
+                        <td><span className="home-exec-log-stamp">{row.timestampLabel}</span></td>
+                        <td><strong>{row.symbol}</strong></td>
+                        <td><span className="home-exec-log-instruction">{row.instruction}</span></td>
+                        <td><span className="home-exec-log-notional">{row.value > 0 ? formatMoney(row.value) : "--"}</span></td>
+                        <td><span className={`home-exec-status ${row.tone}`}>{row.status}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <HomeEmptyState title="No recent activity yet" description="Trades and portfolio updates will appear here." />
+            )}
+          </section>
+        </div>
+
+        <aside className="home-exec-secondary-col">
+          <section className="home-exec-panel home-exec-holdings-panel">
+            <div className="home-exec-section-head">
+              <div className="home-exec-section-title-row">
+                <h2>Key Positions</h2>
+                <p>Largest exposures ranked by value, allocation, and concentration risk.</p>
+              </div>
               <button
                 type="button"
-                className="home-v2-link-btn"
+                className="home-exec-link"
                 onClick={() => onViewAllPositions?.()}
               >
-                View All Positions
+                Full Portfolio Detail
               </button>
             </div>
-            <div className="home-v2-holdings-list">
+            <div className="home-exec-holdings-list">
               {topHoldingsRows.length ? (
                 topHoldingsRows.map((asset) => {
                   const symbol = String(asset?.symbol || "").toUpperCase();
                   const change = Number(asset?.priceChangePercent || 0);
-                  const changeClass = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
                   const concentrated = Number(asset.__allocationPercent || 0) >= 50;
                   return (
                     <button
                       type="button"
                       key={`home-hold-${asset.id || symbol}`}
-                      className="home-v2-holding-row"
+                      className="home-exec-holding-row home-exec-holding-table-row"
                       onClick={() => setSelectedHoldingDetail(asset)}
                     >
-                      <div className="home-v2-holding-id">
-                        <div className="home-v2-avatar">{symbol.slice(0, 1) || "?"}</div>
-                        <div>
-                          <div className="home-v2-holding-symbol">{symbol || "N/A"}</div>
-                          <div className="home-v2-holding-name">{asset?.name || symbol || "Asset"}</div>
-                        </div>
+                      <div className="home-exec-holding-top">
+                        <strong>{symbol || "N/A"}</strong>
+                        <span>{formatMoney(asset.__positionValue)}</span>
                       </div>
-                      <div className="home-v2-holding-value">
-                        <strong>{formatMoney(asset.__positionValue)}</strong>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", justifyContent: "flex-end" }}>
-                          {asset.__allocationPercent.toFixed(1)}% allocation · Qty {Number(asset.quantity || 0).toLocaleString()}
-                          {concentrated ? <span className="home-v3-warning-badge" style={{ position: "static", margin: 0, padding: "1px 6px", minHeight: "18px", fontSize: "10px" }}>Concentrated</span> : null}
+                      <div className="home-exec-holding-bar" aria-hidden="true">
+                        <span style={{ width: `${Math.max(8, Math.min(100, Number(asset.__allocationPercent || 0)))}%` }} />
+                      </div>
+                      <div className="home-exec-holding-meta">
+                        <span>{asset?.name || symbol || "Asset"}</span>
+                        <span>
+                          {asset.__allocationPercent.toFixed(1)}% allocation
+                          {Number.isFinite(change) ? ` · ${change > 0 ? "+" : ""}${change.toFixed(1)}%` : ""}
+                          {concentrated ? " · Concentrated" : ""}
                         </span>
-                      </div>
-                      <div className={`home-v2-holding-change ${changeClass}`}>
-                        {change > 0 ? "↗" : change < 0 ? "↘" : ""} {change > 0 ? "+" : ""}{change.toFixed(1)}%
                       </div>
                     </button>
                   );
@@ -2121,151 +2471,64 @@ export function HomeModule({
                 <HomeEmptyState title="No holdings yet" description="Add your first position to start tracking allocation and performance." cta="Add Position" onAction={() => onViewAllPositions?.()} />
               )}
             </div>
-          </div>
-        </div>
+          </section>
 
-        <aside className="home-v2-right-col">
-          <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header">
-              <h2>Asset Allocation</h2>
-              <button type="button" className="home-v2-link-btn" onClick={() => onViewAllPositions?.()}>View Breakdown</button>
+          <section className="home-exec-panel home-exec-allocation-panel">
+            <div className="home-exec-section-head">
+              <div className="home-exec-section-title-row">
+                <h2>Capital Mix</h2>
+                <p>Portfolio composition between deployed crypto exposure and liquid reserve.</p>
+              </div>
+              <button type="button" className="home-exec-link" onClick={() => onViewAllPositions?.()}>View Breakdown</button>
             </div>
             {allocationBreakdown.total > 0 ? (
               <>
-                <div className="home-v3-allocation-chart">
+                <div className="home-exec-allocation-chart">
                   <ReactApexChart
                     options={{
                       chart: { type: "donut", background: "transparent" },
                       labels: ["Crypto", "Cash"],
                       legend: { show: false },
-                      stroke: { width: 2, colors: ["#030A18"] },
-                      colors: ["#8B5CF6", "#22D3EE"],
+                      stroke: { width: 2, colors: ["#14191f"] },
+                      colors: ["#5cc8f6", "#5bc48c"],
                       dataLabels: { enabled: false },
                       tooltip: { y: { formatter: (val) => `${Number(val).toFixed(1)}%` } },
-                      plotOptions: { pie: { donut: { size: "68%" } } }
+                      plotOptions: { pie: { donut: { size: "70%" } } }
                     }}
                     series={[
                       Number(allocationBreakdown.cryptoPercent.toFixed(2)),
                       Number(allocationBreakdown.cashPercent.toFixed(2))
                     ]}
                     type="donut"
-                    height={220}
+                    height={184}
                   />
-                  <div className="home-v3-donut-center"><span>Total</span><strong>{formatCompactMoney(allocationBreakdown.total)}</strong></div>
+                  <div className="home-exec-donut-center"><span>Total</span><strong>{formatCompactMoney(allocationBreakdown.total)}</strong></div>
                 </div>
-                <div className="home-v2-legend">
-                  <div className="home-v2-legend-row">
-                    <div className="home-v2-legend-left">
+                <div className="home-exec-allocation-legend">
+                  <div className="home-exec-legend-row">
+                    <div className="home-exec-legend-left">
                       <span className="dot crypto" />
                       <span>Crypto</span>
                     </div>
                     <strong>{allocationBreakdown.cryptoPercent.toFixed(0)}% / {formatMoney(allocationBreakdown.cryptoValue)}</strong>
                   </div>
-                  <div className="home-v2-legend-row">
-                    <div className="home-v2-legend-left">
+                  <div className="home-exec-legend-row">
+                    <div className="home-exec-legend-left">
                       <span className="dot cash" />
                       <span>Cash</span>
                     </div>
                     <strong>{allocationBreakdown.cashPercent.toFixed(0)}% / {formatMoney(allocationBreakdown.cashValue)}</strong>
                   </div>
                 </div>
-                {allocationBreakdown.cashPercent >= 80 ? <div className="home-v3-allocation-warning">Cash concentration is high.</div> : null}
+                {allocationBreakdown.cashPercent >= 80 ? <div className="home-exec-warning">Cash concentration is high.</div> : null}
               </>
             ) : (
               <HomeEmptyState title="No allocation data" description="Add holdings to see portfolio allocation." cta="Add Position" onAction={() => onViewAllPositions?.()} />
             )}
-          </div>
-
-          <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header"><h2>Key Metrics</h2></div>
-            <div className="home-v2-metrics">
-              <div className="home-v2-metric-row"><span>↗ Total Return</span><strong className={totalReturnPct >= 0 ? "positive" : "negative"}>{formatSignedPercent(totalReturnPct)}</strong></div>
-              <div className="home-v2-metric-row"><span>⏱ Today's Change</span><strong className={dailyChange >= 0 ? "positive" : "negative"}>{formatSignedMoney(dailyChange)}</strong></div>
-              <div className="home-v2-metric-row"><span>◼ Positions</span><strong>{(portfolio || []).length}</strong></div>
-              <div className="home-v2-metric-row"><span>◎ Watchlist</span><strong>{(watchlistAssets || []).length} assets</strong></div>
-              <div className="home-v2-metric-row"><span>⚠ Active Alerts</span><strong className="warning">{alerts.length}</strong></div>
-            </div>
-            <button type="button" className="home-v3-btn secondary full" onClick={onViewFullMetrics}>View Full Metrics</button>
-          </div>
-
-          <div className="watchlist-panel glass home-v2-panel">
-            <div className="section-header"><h2>Recent Activity</h2><button type="button" className="home-v2-link-btn" onClick={openAllActivityDrawer}>View all activity</button></div>
-            <div className="home-v2-activity-list">
-              {recentActivityRows.length ? recentActivityRows.map((row) => (
-                <button key={row.id} type="button" className="home-v2-activity-row" onClick={() => setSelectedActivityDetail(row)}>
-                  <div className={`home-v2-activity-icon ${row.tone}`}>{row.tone === "sell" ? "↘" : "↗"}</div>
-                  <div className="home-v2-activity-body">
-                    <strong>{row.action} {row.symbol}</strong>
-                    <span>{row.when}</span>
-                  </div>
-                  <div className="home-v2-activity-value">{formatMoney(row.value)}</div>
-                  <span className="home-v3-status-badge">{row.status}</span>
-                </button>
-              )) : (
-                <HomeEmptyState title="No recent activity yet" description="Trades and portfolio updates will appear here." />
-              )}
-            </div>
-          </div>
+          </section>
         </aside>
-      </section>
-
-      {(needsAttention.length || quickActionFeedback || moversLoading || gainers.length || losers.length || todayView.headlines.length || eventRows.length || quickActions.length) ? (
-        <section className="watchlist-panel glass home-v2-panel home-v3-market-context">
-          <div className="section-header">
-            <div>
-              <h2>Market Context</h2>
-              <p className="home-v2-section-kicker">Daily movers and broader signals affecting your portfolio.</p>
-            </div>
-            <div className="home-v3-market-controls">
-              <select
-                value={moversHorizon}
-                onChange={(e) => setMoversHorizon(e.target.value)}
-              >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="quarterly">3M</option>
-              </select>
-              <select value={marketScope} onChange={(e) => setMarketScope(e.target.value)}>
-                <option value="all">All</option>
-                <option value="holdings">Holdings</option>
-                <option value="watchlist">Watchlist</option>
-              </select>
-              <span className="asset-count">{moversLoading ? "Loading..." : `${gainers.length + losers.length} movers`}</span>
-            </div>
-          </div>
-          <div className="home-v3-market-grid">
-            <div className="home-v3-mover-panel">
-              <h3 className="home-subsection-title">Gainers</h3>
-              {gainers.length ? (
-                <div className="home-v3-mover-list">
-                  {gainers.map((asset) => (
-                    <button key={`g-${asset.symbol}`} type="button" className="home-v3-mover-row" onClick={() => onSelectAsset(asset)}>
-                      <div><strong>{asset.symbol}</strong><span>{asset.name || asset.symbol}</span></div>
-                      <span className="home-v3-relevance">Market</span>
-                      <div><strong>{formatAssetPrice(asset)}</strong><span className="positive">+{(asset.__moverChange || 0).toFixed(2)}%</span></div>
-                    </button>
-                  ))}
-                </div>
-              ) : <HomeEmptyState title="No gainers found for this period." />}
-            </div>
-            <div className="home-v3-mover-panel">
-              <h3 className="home-subsection-title">Losers</h3>
-              {losers.length ? (
-                <div className="home-v3-mover-list">
-                  {losers.map((asset) => (
-                    <button key={`l-${asset.symbol}`} type="button" className="home-v3-mover-row" onClick={() => onSelectAsset(asset)}>
-                      <div><strong>{asset.symbol}</strong><span>{asset.name || asset.symbol}</span></div>
-                      <span className="home-v3-relevance">Market</span>
-                      <div><strong>{formatAssetPrice(asset)}</strong><span className="negative">{(asset.__moverChange || 0).toFixed(2)}%</span></div>
-                    </button>
-                  ))}
-                </div>
-              ) : <HomeEmptyState title="No losers found for this period." />}
-            </div>
-          </div>
-          <button type="button" className="home-v3-btn secondary" onClick={() => setMarketDetailOpen(true)}>Open Market Context</button>
         </section>
-      ) : null}
+      </div>
       {renderAttentionFlow()}
       <HomeDetailDrawer
         title={selectedHoldingDetail ? String(selectedHoldingDetail.symbol || "Holding").toUpperCase() : ""}
@@ -2300,16 +2563,40 @@ export function HomeModule({
           `${row.action} ${row.symbol} · ${formatMoney(row.value)} · ${row.status}`
         ]) : []}
       />
+      <HomeSavedItemsDrawer
+        open={showSavedItemsDrawer}
+        onClose={() => setShowSavedItemsDrawer(false)}
+        savedViews={savedHomeViews}
+        savedAlerts={savedHomeAlerts}
+        savedTasks={savedHomeTasks}
+        savedRebalances={savedHomeRebalances}
+        onApplyView={applySavedHomeView}
+        onReviewItem={reviewSavedHomeItem}
+      />
+      <HomeSignalArchiveDrawer
+        open={showSignalArchiveDrawer}
+        onClose={() => setShowSignalArchiveDrawer(false)}
+        archivedItems={archivedAttentionCards}
+        snoozedItems={snoozedAttentionCards}
+        onRestore={(id) => {
+          setArchivedAttentionCards((prev) => (Array.isArray(prev) ? prev.filter((entry) => entry?.id !== id) : []));
+          setSnoozedAttentionCards((prev) => (Array.isArray(prev) ? prev.filter((entry) => entry?.id !== id) : []));
+        }}
+        onClear={(id) => {
+          setArchivedAttentionCards((prev) => (Array.isArray(prev) ? prev.filter((entry) => entry?.id !== id) : []));
+          setSnoozedAttentionCards((prev) => (Array.isArray(prev) ? prev.filter((entry) => entry?.id !== id) : []));
+        }}
+      />
     </div>
   );
 }
 
 function HomeEmptyState({ title, description, cta, onAction }) {
   return (
-    <div className="home-v3-empty">
+    <div className="home-exec-empty">
       <h3>{title}</h3>
       {description ? <p>{description}</p> : null}
-      {cta ? <button type="button" className="home-v3-btn secondary" onClick={onAction}>{cta}</button> : null}
+      {cta ? <button type="button" className="home-exec-btn secondary" onClick={onAction}>{cta}</button> : null}
     </div>
   );
 }
@@ -2329,6 +2616,222 @@ function HomeDetailDrawer({ open, title, rows, onClose }) {
           ))}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function HomeSavedItemsDrawer({
+  open,
+  onClose,
+  savedViews,
+  savedAlerts,
+  savedTasks,
+  savedRebalances,
+  onApplyView,
+  onReviewItem
+}) {
+  if (!open) return null;
+
+  const sections = [
+    {
+      title: "Saved Views",
+      rows: savedViews,
+      empty: "No saved Home views yet.",
+      renderRow: (view) => (
+        <SavedWorkspaceRow
+          key={view.id}
+          title={`${view.chartMode || "equity"} · ${view.chartInterval || "1D"}`}
+          subtitle={`${view.moversHorizon || "daily"} movers · ${formatSavedTimestamp(view.createdAt)}`}
+          actionLabel="Apply"
+          onAction={() => onApplyView(view)}
+        />
+      )
+    },
+    {
+      title: "Alerts",
+      rows: savedAlerts,
+      empty: "No saved alerts yet.",
+      renderRow: (alert) => (
+        <SavedWorkspaceRow
+          key={alert.id}
+          title={alert.symbol || "Saved alert"}
+          subtitle={`${alert.message || "Alert saved"} · ${formatSavedTimestamp(alert.createdAt)}`}
+          actionLabel="Open"
+          onAction={() => onReviewItem("alert", alert)}
+        />
+      )
+    },
+    {
+      title: "Workspace Tasks",
+      rows: savedTasks,
+      empty: "No saved follow-up tasks yet.",
+      renderRow: (task) => (
+        <SavedWorkspaceRow
+          key={task.id}
+          title={task.symbol ? `${task.symbol} · ${task.kind}` : task.kind || "Task"}
+          subtitle={`${task.issue || task.context || "Saved from Action Center"} · ${formatSavedTimestamp(task.createdAt)}`}
+          actionLabel="Open"
+          onAction={() => onReviewItem("task", task)}
+        />
+      )
+    },
+    {
+      title: "Queued Rebalances",
+      rows: savedRebalances,
+      empty: "No queued rebalances yet.",
+      renderRow: (rebalance) => (
+        <SavedWorkspaceRow
+          key={rebalance.id}
+          title={`Drift ${Number(rebalance.drift || 0).toFixed(1)}%`}
+          subtitle={`${Array.isArray(rebalance.plan) ? rebalance.plan.length : 0} planned trades · ${formatSavedTimestamp(rebalance.createdAt)}`}
+          actionLabel="Open"
+          onAction={() => onReviewItem("rebalance", rebalance)}
+        />
+      )
+    }
+  ];
+
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside
+        className="home-v3-detail-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Saved items"
+        style={{ maxWidth: 720 }}
+      >
+        <div className="home-v3-drawer-head">
+          <h2>Saved Items</h2>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div style={{ display: "grid", gap: 18 }}>
+          {sections.map((section) => (
+            <section key={section.title} style={{ display: "grid", gap: 10 }}>
+              <div>
+                <strong style={{ display: "block", marginBottom: 4 }}>{section.title}</strong>
+                <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                  {section.rows.length ? `${section.rows.length} saved item${section.rows.length === 1 ? "" : "s"}` : section.empty}
+                </span>
+              </div>
+              {section.rows.length ? section.rows.map(section.renderRow) : null}
+            </section>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function HomeSignalArchiveDrawer({
+  open,
+  onClose,
+  archivedItems,
+  snoozedItems,
+  onRestore,
+  onClear
+}) {
+  if (!open) return null;
+
+  const activeSnoozedItems = (Array.isArray(snoozedItems) ? snoozedItems : []).filter(
+    (item) => new Date(item?.snoozeUntil || 0).getTime() > Date.now()
+  );
+
+  const sections = [
+    {
+      title: "Snoozed Signals",
+      rows: activeSnoozedItems,
+      empty: "No snoozed signals.",
+      renderRow: (item) => (
+        <SavedWorkspaceRow
+          key={`snoozed-${item.id}`}
+          title={item.title || item.id || "Snoozed signal"}
+          subtitle={`Returns ${formatSavedTimestamp(item.snoozeUntil)} · ${item.severity || "Signal"}`}
+          actionLabel="Restore"
+          onAction={() => onRestore(item.id)}
+        />
+      )
+    },
+    {
+      title: "Archived Signals",
+      rows: Array.isArray(archivedItems) ? archivedItems : [],
+      empty: "No archived signals.",
+      renderRow: (item) => (
+        <SavedWorkspaceRow
+          key={`archived-${item.id}`}
+          title={item.title || item.id || "Archived signal"}
+          subtitle={`${item.reason || "dismissed"} · ${formatSavedTimestamp(item.archivedAt)}`}
+          actionLabel="Restore"
+          onAction={() => onRestore(item.id)}
+          secondaryActionLabel="Remove"
+          onSecondaryAction={() => onClear(item.id)}
+        />
+      )
+    }
+  ];
+
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside
+        className="home-v3-detail-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Signal archive"
+        style={{ maxWidth: 720 }}
+      >
+        <div className="home-v3-drawer-head">
+          <h2>Signal Archive</h2>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div style={{ display: "grid", gap: 18 }}>
+          {sections.map((section) => (
+            <section key={section.title} style={{ display: "grid", gap: 10 }}>
+              <div>
+                <strong style={{ display: "block", marginBottom: 4 }}>{section.title}</strong>
+                <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                  {section.rows.length ? `${section.rows.length} item${section.rows.length === 1 ? "" : "s"}` : section.empty}
+                </span>
+              </div>
+              {section.rows.length ? section.rows.map(section.renderRow) : null}
+            </section>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction, secondaryActionLabel, onSecondaryAction }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 12,
+        alignItems: "center",
+        padding: "12px 14px",
+        borderRadius: 3,
+        border: "1px solid rgba(148, 163, 184, 0.14)",
+        background: "var(--color-surface-card)"
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <strong style={{ display: "block" }}>{title}</strong>
+        <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{subtitle}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {secondaryActionLabel ? (
+          <button type="button" className="home-v3-btn secondary" onClick={onSecondaryAction}>
+            {secondaryActionLabel}
+          </button>
+        ) : null}
+        {actionLabel ? (
+          <button type="button" className="home-v3-btn secondary" onClick={onAction}>
+            {actionLabel}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

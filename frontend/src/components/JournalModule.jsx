@@ -4,6 +4,7 @@ import { calculateOptionPnL } from "../utils/optionsPnL";
 import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup, MetricStrip } from "./CompactWorkspaceUI";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -29,6 +30,13 @@ function extractFileLabel(value, fallback = "Attachment") {
     const segments = raw.split("/").filter(Boolean);
     return decodeURIComponent(segments[segments.length - 1] || fallback);
   }
+}
+
+function isWithinJournalDateWindow(value, windowKey) {
+  if (windowKey !== "30d") return true;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.getTime() >= Date.now() - 30 * 24 * 60 * 60 * 1000;
 }
 
 export function JournalModule({ 
@@ -88,6 +96,7 @@ export function JournalModule({
   const [journalPage, setJournalPage] = useState("entry");
   const [editingEntryId, setEditingEntryId] = useState(null);
   const [journalFilters, setJournalFilters] = useState({
+    dateWindow: "all",
     strategy: "all",
     timeframe: "all",
     assetClass: "all",
@@ -110,8 +119,8 @@ export function JournalModule({
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
   const [selectedCalendarTradeDate, setSelectedCalendarTradeDate] = useState("");
   const [reviewNote, setReviewNote] = useState(() => localStorage.getItem(JOURNAL_REVIEW_NOTE_KEY) || "");
-  const quickEntryRef = useRef(null);
   const drawerRef = useRef(null);
+  const reviewComposerRef = useRef(null);
   const journalSyncReadyRef = useRef(false);
 
   const syncJournalCollection = (namespace, rows, limit = 500) => {
@@ -951,12 +960,13 @@ export function JournalModule({
 
   const filteredJournalEntries = useMemo(() => {
     return (journalEntries || []).filter((entry) => {
+      const dateOk = isWithinJournalDateWindow(entry.tradeDate || entry.createdAt, journalFilters.dateWindow);
       const strategyOk = journalFilters.strategy === "all" || String(entry.strategy || "").toLowerCase() === journalFilters.strategy;
       const timeframeOk = journalFilters.timeframe === "all" || String(entry.timeframe || "").toLowerCase() === journalFilters.timeframe;
       const emotionOk = journalFilters.emotion === "all" || String(entry.emotion || "").toLowerCase() === journalFilters.emotion;
       const textBlob = `${entry.symbol || ""} ${entry.strategy || ""} ${entry.preThesis || ""} ${entry.postReview || ""} ${entry.learned || ""}`.toLowerCase();
       const searchOk = !journalFilters.search.trim() || textBlob.includes(journalFilters.search.trim().toLowerCase());
-      return strategyOk && timeframeOk && emotionOk && searchOk;
+      return dateOk && strategyOk && timeframeOk && emotionOk && searchOk;
     });
   }, [journalEntries, journalFilters]);
 
@@ -1513,6 +1523,7 @@ export function JournalModule({
       const haystack = `${row.symbol} ${row.setup} ${row.regime} ${row.entry?.preThesis || ""} ${row.entry?.postReview || ""}`.toLowerCase();
       if (!haystack.includes(query)) return false;
     }
+    if (!isWithinJournalDateWindow(row.rawDate || row.date, journalFilters.dateWindow)) return false;
     if (selectedSymbols.length && !selectedSymbols.includes(row.symbol)) return false;
     if (journalFilters.strategy !== "all" && String(row.setup || "").toLowerCase() !== journalFilters.strategy) return false;
     if (journalFilters.regime !== "all" && String(row.regime || "").toLowerCase() !== journalFilters.regime) return false;
@@ -1541,17 +1552,12 @@ export function JournalModule({
   };
 
   const openNewEntry = () => {
-    if (window.innerWidth < 768) {
-      setIsQuickEntryOpen(true);
-      return;
-    }
-    quickEntryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    quickEntryRef.current?.focus();
+    setIsQuickEntryOpen(true);
   };
 
   const resetFilters = () => {
     setSelectedSymbols([]);
-    setJournalFilters((prev) => ({ ...prev, strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", search: "" }));
+    setJournalFilters((prev) => ({ ...prev, dateWindow: "all", strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", search: "" }));
   };
 
   const saveJournalNoteEntry = ({ title, body, status = "Saved", learned = "" }) => {
@@ -1645,6 +1651,22 @@ export function JournalModule({
     notify("Review added to Journal.", "success");
   };
 
+  const addReviewNoteToEntry = (entry) => {
+    if (!entry?.entry) return;
+    setEditingEntryId(entry.entry.id);
+    setEntryDraft((prev) => ({
+      ...prev,
+      ...entry.entry,
+      symbol: entry.symbol,
+      side: entry.side,
+      strategy: entry.setup,
+      postReview: entry.entry?.postReview || entry.entry?.learned || "",
+    }));
+    setIsEntryDrawerOpen(false);
+    openNewEntry();
+    notify("Review note editor opened.", "info");
+  };
+
   const saveReviewSnapshot = () => {
     saveWorkspaceDoc("journal:review_note", reviewNote).catch((error) => {
       console.warn("Journal review note sync skipped.", error);
@@ -1691,12 +1713,123 @@ export function JournalModule({
     acc[key] = item;
     return acc;
   }, {})).slice(0, 6);
-  const mistakeRows = ["Entered late", "Ignored stop", "Oversized position", "Chased move", "Took low-quality setup", "Closed winner early"].map((mistake, idx) => ({
-    mistake,
-    count: Math.max(0, journalEntries.filter((entry) => String(entry.mistakeCategory || "").toLowerCase().includes(mistake.toLowerCase())).length || (idx < 3 ? idx + 1 : 0)),
-    cost: idx < 3 ? -Math.abs(analytics.avgTradeLoss || 0) * (idx + 1) : 0,
-    action: idx === 0 ? "Wait for trigger confirmation" : idx === 1 ? "Pre-place invalidation" : "Review before entry"
-  }));
+  const mistakeActionMap = {
+    "Entered late": "Wait for trigger confirmation",
+    "Ignored stop": "Pre-place invalidation",
+    "Oversized position": "Reduce size before order entry",
+    "Chased move": "Wait for pullback or invalidate",
+    "Took low-quality setup": "Filter harder before execution",
+    "Closed winner early": "Scale systematically instead of reacting",
+  };
+  const mistakeRows = ["Entered late", "Ignored stop", "Oversized position", "Chased move", "Took low-quality setup", "Closed winner early"].map((mistake) => {
+    const relatedRows = tradeLogRows.filter((row) =>
+      String(row.mistakeCategory || row.entry?.mistakeCategory || "").toLowerCase().includes(mistake.toLowerCase())
+    );
+    const cost = relatedRows.reduce((sum, row) => {
+      const pnl = Number(row.pnl || 0);
+      return pnl < 0 ? sum + pnl : sum;
+    }, 0);
+    return {
+      mistake,
+      count: relatedRows.length,
+      cost,
+      action: mistakeActionMap[mistake] || "Review before entry"
+    };
+  });
+  const activeDebriefDate = activeCalendarTradeDate || String(selectedDay?.key || "");
+  const debriefRows = activeDebriefDate
+    ? allTradeLogRows.filter((row) => toDateKey(row.rawDate || row.date) === activeDebriefDate)
+    : [];
+  const debriefPnl = debriefRows.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
+  const debriefWins = debriefRows.filter((row) => Number(row.pnl || 0) > 0).length;
+  const debriefLosses = debriefRows.filter((row) => Number(row.pnl || 0) < 0).length;
+  const debriefWinRate = debriefRows.length ? (debriefWins / debriefRows.length) * 100 : analytics.winRate;
+  const ruleBreakCount = debriefRows.filter((row) => String(row.mistakeCategory || "").trim()).length;
+  const ruleAdherence = debriefRows.length ? Math.max(0, ((debriefRows.length - ruleBreakCount) / debriefRows.length) * 100) : null;
+  const disciplinePositiveCount = debriefRows.filter((row) => ["disciplined", "confident", "neutral"].includes(String(row.emotion || "").toLowerCase())).length;
+  const emotionalDiscipline = debriefRows.length
+    ? Math.max(0, (disciplinePositiveCount / debriefRows.length) * 100)
+    : null;
+  const strongestSetup = [...setupPnlRows].sort((a, b) => Number(b.pnl || 0) - Number(a.pnl || 0))[0] || null;
+  const leadMistake = [...mistakeRows].filter((row) => row.count > 0).sort((a, b) => Number(b.count || 0) - Number(a.count || 0))[0] || null;
+  const noteLedLesson = todayNotes[0]?.learned || todayNotes[0]?.postReview || todayNotes[0]?.preThesis || "";
+  const primaryLesson = String(reviewNote || "").trim()
+    ? String(reviewNote).trim().split(/[.!?]\s/)[0]
+    : noteLedLesson
+    ? noteLedLesson
+    : leadMistake?.count
+    ? `${leadMistake.mistake}: ${leadMistake.action}`
+    : strongestSetup
+    ? `Keep leaning into ${strongestSetup.setup} setups with planned risk.`
+    : "No lesson logged yet.";
+  const syncTimestampLabel = new Date(lastReportPriceRefreshAt || nowTs).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const reviewQueueItems = [
+    leadMistake?.count ? {
+      title: leadMistake.mistake,
+      detail: `${leadMistake.count} flags logged. ${leadMistake.action}.`,
+      tone: "risk"
+    } : null,
+    strongestSetup ? {
+      title: `${strongestSetup.setup} is leading`,
+      detail: `${strongestSetup.trades} trades with ${formatValue(strongestSetup.pnl, true)} total P&L.`,
+      tone: strongestSetup.pnl >= 0 ? "positive" : "risk"
+    } : null,
+    todayNotes[0] ? {
+      title: todayNotes[0].strategy || todayNotes[0].symbol || "Today's note",
+      detail: todayNotes[0].postReview || todayNotes[0].preThesis || "Review note captured for follow-up.",
+      tone: "info"
+    } : null
+  ].filter(Boolean).slice(0, 3);
+  const behaviorPatterns = [
+    {
+      label: "Best setup",
+      value: strongestSetup?.setup || "No clear leader",
+      helper: strongestSetup ? `${strongestSetup.trades} trades · ${formatValue(strongestSetup.pnl, true)}` : "Need more tagged trades",
+      tone: strongestSetup && strongestSetup.pnl >= 0 ? "positive" : "neutral"
+    },
+    {
+      label: "Recurring mistake",
+      value: leadMistake?.mistake || "No repeat mistake",
+      helper: leadMistake?.count ? `${leadMistake.count} repeats · ${leadMistake.action}` : "Clean session discipline",
+      tone: leadMistake?.count ? "risk" : "positive"
+    },
+    {
+      label: "Emotional state",
+      value: emotionalDiscipline == null ? "No session evidence" : `${emotionalDiscipline.toFixed(0)}% disciplined`,
+      helper: debriefRows.length ? `${disciplinePositiveCount}/${debriefRows.length} trades stayed composed` : "Log emotion on trades to unlock this signal",
+      tone: emotionalDiscipline == null ? "neutral" : emotionalDiscipline >= 70 ? "positive" : emotionalDiscipline >= 55 ? "warning" : "risk"
+    },
+    {
+      label: "Rule adherence",
+      value: ruleAdherence == null ? "No session evidence" : `${ruleAdherence.toFixed(0)}%`,
+      helper: debriefRows.length ? `${Math.max(0, debriefRows.length - ruleBreakCount)} of ${debriefRows.length} trades logged without rule breaks` : "Tag broken rules on journal entries to populate this metric",
+      tone: ruleAdherence == null ? "neutral" : ruleAdherence >= 75 ? "positive" : ruleAdherence >= 55 ? "warning" : "risk"
+    }
+  ];
+  const lessonRows = [
+    ...mistakeRows
+      .filter((row) => row.count > 0)
+      .slice(0, 3)
+      .map((row) => ({
+        topic: row.mistake,
+        evidence: `${row.count} occurrences`,
+        lesson: row.action,
+        priority: row.cost < 0 ? "High" : "Medium"
+      })),
+    ...todayNotes
+      .slice(0, 2)
+      .map((entry) => ({
+        topic: entry.strategy || entry.symbol || "Journal note",
+        evidence: new Date(entry.createdAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        lesson: entry.learned || entry.postReview || entry.preThesis || "No lesson logged yet.",
+        priority: "Review"
+      }))
+  ].slice(0, 5);
 
   return (
     <div className="view-container journal-page">
@@ -1714,124 +1847,48 @@ export function JournalModule({
         />
       ) : (
         <>
-          <JournalHeader
-            search={journalFilters.search}
-            onSearch={(value) => setJournalFilters((prev) => ({ ...prev, search: value }))}
-            onNewEntry={openNewEntry}
+          <JournalDebriefHeader
+            syncTimestampLabel={syncTimestampLabel}
             exportMenuOpen={isExportMenuOpen}
             setExportMenuOpen={setIsExportMenuOpen}
             exportMenuRef={exportMenuRef}
             onExportChoice={handleExportChoice}
+            onNewEntry={openNewEntry}
+            onSaveSnapshot={saveReviewSnapshot}
+            onJumpToReview={() => reviewComposerRef.current?.focus()}
           />
-
-          <JournalStatsGrid stats={statCards} />
-          <JournalTabNav activeTab={journalView} onChange={setJournalView} />
-
-          <div className="journal-workspace">
-            <main className="journal-main-panel">
-              {journalView === "entries" ? (
-                <JournalEntriesView
-                  rows={paginatedTradeLogRows}
-                  totalRows={journalEntriesTotalRows}
-                  page={safeEntriesPage}
-                  pageSize={JOURNAL_PAGE_SIZE}
-                  totalPages={journalEntriesTotalPages}
-                  filters={journalFilters}
-                  setFilters={setJournalFilters}
-                  showMoreFilters={showMoreFilters}
-                  setShowMoreFilters={setShowMoreFilters}
-                  symbolOptions={symbolOptions}
-                  setupOptions={setupOptions}
-                  regimeOptions={regimeOptions}
-                  selectedSymbols={selectedSymbols}
-                  setSelectedSymbols={setSelectedSymbols}
-                  onReset={resetFilters}
-                  onNewEntry={openNewEntry}
-                  onOpenDetail={openTradeDetail}
-                  onPrevPage={() => setReportPage((prev) => Math.max(1, prev - 1))}
-                  onNextPage={() => setReportPage((prev) => Math.min(journalEntriesTotalPages, prev + 1))}
-                  formatValue={formatValue}
-                />
-              ) : null}
-
-              {journalView === "calendar" ? (
-                <JournalCalendarView
-                  calendarMonthLabel={calendarMonthLabel}
-                  monthDateRangeLabel={monthDateRangeLabel}
-                  calendarCells={calendarCells}
-                  selectedDay={selectedDay}
-                  selectedDayTrades={selectedDayTrades}
-                  onSelectDay={setSelectedCalendarDay}
-                  onMoveMonth={moveCalendarMonth}
-                  onViewTrades={(day) => setSelectedCalendarTradeDate(String(day?.key || ""))}
-                  selectedSymbol={selectedSymbols[0] || ""}
-                  setSelectedSymbols={setSelectedSymbols}
-                  symbolOptions={symbolOptions}
-                  monthPnL={monthPnL}
-                  bestDay={bestDay}
-                  worstDay={worstDay}
-                  avgDayPnL={avgDayPnL}
-                  profitableDays={profitableDays}
-                  losingDays={losingDays}
-                  breakevenDays={breakevenDays}
-                  formatValue={formatValue}
-                />
-              ) : null}
-
-              {journalView === "analytics" ? (
-                <JournalAnalyticsView
-                  analytics={analytics}
-                  winLossOptions={winLossOptions}
-                  winLossSeries={winLossSeries}
-                  winnersCount={winnersCount}
-                  losersCount={losersCount}
-                  breakevenCount={breakevenCount}
-                  weeklyMonthlyReview={weeklyMonthlyReview}
-                  assetPnlRows={assetPnlRows}
-                  setupPnlRows={setupPnlRows}
-                  tradeLogRows={tradeLogRows}
-                  onToast={notify}
-                  onExportAnalytics={exportAnalyticsReport}
-                  onSaveInsight={saveAnalyticsInsightToJournal}
-                  onCreateReviewTask={createReviewTask}
-                  formatValue={formatValue}
-                />
-              ) : null}
-
-              {journalView === "review" ? (
-                <JournalReviewView
-                  analytics={analytics}
-                  weeklyMonthlyReview={weeklyMonthlyReview}
-                  mistakeRows={mistakeRows}
-                  setupPnlRows={setupPnlRows}
-                  reviewNote={reviewNote}
-                  setReviewNote={setReviewNote}
-                  onToast={notify}
-                  onSaveReview={saveReviewSnapshot}
-                  onExportReview={exportReviewReport}
-                  onAddToJournal={addReviewToJournal}
-                  formatValue={formatValue}
-                />
-              ) : null}
-            </main>
-
-            <aside className="journal-quick-column" ref={quickEntryRef} tabIndex={-1}>
-              <JournalQuickEntryPanel
-                entryDraft={entryDraft}
-                setEntryDraft={setEntryDraft}
-                entryErrors={entryErrors}
-                saveStatus={saveStatus}
-                confidenceDots={confidenceDots}
-                editingEntryId={editingEntryId}
-                onSave={addJournalEntry}
-                todayNotes={todayNotes}
-              />
-            </aside>
-          </div>
-
-          <button type="button" className="journal-mobile-new-entry" onClick={openNewEntry}>
-            + New Entry
-          </button>
+          <JournalDebriefDashboard
+            dateKey={activeDebriefDate}
+            syncTimestampLabel={syncTimestampLabel}
+            debriefPnl={debriefPnl}
+            debriefWinRate={debriefWinRate}
+            ruleAdherence={ruleAdherence}
+            emotionalDiscipline={emotionalDiscipline}
+            primaryLesson={primaryLesson}
+            reviewQueueItems={reviewQueueItems}
+            executionRows={tradeLogRows.slice(0, 8)}
+            behaviorPatterns={behaviorPatterns}
+            calendarMonthLabel={calendarMonthLabel}
+            monthDateRangeLabel={monthDateRangeLabel}
+            calendarCells={calendarCells}
+            selectedDay={selectedDay}
+            monthPnL={monthPnL}
+            bestDay={bestDay}
+            worstDay={worstDay}
+            avgDayPnL={avgDayPnL}
+            formatValue={formatValue}
+            onSelectDay={setSelectedCalendarDay}
+            onMoveMonth={moveCalendarMonth}
+            onOpenDay={(day) => setSelectedCalendarTradeDate(String(day?.key || ""))}
+            onOpenTrade={openTradeDetail}
+            lessonRows={lessonRows}
+            reviewNote={reviewNote}
+            setReviewNote={setReviewNote}
+            reviewComposerRef={reviewComposerRef}
+            onSaveReview={saveReviewSnapshot}
+            onAddToJournal={addReviewToJournal}
+            onNewEntry={openNewEntry}
+          />
         </>
       )}
 
@@ -1875,6 +1932,7 @@ export function JournalModule({
             notify("Entry deleted.", "success");
           }
         }}
+        onAddReviewNote={addReviewNoteToEntry}
         formatValue={formatValue}
       />
     </div>
@@ -1886,82 +1944,365 @@ function JournalToast({ toast }) {
   return <div className={`journal-toast ${toast.tone || "info"}`} role="status">{toast.message}</div>;
 }
 
+function JournalDebriefHeader({
+  syncTimestampLabel,
+  exportMenuOpen,
+  setExportMenuOpen,
+  exportMenuRef,
+  onExportChoice,
+  onNewEntry,
+  onSaveSnapshot,
+  onJumpToReview
+}) {
+  return (
+    <CompactPageHeader
+      className="journal-debrief-head"
+      eyebrow="Journal"
+      title="Trader Debrief"
+      description="Session evidence, behavioral drift, and review signals pulled into one closeout workspace."
+      actions={(
+        <div className="journal-debrief-head-actions">
+          <div className="journal-debrief-sync-box" aria-label={`Sync state ${syncTimestampLabel}`}>
+            <span>Sync State</span>
+            <strong>{syncTimestampLabel}</strong>
+          </div>
+          <button type="button" className="journal-btn secondary" onClick={onNewEntry}>New Entry</button>
+          <div className="journal-export-wrap" ref={exportMenuRef}>
+            <button type="button" className="journal-btn secondary" onClick={() => setExportMenuOpen((value) => !value)}>
+              Export
+            </button>
+            {exportMenuOpen ? (
+              <div className="journal-export-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => onExportChoice("entries")}>Export entries CSV</button>
+                <button type="button" role="menuitem" onClick={() => onExportChoice("analytics")}>Export analytics report</button>
+                <button type="button" role="menuitem" onClick={() => onExportChoice("review")}>Export review summary</button>
+              </div>
+            ) : null}
+          </div>
+          <button type="button" className="journal-btn secondary" onClick={onJumpToReview}>Review Mode</button>
+          <button type="button" className="journal-btn primary" onClick={onSaveSnapshot}>Save Snapshot</button>
+        </div>
+      )}
+    />
+  );
+}
+
+function JournalDebriefDashboard({
+  dateKey,
+  syncTimestampLabel,
+  debriefPnl,
+  debriefWinRate,
+  ruleAdherence,
+  emotionalDiscipline,
+  primaryLesson,
+  reviewQueueItems,
+  executionRows,
+  behaviorPatterns,
+  calendarMonthLabel,
+  monthDateRangeLabel,
+  calendarCells,
+  selectedDay,
+  monthPnL,
+  bestDay,
+  worstDay,
+  avgDayPnL,
+  formatValue,
+  onSelectDay,
+  onMoveMonth,
+  onOpenDay,
+  onOpenTrade,
+  lessonRows,
+  reviewNote,
+  setReviewNote,
+  reviewComposerRef,
+  onSaveReview,
+  onAddToJournal,
+  onNewEntry
+}) {
+  const safeRuleAdherence = ruleAdherence == null ? "—" : `${ruleAdherence.toFixed(0)}%`;
+  const safeDiscipline = emotionalDiscipline == null ? "—" : `${emotionalDiscipline.toFixed(0)}%`;
+  return (
+    <div className="journal-debrief">
+      <section className="journal-debrief-top-grid">
+        <article className="journal-debrief-panel journal-debrief-daily">
+          <div className="journal-debrief-panel-head">
+            <div>
+              <span className="journal-debrief-kicker">Daily Debrief</span>
+              <h3>{dateKey || "Current Session"}</h3>
+            </div>
+            <div className="journal-debrief-date-chip">{syncTimestampLabel}</div>
+          </div>
+          <div className="journal-debrief-metric-grid">
+            <div>
+              <span>Session P&amp;L (USD)</span>
+              <strong className={debriefPnl >= 0 ? "positive" : "negative"}>{formatValue(debriefPnl, true)}</strong>
+            </div>
+            <div>
+              <span>Win Rate</span>
+              <strong>{debriefWinRate.toFixed(1)}%</strong>
+            </div>
+            <div>
+              <span>Rule Adherence</span>
+              <strong>{safeRuleAdherence}</strong>
+            </div>
+            <div>
+              <span>Emotional Discipline</span>
+              <strong>{safeDiscipline}</strong>
+            </div>
+            <div className="wide">
+              <span>Primary Lesson</span>
+              <strong>{primaryLesson}</strong>
+            </div>
+          </div>
+        </article>
+
+        <aside className="journal-debrief-panel journal-debrief-queue">
+          <div className="journal-debrief-panel-head">
+            <div>
+              <span className="journal-debrief-kicker">Review Queue</span>
+              <h3>Session Follow-ups</h3>
+            </div>
+          </div>
+          <div className="journal-debrief-queue-list">
+            {reviewQueueItems.length ? reviewQueueItems.map((item) => (
+              <div key={item.title} className={`journal-debrief-queue-item ${item.tone || "info"}`}>
+                <strong>{item.title}</strong>
+                <p>{item.detail}</p>
+              </div>
+            )) : (
+              <div className="journal-debrief-queue-item info">
+                <strong>Queue is clear</strong>
+                <p>No immediate review follow-ups are flagged for this session.</p>
+              </div>
+            )}
+          </div>
+        </aside>
+      </section>
+
+      <section className="journal-debrief-mid-grid">
+        <article className="journal-debrief-panel journal-debrief-evidence">
+          <div className="journal-debrief-panel-head">
+            <div>
+              <span className="journal-debrief-kicker">Execution Evidence</span>
+              <h3>Recent trade evidence</h3>
+            </div>
+          </div>
+          <div className="journal-debrief-table-wrap">
+            <table className="journal-debrief-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Setup</th>
+                  <th>Side</th>
+                  <th>Confidence</th>
+                  <th>Review</th>
+                  <th className="numeric">P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {executionRows.length ? executionRows.map((row, index) => {
+                  const tone = Number(row.pnl || 0) >= 0 ? "positive" : "negative";
+                  const reviewCopy = row.review || row.entry?.postReview || row.entry?.preThesis || "No review note logged.";
+                  return (
+                    <tr key={`${row.id || row.sourceId || row.symbol}-${index}`} onClick={() => onOpenTrade(row)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" ? onOpenTrade(row) : null}>
+                      <td><JournalSymbolCell row={row} /></td>
+                      <td>{row.setup || "Setup"}</td>
+                      <td><JournalSideChip side={row.side} /></td>
+                      <td><ConfidenceDots value={row.confidence} /></td>
+                      <td className="journal-debrief-table-note">{reviewCopy}</td>
+                      <td className={`numeric ${tone}`}>{formatValue(row.pnl || 0, true)}</td>
+                    </tr>
+                  );
+                }) : (
+                  <tr>
+                    <td colSpan={6}>
+                      <GuidedEmptyState
+                        eyebrow="Journal workflow"
+                        title="No execution evidence yet"
+                        description="The debrief fills in once you log trades or attach review notes to the session."
+                        steps={[
+                          "Add a quick journal entry or trade note after the session.",
+                          "Return here to review execution evidence and recurring behavior.",
+                        ]}
+                        cta="Quick Entry"
+                        onAction={onNewEntry}
+                        className="guided-empty-state--compact"
+                      />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article className="journal-debrief-panel journal-debrief-behavior">
+          <div className="journal-debrief-panel-head">
+            <div>
+              <span className="journal-debrief-kicker">Behavior Patterns</span>
+              <h3>What repeated today</h3>
+            </div>
+          </div>
+          <div className="journal-debrief-pattern-list">
+            {behaviorPatterns.map((item) => (
+              <div key={item.label} className={`journal-debrief-pattern ${item.tone || "neutral"}`}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <p>{item.helper}</p>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="journal-debrief-bottom-grid">
+        <article className="journal-debrief-panel journal-debrief-heatmap">
+          <div className="journal-debrief-panel-head">
+            <div>
+              <span className="journal-debrief-kicker">Calendar Heatmap</span>
+              <h3>{calendarMonthLabel}</h3>
+              <p>{monthDateRangeLabel}</p>
+            </div>
+            <div className="journal-inline-actions">
+              <button type="button" className="journal-btn secondary journal-btn-small" onClick={() => onMoveMonth(-1)}>Prev</button>
+              <button type="button" className="journal-btn secondary journal-btn-small" onClick={() => onMoveMonth(1)}>Next</button>
+            </div>
+          </div>
+          <div className="journal-debrief-heat-grid">
+            {calendarCells.map((cell) => {
+              if (cell.type === "blank") return <div key={cell.key} className="journal-debrief-heat-cell blank" />;
+              const pnl = Number(cell.pnl || 0);
+              const tone = pnl > 300 ? "large-gain" : pnl > 0 ? "small-gain" : pnl < -300 ? "large-loss" : pnl < 0 ? "small-loss" : "neutral";
+              return (
+                <button
+                  key={cell.key}
+                  type="button"
+                  className={`journal-debrief-heat-cell ${tone} ${selectedDay?.key === cell.key ? "selected" : ""}`}
+                  onClick={() => onSelectDay(cell)}
+                  onDoubleClick={() => onOpenDay(cell)}
+                  title={`${cell.key} · ${formatValue(pnl, true)}`}
+                >
+                  <span>{cell.dayNum}</span>
+                  <small>{cell.pnl == null ? "—" : formatValue(pnl, true)}</small>
+                </button>
+              );
+            })}
+          </div>
+          <div className="journal-debrief-heat-stats">
+            <div><span>Month P&amp;L</span><strong className={monthPnL >= 0 ? "positive" : "negative"}>{formatValue(monthPnL, true)}</strong></div>
+            <div><span>Best Day</span><strong className="positive">{formatValue(bestDay, true)}</strong></div>
+            <div><span>Worst Day</span><strong className="negative">{formatValue(worstDay, true)}</strong></div>
+            <div><span>Avg Day</span><strong>{formatValue(avgDayPnL, true)}</strong></div>
+          </div>
+        </article>
+
+        <article className="journal-debrief-panel journal-debrief-lessons">
+          <div className="journal-debrief-panel-head">
+            <div>
+              <span className="journal-debrief-kicker">Lessons Board</span>
+              <h3>Replay the edge, cut the leak</h3>
+            </div>
+          </div>
+          <div className="journal-debrief-lessons-table">
+            <div className="journal-debrief-lessons-head">
+              <span>Topic</span>
+              <span>Evidence</span>
+              <span>Lesson</span>
+              <span>Priority</span>
+            </div>
+            {lessonRows.length ? lessonRows.map((row) => (
+              <div key={`${row.topic}-${row.evidence}`} className="journal-debrief-lessons-row">
+                <strong>{row.topic}</strong>
+                <span>{row.evidence}</span>
+                <p>{row.lesson}</p>
+                <em>{row.priority}</em>
+              </div>
+            )) : (
+              <div className="journal-debrief-lessons-empty">No lessons logged yet. Add one note before closing the session.</div>
+            )}
+          </div>
+          <label className="journal-debrief-review-note">
+            <span>Closeout note</span>
+            <textarea
+              ref={reviewComposerRef}
+              value={reviewNote}
+              onChange={(event) => setReviewNote(event.target.value)}
+              placeholder="Write the one rule to repeat, the one mistake to eliminate, and the one setup to prioritize next session."
+            />
+          </label>
+          <div className="journal-inline-actions">
+            <button type="button" className="journal-btn primary" onClick={onSaveReview}>Save Review</button>
+            <button type="button" className="journal-btn secondary" onClick={onAddToJournal}>Add to Journal</button>
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
 function JournalHeader({ search, onSearch, onNewEntry, exportMenuOpen, setExportMenuOpen, exportMenuRef, onExportChoice }) {
   return (
-    <header className="journal-header">
-      <div>
-        <div className="journal-eyebrow">Journal</div>
-        <h2>Journal</h2>
-        <p>Track trades, review performance, and turn repeat patterns into better decisions.</p>
-      </div>
-      <div className="journal-header-actions">
-        <label className="journal-search">
-          <span aria-hidden="true">⌕</span>
-          <input
-            value={search}
-            onChange={(event) => onSearch(event.target.value)}
-            placeholder="Search symbol, setup, notes..."
-            aria-label="Search journal entries"
-          />
-        </label>
-        <div className="journal-export-wrap" ref={exportMenuRef}>
-          <button type="button" className="journal-btn secondary" onClick={() => setExportMenuOpen((value) => !value)}>
-            Export
+    <CompactPageHeader
+      className="journal-header compact"
+      eyebrow="Journal"
+      title="Journal"
+      description="Track trades, review performance, and turn repeat patterns into better decisions."
+      actions={(
+        <div className="journal-header-actions">
+          <label className="journal-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              value={search}
+              onChange={(event) => onSearch(event.target.value)}
+              placeholder="Search symbol, setup, notes..."
+              aria-label="Search journal entries"
+            />
+          </label>
+          <div className="journal-export-wrap" ref={exportMenuRef}>
+            <button type="button" className="journal-btn secondary" onClick={() => setExportMenuOpen((value) => !value)}>
+              Export
+            </button>
+            {exportMenuOpen ? (
+              <div className="journal-export-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => onExportChoice("entries")}>Export entries CSV</button>
+                <button type="button" role="menuitem" onClick={() => onExportChoice("analytics")}>Export analytics report</button>
+                <button type="button" role="menuitem" onClick={() => onExportChoice("review")}>Export review summary</button>
+              </div>
+            ) : null}
+          </div>
+          <button type="button" className="journal-btn primary" onClick={onNewEntry}>
+            <span aria-hidden="true">+</span> Quick Entry
           </button>
-          {exportMenuOpen ? (
-            <div className="journal-export-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => onExportChoice("entries")}>Export entries CSV</button>
-              <button type="button" role="menuitem" onClick={() => onExportChoice("analytics")}>Export analytics report</button>
-              <button type="button" role="menuitem" onClick={() => onExportChoice("review")}>Export review summary</button>
-            </div>
-          ) : null}
         </div>
-        <button type="button" className="journal-btn primary" onClick={onNewEntry}>
-          <span aria-hidden="true">+</span> New Entry
-        </button>
-      </div>
-    </header>
+      )}
+    />
   );
 }
 
 function JournalStatsGrid({ stats }) {
-  return (
-    <section className="journal-stats-grid-v3" aria-label="Journal statistics">
-      {stats.map((stat) => (
-        <article key={stat.label} className={`journal-stat-card-v3 ${stat.tone}`}>
-          <div className="journal-stat-top">
-            <span className="journal-stat-spark" aria-hidden="true" />
-          </div>
-          <span className="journal-card-label">{stat.label}</span>
-          <strong>{stat.value}</strong>
-          <em>{stat.delta}</em>
-        </article>
-      ))}
-    </section>
-  );
+  return <MetricStrip items={stats.map((stat) => ({ label: stat.label, value: stat.value, helper: stat.delta, tone: stat.tone }))} className="journal-metric-strip" />;
 }
 
 function JournalTabNav({ activeTab, onChange }) {
   const tabs = [
-    ["entries", "Entries", "trade log and filters"],
-    ["calendar", "Calendar", "daily P&L heatmap"],
-    ["analytics", "Analytics", "performance patterns"],
-    ["review", "Review", "lessons and improvement plan"]
+    ["entries", "Entries"],
+    ["calendar", "Calendar"],
+    ["analytics", "Analytics"],
+    ["review", "Review"]
   ];
   return (
     <nav className="journal-tab-nav" aria-label="Journal views">
-      {tabs.map(([key, label, description]) => (
+      {tabs.map(([key, label]) => (
         <button
           key={key}
           type="button"
           className={activeTab === key ? "active" : ""}
           aria-selected={activeTab === key}
           aria-current={activeTab === key ? "page" : undefined}
-          title={description}
+          title={label}
           onClick={() => onChange(key)}
         >
           <span>{label}</span>
-          <small>{description}</small>
         </button>
       ))}
     </nav>
@@ -2027,8 +2368,22 @@ function JournalEntriesView({
 function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilters, symbolOptions, setupOptions, regimeOptions, selectedSymbols, setSelectedSymbols, onReset }) {
   return (
     <div className="journal-filter-toolbar">
-      <button type="button" className="journal-filter-pill active">All Entries</button>
-      <button type="button" className="journal-filter-pill">Last 30D</button>
+      <InlineControlGroup className="journal-filter-chip-row">
+        <button
+          type="button"
+          className={`journal-filter-pill ${filters.dateWindow === "all" ? "active" : ""}`}
+          onClick={() => setFilters((prev) => ({ ...prev, dateWindow: "all" }))}
+        >
+          All Entries
+        </button>
+        <button
+          type="button"
+          className={`journal-filter-pill ${filters.dateWindow === "30d" ? "active" : ""}`}
+          onClick={() => setFilters((prev) => ({ ...prev, dateWindow: "30d" }))}
+        >
+          Last 30D
+        </button>
+      </InlineControlGroup>
       <label>
         <span>Symbol</span>
         <select value={selectedSymbols[0] || ""} onChange={(event) => setSelectedSymbols(event.target.value ? [event.target.value] : [])}>
@@ -2043,36 +2398,35 @@ function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilte
           {setupOptions.map((setup) => <option key={setup} value={setup.toLowerCase()}>{setup}</option>)}
         </select>
       </label>
-      <button type="button" className="journal-btn secondary more-filters" onClick={() => setShowMoreFilters((value) => !value)}>
-        More Filters
-      </button>
-      <div className={`journal-secondary-filters ${showMoreFilters ? "open" : ""}`}>
-        <label>
-          <span>Regime</span>
-          <select value={filters.regime} onChange={(event) => setFilters((prev) => ({ ...prev, regime: event.target.value }))}>
-            <option value="all">All Regimes</option>
-            {regimeOptions.map((regime) => <option key={regime} value={regime.toLowerCase()}>{regime}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Side</span>
-          <select value={filters.side} onChange={(event) => setFilters((prev) => ({ ...prev, side: event.target.value }))}>
-            <option value="all">All</option>
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-        </label>
-        <label>
-          <span>Status</span>
-          <select value={filters.status} onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}>
-            <option value="all">All</option>
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-            <option value="review">Review</option>
-          </select>
-        </label>
-        <button type="button" className="journal-btn secondary" onClick={onReset}>Reset</button>
-      </div>
+      <FilterPopover open={showMoreFilters} onToggle={setShowMoreFilters} label="More Filters" className="journal-filter-popover">
+        <div className="journal-secondary-filters open">
+          <label>
+            <span>Regime</span>
+            <select value={filters.regime} onChange={(event) => setFilters((prev) => ({ ...prev, regime: event.target.value }))}>
+              <option value="all">All Regimes</option>
+              {regimeOptions.map((regime) => <option key={regime} value={regime.toLowerCase()}>{regime}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Side</span>
+            <select value={filters.side} onChange={(event) => setFilters((prev) => ({ ...prev, side: event.target.value }))}>
+              <option value="all">All</option>
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </label>
+          <label>
+            <span>Status</span>
+            <select value={filters.status} onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}>
+              <option value="all">All</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+              <option value="review">Review</option>
+            </select>
+          </label>
+          <button type="button" className="journal-btn secondary" onClick={onReset}>Reset</button>
+        </div>
+      </FilterPopover>
     </div>
   );
 }
@@ -2871,7 +3225,7 @@ function JournalField({ label, error, wide, children }) {
   );
 }
 
-function TradeDetailDrawer({ open, entry, drawerRef, onClose, onEdit, onDuplicate, onDelete, formatValue }) {
+function TradeDetailDrawer({ open, entry, drawerRef, onClose, onEdit, onDuplicate, onDelete, onAddReviewNote, formatValue }) {
   if (!open || !entry) return null;
   const summary = [
     ["Strategy/setup", entry.setup],
@@ -2903,7 +3257,7 @@ function TradeDetailDrawer({ open, entry, drawerRef, onClose, onEdit, onDuplicat
         <div className="journal-drawer-actions">
           <button type="button" className="journal-btn primary" onClick={() => onEdit(entry)}>Edit Entry</button>
           <button type="button" className="journal-btn secondary" onClick={() => onDuplicate(entry)}>Duplicate</button>
-          <button type="button" className="journal-btn secondary">Add Review Note</button>
+          <button type="button" className="journal-btn secondary" onClick={() => onAddReviewNote(entry)}>Add Review Note</button>
           <button type="button" className="journal-btn danger" onClick={() => onDelete(entry)}>Delete</button>
         </div>
       </aside>
@@ -2924,10 +3278,17 @@ function JournalDrawerSection({ title, rows }) {
 
 function JournalEmptyState({ title, description, cta, onAction }) {
   return (
-    <div className="journal-empty-state">
-      <h3>{title}</h3>
-      <p>{description}</p>
-      {cta ? <button type="button" className="journal-btn primary" onClick={onAction}>{cta}</button> : null}
-    </div>
+    <GuidedEmptyState
+      eyebrow="Journal workflow"
+      title={title}
+      description={description}
+      steps={[
+        "Capture the trade, thesis, or lesson that matters right now.",
+        "Return to review patterns after a few entries are logged.",
+      ]}
+      cta={cta}
+      onAction={onAction}
+      className="journal-empty-state"
+    />
   );
 }

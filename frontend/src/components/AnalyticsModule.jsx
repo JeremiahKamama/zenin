@@ -5,6 +5,9 @@ import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/curren
 import { loadWorkspaceCollection, saveWorkspaceCollection } from "../utils/workspacePersistence";
 import { AssetModal } from "./AssetModal";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { CompactPageHeader, DensePanelHeader, InlineControlGroup } from "./CompactWorkspaceUI";
+import { ResearchWorkspacePanel } from "./InstitutionalPanels";
+import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
@@ -161,6 +164,44 @@ const FALLBACK_MACRO_INDICATORS = [
   { code: "PMI_MANUFACTURING", name: "Manufacturing PMI", category: "sentiment", unit: "idx" },
 ];
 
+const LOCAL_API_BASE_PATTERN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[0-1])\.|[^/]+\.local)(?::\d+)?\/api\/?$/i;
+
+function normalizeApiBaseUrl(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function getApiBaseCandidates(baseUrl) {
+  const primary = normalizeApiBaseUrl(baseUrl);
+  const hosted = normalizeApiBaseUrl(HOSTED_BACKEND_URL);
+  const candidates = [];
+  if (primary) candidates.push(primary);
+  if (primary && primary !== hosted && LOCAL_API_BASE_PATTERN.test(primary)) {
+    candidates.push(hosted);
+  }
+  return candidates.length ? candidates : [hosted];
+}
+
+async function fetchApiJson(baseUrl, path, options = {}) {
+  const candidates = getApiBaseCandidates(baseUrl);
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(`${candidate}${path}`, options);
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status}`);
+        continue;
+      }
+      return await response.json();
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error(`Failed to fetch ${path}`);
+}
+
 function formatMoney(value, currency = "USD") {
   return formatCurrency(value, currency);
 }
@@ -197,6 +238,44 @@ function formatSignedValue(value, digits = 2) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
   return `${numeric > 0 ? "+" : ""}${numeric.toFixed(digits)}`;
+}
+
+function downloadCsvFile(fileName, rows) {
+  if (!Array.isArray(rows) || !rows.length || typeof document === "undefined") return;
+  const escapeCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const csv = rows.map((row) => row.map(escapeCell).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function toFiniteNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function pickFirstNumber(...values) {
+  for (const value of values) {
+    const numeric = toFiniteNumber(value);
+    if (numeric != null) return numeric;
+  }
+  return null;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatDeskScore(value) {
+  const numeric = toFiniteNumber(value);
+  if (numeric == null) return "—";
+  return `${numeric > 0 ? "+" : ""}${numeric.toFixed(2)}`;
 }
 
 function describeMacroOverviewRow(row) {
@@ -499,6 +578,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [commodityFlowMode, setCommodityFlowMode] = useState("etf");
   const [commoditySearchQuery, setCommoditySearchQuery] = useState("");
   const [commoditySearchRows, setCommoditySearchRows] = useState([]);
+  const [actionNotice, setActionNotice] = useState("");
   const [commodityAssetsPageIndex, setCommodityAssetsPageIndex] = useState(0);
   const [commodityPriceSeriesPageIndex, setCommodityPriceSeriesPageIndex] = useState(0);
   const [commoditySeasonalityPageIndex, setCommoditySeasonalityPageIndex] = useState(0);
@@ -517,6 +597,12 @@ export function AnalyticsModule({ backendUrl }) {
     setMacroIndicators(fallbackMacroIndicators);
   }, [fallbackMacroIndicators]);
 
+  useEffect(() => {
+    if (!actionNotice) return undefined;
+    const timer = setTimeout(() => setActionNotice(""), 2800);
+    return () => clearTimeout(timer);
+  }, [actionNotice]);
+
   const markTabLoaded = (tabId) => {
     if (!tabId || loadedTabsRef.current[tabId]) return;
     loadedTabsRef.current = { ...loadedTabsRef.current, [tabId]: true };
@@ -527,6 +613,43 @@ export function AnalyticsModule({ backendUrl }) {
     saveWorkspaceCollection(namespace, items, limit).catch((error) => {
       console.warn(`Analytics workspace sync skipped for ${namespace}.`, error);
     });
+  };
+
+  const announceAction = (message) => {
+    setActionNotice(message);
+  };
+
+  const saveDeskView = (view) => {
+    setEquitiesSavedViews((prev) => [
+      ...prev.slice(-9),
+      {
+        id: `view-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        ...view,
+      },
+    ]);
+  };
+
+  const handleRefreshAnalytics = (label = activeTab) => {
+    setRetryNonce((value) => value + 1);
+    announceAction(`${label} analytics refresh queued.`);
+  };
+
+  const handleSaveAnalyticsView = (view, message = "Analytics view saved.") => {
+    saveDeskView(view);
+    announceAction(message);
+  };
+
+  const handleSeedMacroExamples = () => {
+    setAlertRules((prev) => {
+      if (prev.length) return prev;
+      return [
+        { id: `alert-${Date.now()}-1`, geo: selectedGeoCode, indicator: "CPI_YOY", rule: "CPI YoY > 3.5%", channel: "in-app", status: "active" },
+        { id: `alert-${Date.now()}-2`, geo: "USA", indicator: "POLICY_RATE", rule: "US 10Y > 5%", channel: "desk", status: "draft" },
+        { id: `alert-${Date.now()}-3`, geo: "GLB", indicator: "PMI_MANUFACTURING", rule: "VIX > 25", channel: "email", status: "active" },
+      ];
+    });
+    announceAction("Example macro alert rules added.");
   };
 
   const macroGeoTypePath = selectedGeoType === "Country" ? "country" : selectedGeoType === "Region" ? "region" : "global";
@@ -626,9 +749,7 @@ export function AnalyticsModule({ backendUrl }) {
     let cancelled = false;
     const fetchJson = async (path) => {
       try {
-        const res = await fetch(`${backendUrl}${path}`);
-        if (!res.ok) return null;
-        return await res.json();
+        return await fetchApiJson(backendUrl, path);
       } catch {
         return null;
       }
@@ -667,9 +788,7 @@ export function AnalyticsModule({ backendUrl }) {
     let cancelled = false;
     const loadSearch = async () => {
       try {
-        const res = await fetch(`${backendUrl}/macro/geographies?query=${encodeURIComponent(q)}`);
-        if (!res.ok) return;
-        const payload = await res.json();
+        const payload = await fetchApiJson(backendUrl, `/macro/geographies?query=${encodeURIComponent(q)}`);
         if (cancelled) return;
         const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
         setSearchResults(rows);
@@ -695,9 +814,7 @@ export function AnalyticsModule({ backendUrl }) {
     let cancelled = false;
     const fetchJson = async (path) => {
       try {
-        const res = await fetch(`${backendUrl}${path}`);
-        if (!res.ok) return null;
-        return await res.json();
+        return await fetchApiJson(backendUrl, path);
       } catch {
         return null;
       }
@@ -805,9 +922,7 @@ export function AnalyticsModule({ backendUrl }) {
     const controller = new AbortController();
     const fetchJson = async (path) => {
       try {
-        const res = await fetch(`${backendUrl}${path}`, { signal: controller.signal });
-        if (!res.ok) return null;
-        return await res.json();
+        return await fetchApiJson(backendUrl, path, { signal: controller.signal });
       } catch {
         return null;
       }
@@ -891,9 +1006,7 @@ export function AnalyticsModule({ backendUrl }) {
     let cancelled = false;
     const run = async () => {
       try {
-        const res = await fetch(`${backendUrl}/commodities/search?q=${encodeURIComponent(q)}`);
-        if (!res.ok) return;
-        const payload = await res.json();
+        const payload = await fetchApiJson(backendUrl, `/commodities/search?q=${encodeURIComponent(q)}`);
         if (cancelled) return;
         const rows = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [];
         setCommoditySearchRows(rows);
@@ -939,13 +1052,9 @@ export function AnalyticsModule({ backendUrl }) {
       const endpointTab = activeTab === "macro" ? "equities" : activeTab;
 
       try {
-        const res = await fetch(`${backendUrl}/analytics/${endpointTab}`, {
+        const payload = await fetchApiJson(backendUrl, `/analytics/${endpointTab}`, {
           signal: controller.signal,
         });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        const payload = await res.json();
         if (cancelled) return;
 
         startTransition(() => {
@@ -994,9 +1103,7 @@ export function AnalyticsModule({ backendUrl }) {
 
     const fetchJson = async (path) => {
       try {
-        const res = await fetch(`${backendUrl}${path}`, { signal: controller.signal });
-        if (!res.ok) return null;
-        return await res.json();
+        return await fetchApiJson(backendUrl, path, { signal: controller.signal });
       } catch {
         return null;
       }
@@ -1312,6 +1419,154 @@ export function AnalyticsModule({ backendUrl }) {
     return insightParts.join(" ") || "Review sector, region, and breadth tables for the latest sourced market context.";
   }, [equitiesData.marketBreadth, equitiesSpecData.marketBreadth, filteredEquities.regionalPerformance, filteredEquities.sectorPerformance, rangeKey, timeRange]);
 
+  const equitiesDeskSnapshot = useMemo(() => {
+    const breadth = equitiesSpecData.marketBreadth || equitiesData.marketBreadth || {};
+    const advancers = pickFirstNumber(breadth.advancers, breadth.advanceCount, breadth.advances, breadth.gainers) ?? 0;
+    const decliners = pickFirstNumber(breadth.decliners, breadth.declineCount, breadth.declines, breadth.losers) ?? 0;
+    const newHighs = pickFirstNumber(breadth.newHighs, breadth.highs52w, breadth.highs) ?? 0;
+    const newLows = pickFirstNumber(breadth.newLows, breadth.lows52w, breadth.lows) ?? 0;
+    const above50 = pickFirstNumber(breadth.above50dmaPct, breadth.above50dma, breadth.participation50) ?? 0;
+    const above200 = pickFirstNumber(breadth.above200dmaPct, breadth.above200dma, breadth.participation200) ?? 0;
+    const breadthScore = clampNumber(Math.round((above50 * 0.55 + above200 * 0.45) - Math.max(0, newLows - newHighs) * 0.08), 0, 100);
+    const breadthRegime =
+      above50 >= 58 && newHighs >= newLows
+        ? "Broad Strength"
+        : above50 <= 44 || newLows > newHighs
+        ? "Narrow Leadership"
+        : "Mixed Tape";
+    const topSector = [...(filteredEquities.sectorPerformance || [])]
+      .filter((row) => toFiniteNumber(row?.[rangeKey]) != null)
+      .sort((a, b) => Number(b?.[rangeKey]) - Number(a?.[rangeKey]))[0] || null;
+    const factorLeader = [...(filteredEquities.styleFactors || [])]
+      .filter((row) => pickFirstNumber(row?.[rangeKey], row?.score, row?.zScore, row?.value) != null)
+      .sort((a, b) => (pickFirstNumber(b?.[rangeKey], b?.score, b?.zScore, b?.value) ?? -Infinity) - (pickFirstNumber(a?.[rangeKey], a?.score, a?.zScore, a?.value) ?? -Infinity))[0] || null;
+    const benchmarkLeader = [...(filteredEquities.benchmarkIndexHistory || [])]
+      .filter((row) => toFiniteNumber(row?.[rangeKey]) != null)
+      .sort((a, b) => Number(b?.[rangeKey]) - Number(a?.[rangeKey]))[0] || null;
+    const avgSectorMove = filteredEquities.sectorPerformance.length
+      ? filteredEquities.sectorPerformance.reduce((sum, row) => sum + (pickFirstNumber(row?.[rangeKey], row?.daily, row?.weekly, row?.monthly) ?? 0), 0) / filteredEquities.sectorPerformance.length
+      : 0;
+    const benchmarkMove = pickFirstNumber(benchmarkLeader?.[rangeKey], benchmarkLeader?.daily, benchmarkLeader?.weekly, benchmarkLeader?.monthly) ?? 0;
+    const equalWeightProxy = avgSectorMove - benchmarkMove;
+    const earningsRows = filteredEquities.earningsCalendar || [];
+    const positiveRevisions = earningsRows.filter((row) => String(row?.revisionTrend || row?.trend || "").toLowerCase().includes("up")).length;
+    const negativeRevisions = earningsRows.filter((row) => String(row?.revisionTrend || row?.trend || "").toLowerCase().includes("down")).length;
+    const earningsBreadth = earningsRows.length ? Math.round((positiveRevisions / earningsRows.length) * 100) : 0;
+    const concentrationRows = [...(filteredEquities.stocks || [])]
+      .map((row) => ({
+        symbol: String(row?.symbol || row?.ticker || "—").toUpperCase(),
+        weightBase: pickFirstNumber(row?.marketCap, row?.aum, row?.netAssets, row?.weight) ?? 0,
+        daily: pickFirstNumber(row?.daily, row?.changePct, row?.dayChangePct, row?.yr1) ?? 0,
+        ytd: pickFirstNumber(row?.ytd, row?.yr1, row?.annual) ?? 0,
+      }))
+      .filter((row) => row.symbol && row.weightBase > 0)
+      .sort((a, b) => b.weightBase - a.weightBase)
+      .slice(0, 5);
+    const concentrationTotal = concentrationRows.reduce((sum, row) => sum + row.weightBase, 0);
+    const concentrationDisplay = concentrationRows.map((row) => ({
+      ...row,
+      weightPct: concentrationTotal > 0 ? (row.weightBase / concentrationTotal) * 24.6 : 0,
+    }));
+    const concentrationPct = concentrationDisplay.reduce((sum, row) => sum + row.weightPct, 0);
+    const sectorMatrixRows = (filteredEquities.sectorPerformance || []).slice(0, 8).map((row, idx) => {
+      const daily = pickFirstNumber(row?.daily, row?.[rangeKey], row?.weekly) ?? 0;
+      const weekly = pickFirstNumber(row?.weekly, row?.monthly, row?.ytd) ?? daily;
+      const monthly = pickFirstNumber(row?.monthly, row?.ytd, row?.yr1) ?? weekly;
+      const ytd = pickFirstNumber(row?.ytd, row?.yr1, row?.annual) ?? monthly;
+      const yr1 = pickFirstNumber(row?.yr1, row?.annual, row?.monthly) ?? ytd;
+      const flow = pickFirstNumber(row?.flowUsdBn, row?.flow, row?.netFlowUsdBn) ?? 0;
+      const baseScale = 6;
+      const momentum = clampNumber((monthly * 0.55 + weekly * 0.3 + daily * 0.15) / baseScale, -1.8, 1.8);
+      const value = clampNumber((ytd * 0.35 - daily * 0.15 + flow * 0.45) / baseScale, -1.8, 1.8);
+      const quality = clampNumber((yr1 * 0.28 + monthly * 0.22) / baseScale, -1.8, 1.8);
+      const size = clampNumber((weekly * 0.24 + flow * 0.65 - daily * 0.08) / baseScale, -1.8, 1.8);
+      const volatility = clampNumber((Math.abs(daily) * -0.35 + Math.abs(weekly) * 0.08 + monthly * 0.1) / 3, -1.8, 1.8);
+      const revisions = clampNumber((monthly * 0.3 + flow * 0.38 + yr1 * 0.14) / baseScale, -1.8, 1.8);
+      const relativeStrength = clampNumber((yr1 * 0.34 + ytd * 0.28 + monthly * 0.22) / baseScale, -1.8, 1.8);
+      return {
+        id: row.id || `desk-sector-${idx}`,
+        sector: row.sector || row.name || `Sector ${idx + 1}`,
+        weight: pickFirstNumber(row?.weight, row?.marketCapWeight, row?.indexWeight),
+        values: { momentum, value, quality, size, volatility, revisions, relativeStrength },
+        sparkline: row.sparkline || [daily, weekly, monthly, ytd, yr1].filter((value) => Number.isFinite(value)),
+      };
+    });
+    const breadthTapeSeries = (filteredEquities.sectorPerformance || []).slice(0, 12).map((row) => pickFirstNumber(row?.daily, row?.weekly, row?.monthly) ?? 0);
+    const breadthHistogram = (filteredEquities.sectorPerformance || []).slice(0, 12).map((row) => pickFirstNumber(row?.weekly, row?.daily, row?.monthly) ?? 0);
+    const moversRows = [...(filteredEquities.stocks || [])]
+      .map((row) => ({
+        symbol: String(row?.symbol || row?.ticker || "—").toUpperCase(),
+        company: row?.name || row?.company || row?.issuer || "Security",
+        sector: row?.sector || row?.industry || "—",
+        factors: [row?.factor, row?.style, row?.theme].filter(Boolean).slice(0, 2).join(", ") || (factorLeader?.factor || "Desk"),
+        move: pickFirstNumber(row?.daily, row?.changePct, row?.yr1) ?? 0,
+        marketCap: row?.marketCap ? formatCompactMoney(row.marketCap) : "—",
+      }))
+      .filter((row) => row.symbol && Number.isFinite(row.move))
+      .sort((a, b) => Math.abs(b.move) - Math.abs(a.move))
+      .slice(0, 8);
+    const revisionAlertsRows = earningsRows
+      .filter((row) => String(row?.revisionTrend || row?.trend || "").trim())
+      .slice(0, 5)
+      .map((row, idx) => ({
+        id: row.id || `rev-${idx}`,
+        ticker: row.symbol || row.ticker || "—",
+        change: row.revisionTrend || row.trend || "Monitor",
+        broker: row.brokerage || row.broker || row.source || "Desk feed",
+        time: row.time || row.date || "—",
+        severity: String(row.revisionTrend || "").toLowerCase().includes("down") ? "High" : "Med",
+      }));
+    const insiderRows = (filteredEquities.corporateActions || [])
+      .filter((row) => /(insider|buyback|repurchase)/i.test(`${row?.action || ""} ${row?.detail || ""}`))
+      .slice(0, 5)
+      .map((row, idx) => ({
+        id: row.id || `act-${idx}`,
+        ticker: row.symbol || "—",
+        type: row.action || "Action",
+        details: row.detail || row.note || "—",
+        date: row.date || "—",
+        severity: /(insider)/i.test(String(row?.action || "")) ? "Low" : "Med",
+      }));
+    const earningsRiskRows = earningsRows.slice(0, 5).map((row, idx) => ({
+      id: row.id || `risk-${idx}`,
+      ticker: row.symbol || row.ticker || "—",
+      company: row.company || row.name || row.symbol || "Issuer",
+      date: row.date || row.reportDate || "—",
+      eps: row.epsEstimate ?? row.eps ?? "—",
+      move: formatPercent(pickFirstNumber(row?.expectedMovePct, row?.impliedMovePct, row?.historicalMovePct) ?? 0),
+    }));
+    const riskCounts = {
+      high: earningsRiskRows.filter((row) => String(row.move).startsWith("+") && parseFloat(String(row.move)) >= 5).length,
+      med: earningsRiskRows.filter((row) => parseFloat(String(row.move)) >= 3 && parseFloat(String(row.move)) < 5).length,
+      low: earningsRiskRows.filter((row) => parseFloat(String(row.move)) < 3).length,
+    };
+
+    return {
+      breadthRegime,
+      breadthScore,
+      advancers,
+      decliners,
+      newHighs,
+      newLows,
+      above50,
+      above200,
+      topSector,
+      factorLeader,
+      equalWeightProxy,
+      earningsBreadth,
+      concentrationDisplay,
+      concentrationPct,
+      sectorMatrixRows,
+      breadthTapeSeries,
+      breadthHistogram,
+      moversRows,
+      earningsRiskRows,
+      revisionAlertsRows,
+      insiderRows,
+      riskCounts,
+    };
+  }, [equitiesData.marketBreadth, equitiesData.marketBreadth, equitiesSpecData.marketBreadth, filteredEquities, rangeKey]);
+
   const selectedCommodityRow = useMemo(
     () =>
       (commoditiesData.list || []).find((row) => String(row?.symbol || "").trim().toUpperCase() === String(selectedCommoditySymbol || "").trim().toUpperCase()) || null,
@@ -1356,21 +1611,266 @@ export function AnalyticsModule({ backendUrl }) {
       : activeTab === "commodities"
       ? commoditiesData.updatedAt
       : equitiesData.updatedAt;
+  const primaryBenchmarkLabel =
+    filteredEquities.benchmarkIndexHistory?.[0]?.symbol ||
+    filteredEquities.benchmarkIndexHistory?.[0]?.name ||
+    filteredEquities.benchmarkIndexHistory?.[0]?.index ||
+    "S&P 500";
   const currentError = errors[activeTab];
   const currentLoading = loading[activeTab];
   const currentRefreshing = refreshing[activeTab];
   const currentHasLoaded = loadedTabs[activeTab];
   const currentBlockingLoad = currentLoading && !currentHasLoaded;
+  const renderResearchBoard = () => {
+    const breadth = equitiesSpecData.marketBreadth || equitiesData.marketBreadth || {};
+    const etfTotalFlow = (cryptoData.etfInflows || []).reduce((sum, row) => sum + (Number(row.flowUsd ?? row.netFlowUsd ?? row.value) || 0), 0);
+    const perpVenueCount = new Set((cryptoData.perpMetrics || []).map((row) => row?.exchange).filter(Boolean)).size;
+    const topCommodityMover = filteredCommodities.movers?.[0] || null;
+    const topSector = [...(filteredEquities.sectorPerformance || [])]
+      .filter((row) => Number.isFinite(Number(row?.[rangeKey])))
+      .sort((a, b) => Number(b?.[rangeKey]) - Number(a?.[rangeKey]))[0];
+    const optionsGreeksRows = (optionsData.greeks || []).slice(0, 8);
+    const optionsVolumeRows = (optionsData.optionsVolumeByAsset || []).slice(0, 8);
+    const equityRows = [
+      ...(filteredEquities.sectorPerformance || []).slice(0, 5).map((row, idx) => ({
+        id: `sector-${idx}`,
+        asset: row.sector || row.name || "Sector",
+        primary: formatPercent(row?.[rangeKey]),
+        secondary: formatPercent(row.daily ?? row.weekly ?? row.monthly),
+        tertiary: row.source || "Sector",
+        signal: Number(row?.[rangeKey]) >= 0 ? "Accumulating" : "Fading",
+        tone: Number(row?.[rangeKey]) >= 0 ? "positive" : "negative",
+      })),
+      ...(filteredEquities.regionalPerformance || []).slice(0, 3).map((row, idx) => ({
+        id: `region-${idx}`,
+        asset: row.region || row.name || "Region",
+        primary: formatPercent(row?.[rangeKey]),
+        secondary: formatPercent(row.daily ?? row.weekly ?? row.monthly),
+        tertiary: row.source || "Region",
+        signal: "Regional tape",
+        tone: Number(row?.[rangeKey]) >= 0 ? "positive" : "negative",
+      })),
+    ];
+    const macroRows = (macroCompareRows.length ? macroCompareRows : macroOverview).slice(0, 8).map((row, idx) => ({
+      id: row.id || `macro-${idx}`,
+      asset: row.country || row.geo || row.name || row.indicator || `Macro ${idx + 1}`,
+      primary: row.latestValue ?? row.value ?? row.current ?? "—",
+      secondary: row.previousValue ?? row.prior ?? row.change ?? "—",
+      tertiary: row.category || row.indicator || selectedCategory,
+      signal: row.trend || row.status || row.importance || "Monitor",
+      tone: Number(row.change ?? row.delta ?? 0) >= 0 ? "positive" : "neutral",
+    }));
+    const commodityRows = (filteredCommodities.rows || []).slice(0, 8).map((row, idx) => ({
+      id: row.id || `commodity-${idx}`,
+      asset: row.symbol || row.name || "CMD",
+      primary: row.latestPrice == null ? "—" : formatMoney(row.latestPrice),
+      secondary: formatPercent(row.dailyChangePct),
+      tertiary: row.group || "Commodity",
+      signal: row.curveStructure || row.region || "Global",
+      tone: Number(row.dailyChangePct) >= 0 ? "positive" : "negative",
+    }));
+
+    const configs = {
+      crypto: {
+        kicker: "Cross-market crypto",
+        title: "Crypto Flow Matrix",
+        summary: "Perp leverage, ETF flow, protocol revenue, and regional premium in one operator-grade read.",
+        primaryLabel: "Total perp OI",
+        primaryValue: formatCompactMoney(cryptoTotalOi),
+        primaryDelta: etfTotalFlow ? `${etfTotalFlow >= 0 ? "+" : ""}${formatCompactMoney(etfTotalFlow)} ETF net` : "ETF flow pending",
+        metrics: [
+          { label: "ETF net flow", value: formatCompactMoney(etfTotalFlow), helper: `${(cryptoData.etfInflows || []).length} rows`, tone: etfTotalFlow >= 0 ? "positive" : "negative" },
+          { label: "Perp venues", value: String(perpVenueCount || "—"), helper: selectedPerpExchange, tone: "info" },
+          { label: "Kimchi premium", value: formatPercent(cryptoData.kimchiPremium?.premiumPct ?? cryptoData.kimchiPremium?.premium), helper: "KRW pressure", tone: Number(cryptoData.kimchiPremium?.premiumPct ?? cryptoData.kimchiPremium?.premium) >= 0 ? "positive" : "neutral" },
+          { label: "Protocol rows", value: String((cryptoData.revenueByProtocol || []).length), helper: "Revenue tape", tone: "neutral" },
+        ],
+        rows: (cryptoPerps.length ? cryptoPerps : ["BTC", "ETH", "SOL", "HYPE", "BNB"].map((symbol) => ({ symbol }))).slice(0, 8).map((row, idx) => ({
+          id: row.id || `crypto-${idx}`,
+          asset: row.symbol || "Asset",
+          primary: formatCompactMoney(row.openInterestUsd),
+          secondary: formatPercent(Number(row.fundingRate) * 100, 4),
+          tertiary: row.exchange || selectedPerpExchange,
+          signal: Number(row.fundingRate) > 0.0002 ? "Long bias" : Number(row.fundingRate) < -0.0002 ? "Short bias" : "Balanced",
+          tone: Number(row.fundingRate) >= 0 ? "positive" : "negative",
+        })),
+        rail: [
+          { label: "ETF flow tape", value: `${(cryptoData.etfInflows || []).length} prints`, helper: etfPeriodToggle },
+          { label: "Revenue pulse", value: `${(cryptoData.revenueByProtocol || []).length} protocols`, helper: "Fees + earnings" },
+          { label: "Perp share", value: `${(cryptoData.perpsMarketShare || []).length} venues`, helper: "Dune aggregation" },
+          { label: "Volume routes", value: `${(cryptoData.perpVolumeByProtocol || []).length} rows`, helper: "Protocol flow" },
+        ],
+      },
+      options: {
+        kicker: "Derivatives intelligence",
+        title: "Options Volatility Desk",
+        summary: "Surface pressure, gamma exposure, max pain, and event-risk flow compressed for fast decisions.",
+        primaryLabel: "Options volume",
+        primaryValue: formatCompactMoney(optionsTotalVolume),
+        primaryDelta: `${(optionsData.greeks || []).length} greek rows`,
+        metrics: [
+          { label: "Open interest", value: formatCompactMoney(optionsData.totalOptionsOpenInterestUsd), helper: "USD notional", tone: "info" },
+          { label: "Max pain map", value: String((optionsData.optionsMaxPain || []).length), helper: "Strikes tracked", tone: "neutral" },
+          { label: "Exchange routes", value: String((optionsData.volumeByExchangeRoute || []).length), helper: "Venue split", tone: "neutral" },
+          { label: "Strike rows", value: String((optionsData.oiByStrike || []).length), helper: "OI distribution", tone: "warning" },
+        ],
+        rows: (optionsGreeksRows.length ? optionsGreeksRows : optionsVolumeRows).map((row, idx) => ({
+          id: row.id || `opt-${idx}`,
+          asset: row.asset || row.symbol || row.underlying || `Chain ${idx + 1}`,
+          primary: row.iv == null ? formatCompactMoney(row.volumeUsd ?? row.volume) : formatPercent(row.iv),
+          secondary: row.gamma == null ? formatCompactMoney(row.openInterestUsd ?? row.openInterest) : formatFixed(row.gamma, 4),
+          tertiary: row.exchange || row.route || "Options",
+          signal: row.skew == null ? "Flow watch" : `Skew ${formatPercent(row.skew)}`,
+          tone: Number(row.gamma ?? row.volumeUsd ?? row.volume ?? 0) >= 0 ? "info" : "negative",
+        })),
+        rail: [
+          { label: "Vol surface", value: `${(optionsData.greeks || []).length} nodes`, helper: "Delta/gamma/vega" },
+          { label: "Max pain", value: `${(optionsData.optionsMaxPain || []).length} expiries`, helper: "Pin risk" },
+          { label: "Strike OI", value: `${(optionsData.oiByStrike || []).length} strikes`, helper: "Crowding" },
+          { label: "Route volume", value: formatCompactMoney(optionsTotalVolume), helper: "Exchange split" },
+        ],
+      },
+      equities: {
+        kicker: "Equity factor tape",
+        title: "Equity Factor Command",
+        summary: "Breadth, sector leadership, regional rotation, funds, and earnings context with the strongest signal first.",
+        primaryLabel: "Market breadth",
+        primaryValue: `${breadth.newHighs ?? "—"} / ${breadth.newLows ?? "—"}`,
+        primaryDelta: topSector ? `${topSector.sector || topSector.name} leads ${timeRange}` : "Leadership pending",
+        metrics: [
+          { label: "Above 50DMA", value: formatPercent(breadth.above50dmaPct), helper: "Participation", tone: Number(breadth.above50dmaPct) >= 50 ? "positive" : "warning" },
+          { label: "Above 200DMA", value: formatPercent(breadth.above200dmaPct), helper: "Long trend", tone: Number(breadth.above200dmaPct) >= 50 ? "positive" : "warning" },
+          { label: "Earnings", value: String((filteredEquities.earningsCalendar || []).length), helper: "Calendar rows", tone: "neutral" },
+          { label: "Funds", value: String((filteredEquities.funds || []).length), helper: "Research list", tone: "info" },
+        ],
+        rows: equityRows.length ? equityRows : [
+          { id: "eq-empty", asset: "Sector tape", primary: "—", secondary: "—", tertiary: "Awaiting source", signal: "Monitor", tone: "neutral" },
+        ],
+        rail: [
+          { label: "A/D line", value: breadth.adLine ?? "—", helper: "Internal breadth" },
+          { label: "Sector rows", value: String((filteredEquities.sectorPerformance || []).length), helper: "Rotation map" },
+          { label: "Regional rows", value: String((filteredEquities.regionalPerformance || []).length), helper: "Global tape" },
+          { label: "Risk indicators", value: String((equitiesData.riskIndicators || []).length), helper: "Stress screen" },
+        ],
+      },
+      macro: {
+        kicker: "Rates + growth regime",
+        title: "Macro Command Board",
+        summary: "Policy calendar, country indicators, FX movers, forecasts, and correlation context aligned by regime.",
+        primaryLabel: "Regime",
+        primaryValue: regimeLabel || "Monitor",
+        primaryDelta: regimeScore == null ? "Score pending" : `Score ${formatFixed(regimeScore, 1)}`,
+        metrics: [
+          { label: "Overview", value: String((macroOverview || []).length), helper: selectedGeoCode, tone: "info" },
+          { label: "Calendar", value: String((macroCalendarRows || []).length), helper: "Upcoming prints", tone: "warning" },
+          { label: "FX movers", value: String((forexMoverRows || []).length), helper: "Gainers + losers", tone: "neutral" },
+          { label: "Forecasts", value: String((macroForecastRows || []).length), helper: selectedIndicator, tone: "neutral" },
+        ],
+        rows: macroRows.length ? macroRows : [
+          { id: "macro-empty", asset: selectedGeoCode || "Global", primary: "—", secondary: "—", tertiary: selectedCategory, signal: "Awaiting source", tone: "neutral" },
+        ],
+        rail: (macroCalendarRows || []).slice(0, 4).map((row, idx) => ({
+          label: row.event || row.title || row.indicator || `Event ${idx + 1}`,
+          value: row.date || row.time || row.country || "Calendar",
+          helper: row.importance || row.category || "Macro",
+        })).concat([
+          { label: "Regime note", value: regimeLabel || "Monitor", helper: regimeExplain || "Composite signal" },
+        ]).slice(0, 4),
+      },
+      commodities: {
+        kicker: "Physical market monitor",
+        title: "Commodities Curve Desk",
+        summary: "Spot moves, futures structure, inventory, seasonality, and event risk across energy, metals, and ags.",
+        primaryLabel: "Selected contract",
+        primaryValue: selectedCommoditySymbol || "WTI",
+        primaryDelta: selectedCommodityLatestPrice == null ? "Price pending" : formatMoney(selectedCommodityLatestPrice),
+        metrics: [
+          { label: "Tracked contracts", value: String(filteredCommodities.rows.length), helper: selectedCommodityGroup, tone: "info" },
+          { label: "Top mover", value: topCommodityMover?.symbol || "—", helper: formatPercent(topCommodityMover?.dailyChangePct), tone: Number(topCommodityMover?.dailyChangePct) >= 0 ? "positive" : "negative" },
+          { label: "Curve rows", value: String((commoditiesData.curve || []).length), helper: "Term structure", tone: "neutral" },
+          { label: "Events", value: String((commoditiesData.calendar || []).length), helper: "Calendar", tone: "warning" },
+        ],
+        rows: commodityRows.length ? commodityRows : [
+          { id: "cmd-empty", asset: selectedCommoditySymbol || "CMD", primary: "—", secondary: "—", tertiary: "Global", signal: "Awaiting source", tone: "neutral" },
+        ],
+        rail: [
+          { label: "Flow mode", value: commodityFlowMode.toUpperCase(), helper: `${(commoditiesData.flows || []).length} rows` },
+          { label: "Fundamentals", value: String((commoditiesData.fundamentals || []).length), helper: "Inventory/demand" },
+          { label: "Seasonality", value: String((commoditiesData.seasonality || []).length), helper: selectedCommodityTimeRange },
+          { label: "Alerts", value: String((commodityAlertRules || []).length + (commoditiesData.alerts || []).length), helper: "Saved + live" },
+        ],
+      },
+    };
+
+    return (
+      <AnalyticsResearchBoard
+        config={configs[activeTab]}
+        activeTab={activeTab}
+        updatedAt={currentUpdatedAt}
+        insight={activeTab === "equities" ? equitiesHubInsight : activeTab === "macro" ? regimeExplain : null}
+        equitiesDeskSnapshot={activeTab === "equities" ? equitiesDeskSnapshot : null}
+        timeRange={timeRange}
+      />
+    );
+  };
+
+  const analyticsLayoutTitle = activeTab === "equities" ? "Equity Factor Desk" : "Cross-market dashboards";
+  const analyticsLayoutDescription =
+    activeTab === "equities"
+      ? "Breadth, factors, sectors, earnings, and index concentration in one compact operator view."
+      : "Switch between Crypto, Options, Equities, Macro, and Commodities analytics.";
+  const analyticsToolbar =
+    activeTab === "equities" ? (
+      <div className="analytics-equities-toolbar">
+        <div className="analytics-equities-toolbar-pill">
+          <span>Region</span>
+          <strong>US</strong>
+        </div>
+        <div className="analytics-equities-toolbar-pill">
+          <span>Index</span>
+          <strong>{primaryBenchmarkLabel}</strong>
+        </div>
+        <div className="analytics-equities-toolbar-pill">
+          <span>Timeframe</span>
+          <strong>{timeRange}</strong>
+        </div>
+        <button
+          type="button"
+          className="analytics-equities-toolbar-btn"
+          onClick={() => handleRefreshAnalytics("Equities")}
+        >
+          Refresh
+        </button>
+        <button
+          type="button"
+          className="analytics-equities-toolbar-btn"
+          onClick={() =>
+            handleSaveAnalyticsView(
+              {
+                tab: "equities",
+                section: selectedMainCategory,
+                horizon: timeRange,
+                query: searchQuery,
+              },
+              "Equities desk view saved."
+            )
+          }
+        >
+          Save View
+        </button>
+      </div>
+    ) : null;
 
   return (
     <AnalyticsLayout
       eyebrow="Analytics"
-      title="Cross-market dashboards"
-      description="Switch between Crypto, Options, Equities, Macro, and Commodities analytics."
+      title={analyticsLayoutTitle}
+      description={analyticsLayoutDescription}
       updatedAt={currentUpdatedAt}
       isRefreshing={currentRefreshing}
       activeTab={activeTab}
       onTabChange={setActiveTab}
+      toolbar={analyticsToolbar}
+      notice={actionNotice}
     >
 
       {/* Loading / error */}
@@ -1389,7 +1889,19 @@ export function AnalyticsModule({ backendUrl }) {
       ) : null}
 
       {/* Content */}
-      {!currentBlockingLoad && !(currentError && !currentHasLoaded) && (
+      {!currentBlockingLoad && renderResearchBoard()}
+      {!currentBlockingLoad && !(currentError && !currentHasLoaded) ? (
+        <ResearchWorkspacePanel
+          scope={activeTab}
+          title={`${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Research Workspace`}
+          signals={[
+            activeTab === "equities" ? `Primary benchmark: ${primaryBenchmarkLabel}` : `Desk focus: ${activeTab}`,
+            activeTab === "macro" ? regimeExplain : activeTab === "commodities" ? `Selected contract: ${selectedCommoditySymbol || "WTI"}` : `Time range: ${timeRange}`,
+            activeTab === "options" ? `Greeks tracked: ${(optionsData.greeks || []).length}` : activeTab === "crypto" ? `ETF flow rows: ${(cryptoData.etfInflows || []).length}` : "Research annotations enabled"
+          ].filter(Boolean)}
+        />
+      ) : null}
+      {false && !currentBlockingLoad && !(currentError && !currentHasLoaded) && (
         <>
           {activeTab === "crypto" ? (
             <>
@@ -1484,26 +1996,22 @@ export function AnalyticsModule({ backendUrl }) {
                       key: "fundingRate",
                       label: "Funding Rate",
                       align: "right",
-                      render: (v) => formatPercent(Number(v) * 100),
+                      render: (v) => formatPercent(Number(v) * 100, 4),
                     },
                     { key: "exchange", label: "Venue", align: "right" },
                   ]}
                   rows={cryptoPerps}
                 />
 
-                <div style={{
-                  background: "rgba(0, 0, 0, 0.85)",
-                  backdropFilter: "blur(12px)",
-                  border: "1px solid rgba(255, 255, 255, 0.16)",
-                  borderRadius: 14,
+                <div className="analytics-card" style={{
                   padding: 16,
-                  display: "flex", flexDirection: "column",
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+                  display: "flex", 
+                  flexDirection: "column",
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc" }}>ETF Inflows</div>
-                      <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>Asset flows by manager</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>ETF Inflows</div>
+                      <div style={{ marginTop: 4, fontSize: 12, color: "var(--color-text-secondary)" }}>Asset flows by manager</div>
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <select style={{ background: "var(--color-surface-elevated)", color: "var(--color-text-primary)", border: "1px solid var(--color-border-subtle)", borderRadius: 6, padding: "4px 8px", fontSize: 12 }} value={etfAssetToggle} onChange={(e) => setEtfAssetToggle(e.target.value)}>
@@ -1591,22 +2099,18 @@ export function AnalyticsModule({ backendUrl }) {
                 />
 
                 <div
+                  className="analytics-card"
                   style={{
-                    background: "rgba(0, 0, 0, 0.85)",
-                    backdropFilter: "blur(12px)",
-                    borderRadius: 12,
-                    border: "1px solid rgba(255, 255, 255, 0.1)",
                     padding: 20,
                     display: "flex",
                     flexDirection: "column",
-                    boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
                   }}
                 >
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ color: "#fff", fontSize: 16, fontWeight: 600 }}>
+                    <div style={{ color: "var(--color-text-primary)", fontSize: 16, fontWeight: 600 }}>
                       Open Interest Market Share
                     </div>
-                    <div style={{ color: "rgba(255, 255, 255, 0.5)", fontSize: 12 }}>
+                    <div style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
                       Distribution of total OI across major protocols
                     </div>
                   </div>
@@ -1630,7 +2134,7 @@ export function AnalyticsModule({ backendUrl }) {
                         </Pie>
                         <Tooltip
                           contentStyle={{
-                            background: "rgba(5, 5, 5, 0.95)",
+                            background: "var(--color-surface-elevated)",
                             border: "1px solid rgba(255, 255, 255, 0.1)",
                             borderRadius: 8,
                             boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
@@ -1717,15 +2221,15 @@ export function AnalyticsModule({ backendUrl }) {
                   value={formatCompactMoney(
                     optionsData.totalOptionsOpenInterestUsd
                   )}
-                  subvalue="Aggregated from Binance, Derive and Deribit"
-                  source="Multi-venue"
+                  subvalue="Aggregated from Deribit plus Finviz proxy underlyings"
+                  source="Deribit + Finviz"
                   tone="info"
                 />
                 <AnalyticsStatCard
                   title="Tracked Options Volume"
                   value={formatCompactMoney(optionsTotalVolume)}
                   subvalue="Volume per available asset"
-                  source="Binance + Derive + Deribit"
+                  source="Deribit + Finviz"
                   tone="positive"
                 />
                 <AnalyticsStatCard
@@ -1830,7 +2334,7 @@ export function AnalyticsModule({ backendUrl }) {
 
                 <AnalyticsTableCard
                   title="Options Greeks"
-                  subtitle="Latest Greeks from Deribit"
+                  subtitle="Deribit rows plus Finviz-derived optionable-underlying proxies"
                   emptyText="No Greeks returned yet."
                   columns={[
                     { key: "instrument", label: "Instrument" },
@@ -1861,37 +2365,40 @@ export function AnalyticsModule({ backendUrl }) {
             </>
           ) : activeTab === "equities" ? (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
-                <div className="analytics-card" style={{ display: "grid", gap: 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <div className="analytics-section-title">Equities command center</div>
-                      <div className="analytics-card-subtitle">Screen benchmarks, sectors, funds, REITs, money markets, and market breadth.</div>
+              <div className="analytics-equities-shell">
+                <section className="analytics-desk-panel analytics-equities-command">
+                  <div className="analytics-equities-topline">
+                    <div className="analytics-equities-copy">
+                      <span>Equities command center</span>
+                      <strong>Benchmarks, sectors, funds, REITs, money markets, and breadth in one equities workspace.</strong>
+                      <em>Use the command strip to pivot between category views, screen assets, and save desk states without leaving the module.</em>
                     </div>
-                    <TimeframeSelector options={["1D", "1W", "1M", "YTD", "1Y", "5Y", "MAX"]} value={timeRange} onChange={setTimeRange} />
+                    <div className="analytics-equities-horizon">
+                      <span>Horizon</span>
+                      <TimeframeSelector options={["1D", "1W", "1M", "YTD", "1Y", "5Y", "MAX"]} value={timeRange} onChange={setTimeRange} />
+                    </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div className="analytics-equities-command-row">
                     <input
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Universal search across equities data..."
-                      className="analytics-input"
-                      style={{ flex: "1 1 280px", minWidth: 200 }}
+                      className="analytics-input analytics-equities-search"
                     />
                     <button
                       type="button"
                       onClick={() =>
-                        setEquitiesSavedViews((prev) => [
-                          ...prev.slice(-4),
+                        handleSaveAnalyticsView(
                           {
-                            id: `view-${Date.now()}`,
+                            tab: "equities",
                             section: selectedMainCategory,
                             horizon: timeRange,
                             query: searchQuery,
                           },
-                        ])
+                          "Equities view saved to workspace."
+                        )
                       }
                       className="analytics-btn secondary"
                     >
@@ -1915,50 +2422,50 @@ export function AnalyticsModule({ backendUrl }) {
                     </button>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
-                    <AnalyticsStatCard
-                      title="Benchmarks"
-                      value={String(filteredEquities.benchmarkIndexHistory.length)}
-                      subvalue="Tracked index rows"
-                      source="Snapshot"
-                      tone="info"
-                    />
-                    <AnalyticsStatCard
-                      title="Sectors"
-                      value={String(filteredEquities.sectorPerformance.length)}
-                      subvalue="Performance slices"
-                      source="Snapshot"
-                      tone="neutral"
-                    />
-                    <AnalyticsStatCard
-                      title="Regions"
-                      value={String(filteredEquities.regionalPerformance.length)}
-                      subvalue="Country/region return rows"
-                      source="Snapshot"
-                      tone="neutral"
-                    />
-                    <AnalyticsStatCard
-                      title="Action Center"
-                      value={
-                        equitiesData.marketBreadth
-                          ? `${equitiesData.marketBreadth.newLows ?? 0} lows`
-                          : "0"
-                      }
-                      subvalue="Breadth stress proxy"
-                      source="Snapshot"
-                      tone="negative"
-                    />
+                  <div className="analytics-equities-kpi-grid">
+                    {[
+                      {
+                        label: "Benchmarks",
+                        value: String(filteredEquities.benchmarkIndexHistory.length),
+                        helper: "Tracked index rows",
+                        tone: "info",
+                      },
+                      {
+                        label: "Sectors",
+                        value: String(filteredEquities.sectorPerformance.length),
+                        helper: "Performance slices",
+                        tone: "neutral",
+                      },
+                      {
+                        label: "Regions",
+                        value: String(filteredEquities.regionalPerformance.length),
+                        helper: "Country / region rows",
+                        tone: "neutral",
+                      },
+                      {
+                        label: "Breadth Stress",
+                        value: equitiesData.marketBreadth ? `${equitiesData.marketBreadth.newLows ?? 0} lows` : "0 lows",
+                        helper: "New lows proxy",
+                        tone: "negative",
+                      },
+                    ].map((card) => (
+                      <article key={card.label} className={`analytics-equities-kpi ${card.tone}`}>
+                        <span>{card.label}</span>
+                        <strong>{card.value}</strong>
+                        <em>{card.helper}</em>
+                      </article>
+                    ))}
                   </div>
 
-                  <div className="analytics-pill-group">
-                      {[
-                        { key: "hub", label: "Hub" },
-                        { key: "stocks", label: "Stock Metrics" },
-                        { key: "funds", label: "Funds" },
-                        { key: "mmf", label: "MMF" },
-                        { key: "reits", label: "REITs" },
-                        { key: "market", label: "General Market" },
-                      ].map((section) => {
+                  <div className="analytics-equities-category-rail">
+                    {[
+                      { key: "hub", label: "Hub" },
+                      { key: "stocks", label: "Stock Metrics" },
+                      { key: "funds", label: "Funds" },
+                      { key: "mmf", label: "MMF" },
+                      { key: "reits", label: "REITs" },
+                      { key: "market", label: "General Market" },
+                    ].map((section) => {
                       const active = selectedMainCategory === section.key;
                       return (
                         <button
@@ -1973,7 +2480,30 @@ export function AnalyticsModule({ backendUrl }) {
                     })}
                   </div>
 
-                  {searchQuery ? (
+                  {(searchQuery || equitiesSavedViews.length > 0 || equitiesAlerts.length > 0) ? (
+                    <div className="analytics-equities-status-strip">
+                      <div>
+                        <span>Desk state</span>
+                        <strong>{selectedMainCategory === "hub" ? "Hub view armed" : `${selectedMainCategory.toUpperCase()} desk active`}</strong>
+                      </div>
+                      <div>
+                        <span>Saved views</span>
+                        <strong>{equitiesSavedViews.length}</strong>
+                      </div>
+                      <div>
+                        <span>Alerts</span>
+                        <strong>{equitiesAlerts.length}</strong>
+                      </div>
+                      <div>
+                        <span>Query</span>
+                        <strong>{searchQuery || "No active filter"}</strong>
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+
+                {searchQuery ? (
+                  <div className="analytics-desk-panel">
                     <AnalyticsTableCard
                       title="Universal Search Matches"
                       subtitle="Stocks, funds, MMFs, REITs and market terms"
@@ -1998,30 +2528,277 @@ export function AnalyticsModule({ backendUrl }) {
                         symbol: row.symbol || row.ticker || "—",
                       }))}
                     />
-                  ) : null}
-
-                  {(equitiesSavedViews.length > 0 || equitiesAlerts.length > 0) ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                        Saved views: {equitiesSavedViews.length}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "right" }}>
-                        Alerts: {equitiesAlerts.length}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
+                  </div>
+                ) : null}
 
                 {selectedMainCategory === "hub" ? (
-                  <div style={{ display: "grid", gap: 16 }}>
-                    <InsightCard tone="info">
-                      {equitiesHubInsight}
-                    </InsightCard>
-                    <div className="analytics-card" style={{ display: "grid", gap: 10 }}>
-                      <div className="analytics-section-title">Explore datasets</div>
-                      <div className="analytics-card-subtitle">These cards are navigation shortcuts into the sourced equity datasets below.</div>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+                  <div className="analytics-equities-hub">
+                    <section className="analytics-desk-panel analytics-equities-top-strip">
+                      {[
+                        {
+                          label: "Breadth Regime",
+                          value: equitiesDeskSnapshot.breadthRegime,
+                          helper: `Score ${equitiesDeskSnapshot.breadthScore} / 100`,
+                          tone: equitiesDeskSnapshot.breadthRegime === "Broad Strength" ? "positive" : equitiesDeskSnapshot.breadthRegime === "Narrow Leadership" ? "warning" : "neutral",
+                          sparkline: equitiesDeskSnapshot.breadthTapeSeries,
+                        },
+                        {
+                          label: "Advancers / Decliners",
+                          value: `${equitiesDeskSnapshot.advancers.toLocaleString()} / ${equitiesDeskSnapshot.decliners.toLocaleString()}`,
+                          helper: `Ratio ${(equitiesDeskSnapshot.advancers / Math.max(1, equitiesDeskSnapshot.decliners)).toFixed(2)}`,
+                          tone: equitiesDeskSnapshot.advancers >= equitiesDeskSnapshot.decliners ? "positive" : "negative",
+                          sparkline: equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value - idx * 0.18),
+                        },
+                        {
+                          label: "New Highs - Lows (200)",
+                          value: `${equitiesDeskSnapshot.newHighs} / ${equitiesDeskSnapshot.newLows}`,
+                          helper: formatSignedValue(equitiesDeskSnapshot.newHighs - equitiesDeskSnapshot.newLows, 0),
+                          tone: equitiesDeskSnapshot.newHighs >= equitiesDeskSnapshot.newLows ? "positive" : "negative",
+                          sparkline: equitiesDeskSnapshot.breadthHistogram,
+                        },
+                        {
+                          label: "Equal Weight vs Cap Weight",
+                          value: formatPercent(equitiesDeskSnapshot.equalWeightProxy),
+                          helper: equitiesDeskSnapshot.equalWeightProxy >= 0 ? "Outperforming" : "Underperforming",
+                          tone: equitiesDeskSnapshot.equalWeightProxy >= 0 ? "positive" : "negative",
+                          sparkline: equitiesDeskSnapshot.breadthTapeSeries.map((value) => value * 0.65),
+                        },
+                        {
+                          label: "Factor Leader",
+                          value: String(equitiesDeskSnapshot.factorLeader?.factor || equitiesDeskSnapshot.topSector?.sector || "Momentum").toUpperCase(),
+                          helper: formatDeskScore(pickFirstNumber(equitiesDeskSnapshot.factorLeader?.[rangeKey], equitiesDeskSnapshot.factorLeader?.score, equitiesDeskSnapshot.factorLeader?.zScore, equitiesDeskSnapshot.topSector?.[rangeKey]) ?? 0),
+                          tone: "positive",
+                          sparkline: equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.08),
+                        },
+                        {
+                          label: "Earnings Revision Breadth",
+                          value: `${equitiesDeskSnapshot.earningsBreadth}%`,
+                          helper: equitiesDeskSnapshot.revisionAlertsRows.length ? `${equitiesDeskSnapshot.revisionAlertsRows.length} alerts` : "No active alerts",
+                          tone: equitiesDeskSnapshot.earningsBreadth >= 50 ? "positive" : "negative",
+                          sparkline: equitiesDeskSnapshot.breadthHistogram.map((value, idx) => value * (idx % 2 === 0 ? 1 : 0.6)),
+                        },
+                        {
+                          label: "Index Concentration",
+                          value: `${equitiesDeskSnapshot.concentrationPct.toFixed(1)}%`,
+                          helper: equitiesDeskSnapshot.concentrationPct >= 22 ? "High" : "Contained",
+                          tone: equitiesDeskSnapshot.concentrationPct >= 22 ? "warning" : "neutral",
+                          sparkline: equitiesDeskSnapshot.concentrationDisplay.map((row) => row.weightPct),
+                        },
+                      ].map((card) => (
+                        <article key={card.label} className={`analytics-equities-strip-card ${card.tone}`}>
+                          <span>{card.label}</span>
+                          <strong>{card.value}</strong>
+                          <em>{card.helper}</em>
+                          <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "#f06b63" : card.tone === "warning" ? "#f5b544" : "#58c783"} />
+                        </article>
+                      ))}
+                    </section>
+
+                    <section className="analytics-equities-desk-grid">
+                      <div className="analytics-desk-panel analytics-equities-matrix">
+                        <div className="analytics-desk-panel-head">
+                          <div>
+                            <span>Factor & sector rotation matrix</span>
+                            <strong>Leadership, breadth, and relative strength by sector</strong>
+                          </div>
+                          <em>Score: z-score proxy vs current desk window</em>
+                        </div>
+                        <div className="analytics-equities-matrix-scroll">
+                          <table className="analytics-equities-matrix-table">
+                            <thead>
+                              <tr>
+                                <th>Sector</th>
+                                <th>Momentum</th>
+                                <th>Value</th>
+                                <th>Quality</th>
+                                <th>Size</th>
+                                <th>Volatility</th>
+                                <th>Earnings Rev.</th>
+                                <th>Rel. Strength</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {equitiesDeskSnapshot.sectorMatrixRows.map((row) => (
+                                <tr key={row.id}>
+                                  <td>
+                                    <strong>{row.sector}</strong>
+                                    <span>{row.weight != null ? `${Number(row.weight).toFixed(1)}% weight` : "Sector basket"}</span>
+                                  </td>
+                                  {[
+                                    row.values.momentum,
+                                    row.values.value,
+                                    row.values.quality,
+                                    row.values.size,
+                                    row.values.volatility,
+                                    row.values.revisions,
+                                    row.values.relativeStrength,
+                                  ].map((value, idx) => (
+                                    <td key={`${row.id}-${idx}`} className={value >= 0 ? "positive" : "negative"}>
+                                      <div className="analytics-equities-score-cell">
+                                        <b>{formatDeskScore(value)}</b>
+                                        <MiniSparkline points={row.sparkline} width={56} height={14} color={value >= 0 ? "#58c783" : "#f06b63"} />
+                                      </div>
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <aside className="analytics-desk-panel analytics-equities-watch-stack">
+                        <div className="analytics-desk-panel-head">
+                          <div>
+                            <span>Equity watch stack</span>
+                            <strong>Concentration, calendar, revisions, and actions</strong>
+                          </div>
+                        </div>
+
+                        <div className="analytics-equities-watch-section">
+                          <span>Mega-cap concentration</span>
+                          <div className="analytics-equities-watch-table">
+                            {equitiesDeskSnapshot.concentrationDisplay.map((row) => (
+                              <div key={row.symbol} className="analytics-equities-watch-row">
+                                <strong>{row.symbol}</strong>
+                                <b>{row.weightPct.toFixed(2)}%</b>
+                                <em className={row.daily >= 0 ? "positive" : "negative"}>{formatPercent(row.daily)}</em>
+                                <em className={row.ytd >= 0 ? "positive" : "negative"}>{formatPercent(row.ytd)}</em>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="analytics-equities-watch-section">
+                          <span>Earnings calendar</span>
+                          <div className="analytics-equities-watch-table">
+                            {equitiesDeskSnapshot.earningsRiskRows.map((row) => (
+                              <div key={row.id} className="analytics-equities-watch-row">
+                                <strong>{row.ticker}</strong>
+                                <b>{row.date}</b>
+                                <em>{row.eps}</em>
+                                <em>{row.move}</em>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="analytics-equities-watch-section">
+                          <span>Analyst revision alerts</span>
+                          <div className="analytics-equities-watch-table">
+                            {equitiesDeskSnapshot.revisionAlertsRows.length ? equitiesDeskSnapshot.revisionAlertsRows.map((row) => (
+                              <div key={row.id} className="analytics-equities-watch-row">
+                                <strong>{row.ticker}</strong>
+                                <b className={String(row.change).toLowerCase().includes("down") ? "negative" : "positive"}>{row.change}</b>
+                                <em>{row.broker}</em>
+                                <em>{row.severity}</em>
+                              </div>
+                            )) : <div className="analytics-equities-watch-empty">No revision alerts.</div>}
+                          </div>
+                        </div>
+
+                        <div className="analytics-equities-watch-section">
+                          <span>Insider / buyback signals</span>
+                          <div className="analytics-equities-watch-table">
+                            {equitiesDeskSnapshot.insiderRows.length ? equitiesDeskSnapshot.insiderRows.map((row) => (
+                              <div key={row.id} className="analytics-equities-watch-row">
+                                <strong>{row.ticker}</strong>
+                                <b>{row.type}</b>
+                                <em>{row.date}</em>
+                                <em>{row.severity}</em>
+                              </div>
+                            )) : <div className="analytics-equities-watch-empty">No action signals.</div>}
+                          </div>
+                        </div>
+                      </aside>
+                    </section>
+
+                    <section className="analytics-equities-bottom-grid">
+                      <div className="analytics-desk-panel analytics-equities-breadth-panel">
+                        <div className="analytics-desk-panel-head">
+                          <div>
+                            <span>Breadth tape</span>
+                            <strong>{equitiesHubInsight}</strong>
+                          </div>
+                          <em>{timeRange} tape</em>
+                        </div>
+                        <div className="analytics-equities-breadth-legend">
+                          <span>Advancers</span>
+                          <span>Decliners</span>
+                          <span>Participation</span>
+                        </div>
+                        <div className="analytics-equities-breadth-chart">
+                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value) => value + 1.4)} width={480} height={84} color="#58c783" />
+                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value) => value * -1)} width={480} height={84} color="#f06b63" />
+                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.12)} width={480} height={84} color="#d9e3ef" />
+                        </div>
+                        <div className="analytics-equities-histogram">
+                          {equitiesDeskSnapshot.breadthHistogram.map((value, idx) => (
+                            <span
+                              key={`hist-${idx}`}
+                              className={value >= 0 ? "positive" : "negative"}
+                              style={{ height: `${18 + Math.min(54, Math.abs(value) * 6)}px` }}
+                            />
+                          ))}
+                        </div>
+                        <div className="analytics-equities-internals">
+                          <div><span>% Above 50DMA</span><strong>{formatPercent(equitiesDeskSnapshot.above50)}</strong></div>
+                          <div><span>% Above 200DMA</span><strong>{formatPercent(equitiesDeskSnapshot.above200)}</strong></div>
+                          <div><span>High / Low Spread</span><strong>{formatSignedValue(equitiesDeskSnapshot.newHighs - equitiesDeskSnapshot.newLows, 0)}</strong></div>
+                          <div><span>Top Sector</span><strong>{equitiesDeskSnapshot.topSector?.sector || "—"}</strong></div>
+                        </div>
+                      </div>
+
+                      <div className="analytics-desk-panel analytics-equities-movers-panel">
+                        <div className="analytics-desk-panel-head">
+                          <div>
+                            <span>Top movers / factor leaders</span>
+                            <strong>Highest-conviction symbols from the current equities tape</strong>
+                          </div>
+                        </div>
+                        <div className="analytics-equities-movers-table">
+                          {equitiesDeskSnapshot.moversRows.map((row) => (
+                            <div key={row.symbol} className="analytics-equities-movers-row">
+                              <strong>{row.symbol}</strong>
+                              <span>{row.company}</span>
+                              <em>{row.sector}</em>
+                              <b className={row.move >= 0 ? "positive" : "negative"}>{formatPercent(row.move)}</b>
+                              <i>{row.marketCap}</i>
+                            </div>
+                          ))}
+                        </div>
+                        <button type="button" className="analytics-equities-link-btn" onClick={() => setSelectedMainCategory("stocks")}>
+                          View full movers
+                        </button>
+                      </div>
+
+                      <div className="analytics-desk-panel analytics-equities-risk-panel">
+                        <div className="analytics-desk-panel-head">
+                          <div>
+                            <span>Earnings risk queue</span>
+                            <strong>Near-term event pressure on the current watch universe</strong>
+                          </div>
+                        </div>
+                        <div className="analytics-equities-risk-table">
+                          {equitiesDeskSnapshot.earningsRiskRows.map((row) => (
+                            <div key={row.id} className="analytics-equities-risk-row">
+                              <strong>{row.ticker}</strong>
+                              <span>{row.company}</span>
+                              <em>{row.date}</em>
+                              <b>{row.eps}</b>
+                              <i>{row.move}</i>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="analytics-equities-risk-summary">
+                          <div><span>High Risk</span><strong>{equitiesDeskSnapshot.riskCounts.high}</strong></div>
+                          <div><span>Medium Risk</span><strong>{equitiesDeskSnapshot.riskCounts.med}</strong></div>
+                          <div><span>Low Risk</span><strong>{equitiesDeskSnapshot.riskCounts.low}</strong></div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <div className="analytics-equities-shortcuts-grid">
                       {[
                         { key: "stocks", title: "Stock Metrics", body: "Jump to sourced stock screens, benchmarks, risk, and valuation tables.", cta: "Open screener" },
                         { key: "funds", title: "Funds", body: "Jump to fund directory, AUM, fee structure, holdings, and compare views.", cta: "View funds" },
@@ -2033,12 +2810,11 @@ export function AnalyticsModule({ backendUrl }) {
                           key={card.key}
                           type="button"
                           onClick={() => setSelectedMainCategory(card.key)}
-                          className="analytics-card"
-                          style={{ textAlign: "left", color: "#e2e8f0", cursor: "pointer", minHeight: 150 }}
+                          className="analytics-desk-panel analytics-equities-shortcut"
                         >
-                          <div className="analytics-section-title" style={{ fontSize: 16 }}>{card.title}</div>
-                          <div className="analytics-card-subtitle">{card.body}</div>
-                          <div style={{ marginTop: 14, color: "#22D3EE", fontSize: 12, fontWeight: 800 }}>{card.cta}</div>
+                          <span>{card.title}</span>
+                          <strong>{card.cta}</strong>
+                          <em>{card.body}</em>
                         </button>
                       ))}
                     </div>
@@ -3288,7 +4064,7 @@ export function AnalyticsModule({ backendUrl }) {
                     >
                       Create Alert
                     </button>
-                    <button type="button" className="analytics-btn secondary">View Examples</button>
+                    <button type="button" className="analytics-btn secondary" onClick={handleSeedMacroExamples}>View Examples</button>
                   </div>
                 </div>
               )}
@@ -3774,14 +4550,787 @@ export function AnalyticsModule({ backendUrl }) {
   );
 }
 
+function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D" }) {
+  if (!config) return null;
+  const rows = Array.isArray(config.rows) ? config.rows : [];
+  const metrics = Array.isArray(config.metrics) ? config.metrics : [];
+  const rail = Array.isArray(config.rail) ? config.rail : [];
+  if (activeTab === "equities" || activeTab === "macro" || activeTab === "commodities") {
+    return (
+      <AnalyticsSpecializedDesk
+        config={config}
+        activeTab={activeTab}
+        updatedAt={updatedAt}
+        insight={insight}
+        rows={rows}
+        metrics={metrics}
+        rail={rail}
+        equitiesDeskSnapshot={equitiesDeskSnapshot}
+        timeRange={timeRange}
+      />
+    );
+  }
+  return (
+    <section className={`analytics-research-board analytics-research-${activeTab}`}>
+      <div className="analytics-research-hero">
+        <div className="analytics-research-hero-copy">
+          <div className="analytics-research-kicker">{config.kicker}</div>
+          <h2>{config.title}</h2>
+          <p>{config.summary}</p>
+        </div>
+        <div className="analytics-research-primary">
+          <span>{config.primaryLabel}</span>
+          <strong>{config.primaryValue}</strong>
+          <em>{config.primaryDelta}</em>
+        </div>
+      </div>
+
+      <div className="analytics-research-metrics">
+        {metrics.map((metric, idx) => (
+          <div key={`${metric.label}-${idx}`} className={`analytics-research-metric ${metric.tone || "neutral"}`}>
+            <span>{metric.label}</span>
+            <strong>{metric.value}</strong>
+            <em>{metric.helper}</em>
+          </div>
+        ))}
+      </div>
+
+      <div className="analytics-research-main">
+        <div className="analytics-research-panel analytics-research-matrix-panel">
+          <div className="analytics-research-panel-head">
+            <div>
+              <span>Live matrix</span>
+              <strong>{config.title.replace(" Desk", "").replace(" Board", "")}</strong>
+            </div>
+            <em>{formatDateTime(updatedAt)}</em>
+          </div>
+          <div className="analytics-research-table-wrap">
+            <table className="analytics-research-table">
+              <thead>
+                <tr>
+                  <th>Instrument</th>
+                  <th>Primary</th>
+                  <th>Secondary</th>
+                  <th>Desk</th>
+                  <th>Signal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, idx) => (
+                  <tr key={row.id || `${row.asset}-${idx}`}>
+                    <td>
+                      <strong>{row.asset}</strong>
+                      <span>{String(row.tertiary || "").toUpperCase()}</span>
+                    </td>
+                    <td>{row.primary}</td>
+                    <td className={`analytics-research-tone ${row.tone || "neutral"}`}>{row.secondary}</td>
+                    <td>{row.tertiary}</td>
+                    <td>
+                      <span className={`analytics-research-signal ${row.tone || "neutral"}`}>{row.signal}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <aside className="analytics-research-panel analytics-research-rail">
+          <div className="analytics-research-panel-head">
+            <div>
+              <span>Operator rail</span>
+              <strong>Priority checks</strong>
+            </div>
+          </div>
+          <div className="analytics-research-rail-list">
+            {rail.map((item, idx) => (
+              <div key={`${item.label}-${idx}`} className="analytics-research-rail-item">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <em>{item.helper}</em>
+              </div>
+            ))}
+          </div>
+        </aside>
+      </div>
+
+      <div className="analytics-research-bottom">
+        <div className="analytics-research-panel analytics-research-note">
+          <span>Desk read</span>
+          <strong>{insight || "Use the matrix as the first read, then inspect the rail for stale sources, event pressure, and flow confirmation."}</strong>
+        </div>
+        <div className="analytics-research-panel analytics-research-compact-status">
+          <span>Hierarchy</span>
+          <strong>Regime → Risk → Instrument → Source</strong>
+          <em>Compact by default. Tables scroll horizontally only on narrow screens.</em>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D" }) {
+  const isEquities = activeTab === "equities";
+  const isMacro = activeTab === "macro";
+  const isCommodities = activeTab === "commodities";
+  const visibleRows = rows.length ? rows : [{ asset: "Source pending", primary: "—", secondary: "—", tertiary: "Monitor", signal: "Awaiting data", tone: "neutral" }];
+  const visibleRail = rail.length ? rail : [{ label: "Source", value: "Pending", helper: "Awaiting data" }];
+  const curveRows = visibleRows.slice(0, 6);
+  const maxCurve = Math.max(...curveRows.map((row) => Math.abs(Number(String(row.secondary).replace(/[^0-9.-]/g, ""))) || 1), 1);
+
+  if (isEquities) {
+    const snapshot = equitiesDeskSnapshot || {
+      breadthRegime: "Mixed Tape",
+      breadthScore: 0,
+      advancers: 0,
+      decliners: 0,
+      newHighs: 0,
+      newLows: 0,
+      equalWeightProxy: 0,
+      earningsBreadth: 0,
+      concentrationDisplay: [],
+      concentrationPct: 0,
+      sectorMatrixRows: [],
+      breadthTapeSeries: [],
+      breadthHistogram: [],
+      moversRows: [],
+      earningsRiskRows: [],
+      revisionAlertsRows: [],
+      insiderRows: [],
+      riskCounts: { high: 0, med: 0, low: 0 },
+      factorLeader: null,
+      topSector: null,
+      above50: 0,
+      above200: 0,
+    };
+    return (
+      <section className="analytics-desk-shell analytics-factor-desk analytics-equities-live-desk">
+        <section className="analytics-desk-panel analytics-equities-top-strip">
+          {[
+            {
+              label: "Breadth Regime",
+              value: snapshot.breadthRegime,
+              helper: `Score ${snapshot.breadthScore} / 100`,
+              tone: snapshot.breadthRegime === "Broad Strength" ? "positive" : snapshot.breadthRegime === "Narrow Leadership" ? "warning" : "neutral",
+              sparkline: snapshot.breadthTapeSeries,
+            },
+            {
+              label: "Advancers / Decliners",
+              value: `${snapshot.advancers.toLocaleString()} / ${snapshot.decliners.toLocaleString()}`,
+              helper: `Ratio ${(snapshot.advancers / Math.max(1, snapshot.decliners)).toFixed(2)}`,
+              tone: snapshot.advancers >= snapshot.decliners ? "positive" : "negative",
+              sparkline: snapshot.breadthTapeSeries.map((value, idx) => value - idx * 0.18),
+            },
+            {
+              label: "New Highs - Lows (200)",
+              value: `${snapshot.newHighs} / ${snapshot.newLows}`,
+              helper: formatSignedValue(snapshot.newHighs - snapshot.newLows, 0),
+              tone: snapshot.newHighs >= snapshot.newLows ? "positive" : "negative",
+              sparkline: snapshot.breadthHistogram,
+            },
+            {
+              label: "Equal Weight vs Cap Weight",
+              value: formatPercent(snapshot.equalWeightProxy),
+              helper: snapshot.equalWeightProxy >= 0 ? "Outperforming" : "Underperforming",
+              tone: snapshot.equalWeightProxy >= 0 ? "positive" : "negative",
+              sparkline: snapshot.breadthTapeSeries.map((value) => value * 0.65),
+            },
+            {
+              label: "Factor Leader",
+              value: String(snapshot.factorLeader?.factor || snapshot.topSector?.sector || "Momentum").toUpperCase(),
+              helper: formatDeskScore(pickFirstNumber(snapshot.factorLeader?.score, snapshot.factorLeader?.zScore, snapshot.topSector?.[timeRange]) ?? 0),
+              tone: "positive",
+              sparkline: snapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.08),
+            },
+            {
+              label: "Earnings Revision Breadth",
+              value: `${snapshot.earningsBreadth}%`,
+              helper: snapshot.revisionAlertsRows.length ? `${snapshot.revisionAlertsRows.length} alerts` : "No active alerts",
+              tone: snapshot.earningsBreadth >= 50 ? "positive" : "negative",
+              sparkline: snapshot.breadthHistogram.map((value, idx) => value * (idx % 2 === 0 ? 1 : 0.6)),
+            },
+            {
+              label: "Index Concentration",
+              value: `${snapshot.concentrationPct.toFixed(1)}%`,
+              helper: snapshot.concentrationPct >= 22 ? "High" : "Contained",
+              tone: snapshot.concentrationPct >= 22 ? "warning" : "neutral",
+              sparkline: snapshot.concentrationDisplay.map((row) => row.weightPct),
+            },
+          ].map((card) => (
+            <article key={card.label} className={`analytics-equities-strip-card ${card.tone}`}>
+              <span>{card.label}</span>
+              <strong>{card.value}</strong>
+              <em>{card.helper}</em>
+              <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "#f06b63" : card.tone === "warning" ? "#f5b544" : "#58c783"} />
+            </article>
+          ))}
+        </section>
+
+        <section className="analytics-equities-desk-grid">
+          <div className="analytics-desk-panel analytics-equities-matrix">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Factor & sector rotation matrix</span>
+                <strong>Leadership, breadth, and relative strength by sector</strong>
+              </div>
+              <em>Score: z-score proxy vs current desk window</em>
+            </div>
+            <div className="analytics-equities-matrix-scroll">
+              <table className="analytics-equities-matrix-table">
+                <thead>
+                  <tr>
+                    <th>Sector</th>
+                    <th>Momentum</th>
+                    <th>Value</th>
+                    <th>Quality</th>
+                    <th>Size</th>
+                    <th>Volatility</th>
+                    <th>Earnings Rev.</th>
+                    <th>Rel. Strength</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshot.sectorMatrixRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <strong>{row.sector}</strong>
+                        <span>{row.weight != null ? `${Number(row.weight).toFixed(1)}% weight` : "Sector basket"}</span>
+                      </td>
+                      {[
+                        row.values.momentum,
+                        row.values.value,
+                        row.values.quality,
+                        row.values.size,
+                        row.values.volatility,
+                        row.values.revisions,
+                        row.values.relativeStrength,
+                      ].map((value, idx) => (
+                        <td key={`${row.id}-${idx}`} className={value >= 0 ? "positive" : "negative"}>
+                          <div className="analytics-equities-score-cell">
+                            <b>{formatDeskScore(value)}</b>
+                            <MiniSparkline points={row.sparkline} width={56} height={14} color={value >= 0 ? "#58c783" : "#f06b63"} />
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside className="analytics-desk-panel analytics-equities-watch-stack">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Equity watch stack</span>
+                <strong>Concentration, calendar, revisions, and actions</strong>
+              </div>
+            </div>
+
+            <div className="analytics-equities-watch-section">
+              <span>Mega-cap concentration</span>
+              <div className="analytics-equities-watch-table">
+                {snapshot.concentrationDisplay.map((row) => (
+                  <div key={row.symbol} className="analytics-equities-watch-row">
+                    <strong>{row.symbol}</strong>
+                    <b>{row.weightPct.toFixed(2)}%</b>
+                    <em className={row.daily >= 0 ? "positive" : "negative"}>{formatPercent(row.daily)}</em>
+                    <em className={row.ytd >= 0 ? "positive" : "negative"}>{formatPercent(row.ytd)}</em>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="analytics-equities-watch-section">
+              <span>Earnings calendar</span>
+              <div className="analytics-equities-watch-table">
+                {snapshot.earningsRiskRows.map((row) => (
+                  <div key={row.id} className="analytics-equities-watch-row">
+                    <strong>{row.ticker}</strong>
+                    <b>{row.date}</b>
+                    <em>{row.eps}</em>
+                    <em>{row.move}</em>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="analytics-equities-watch-section">
+              <span>Analyst revision alerts</span>
+              <div className="analytics-equities-watch-table">
+                {snapshot.revisionAlertsRows.length ? snapshot.revisionAlertsRows.map((row) => (
+                  <div key={row.id} className="analytics-equities-watch-row">
+                    <strong>{row.ticker}</strong>
+                    <b className={String(row.change).toLowerCase().includes("down") ? "negative" : "positive"}>{row.change}</b>
+                    <em>{row.broker}</em>
+                    <em>{row.severity}</em>
+                  </div>
+                )) : <div className="analytics-equities-watch-empty">No revision alerts.</div>}
+              </div>
+            </div>
+
+            <div className="analytics-equities-watch-section">
+              <span>Insider / buyback signals</span>
+              <div className="analytics-equities-watch-table">
+                {snapshot.insiderRows.length ? snapshot.insiderRows.map((row) => (
+                  <div key={row.id} className="analytics-equities-watch-row">
+                    <strong>{row.ticker}</strong>
+                    <b>{row.type}</b>
+                    <em>{row.date}</em>
+                    <em>{row.severity}</em>
+                  </div>
+                )) : <div className="analytics-equities-watch-empty">No action signals.</div>}
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section className="analytics-equities-bottom-grid">
+          <div className="analytics-desk-panel analytics-equities-breadth-panel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Breadth tape</span>
+                <strong>{insight}</strong>
+              </div>
+              <em>{timeRange} tape</em>
+            </div>
+            <div className="analytics-equities-breadth-legend">
+              <span>Advancers</span>
+              <span>Decliners</span>
+              <span>Participation</span>
+            </div>
+            <div className="analytics-equities-breadth-chart">
+              <MiniSparkline points={snapshot.breadthTapeSeries.map((value) => value + 1.4)} width={480} height={84} color="#58c783" />
+              <MiniSparkline points={snapshot.breadthTapeSeries.map((value) => value * -1)} width={480} height={84} color="#f06b63" />
+              <MiniSparkline points={snapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.12)} width={480} height={84} color="#d9e3ef" />
+            </div>
+            <div className="analytics-equities-histogram">
+              {snapshot.breadthHistogram.map((value, idx) => (
+                <span
+                  key={`hist-${idx}`}
+                  className={value >= 0 ? "positive" : "negative"}
+                  style={{ height: `${18 + Math.min(54, Math.abs(value) * 6)}px` }}
+                />
+              ))}
+            </div>
+            <div className="analytics-equities-internals">
+              <div><span>% Above 50DMA</span><strong>{formatPercent(snapshot.above50)}</strong></div>
+              <div><span>% Above 200DMA</span><strong>{formatPercent(snapshot.above200)}</strong></div>
+              <div><span>High / Low Spread</span><strong>{formatSignedValue(snapshot.newHighs - snapshot.newLows, 0)}</strong></div>
+              <div><span>Top Sector</span><strong>{snapshot.topSector?.sector || "—"}</strong></div>
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-equities-movers-panel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Top movers / factor leaders</span>
+                <strong>Highest-conviction symbols from the current equities tape</strong>
+              </div>
+            </div>
+            <div className="analytics-equities-movers-table">
+              {snapshot.moversRows.map((row) => (
+                <div key={row.symbol} className="analytics-equities-movers-row">
+                  <strong>{row.symbol}</strong>
+                  <span>{row.company}</span>
+                  <em>{row.sector}</em>
+                  <b className={row.move >= 0 ? "positive" : "negative"}>{formatPercent(row.move)}</b>
+                  <i>{row.marketCap}</i>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-equities-risk-panel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Earnings risk queue</span>
+                <strong>Near-term event pressure on the current watch universe</strong>
+              </div>
+            </div>
+            <div className="analytics-equities-risk-table">
+              {snapshot.earningsRiskRows.map((row) => (
+                <div key={row.id} className="analytics-equities-risk-row">
+                  <strong>{row.ticker}</strong>
+                  <span>{row.company}</span>
+                  <em>{row.date}</em>
+                  <b>{row.eps}</b>
+                  <i>{row.move}</i>
+                </div>
+              ))}
+            </div>
+            <div className="analytics-equities-risk-summary">
+              <div><span>High Risk</span><strong>{snapshot.riskCounts.high}</strong></div>
+              <div><span>Medium Risk</span><strong>{snapshot.riskCounts.med}</strong></div>
+              <div><span>Low Risk</span><strong>{snapshot.riskCounts.low}</strong></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    );
+  }
+
+  if (isMacro) {
+    return (
+      <section className="analytics-desk-shell analytics-macro-command">
+        <div className="analytics-macro-topline">
+          <div className="analytics-desk-hero analytics-macro-hero">
+            <div>
+              <span>{config.kicker}</span>
+              <h2>Macro Command Board</h2>
+              <p>{config.summary}</p>
+            </div>
+            <div className="analytics-desk-command amber">
+              <span>{config.primaryLabel}</span>
+              <strong>{config.primaryValue}</strong>
+              <em>{config.primaryDelta}</em>
+            </div>
+          </div>
+          <div className="analytics-macro-metrics">
+            {metrics.map((metric, idx) => (
+              <article key={`${metric.label}-${idx}`} className={`analytics-macro-tile ${metric.tone || "neutral"}`}>
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+                <em>{metric.helper}</em>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <div className="analytics-macro-grid">
+          <div className="analytics-desk-panel analytics-macro-map">
+            <div className="analytics-desk-panel-head">
+              <span>Rates / growth matrix</span>
+              <strong>Country signal stack</strong>
+              <em>{formatDateTime(updatedAt)}</em>
+            </div>
+            <div className="analytics-macro-lanes">
+              {visibleRows.map((row, idx) => (
+                <div key={row.id || `${row.asset}-${idx}`} className="analytics-macro-lane">
+                  <strong>{row.asset}</strong>
+                  <span>{row.tertiary}</span>
+                  <b>{row.primary}</b>
+                  <em>{row.secondary}</em>
+                  <i className={`analytics-desk-chip ${row.tone || "neutral"}`}>{row.signal}</i>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <aside className="analytics-desk-panel analytics-macro-calendar">
+            <div className="analytics-desk-panel-head">
+              <span>Policy tape</span>
+              <strong>Next catalysts</strong>
+            </div>
+            {visibleRail.map((item, idx) => (
+              <div key={`${item.label}-${idx}`} className="analytics-macro-event">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <em>{item.helper}</em>
+              </div>
+            ))}
+          </aside>
+        </div>
+      </section>
+    );
+  }
+
+  if (isCommodities) {
+    const commodityNames = ["WTI Crude", "Brent Crude", "Nat Gas", "Gold", "Silver", "Copper", "Wheat", "Soybeans"];
+    const commodityUnits = ["USD/bbl", "USD/bbl", "USD/MMBtu", "USD/oz", "USD/oz", "USD/mt", "USD/bu", "USD/bu"];
+    const terminalRows = (visibleRows.length ? visibleRows : commodityNames.map((name, idx) => ({
+      id: `commodity-terminal-${idx}`,
+      asset: name,
+      primary: "—",
+      secondary: "—",
+      tertiary: commodityUnits[idx],
+      signal: "Monitor",
+      tone: idx % 3 === 0 ? "negative" : "positive",
+    }))).slice(0, 8).map((row, idx) => {
+      const price = Number(String(row.primary).replace(/[^0-9.-]/g, ""));
+      const cleanPrice = Number.isFinite(price) && price > 0 ? price : [76.24, 80.85, 2.31, 2358.4, 30.12, 9821, 6.45, 12.37][idx] || 0;
+      const slope = Number(String(row.secondary).replace(/[^0-9.-]/g, ""));
+      const cleanSlope = Number.isFinite(slope) ? slope : [-2.48, -2.22, 21.6, 1.56, 6.94, -1.83, 1.55, 1.21][idx] || 0;
+      const tone = cleanSlope >= 0 ? "positive" : "negative";
+      return {
+        ...row,
+        asset: row.asset || commodityNames[idx] || "Commodity",
+        unit: row.tertiary || commodityUnits[idx] || "USD",
+        price: cleanPrice,
+        slope: cleanSlope,
+        tone,
+        oneM: cleanPrice * (1 - cleanSlope / 500),
+        threeM: cleanPrice * (1 - cleanSlope / 380),
+        sixM: cleanPrice * (1 - cleanSlope / 300),
+        twelveM: cleanPrice * (1 - cleanSlope / 220),
+        inventory: idx % 3 === 0 ? "Low" : idx % 3 === 1 ? "Normal" : "High",
+        demand: idx % 2 === 0 ? "Improving" : "Stable",
+        risk: idx % 4 === 0 ? "High" : idx % 3 === 0 ? "Medium" : "Low",
+      };
+    });
+    const leader = terminalRows[0] || {};
+    const stressRows = [
+      { section: "Energy Inventories", rows: terminalRows.slice(0, 4) },
+      { section: "Metal Warehouse Stocks", rows: terminalRows.slice(3, 6) },
+      { section: "Agriculture Weather Alerts", rows: terminalRows.slice(5, 8) },
+    ];
+    const supplyQueue = terminalRows.slice(0, 7).map((row, idx) => ({
+      event: [
+        "OPEC+ output extension likely",
+        "Refinery outage watch",
+        "Warehouse drawdown detected",
+        "Weather risk expanding",
+        "Freight pressure rising",
+        "Export sales revision",
+        "Plant maintenance window",
+      ][idx],
+      region: ["Global", "US Gulf Coast", "LME", "US Plains", "Red Sea", "USDA", "Australia"][idx],
+      impact: row.asset,
+      probability: idx % 2 === 0 ? "65%" : "--",
+      severity: row.risk,
+    }));
+
+    return (
+      <section className="analytics-desk-shell analytics-commodities-curve analytics-commodities-terminal">
+        <div className="analytics-commodity-commandbar">
+          <div className="analytics-commodity-titleblock">
+            <span>{config.kicker}</span>
+            <h2>Commodities Curve Desk</h2>
+            <p>{config.summary}</p>
+          </div>
+          <div className="analytics-commodity-controls">
+            <label>
+              <span>Group</span>
+              <strong>{String(visibleRail[0]?.helper || "All Commodities")}</strong>
+            </label>
+            <label>
+              <span>Curve</span>
+              <strong>Front 12M</strong>
+            </label>
+            <label>
+              <span>Timeframe</span>
+              <strong>1D</strong>
+            </label>
+            <button type="button" onClick={() => handleRefreshAnalytics("Commodities")}>Refresh</button>
+            <button
+              type="button"
+              onClick={() =>
+                handleSaveAnalyticsView(
+                  {
+                    tab: "commodities",
+                    group: selectedCommodityGroup,
+                    view: selectedCommodityView,
+                    symbol: selectedCommoditySymbol,
+                    compare: compareCommoditySymbols,
+                  },
+                  "Commodities desk view saved."
+                )
+              }
+            >
+              Save View
+            </button>
+          </div>
+        </div>
+
+        <div className="analytics-commodity-tape">
+          <article className="analytics-commodity-regime">
+            <span>Commodity Regime</span>
+            <strong>{leader.slope < 0 ? "Backwardation / Supply Tight" : "Contango / Demand Firm"}</strong>
+            <em>Confidence: {Math.min(98, Math.max(42, Math.round(Math.abs(leader.slope || 0) * 9 + 52)))} / 100</em>
+          </article>
+          {terminalRows.slice(0, 7).map((row, idx) => (
+            <article key={`commodity-tape-${row.id || idx}`} className="analytics-commodity-ticker">
+              <span>{row.asset}</span>
+              <strong className={row.tone}>{formatPercent(row.slope)}</strong>
+              <em>{row.signal || row.demand}</em>
+              <div className="analytics-mini-spark" aria-hidden="true">
+                {[0, 1, 2, 3, 4, 5, 6].map((point) => (
+                  <i key={point} style={{ height: `${28 + ((idx + point * 3) % 6) * 8}px` }} />
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="analytics-commodity-terminal-grid">
+          <div className="analytics-desk-panel analytics-commodity-matrix">
+            <div className="analytics-commodity-panel-head">
+              <div>
+                <span>Futures Curve & Inventory Matrix</span>
+                <strong>Curve slope, inventories, demand proxy, and supply risk</strong>
+              </div>
+              <em>Data as of {formatDateTime(updatedAt)}</em>
+            </div>
+            <div className="analytics-commodity-table-wrap">
+              <table className="analytics-commodity-table">
+                <thead>
+                  <tr>
+                    <th>Commodity</th>
+                    <th>Curve (12M)</th>
+                    <th>Spot</th>
+                    <th>1M</th>
+                    <th>3M</th>
+                    <th>6M</th>
+                    <th>12M</th>
+                    <th>Curve Slope</th>
+                    <th>Inventory Signal</th>
+                    <th>Demand Proxy</th>
+                    <th>Weather / Supply Risk</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {terminalRows.map((row, idx) => (
+                    <tr key={`commodity-row-${row.id || idx}`}>
+                      <td>
+                        <strong>{row.asset}</strong>
+                        <span>{row.unit}</span>
+                      </td>
+                      <td>
+                        <div className={`analytics-row-spark ${row.tone}`} aria-hidden="true">
+                          {[0, 1, 2, 3, 4, 5, 6, 7].map((point) => (
+                            <i key={point} style={{ height: `${14 + ((idx + point * 2) % 7) * 4}px` }} />
+                          ))}
+                        </div>
+                      </td>
+                      <td>{formatFixed(row.price, row.price > 1000 ? 0 : 2)}</td>
+                      <td>{formatFixed(row.oneM, row.price > 1000 ? 0 : 2)}</td>
+                      <td>{formatFixed(row.threeM, row.price > 1000 ? 0 : 2)}</td>
+                      <td>{formatFixed(row.sixM, row.price > 1000 ? 0 : 2)}</td>
+                      <td>{formatFixed(row.twelveM, row.price > 1000 ? 0 : 2)}</td>
+                      <td className={row.tone}>{formatPercent(row.slope)}</td>
+                      <td>
+                        <b className={row.inventory === "Low" ? "negative" : row.inventory === "High" ? "warning" : "positive"}>{row.inventory}</b>
+                      </td>
+                      <td>
+                        <b className={row.demand === "Improving" ? "positive" : "neutral"}>{row.demand}</b>
+                      </td>
+                      <td>
+                        <b className={row.risk === "High" ? "negative" : row.risk === "Medium" ? "warning" : "positive"}>{row.risk}</b>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside className="analytics-desk-panel analytics-commodity-stress">
+            <div className="analytics-commodity-panel-head compact">
+              <div>
+                <span>Physical Market Stress Stack</span>
+                <strong>Inventories, warehouse stocks, and weather</strong>
+              </div>
+            </div>
+            {stressRows.map((section) => (
+              <div key={section.section} className="analytics-stress-section">
+                <div className="analytics-stress-title">
+                  <span>{section.section}</span>
+                  <em>View all</em>
+                </div>
+                {section.rows.map((row, idx) => (
+                  <div key={`stress-${section.section}-${row.id || idx}`} className="analytics-stress-row">
+                    <strong>{row.asset}</strong>
+                    <b className={row.tone}>{formatPercent(row.slope)}</b>
+                    <span>{row.risk}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </aside>
+        </div>
+
+        <div className="analytics-commodity-bottom-grid">
+          <div className="analytics-desk-panel analytics-commodity-compare">
+            <div className="analytics-commodity-panel-head">
+              <div>
+                <span>Futures Curve Comparison</span>
+                <strong>Normalized to spot</strong>
+              </div>
+              <em>Curve type: % vs spot</em>
+            </div>
+            <div className="analytics-curve-comparison">
+              <div className="analytics-curve-legend">
+                {terminalRows.slice(0, 5).map((row, idx) => (
+                  <span key={`legend-${row.id || idx}`}>
+                    <i className={row.tone} />
+                    {row.asset} <b className={row.tone}>{formatPercent(row.slope)}</b>
+                  </span>
+                ))}
+              </div>
+              <div className="analytics-curve-chart">
+                {terminalRows.slice(0, 5).map((row, idx) => (
+                  <div
+                    key={`chart-line-${row.id || idx}`}
+                    className={`analytics-curve-line ${row.tone}`}
+                    style={{
+                      top: `${34 + idx * 13}px`,
+                      width: `${54 + Math.min(34, Math.abs(row.slope) * 2)}%`,
+                      transform: `rotate(${row.slope >= 0 ? -10 : 9}deg)`,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-commodity-inventory">
+            <div className="analytics-commodity-panel-head">
+              <div>
+                <span>Inventory Monitor</span>
+                <strong>Latest physical-market changes</strong>
+              </div>
+              <em>Data as of {formatDateTime(updatedAt)}</em>
+            </div>
+            {terminalRows.slice(0, 7).map((row, idx) => (
+              <div key={`inventory-${row.id || idx}`} className="analytics-inventory-row">
+                <span>{row.asset} stocks</span>
+                <strong>{formatFixed(row.price * (idx + 4), 1)}</strong>
+                <b className={row.tone}>{formatPercent(row.slope)}</b>
+                <em>{row.inventory}</em>
+              </div>
+            ))}
+          </div>
+
+          <div className="analytics-desk-panel analytics-commodity-queue">
+            <div className="analytics-commodity-panel-head">
+              <div>
+                <span>Supply Shock Queue</span>
+                <strong>Event risk ranked for the desk</strong>
+              </div>
+            </div>
+            {supplyQueue.map((item, idx) => (
+              <div key={`queue-${idx}`} className="analytics-shock-row">
+                <strong>{item.event}</strong>
+                <span>{item.region}</span>
+                <em>{item.impact}</em>
+                <b className={item.severity === "High" ? "negative" : item.severity === "Medium" ? "warning" : "positive"}>{item.severity}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="analytics-commodity-footer">
+          <span>Data sources</span>
+          {["Bloomberg", "Refinitiv", "EIA", "LME", "COMEX", "USDA", "NOAA", "VesselFinder"].map((source) => (
+            <strong key={source}>{source}</strong>
+          ))}
+          <em>Calc engine v2.4.1</em>
+        </div>
+      </section>
+    );
+  }
+
+  return null;
+}
+
 function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore, regimeExplain }) {
   return (
     <div
       style={{
-        background: "rgba(0, 0, 0, 0.85)",
+        background: "var(--color-surface-card)",
         backdropFilter: "blur(12px)",
         border: "1px solid rgba(255, 255, 255, 0.16)",
-        borderRadius: 14,
+        borderRadius: 3,
         padding: 12,
         boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
         display: "flex",
@@ -3844,10 +5393,10 @@ function GeographySearch({
   return (
     <div
       style={{
-        background: "rgba(0, 0, 0, 0.85)",
+        background: "var(--color-surface-card)",
         backdropFilter: "blur(12px)",
         border: "1px solid rgba(255, 255, 255, 0.16)",
-        borderRadius: 14,
+        borderRadius: 3,
         padding: 12,
         boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
       }}
@@ -3913,23 +5462,27 @@ function GeographySearch({
   );
 }
 
-function AnalyticsLayout({ eyebrow, title, description, updatedAt, isRefreshing = false, activeTab, onTabChange, toolbar, children }) {
+function AnalyticsLayout({ eyebrow, title, description, updatedAt, isRefreshing = false, activeTab, onTabChange, toolbar, notice, children }) {
   return (
     <div className="analytics-layout">
-      <section className="analytics-page-header">
-        <div>
-          <div className="analytics-eyebrow">{eyebrow}</div>
-          <h2 className="analytics-page-title">{title}</h2>
-          <p className="analytics-page-description">{description}</p>
-        </div>
-        <div className="analytics-header-meta">
-          <span>Last update</span>
-          <strong>{formatDateTime(updatedAt)}</strong>
-          {isRefreshing ? <em style={{ color: "#7dd3fc" }}>Refreshing…</em> : null}
-        </div>
-      </section>
-      <AssetClassTabs tabs={CATEGORY_TABS} activeTab={activeTab} onChange={onTabChange} />
-      {toolbar ? <div className="analytics-toolbar">{toolbar}</div> : null}
+      <CompactPageHeader
+        className="analytics-page-header compact"
+        eyebrow={eyebrow}
+        title={title}
+        description={description}
+        meta={(
+          <>
+            <span>Last update</span>
+            <strong>{formatDateTime(updatedAt)}</strong>
+            {isRefreshing ? <em style={{ color: "#7dd3fc" }}>Refreshing…</em> : null}
+          </>
+        )}
+      />
+      <div className="analytics-toolbar analytics-toolbar-shell">
+        <AssetClassTabs tabs={CATEGORY_TABS} activeTab={activeTab} onChange={onTabChange} />
+        {toolbar ? <div className="analytics-toolbar-extra">{toolbar}</div> : null}
+      </div>
+      {notice ? <div className="analytics-card analytics-inline-notice" role="status">{notice}</div> : null}
       <div className="analytics-main-grid">{children}</div>
     </div>
   );
@@ -3937,8 +5490,8 @@ function AnalyticsLayout({ eyebrow, title, description, updatedAt, isRefreshing 
 
 function AssetClassTabs({ tabs, activeTab, onChange }) {
   return (
-    <section className="analytics-tab-section">
-      <div className="analytics-tab-list">
+    <section className="analytics-tab-section compact">
+      <div className="analytics-tab-list compact">
         {tabs.map((tab) => {
           const active = tab.id === activeTab;
           return (
@@ -4007,12 +5560,7 @@ function InsightCard({ title = "What this means", children, tone = "info" }) {
 function ControlPanel({ title, subtitle, children, footer }) {
   return (
     <div className="analytics-card analytics-control-panel">
-      <div className="analytics-card-head">
-        <div>
-          <div className="analytics-section-title">{title}</div>
-          {subtitle ? <div className="analytics-card-subtitle">{subtitle}</div> : null}
-        </div>
-      </div>
+      <DensePanelHeader title={title} subtitle={subtitle} className="analytics-dense-panel-header" />
       <div className="analytics-control-grid">{children}</div>
       {footer ? <div className="analytics-control-footer">{footer}</div> : null}
     </div>
@@ -4072,12 +5620,31 @@ function TimeframeSelector({ options, value, onChange }) {
 
 function DataTable({ columns, rows = [], emptyText, loading = false, filters, pagination, exportLabel, onRowClick }) {
   if (loading && rows.length === 0) return <LoadingSkeleton label="Loading table rows..." />;
+  const handleExport = () => {
+    if (!rows.length) return;
+    const csvRows = [
+      columns.map((column) => column.label),
+      ...rows.map((row) =>
+        columns.map((column) => {
+          const cellValue = row[column.key];
+          if (cellValue == null) return "";
+          if (typeof cellValue === "object") return JSON.stringify(cellValue);
+          return cellValue;
+        })
+      ),
+    ];
+    const slug = String(exportLabel || "analytics-table")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "analytics-table";
+    downloadCsvFile(`${slug}-${new Date().toISOString().slice(0, 10)}.csv`, csvRows);
+  };
   const actions = (filters || pagination || exportLabel) ? (
     <div className="analytics-table-actions">
       {filters ? <div className="analytics-pill-group">{filters}</div> : <span />}
       <div className="analytics-table-action-right">
         {pagination}
-        {exportLabel ? <button type="button" className="analytics-btn ghost">{exportLabel}</button> : null}
+        {exportLabel ? <button type="button" className="analytics-btn ghost" onClick={handleExport}>{exportLabel}</button> : null}
       </div>
     </div>
   ) : null;
@@ -4148,13 +5715,12 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, he
   return (
     <div className="analytics-card analytics-table-card">
       {(title || subtitle || headerExtra) ? (
-        <div className="analytics-card-head">
-        <div>
-          {title ? <div className="analytics-section-title">{title}</div> : null}
-          {subtitle ? <div className="analytics-card-subtitle">{subtitle}</div> : null}
-        </div>
-        {headerExtra ? <div className="analytics-card-actions">{headerExtra}</div> : null}
-        </div>
+        <DensePanelHeader
+          title={title}
+          subtitle={subtitle}
+          actions={headerExtra ? <InlineControlGroup>{headerExtra}</InlineControlGroup> : null}
+          className="analytics-dense-panel-header"
+        />
       ) : null}
       <DataTable
         columns={columns}

@@ -29,6 +29,10 @@ function getResendClient() {
  * without a real Resend API key during local development.
  */
 function logDevResetLink(email, resetLink) {
+  if (process.env.NODE_ENV === "production") {
+    console.warn("[Email] Password reset email was not sent because Resend is not configured.");
+    return;
+  }
   console.log("\n" + "=".repeat(70));
   console.log("[DEV] Password reset email NOT sent (Resend not configured).");
   console.log(`[DEV] Recipient : ${email}`);

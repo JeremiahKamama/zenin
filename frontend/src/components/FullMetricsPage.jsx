@@ -43,6 +43,22 @@ function MiniBar({ value }) {
   );
 }
 
+function downloadMetricsCsv(fileName, rows) {
+  if (!Array.isArray(rows) || !rows.length || typeof document === "undefined") return;
+  const csv = rows
+    .map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function FullMetricsPage({ 
   onBack, 
   themeMode, 
@@ -399,6 +415,20 @@ export function FullMetricsPage({
     "Key Ratios",
   ];
 
+  const handleExport = () => {
+    const rows = [
+      ["Tab", activeTab],
+      ["Timeframe", timeframe],
+      ["Scope", scope],
+      ["Benchmark", benchmark],
+      ["Asset Class", assetClass],
+      [],
+      ["KPI", "Value", "Context"],
+      ...kpis.map((kpi) => [kpi.label, kpi.value, kpi.sub]),
+    ];
+    downloadMetricsCsv(`full-metrics-${activeTab.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  };
+
   return (
     <div className="metrics-shell active-zenin-metrics">
       <style>{styles}</style>
@@ -472,7 +502,7 @@ export function FullMetricsPage({
               ]}
               onChange={setAssetClass}
             />
-            <button className="export-btn">Export</button>
+            <button className="export-btn" onClick={handleExport}>Export</button>
           </div>
         </header>
 

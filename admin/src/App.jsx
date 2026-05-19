@@ -3189,6 +3189,25 @@ export default function App() {
     }
   };
 
+  const withAdminReauth = async (task) => {
+    try {
+      return await task();
+    } catch (error) {
+      if (Number(error?.status) !== 428 || error?.code !== 'ADMIN_REAUTH_REQUIRED') {
+        throw error;
+      }
+      const currentPassword = window.prompt('Confirm your admin password to continue:', '')?.trim();
+      if (!currentPassword) {
+        throw new Error('Admin confirmation is required to continue.');
+      }
+      await adminFetch('/reauth/verify', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword })
+      });
+      return task();
+    }
+  };
+
   const handleUpdateUser = async (userId, type, value, reason = '') => {
     try {
       let response = null;
@@ -3199,20 +3218,20 @@ export default function App() {
         });
         notify('success', 'User plan updated.', `The account is now on the ${String(value).toUpperCase()} plan.`);
       } else if (type === 'role') {
-        response = await adminFetch(`/users/${userId}/role`, {
+        response = await withAdminReauth(() => adminFetch(`/users/${userId}/role`, {
           method: 'PATCH',
           body: JSON.stringify({ adminRole: value, reason })
-        });
+        }));
         notify('success', 'Role updated.', `${formatAdminRoleLabel(value)} access is now applied.`);
       } else if (type === 'suspend') {
-        response = await adminFetch(`/users/${userId}/suspend`, {
+        response = await withAdminReauth(() => adminFetch(`/users/${userId}/suspend`, {
           method: 'POST',
           body: JSON.stringify({ isSuspended: value, reason })
-        });
+        }));
         notify('success', value ? 'User suspended.' : 'User reactivated.', value ? 'The account has been suspended.' : 'The account is active again.');
       } else if (type === 'delete') {
         if (!window.confirm('Are you sure you want to permanently delete this user?')) return;
-        await adminFetch(`/users/${userId}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+        await withAdminReauth(() => adminFetch(`/users/${userId}`, { method: 'DELETE', body: JSON.stringify({ reason }) }));
         setIsPanelOpen(false);
         setSelectedUser(null);
         setSelectedUserDetails(null);
@@ -3234,19 +3253,19 @@ export default function App() {
 
   const handleResetPassword = async (userId, reason = '') => {
     try {
-      const { recoveryLink } = await adminFetch(`/users/${userId}/recover`, { method: 'POST', body: JSON.stringify({ reason }) });
-      await copyText(recoveryLink, 'Recovery link copied.', 'The password reset link is on your clipboard and ready to share securely.');
+      await withAdminReauth(() => adminFetch(`/users/${userId}/recover`, { method: 'POST', body: JSON.stringify({ reason }) }));
+      notify('success', 'Recovery email sent.', 'A password reset email was sent to the user.');
     } catch (err) {
-      notify('error', 'Recovery link failed.', err.message);
+      notify('error', 'Recovery email failed.', err.message);
     }
   };
 
   const handleRevokeSessions = async (userId, reason = '') => {
     try {
-      await adminFetch(`/users/${userId}/sessions/revoke`, {
+      await withAdminReauth(() => adminFetch(`/users/${userId}/sessions/revoke`, {
         method: 'POST',
         body: JSON.stringify({ reason })
-      });
+      }));
       notify('success', 'Sessions revoked.', 'All active sessions for this user have been revoked.');
       await fetchData('users');
       await fetchSelectedUserDetails(userId);
@@ -3272,15 +3291,17 @@ export default function App() {
     if (!reason) {
       throw new Error('Creation reason is required.');
     }
-    const created = await adminFetch('/users', {
+    const created = await withAdminReauth(() => adminFetch('/users', {
       method: 'POST',
       body: JSON.stringify({ ...userData, reason }),
-    });
+    }));
 
-    await copyText(
-      created.recoveryLink,
-      'User created and invite copied.',
-      `A password setup link for ${userData.email} is now on your clipboard.`
+    notify(
+      created.recoveryEmailSent ? 'success' : 'warning',
+      created.recoveryEmailSent ? 'User created and invited.' : 'User created without email delivery.',
+      created.recoveryEmailSent
+        ? `A password setup email was sent to ${userData.email}.`
+        : `The user was created, but the password setup email could not be sent.`
     );
     await fetchData('users');
     return created.user;
@@ -3306,10 +3327,10 @@ export default function App() {
 
   const handleBulkAction = async ({ action, userIds, value, reason }) => {
     try {
-      await adminFetch('/users/bulk', {
+      await withAdminReauth(() => adminFetch('/users/bulk', {
         method: 'POST',
         body: JSON.stringify({ action, userIds, value, reason })
-      });
+      }));
       notify('success', 'Bulk action completed.', `${action.replace(/_/g, ' ')} ran for ${userIds.length} users.`);
       await fetchData('users');
     } catch (err) {
@@ -3400,10 +3421,10 @@ export default function App() {
     if (!reason) return;
     const excludeCurrentAdmin = !window.confirm('Include your current admin session in the revoke? Choose Cancel to keep your current session active.');
     try {
-      const result = await adminFetch('/sessions/revoke-all', {
+      const result = await withAdminReauth(() => adminFetch('/sessions/revoke-all', {
         method: 'POST',
         body: JSON.stringify({ reason, excludeCurrentAdmin })
-      });
+      }));
       notify('success', 'Sessions revoked.', `${formatMetricNumber(result.revokedCount || 0)} sessions were revoked.`);
       await fetchData('users');
       await fetchData('logs');

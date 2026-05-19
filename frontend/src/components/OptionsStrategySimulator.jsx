@@ -456,7 +456,7 @@ const OptionsStrategySimulator = ({
   };
 
   return (
-    <div className="options-strategy-simulator" style={{ color: "var(--options-sim-text)", fontSize: "0.85rem" }}>
+    <div className="options-strategy-simulator options-exec-simulator" style={{ color: "var(--options-sim-text)", fontSize: "0.85rem" }}>
       {/* Step 1: View */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
@@ -525,20 +525,20 @@ const OptionsStrategySimulator = ({
         </div>
 
         {!selectedView || !selectedHorizon ? (
-          <div style={{ borderRadius: 10, border: "1px dashed var(--options-sim-dashed-border)", padding: 12, fontSize: 12, color: "var(--options-sim-muted)" }}>
+          <div style={{ borderRadius: 3, border: "1px dashed var(--options-sim-dashed-border)", padding: 12, fontSize: 12, color: "var(--options-sim-muted)" }}>
             Choose a view and horizon to see candidate strategies.
           </div>
         ) : loading && chain.length === 0 ? (
-          <div style={{ borderRadius: 10, border: "1px dashed var(--options-sim-accent-border)", padding: 24, fontSize: 13, color: "var(--options-sim-accent)", background: "var(--options-sim-loading-bg)", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+          <div style={{ borderRadius: 3, border: "1px dashed var(--options-sim-accent-border)", padding: 24, fontSize: 13, color: "var(--options-sim-accent)", background: "var(--options-sim-loading-bg)", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
              <div className="spinner" style={{ width: 24, height: 24, border: "2px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8", borderRadius: "50%" }}></div>
              Syncing real-time market data for {underlying}...
           </div>
         ) : visible.length === 0 ? (
-          <div style={{ borderRadius: 10, border: "1px dashed var(--options-sim-error-border)", padding: 12, fontSize: 12, color: "var(--options-sim-error-text)", background: "var(--options-sim-error-bg)" }}>
+          <div style={{ borderRadius: 3, border: "1px dashed var(--options-sim-error-border)", padding: 12, fontSize: 12, color: "var(--options-sim-error-text)", background: "var(--options-sim-error-bg)" }}>
             No strategies in the library match this combination yet. Try a different horizon or view.
           </div>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll options-exec-table-scroll">
             <table className="option-chain-table">
               <thead>
                 <tr>
@@ -556,6 +556,14 @@ const OptionsStrategySimulator = ({
                     <React.Fragment key={s.id}>
                       <tr
                         onClick={() => setSelectedStrategyId(prev => prev === s.id ? null : s.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setSelectedStrategyId(prev => prev === s.id ? null : s.id);
+                          }
+                        }}
+                        tabIndex={0}
+                        role="button"
                         style={{ cursor: "pointer", background: isSelected ? "var(--options-sim-row-selected)" : "" }}
                       >
                         <td>

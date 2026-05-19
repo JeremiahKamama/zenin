@@ -336,7 +336,7 @@ export default function PublicHomepage() {
     {
       key: "desk",
       label: "Desk",
-      description: "Full multi-desk coverage and premium integrations",
+      description: "Shared desk workflows, workspace controls, and premium operations",
       price: `${toMoney(getPlanPrice("desk", billingCycle).amount)}${getPlanPrice("desk", billingCycle).periodLabel}`
     }
   ]), [billingCycle]);
@@ -716,7 +716,7 @@ export default function PublicHomepage() {
                     <h4>Desk</h4>
                     <span className="pricing-badge muted">For teams</span>
                   </div>
-                  <p className="pricing-desc">Shared workspaces, controls, and premium integrations.</p>
+                  <p className="pricing-desc">Shared workspaces, member controls, and desk operations.</p>
                   <div className="pricing-price">
                     <strong>{toMoney(getPlanPrice("desk", billingCycle).amount)}</strong>
                     <span>{getPlanPrice("desk", billingCycle).periodLabel}</span>
@@ -726,9 +726,9 @@ export default function PublicHomepage() {
                   ) : null}
                   <ul className="pricing-list">
                     <li>5 team seats included</li>
-                    <li>Role-based permissions</li>
-                    <li>Priority data refresh</li>
-                    <li>Dedicated support channel</li>
+                    <li>Role-based workspace permissions</li>
+                    <li>Shared account sync and desk activity</li>
+                    <li>Priority data refresh and source health</li>
                   </ul>
                   <button
                     className="btn btn-secondary pricing-cta"
@@ -780,6 +780,12 @@ export default function PublicHomepage() {
                         <td>Prediction and whale feed</td>
                         <td>-</td>
                         <td>Included</td>
+                        <td>Included</td>
+                      </tr>
+                      <tr>
+                        <td>Workspace members and invites</td>
+                        <td>-</td>
+                        <td>-</td>
                         <td>Included</td>
                       </tr>
                       <tr>

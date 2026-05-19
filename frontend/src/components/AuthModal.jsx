@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { zeninFetch } from "../utils/zeninFetch";
 import { ZeninLogo } from "./Branding";
-import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
+import { clearPostAuthRedirect, getGuestWorkspacePath, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
 
 const ENABLE_APPLE_OAUTH = false;
 
@@ -60,7 +60,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
   const handleGuestEntry = () => {
     localStorage.removeItem("zenin_auth_user");
-    const guestTarget = new URL(getPostAuthRedirectPath(), window.location.origin);
+    localStorage.removeItem("zenin_auth_expires_at");
+    const guestTarget = new URL(getGuestWorkspacePath(), window.location.origin);
     guestTarget.searchParams.set("guest", "1");
     clearPostAuthRedirect();
     window.location.href = `${guestTarget.pathname}${guestTarget.search}${guestTarget.hash}`;

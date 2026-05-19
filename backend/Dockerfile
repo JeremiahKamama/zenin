@@ -1,6 +1,6 @@
-FROM node:18
+FROM node:20-bookworm-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --build-from-source
+RUN npm ci --omit=dev --build-from-source
 
 COPY requirements.txt ./
 RUN python3 -m venv /opt/venv && \
@@ -19,5 +19,7 @@ RUN python3 -m venv /opt/venv && \
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY . .
+RUN chown -R node:node /app
 
+USER node
 CMD ["node", "index.js"]

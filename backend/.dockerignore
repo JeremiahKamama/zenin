@@ -1,2 +1,13 @@
 node_modules
-npm-debug.log
+venv
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+*.log
+*.db
+*.sqlite
+dist
+scratch
+test

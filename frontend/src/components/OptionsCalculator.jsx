@@ -500,9 +500,10 @@ export function OptionsCalculator({   spotPrice = 0,
         breakevens: Array.isArray(savedRecord?.breakevens) ? savedRecord.breakevens : calc.breakevens
       };
       setSaveMsgType("success");
-      setSaveMsg("Calculation saved.");
+      setSaveMsg("Calculation saved. Opening saved calculations…");
       setSavedCalculations((prev) => [normalizedRecord, ...prev.filter((row) => row?.id !== normalizedRecord?.id)]);
       setSavedCalculationsPage(1);
+      setSavedCalculationsOpen(true);
       setTimeout(() => setSaveMsg(""), 2000);
     } catch {
       setSaveMsgType("error");
@@ -512,14 +513,14 @@ export function OptionsCalculator({   spotPrice = 0,
   };
 
   return (
-    <div className="options-calculator" style={{ marginTop: "32px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "24px" }}>
+    <div className="options-calculator options-exec-calculator" style={{ marginTop: "32px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "24px" }}>
       <h2 className="options-calculator-title" style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 500, color: "var(--color-text-primary)" }}>
         Options Calculator
       </h2>
 
       <div className="options-calculator-layout" style={{ marginBottom: "16px" }}>
         <div className="options-calculator-side">
-          <div className="watchlist-panel glass options-calculator-symbol-panel" style={{ padding: "16px" }}>
+          <div className="watchlist-panel glass options-calculator-symbol-panel options-exec-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
             {isRfqSymbol ? (
               <div className="options-calculator-mode-pill rfq" style={{ marginBottom: "10px" }}>
@@ -563,7 +564,8 @@ export function OptionsCalculator({   spotPrice = 0,
                   }}
                 >
                   {filteredSymbols.map((s) => (
-                    <div
+                    <button
+                      type="button"
                       className="options-calculator-symbol-option"
                       key={s}
                       onClick={() => {
@@ -573,6 +575,9 @@ export function OptionsCalculator({   spotPrice = 0,
                       onMouseLeave={(e) => (e.currentTarget.style.background = s === symbol ? "rgba(56,189,248,0.1)" : "transparent")}
                       style={{
                         padding: "10px 14px",
+                        width: "100%",
+                        border: "none",
+                        textAlign: "left",
                         cursor: "pointer",
                         fontSize: "14px",
                         color: s === symbol ? "#38bdf8" : "#f1f5f9",
@@ -580,7 +585,7 @@ export function OptionsCalculator({   spotPrice = 0,
                       }}
                     >
                       {s}
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -610,7 +615,7 @@ export function OptionsCalculator({   spotPrice = 0,
             ) : null}
           </div>
 
-          <div className="watchlist-panel glass options-calculator-strategy-panel" style={{ padding: "16px" }}>
+          <div className="watchlist-panel glass options-calculator-strategy-panel options-exec-panel" style={{ padding: "16px" }}>
             <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
             <div className="options-calculator-strategy-grid">
               {strategies.map((s) => (
@@ -627,7 +632,7 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
         </div>
 
-        <div className="watchlist-panel glass options-calculator-position-panel" style={{ padding: "16px" }}>
+        <div className="watchlist-panel glass options-calculator-position-panel options-exec-panel" style={{ padding: "16px" }}>
           <div className="options-calculator-section-head">
             <p className="options-calculator-section-kicker">Position Legs</p>
             <button type="button" className="options-calculator-add-leg-btn" onClick={addLeg}>
@@ -781,9 +786,9 @@ export function OptionsCalculator({   spotPrice = 0,
                 onClick={() => setSavedCalculationsOpen(true)}
                 className="options-calculator-action-btn secondary"
                 disabled={!canUseSavedCalculations}
-                title={!canUseSavedCalculations ? "Sign in to view saved calculations" : "View saved calculations"}
+                title={!canUseSavedCalculations ? "Sign in to view saved calculations" : "Open saved calculations"}
               >
-                View Calculations
+                Saved Calculations
               </button>
         
               {saveMsg && (
@@ -796,7 +801,7 @@ export function OptionsCalculator({   spotPrice = 0,
         </div>
       </div>
 
-      <div className="watchlist-panel glass options-calculator-pnl-panel" style={{ padding: "20px" }}>
+      <div className="watchlist-panel glass options-calculator-pnl-panel options-exec-panel options-exec-pnl-panel" style={{ padding: "20px" }}>
         <div className="options-calculator-pnl-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
             <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>

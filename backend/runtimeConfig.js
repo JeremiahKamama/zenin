@@ -42,14 +42,14 @@ const APP_RUNTIME_CONFIG = {
       Watchlist: 'starter',
       Analytics: 'pro',
       Journal: 'pro',
-      Options: 'desk',
-      Predictions: 'desk',
+      Options: 'pro',
+      Predictions: 'pro',
       'Tax Estimator': 'starter',
       Metrics: 'pro'
     }
   },
   watchlist: {
-    fallbackCategories: ['stocks', 'crypto', 'indicators'],
+    fallbackCategories: ['stocks', 'crypto', 'indicators', 'commodities'],
     fallbackAssetsByCategory: {
       stocks: [
         { symbol: 'AAPL', name: 'Apple Inc.', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Mega Cap Tech', price: 169.3, priceChangePercent: 0.84 },
@@ -66,6 +66,11 @@ const APP_RUNTIME_CONFIG = {
         { symbol: 'CPI', name: 'Consumer Price Index', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' },
         { symbol: 'GDP', name: 'Gross Domestic Product', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' },
         { symbol: 'FEDFUNDS', name: 'Federal Funds Rate', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' }
+      ],
+      commodities: [
+        { symbol: 'WTI', name: 'WTI Crude Oil', type: 'commodity', marketType: 'futures', category: 'commodities' },
+        { symbol: 'BRENT', name: 'Brent Crude Oil', type: 'commodity', marketType: 'futures', category: 'commodities' },
+        { symbol: 'NG', name: 'Natural Gas', type: 'commodity', marketType: 'futures', category: 'commodities' }
       ]
     }
   },

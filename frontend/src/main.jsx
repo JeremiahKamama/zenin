@@ -1,7 +1,7 @@
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
-import { storePostAuthRedirect } from "./utils/authRedirect";
+import { getGuestWorkspacePath, storePostAuthRedirect } from "./utils/authRedirect";
 import { hasWorkspaceSession } from "./utils/workspacePersistence";
 
 function resolveEntry(pathname) {
@@ -11,6 +11,8 @@ function resolveEntry(pathname) {
   const path = String(pathname || "/").toLowerCase();
   if (path.startsWith("/app")) return "app";
   if (path.startsWith("/auth")) return "auth";
+  if (path.startsWith("/terms")) return "terms";
+  if (path.startsWith("/privacy")) return "privacy";
   return "public";
 }
 
@@ -30,8 +32,21 @@ function redirectUnauthenticatedAppEntry(entry) {
   return true;
 }
 
+function redirectMisroutedGuestEntry(entry) {
+  if (typeof window === "undefined" || entry === "app") return false;
+  const params = new URLSearchParams(window.location.search);
+  const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
+  if (!allowGuest) return false;
+
+  const guestUrl = new URL(getGuestWorkspacePath(), window.location.origin);
+  guestUrl.searchParams.set("guest", "1");
+  window.location.replace(`${guestUrl.pathname}${guestUrl.search}${guestUrl.hash}`);
+  return true;
+}
+
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");
-const redirectedToAuth = redirectUnauthenticatedAppEntry(entry);
+const redirectedToGuestWorkspace = redirectMisroutedGuestEntry(entry);
+const redirectedToAuth = !redirectedToGuestWorkspace && redirectUnauthenticatedAppEntry(entry);
 
 async function loadEntryComponent(currentEntry) {
   try {
@@ -42,6 +57,14 @@ async function loadEntryComponent(currentEntry) {
     if (currentEntry === "auth") {
       const mod = await import("./AuthPage");
       return mod.default;
+    }
+    if (currentEntry === "terms") {
+      const mod = await import("./LegalPage");
+      return (props) => <mod.default {...props} type="terms" />;
+    }
+    if (currentEntry === "privacy") {
+      const mod = await import("./LegalPage");
+      return (props) => <mod.default {...props} type="privacy" />;
     }
     const mod = await import("./PublicHomepage");
     return mod.default;

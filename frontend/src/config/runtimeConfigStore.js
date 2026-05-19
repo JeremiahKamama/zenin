@@ -49,11 +49,12 @@ const defaultAppConfig = {
     }
   },
   watchlist: {
-    fallbackCategories: ["stocks", "crypto", "indicators"],
+    fallbackCategories: ["stocks", "crypto", "indicators", "commodities"],
     fallbackAssetsByCategory: {
       stocks: [],
       crypto: [],
-      indicators: []
+      indicators: [],
+      commodities: []
     }
   },
   auth: {
