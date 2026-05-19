@@ -165,6 +165,25 @@ async function getStartRegistration() {
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
+const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid"]);
+
+function normalizeProviderId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function getDefaultConnectionLabel(provider, venueType = "cex") {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "hyperliquid") return "Hyperliquid watch";
+  const label = String(provider || "").trim() || (
+    venueType === "broker" ? "Broker" : venueType === "prediction" ? "Prediction" : venueType === "dex" ? "DEX" : "Exchange"
+  );
+  return `${label} main`;
+}
 
 function isGuestAccessRequested() {
   if (typeof window === "undefined") return false;
@@ -2852,6 +2871,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           canTrade: !!account.canTrade,
           lastVerifiedScope: account.lastVerifiedScope || "unknown",
           riskLevel: account.riskLevel || "standard",
+          syncAvailable: account.syncAvailable !== false,
           connectedAt: account.createdAt || null,
           lastSyncAt: account.lastSyncAt || null,
           lastSyncStatus: account.lastSyncStatus || "idle",
@@ -2913,6 +2933,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isConnectWindowOpen, setIsConnectWindowOpen] = useState(false);
   const [connectPromptMode, setConnectPromptMode] = useState("manual");
   const [connectAccountFeedback, setConnectAccountFeedback] = useState("");
+  const [connectAccountSuccess, setConnectAccountSuccess] = useState(null);
   const [connectedAccountsHydrated, setConnectedAccountsHydrated] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState(null);
   const [workspaceMembers, setWorkspaceMembers] = useState([]);
@@ -3581,6 +3602,18 @@ const handleOptionTradeClosed = async (tradeId) => {
       : accountForm.venueType === "prediction"
         ? predictionOptions
         : brokerOptions;
+  const selectedProviderId = normalizeProviderId(accountForm.provider);
+  const selectedProviderCanSync = SYNC_ENABLED_PROVIDERS.has(selectedProviderId);
+  const selectedProviderIsHyperliquid = selectedProviderId === "hyperliquid";
+  const apiKeyFieldLabel = selectedProviderIsHyperliquid ? "Wallet address" : "API Key / Account ID";
+  const apiKeyPlaceholder = selectedProviderIsHyperliquid
+    ? "Enter public wallet address"
+    : "Enter read-only API key or account ID";
+  const showApiSecretField = accountForm.venueType === "cex" && selectedProviderCanSync;
+  const selectedProviderSyncLabel = selectedProviderCanSync ? "Live sync today" : "Save only";
+  const selectedProviderSyncHelp = selectedProviderCanSync
+    ? "Zenin can pull holdings, balances, and fills after you connect."
+    : "Zenin will save this source now; live sync will arrive with a provider adapter.";
 
   const onboardingVenuePreview = useMemo(
     () =>
@@ -3594,17 +3627,24 @@ const handleOptionTradeClosed = async (tradeId) => {
   );
 
   const openConnectWindow = useCallback((mode = "manual") => {
+    const onboardingProvider = (dexOptions || []).includes("Hyperliquid")
+      ? "Hyperliquid"
+      : (cexOptions[0] || "Binance");
+    const onboardingVenueType = onboardingProvider === "Hyperliquid" ? "dex" : "cex";
+    const provider = mode === "onboarding" ? onboardingProvider : (cexOptions[0] || "Binance");
+    const venueType = mode === "onboarding" ? onboardingVenueType : "cex";
     setAccountForm({
-      venueType: "cex",
-      provider: cexOptions[0] || "Binance",
-      username: "",
+      venueType,
+      provider,
+      username: getDefaultConnectionLabel(provider, venueType),
       apiKey: "",
       apiSecret: ""
     });
     setConnectAccountFeedback("");
+    setConnectAccountSuccess(null);
     setConnectPromptMode(mode);
     setIsConnectWindowOpen(true);
-  }, [cexOptions]);
+  }, [cexOptions, dexOptions]);
 
   const refreshWorkspacePanel = useCallback(async () => {
     if (isGuestUser) return null;
@@ -3746,53 +3786,41 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [accessCheckLoading, authUserId, bootstrapLoading, connectedAccounts.length, connectedAccountsHydrated, isGuestUser, openConnectWindow]);
 
   const connectAccount = async () => {
-    if (!accountForm.username.trim() || !accountForm.apiKey.trim()) return;
-    
-    // Only CEX typically needs secret, but we handle conditionally if others do.
-    const requiresSecret = accountForm.venueType === "cex" || accountForm.provider.toLowerCase() === "hyperliquid";
+    if (!accountForm.apiKey.trim()) return;
+    const providerId = normalizeProviderId(accountForm.provider);
+    const canSyncProvider = SYNC_ENABLED_PROVIDERS.has(providerId);
+    const requiresSecret = accountForm.venueType === "cex" && canSyncProvider;
     if (requiresSecret && !accountForm.apiSecret.trim()) return;
+    const connectionLabel = accountForm.username.trim() || getDefaultConnectionLabel(accountForm.provider, accountForm.venueType);
 
     setIsSyncingAccount(true);
 
     try {
       if (!isGuestUser) {
-        const inferredCanTrade = (accountForm.venueType === "cex" || accountForm.venueType === "broker") && !!accountForm.apiSecret.trim();
-        const riskLevel = inferredCanTrade ? "trading" : accountForm.apiSecret.trim() ? "sensitive" : "standard";
-        const permissionScope = inferredCanTrade ? "trade" : "unknown";
+        const permissionScope = "read_only";
+        const submittedApiSecret = showApiSecretField ? accountForm.apiSecret.trim() : "";
+        const riskLevel = submittedApiSecret ? "sensitive" : "standard";
         // 1. Send the key to backend for encryption & storage
         const payload = {
-          exchange: accountForm.provider.toLowerCase(),
+          exchange: providerId,
           apiKey: accountForm.apiKey.trim(),
-          apiSecret: accountForm.apiSecret.trim() || "",
-          extraData: { username: accountForm.username.trim(), venueType: accountForm.venueType },
+          apiSecret: submittedApiSecret,
+          extraData: {
+            username: connectionLabel,
+            venueType: accountForm.venueType,
+            providerLabel: accountForm.provider,
+            ...(providerId === "hyperliquid" ? { address: accountForm.apiKey.trim() } : {})
+          },
           permissionScope,
-          canTrade: inferredCanTrade,
+          canTrade: false,
           lastVerifiedScope: permissionScope,
           riskLevel
         };
 
-        let res = await zeninFetch("/db/exchange-keys", {
+        const res = await zeninFetch("/db/exchange-keys", {
           method: "POST",
           body: JSON.stringify(payload)
         });
-        if (res.status === 428) {
-          const currentPassword = window.prompt("Confirm your current password to add a sensitive account:", "")?.trim();
-          if (!currentPassword) {
-            throw new Error("Account confirmation is required to add this connection.");
-          }
-          const reauthRes = await zeninFetch("/auth/reauth", {
-            method: "POST",
-            body: JSON.stringify({ currentPassword })
-          });
-          if (!reauthRes.ok) {
-            const reauthData = await reauthRes.json().catch(() => ({}));
-            throw new Error(reauthData?.error || "Could not confirm your account.");
-          }
-          res = await zeninFetch("/db/exchange-keys", {
-            method: "POST",
-            body: JSON.stringify(payload)
-          });
-        }
         
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -3801,11 +3829,13 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         const addedKey = await res.json();
 
-        // 2. Trigger the immediate sync
-        const syncRes = await zeninFetch(`/db/exchange-sync/${addedKey.id}`, { method: "POST" });
-        if (!syncRes.ok) {
-          const syncErr = await syncRes.json().catch(() => ({}));
-          throw new Error(syncErr.error || "Failed to sync exchange data");
+        let syncPayload = { syncAvailable: false, message: "Connection saved." };
+        if (canSyncProvider) {
+          const syncRes = await zeninFetch(`/db/exchange-sync/${addedKey.id}`, { method: "POST" });
+          syncPayload = await syncRes.json().catch(() => ({}));
+          if (!syncRes.ok) {
+            throw new Error(syncPayload.error || "Failed to sync exchange data");
+          }
         }
 
         // 3. Re-fetch workspace to update PortfolioContext
@@ -3816,20 +3846,31 @@ const handleOptionTradeClosed = async (tradeId) => {
           id: addedKey.id,
           venueType: accountForm.venueType,
           provider: accountForm.provider,
-          username: accountForm.username.trim(),
+          username: connectionLabel,
           apiKeyMasked: addedKey.apiKey,
           permissionScope: addedKey.permissionScope || permissionScope,
-          canTrade: !!addedKey.canTrade,
+          canTrade: false,
           lastVerifiedScope: addedKey.lastVerifiedScope || permissionScope,
           riskLevel: addedKey.riskLevel || riskLevel,
+          syncAvailable: canSyncProvider,
           connectedAt: new Date().toISOString(),
-          lastSyncAt: new Date().toISOString(),
-          lastSyncStatus: "success",
-          lastSyncMeta: {}
+          lastSyncAt: canSyncProvider ? new Date().toISOString() : null,
+          lastSyncStatus: canSyncProvider ? "success" : "sync_unavailable",
+          lastSyncMeta: canSyncProvider ? syncPayload : { reason: "Sync adapter is not available for this provider yet." }
         };
         const nextAccounts = [nextAccount, ...connectedAccounts];
         setConnectedAccounts(nextAccounts);
         void refreshWorkspacePanel();
+        setConnectAccountSuccess({
+          provider: accountForm.provider,
+          label: connectionLabel,
+          syncAvailable: canSyncProvider,
+          holdingsCount: Number(syncPayload?.holdingsCount || 0),
+          tradesCount: Number(syncPayload?.tradesCount || 0),
+          message: canSyncProvider
+            ? `Synced ${Number(syncPayload?.holdingsCount || 0)} holdings and ${Number(syncPayload?.tradesCount || 0)} fills.`
+            : "Connection saved. Live sync is not available for this provider yet."
+        });
       } else {
         // Guest user fallback (localStorage)
         const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
@@ -3837,18 +3878,27 @@ const handleOptionTradeClosed = async (tradeId) => {
           id: Date.now(),
           venueType: accountForm.venueType,
           provider: accountForm.provider,
-          username: accountForm.username.trim(),
+          username: connectionLabel,
           apiKeyMasked: masked,
-          permissionScope: "unknown",
+          permissionScope: "read_only",
           canTrade: false,
-          lastVerifiedScope: "unknown",
+          lastVerifiedScope: "read_only",
           riskLevel: "standard",
-          connectedAt: new Date().toISOString()
+          syncAvailable: canSyncProvider,
+          connectedAt: new Date().toISOString(),
+          lastSyncStatus: canSyncProvider ? "local_only" : "sync_unavailable"
         };
         const nextAccounts = [nextAccount, ...connectedAccounts];
         setConnectedAccounts(nextAccounts);
+        setConnectAccountSuccess({
+          provider: accountForm.provider,
+          label: connectionLabel,
+          syncAvailable: canSyncProvider,
+          holdingsCount: 0,
+          tradesCount: 0,
+          message: canSyncProvider ? "Connection saved in this browser." : "Connection saved in this browser. Live sync requires a workspace session."
+        });
       }
-      setIsConnectWindowOpen(false);
     } catch (error) {
       console.error("Connected account sync failed:", error);
       setConnectAccountFeedback(error.message || "Failed to connect and sync account.");
@@ -4419,6 +4469,29 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const isSidebarVisuallyCollapsed = isSidebarCollapsed;
   const usesWorkspaceShell = routeState.type !== "company";
+  const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
+  const renderConnectNudge = (surface = "home") => {
+    if (!shouldShowConnectNudge) return null;
+    return (
+      <section className={`connect-empty-state ${surface === "portfolio" ? "portfolio" : "home"}`}>
+        <div>
+          <span>{surface === "portfolio" ? "Portfolio setup" : "First account"}</span>
+          <h3>Connect a read-only source</h3>
+          <p>Start with Hyperliquid watch-only or add read-only exchange credentials. You can skip this and return here anytime.</p>
+        </div>
+        <div className="connect-empty-actions">
+          <button type="button" className="settings-primary-btn" onClick={() => openConnectWindow("onboarding")}>
+            Connect account
+          </button>
+          {surface !== "portfolio" ? (
+            <button type="button" className="settings-secondary-btn" onClick={() => setActiveSection("Portfolio")}>
+              Open Portfolio
+            </button>
+          ) : null}
+        </div>
+      </section>
+    );
+  };
 
   return (
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
@@ -4625,38 +4698,41 @@ const handleOptionTradeClosed = async (tradeId) => {
           <GenericErrorBoundary>
             <Suspense fallback={moduleLoadingFallback}>
         {activeSection === "Home" && (
-          <HomeModule
-            portfolio={portfolioWithEntry}
-            trades={trades}
-            assets={assets}
-            marketMovers={homeMarketMovers}
-            macroData={homeMacroData}
-            watchlistAssets={watchlistAssets}
-            activeOptionsTrades={activeOptionsTrades}
-            multiChainCache={multiChainCache}
-            spotPrices={spotPrices}
-            onSelectAsset={setSelectedAsset}
-            accountMetrics={accountMetrics}
-            calculatePortfolioValue={calculatePortfolioValue}
-            calculatePortfolioGain={calculatePortfolioGain}
-            balance={balance}
-            onViewAllPositions={() => {
-              if (routeState.type === "company") navigateToAppRoute();
-              setActiveSection("Portfolio");
-            }}
-            onViewFullMetrics={() => {
-              if (routeState.type === "company") navigateToAppRoute();
-              setActiveSection("Metrics");
-            }}
-            onOpenWatchlist={() => {
-              if (routeState.type === "company") navigateToAppRoute();
-              setActiveSection("Watchlist");
-            }}
-            onOpenAnalytics={() => {
-              if (routeState.type === "company") navigateToAppRoute();
-              setActiveSection("Analytics");
-            }}
-          />
+          <>
+            {renderConnectNudge("home")}
+            <HomeModule
+              portfolio={portfolioWithEntry}
+              trades={trades}
+              assets={assets}
+              marketMovers={homeMarketMovers}
+              macroData={homeMacroData}
+              watchlistAssets={watchlistAssets}
+              activeOptionsTrades={activeOptionsTrades}
+              multiChainCache={multiChainCache}
+              spotPrices={spotPrices}
+              onSelectAsset={setSelectedAsset}
+              accountMetrics={accountMetrics}
+              calculatePortfolioValue={calculatePortfolioValue}
+              calculatePortfolioGain={calculatePortfolioGain}
+              balance={balance}
+              onViewAllPositions={() => {
+                if (routeState.type === "company") navigateToAppRoute();
+                setActiveSection("Portfolio");
+              }}
+              onViewFullMetrics={() => {
+                if (routeState.type === "company") navigateToAppRoute();
+                setActiveSection("Metrics");
+              }}
+              onOpenWatchlist={() => {
+                if (routeState.type === "company") navigateToAppRoute();
+                setActiveSection("Watchlist");
+              }}
+              onOpenAnalytics={() => {
+                if (routeState.type === "company") navigateToAppRoute();
+                setActiveSection("Analytics");
+              }}
+            />
+          </>
         )}
         {activeSection === "Metrics" && (
           <div className="view-container">
@@ -4787,6 +4863,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         {activeSection === "Portfolio" && (
           <div className="view-container portfolio-shell-view">
+            {renderConnectNudge("portfolio")}
             <PortfolioModule
                 portfolio={portfolioWithEntry}
                 trades={trades}
@@ -4828,6 +4905,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   if (routeState.type === "company") navigateToAppRoute();
                   setActiveSection("Journal");
                 }}
+                onOpenConnections={() => openConnectWindow("manual")}
               />
 
           </div>
@@ -5957,13 +6035,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <div className="connect-account-kicker">Secure setup</div>
                       <h2>{connectPromptMode === "onboarding" ? "Bring in your portfolio data" : "Connect another account"}</h2>
                       <p>
-                        Connect read-only API credentials to unlock live portfolio sync, analytics, and tax tracking inside your Zenin workspace.
+                        Connect read-only credentials or watch-only addresses to unlock portfolio context, analytics, and tax tracking inside your Zenin workspace.
                       </p>
                       <div className="connect-account-trust-grid">
                         <div className="connect-account-trust-card">
                           <span>Access model</span>
                           <strong>Read-only only</strong>
-                          <em>No trading permissions. No withdrawal permissions.</em>
+                          <em>No trading permissions. No withdrawal permissions. Hyperliquid uses address watch only.</em>
                         </div>
                         <div className="connect-account-trust-card">
                           <span>Coverage</span>
@@ -5986,9 +6064,15 @@ const handleOptionTradeClosed = async (tradeId) => {
                         </div>
                       </div>
                       <div className="connect-account-provider-preview">
-                        {onboardingVenuePreview.map((venue) => (
-                          <span key={venue}>{venue}</span>
-                        ))}
+                        {onboardingVenuePreview.map((venue) => {
+                          const canSync = SYNC_ENABLED_PROVIDERS.has(normalizeProviderId(venue));
+                          return (
+                            <span key={venue} className={canSync ? "can-sync" : "save-only"}>
+                              {venue}
+                              <em>{canSync ? "Sync" : "Save"}</em>
+                            </span>
+                          );
+                        })}
                       </div>
                     </aside>
 
@@ -6002,14 +6086,68 @@ const handleOptionTradeClosed = async (tradeId) => {
                       </div>
 
                       <div className="connect-account-body">
+                        {connectAccountSuccess ? (
+                          <div className="connect-account-success-panel" role="status">
+                            <div className={`connect-account-success-mark ${connectAccountSuccess.syncAvailable ? "synced" : "saved"}`}>
+                              {connectAccountSuccess.syncAvailable ? "✓" : "i"}
+                            </div>
+                            <span>{connectAccountSuccess.syncAvailable ? "Connection synced" : "Connection saved"}</span>
+                            <h3>{connectAccountSuccess.provider}</h3>
+                            <p>{connectAccountSuccess.message}</p>
+                            <div className="connect-account-success-grid">
+                              <div>
+                                <span>Label</span>
+                                <strong>{connectAccountSuccess.label}</strong>
+                              </div>
+                              <div>
+                                <span>Holdings</span>
+                                <strong>{connectAccountSuccess.holdingsCount}</strong>
+                              </div>
+                              <div>
+                                <span>Fills</span>
+                                <strong>{connectAccountSuccess.tradesCount}</strong>
+                              </div>
+                            </div>
+                            <div className="connect-account-actions">
+                              <button
+                                className="settings-secondary-btn connect-account-secondary"
+                                onClick={() => {
+                                  const provider = cexOptions[0] || "Binance";
+                                  setAccountForm({
+                                    venueType: "cex",
+                                    provider,
+                                    username: getDefaultConnectionLabel(provider, "cex"),
+                                    apiKey: "",
+                                    apiSecret: ""
+                                  });
+                                  setConnectAccountSuccess(null);
+                                }}
+                              >
+                                Add another
+                              </button>
+                              <button
+                                className="settings-primary-btn connect-account-primary"
+                                onClick={() => {
+                                  setIsConnectWindowOpen(false);
+                                  setConnectAccountSuccess(null);
+                                  if (routeState.type === "company") navigateToAppRoute();
+                                  setActiveSection("Portfolio");
+                                }}
+                              >
+                                View Portfolio
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
                         <div className="connect-account-status-strip">
                           <div>
                             <span>Unlocks</span>
                             <strong>Live portfolio, analytics, tax tracking</strong>
                           </div>
                           <div>
-                            <span>Key policy</span>
-                            <strong>Read-only API only</strong>
+                            <span>{selectedProviderSyncLabel}</span>
+                            <strong>{selectedProviderSyncHelp}</strong>
                           </div>
                         </div>
 
@@ -6034,7 +6172,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                                       : type.key === "prediction"
                                         ? (predictionOptions[0] || "Polymarket")
                                         : (brokerOptions[0] || "Interactive Brokers");
-                                  setAccountForm((prev) => ({ ...prev, venueType: type.key, provider: nextProvider }));
+                                  setAccountForm((prev) => ({
+                                    ...prev,
+                                    venueType: type.key,
+                                    provider: nextProvider,
+                                    username: getDefaultConnectionLabel(nextProvider, type.key),
+                                    apiSecret: ""
+                                  }));
+                                  setConnectAccountSuccess(null);
                                   setConnectAccountFeedback("");
                                 }}
                               >
@@ -6049,7 +6194,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <select
                             value={accountForm.provider}
                             onChange={(e) => {
-                              setAccountForm((prev) => ({ ...prev, provider: e.target.value }));
+                              setAccountForm((prev) => ({
+                                ...prev,
+                                provider: e.target.value,
+                                username: getDefaultConnectionLabel(e.target.value, prev.venueType),
+                                apiSecret: ""
+                              }));
+                              setConnectAccountSuccess(null);
                               setConnectAccountFeedback("");
                             }}
                           >
@@ -6065,25 +6216,27 @@ const handleOptionTradeClosed = async (tradeId) => {
                             value={accountForm.username}
                             onChange={(e) => {
                               setAccountForm((prev) => ({ ...prev, username: e.target.value }));
+                              setConnectAccountSuccess(null);
                               setConnectAccountFeedback("");
                             }}
-                            placeholder="Name this connection"
+                            placeholder={getDefaultConnectionLabel(accountForm.provider, accountForm.venueType)}
                           />
                         </label>
                         <label className="settings-field">
-                          <span>API Key / Account ID</span>
+                          <span>{apiKeyFieldLabel}</span>
                           <input
-                            type="password"
+                            type={selectedProviderIsHyperliquid ? "text" : "password"}
                             value={accountForm.apiKey}
                             onChange={(e) => {
                               setAccountForm((prev) => ({ ...prev, apiKey: e.target.value }));
+                              setConnectAccountSuccess(null);
                               setConnectAccountFeedback("");
                             }}
-                            placeholder="Enter read-only API key or account ID"
+                            placeholder={apiKeyPlaceholder}
                             disabled={isSyncingAccount}
                           />
                         </label>
-                        {(accountForm.venueType === "cex" || accountForm.provider === "Hyperliquid") && (
+                        {showApiSecretField && (
                           <label className="settings-field">
                             <span>API Secret</span>
                             <input
@@ -6091,6 +6244,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                               value={accountForm.apiSecret}
                               onChange={(e) => {
                                 setAccountForm((prev) => ({ ...prev, apiSecret: e.target.value }));
+                                setConnectAccountSuccess(null);
                                 setConnectAccountFeedback("");
                               }}
                               placeholder="Enter read-only API secret"
@@ -6103,7 +6257,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <p className="connect-account-feedback error">{connectAccountFeedback}</p>
                         ) : (
                           <p className="connect-account-footnote">
-                            Use least-privilege credentials. Connect one venue now and add the rest after your first sync.
+                            {selectedProviderIsHyperliquid
+                              ? "Hyperliquid connects from a public wallet address only. No API secret is needed."
+                              : selectedProviderCanSync
+                                ? "Use read-only credentials only. Connect one venue now and add the rest from Portfolio."
+                                : "This provider can be saved now. Live sync support will be added through a provider adapter."}
                           </p>
                         )}
 
@@ -6118,11 +6276,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <button
                             className="settings-primary-btn connect-account-primary"
                             onClick={connectAccount}
-                            disabled={isSyncingAccount || !accountForm.username.trim() || !accountForm.apiKey.trim()}
+                            disabled={isSyncingAccount || !accountForm.apiKey.trim() || (showApiSecretField && !accountForm.apiSecret.trim())}
                           >
-                            {isSyncingAccount ? "Syncing..." : "Connect account"}
+                            {isSyncingAccount ? (selectedProviderCanSync ? "Syncing..." : "Saving...") : "Connect account"}
                           </button>
                         </div>
+                          </>
+                        )}
                       </div>
                     </section>
                   </div>

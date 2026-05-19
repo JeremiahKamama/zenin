@@ -3,8 +3,14 @@ import { startAuthentication } from "@simplewebauthn/browser";
 import { zeninFetch } from "../utils/zeninFetch";
 import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getGuestWorkspacePath, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
+import { getSupabaseClient, isSupabaseConfigured } from "../utils/supabaseAuth";
 
 const ENABLE_APPLE_OAUTH = false;
+
+function getRedirectUrl(path = "/auth?mode=signin") {
+  if (typeof window === "undefined") return path;
+  return `${window.location.origin}${path}`;
+}
 
 function writeStoredAuthUser(user, expiresAt = null) {
   if (user) {
@@ -155,6 +161,22 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
+      if (isSupabaseConfigured()) {
+        const client = getSupabaseClient();
+        const { data, error: authError } = await client.auth.signInWithOAuth({
+          provider,
+          options: {
+            redirectTo: getRedirectUrl("/auth?mode=signin")
+          }
+        });
+        if (authError) throw authError;
+        if (data?.url) {
+          window.location.assign(data.url);
+          return;
+        }
+        throw new Error("Google sign-in could not start. Try again.");
+      }
+
       const res = await zeninFetch("/auth/oauth/start", {
         method: "POST",
         body: JSON.stringify({
@@ -166,7 +188,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       });
       const data = await readJson(res);
       if (data.authorizationUrl) {
-        window.location.href = data.authorizationUrl;
+        window.location.assign(data.authorizationUrl);
       } else {
         throw new Error(data.message || "OAuth is not configured.");
       }

@@ -22,7 +22,9 @@ try {
     logLevel: "silent",
     define: {
       "import.meta.env.VITE_SITE_URL": JSON.stringify(process.env.VITE_SITE_URL || "https://www.zenin.capital"),
-      "import.meta.env.VITE_API_URL": JSON.stringify(process.env.VITE_API_URL || "")
+      "import.meta.env.VITE_API_URL": JSON.stringify(process.env.VITE_API_URL || ""),
+      "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(process.env.VITE_SUPABASE_URL || ""),
+      "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "")
     },
     loader: {
       ".css": "text"

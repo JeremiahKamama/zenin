@@ -71,6 +71,8 @@ function resolvePythonBinary() {
 const pythonBinary = resolvePythonBinary();
 const { syncBinance, syncHyperliquid, syncBybit } = require("./exchangeSync");
 
+const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid"]);
+
 const rpName = "Zenin Capital";
 const rpID = process.env.RP_ID || "localhost";
 const expectedOrigin = process.env.EXPECTED_ORIGIN || "http://localhost:5173";
@@ -827,6 +829,7 @@ const workspaceSecretProvider = {
 function maskApiKey(key) {
   if (!key) return "";
   const raw = workspaceSecretProvider.decryptSecret(key); // Decrypt if it was encrypted
+  if (!raw) return "";
   if (raw.length <= 8) return "****";
   return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
 }
@@ -2871,6 +2874,7 @@ async function buildUserBootstrapPayload(userId, options = {}) {
         canTrade: !!item.canTrade,
         lastVerifiedScope: item.lastVerifiedScope || "unknown",
         riskLevel: item.riskLevel || "standard",
+        syncAvailable: SYNC_ENABLED_EXCHANGES.has(item.exchange),
         extraData: parsedExtra,
         lastSyncAt: item.lastSyncAt || null,
         lastSyncStatus: item.lastSyncStatus || "idle",
@@ -3328,7 +3332,7 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, attachActiv
 // ---------------------------------------------------------------------------
 // Exchange Keys Management
 // ---------------------------------------------------------------------------
-app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requirePlan("pro"), async (req, res) => {
+app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const keys = await userWorkspace.exchangeKeys.list(req.auth.userId, req.workspace.workspace.id);
     // Mask sensitive keys for the list view
@@ -3354,6 +3358,7 @@ app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, require
         canTrade: !!k.canTrade,
         lastVerifiedScope: k.lastVerifiedScope || "unknown",
         riskLevel: k.riskLevel || "standard",
+        syncAvailable: SYNC_ENABLED_EXCHANGES.has(k.exchange),
         extraData: parsedExtra,
         createdAt: k.createdAt,
         lastSyncAt: k.lastSyncAt || null,
@@ -3367,24 +3372,23 @@ app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, require
   }
 });
 
-app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requirePlan("pro"), writeLimiter, validate(exchangeKeySchema), async (req, res) => {
+app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(exchangeKeySchema), async (req, res) => {
   try {
-    const { exchange, apiKey, apiSecret, extraData, permissionScope, canTrade, lastVerifiedScope, riskLevel } = req.body;
-    if (canTrade) {
-      if (!hasRecentReauthAt(req.auth?.user?.sessionReauthenticatedAt, SENSITIVE_REAUTH_TTL_MS)) {
-        return res.status(428).json({ error: "Recent account confirmation required for trading-capable credentials.", code: "SENSITIVE_REAUTH_REQUIRED" });
-      }
-    }
+    const { exchange, apiKey, apiSecret, extraData } = req.body;
+    const normalizedExtraData = extraData && typeof extraData === "object" ? extraData : {};
+    const readOnlyPermissionScope = "read_only";
+    const readOnlyCanTrade = false;
+    const readOnlyRiskLevel = apiSecret ? "sensitive" : "standard";
     // Encrypt sensitive data before storing (#EncryptionAtRest)
     const payload = {
       exchange,
       apiKey: workspaceSecretProvider.encryptSecret(apiKey),
       apiSecret: workspaceSecretProvider.encryptSecret(apiSecret),
-      extraData: extraData ? workspaceSecretProvider.encryptSecret(JSON.stringify(extraData)) : null,
-      permissionScope,
-      canTrade,
-      lastVerifiedScope,
-      riskLevel
+      extraData: normalizedExtraData ? workspaceSecretProvider.encryptSecret(JSON.stringify(normalizedExtraData)) : null,
+      permissionScope: readOnlyPermissionScope,
+      canTrade: readOnlyCanTrade,
+      lastVerifiedScope: readOnlyPermissionScope,
+      riskLevel: readOnlyRiskLevel
     };
     const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload, req.workspace.workspace.id);
     await workspaces.recordActivity({
@@ -3395,16 +3399,16 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       entityId: key.id,
       details: {
         exchange: key.exchange,
-        venueType: extraData?.venueType || null,
-        username: extraData?.username || null,
+        venueType: normalizedExtraData?.venueType || null,
+        username: normalizedExtraData?.username || null,
         permissionScope: key.permissionScope,
         canTrade: !!key.canTrade,
         riskLevel: key.riskLevel
       }
     });
     await logSecurityEvent(req, {
-      level: key.canTrade ? "warning" : "info",
-      message: key.canTrade ? "Trading-capable exchange credential added." : "Exchange credential added.",
+      level: "info",
+      message: "Read-only exchange credential added.",
       eventType: "exchange_key_added",
       workspaceId: req.workspace.workspace.id,
       context: {
@@ -3422,7 +3426,8 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       canTrade: !!key.canTrade,
       lastVerifiedScope: key.lastVerifiedScope || "unknown",
       riskLevel: key.riskLevel || "standard",
-      extraData: extraData,
+      syncAvailable: SYNC_ENABLED_EXCHANGES.has(key.exchange),
+      extraData: normalizedExtraData,
       createdAt: key.createdAt || null,
       lastSyncAt: key.lastSyncAt || null,
       lastSyncStatus: key.lastSyncStatus || "idle",
@@ -3458,11 +3463,23 @@ app.delete("/api/db/exchange-keys/:id", requireSignedIn, attachActiveWorkspace, 
 });
 
 // Exchange Sync Trigger
-app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requirePlan("pro"), writeLimiter, async (req, res) => {
+app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
     const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id), req.workspace.workspace.id);
     if (!keyRecord) return res.status(404).json({ error: "Exchange key not found" });
+    if (!SYNC_ENABLED_EXCHANGES.has(keyRecord.exchange)) {
+      await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
+        status: "sync_unavailable",
+        syncedAt: new Date().toISOString(),
+        meta: { reason: "Sync adapter is not available for this provider yet." }
+      });
+      return res.status(202).json({
+        success: true,
+        syncAvailable: false,
+        message: "Connection saved. Live sync is not available for this provider yet."
+      });
+    }
 
     // Decrypt credentials for sync
     const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.apiKey);

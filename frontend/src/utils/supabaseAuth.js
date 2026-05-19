@@ -1,8 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 import { zeninFetchJson } from "./zeninFetch";
 
-const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || "").trim();
-const SUPABASE_PUBLISHABLE_KEY = String(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "").trim();
+const importMetaEnv =
+  typeof import.meta !== "undefined" && import.meta?.env
+    ? import.meta.env
+    : {};
+
+const SUPABASE_URL = String(importMetaEnv.VITE_SUPABASE_URL || "").trim();
+const SUPABASE_PUBLISHABLE_KEY = String(importMetaEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "").trim();
 const SUPABASE_SESSION_HINT_KEY = "zenin_supabase_session_present";
 
 let supabaseClient = null;

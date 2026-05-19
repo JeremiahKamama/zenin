@@ -223,8 +223,35 @@ const cryptoOptionsSchema = z.object({
   expiry: z.union([z.string(), z.number()]).optional().nullable(),
 });
 
+const supportedExchangeIds = [
+  "binance",
+  "bybit",
+  "kraken",
+  "okx",
+  "coinbase_advanced",
+  "hyperliquid",
+  "dydx",
+  "aevo",
+  "lyra",
+  "derive",
+  "interactive_brokers",
+  "alpaca",
+  "tradier",
+  "schwab",
+  "robinhood",
+  "polymarket",
+  "kalshi"
+];
+
+const normalizeExchangeId = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/&/g, "and")
+  .replace(/[^a-z0-9]+/g, "_")
+  .replace(/^_+|_+$/g, "");
+
 const exchangeKeySchema = z.object({
-  exchange: z.enum(["binance", "hyperliquid", "bybit"]),
+  exchange: z.preprocess(normalizeExchangeId, z.enum(supportedExchangeIds)),
   apiKey: z.string().min(1).max(255),
   apiSecret: z.string().max(255).optional().nullable(),
   extraData: z.record(z.any()).optional().nullable(),

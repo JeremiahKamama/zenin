@@ -5,7 +5,6 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
-import { zeninFetch } from "../utils/zeninFetch";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { PortfolioInstitutionalSuite } from "./InstitutionalPanels";
 
@@ -100,7 +99,8 @@ export function PortfolioModule({
   onSellAsset,
   onSelectAsset,
   onOpenPredictions,
-  onOpenJournal
+  onOpenJournal,
+  onOpenConnections
 }){
   const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
     ? getAppRuntimeConfig().ui.g7Currencies
@@ -125,10 +125,8 @@ export function PortfolioModule({
   const [displayCurrency, setDisplayCurrency] = useState("USD");
   const [assetClassFilter, setAssetClassFilter] = useState("all");
   const [showPredictionGuide, setShowPredictionGuide] = useState(false);
-  const [showConnectionsModal, setShowConnectionsModal] = useState(false);
   const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
-  const [exchangeKeys, setExchangeKeys] = useState([]);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncing = false;
   const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
   const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
   const [savedPortfolioViews, setSavedPortfolioViews] = useState(() => readStoredJson(PORTFOLIO_SAVED_VIEWS_KEY, []));
@@ -1297,69 +1295,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
     });
   }, [chartMode, chartInterval, displayCurrency, assetClassFilter, benchmarkSymbol, selectedTaxLotMethod]);
 
-  useEffect(() => {
-    const fetchExchangeKeys = async () => {
-      try {
-        const res = await zeninFetch("/db/exchange-keys");
-        if (res.ok) {
-          const data = await res.json();
-          setExchangeKeys(data);
-        }
-      } catch (err) {
-        console.warn("Failed to fetch exchange keys", err);
-      }
-    };
-    if (showConnectionsModal) fetchExchangeKeys();
-  }, [showConnectionsModal]);
-
-  const handleAddExchangeKey = async (payload) => {
-    try {
-      const res = await zeninFetch("/db/exchange-keys", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        const newKey = await res.json();
-        setExchangeKeys(prev => [newKey, ...prev]);
-        // Automatically trigger initial sync after adding
-        await handleSyncExchange(newKey.id);
-      }
-    } catch (err) {
-      console.error("Failed to add exchange key", err);
-    }
-  };
-
-  const handleRemoveExchangeKey = async (id) => {
-    try {
-      const res = await zeninFetch(`/db/exchange-keys/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setExchangeKeys(prev => prev.filter(k => k.id !== id));
-      }
-    } catch (err) {
-      console.error("Failed to remove exchange key", err);
-    }
-  };
-
-  const handleSyncExchange = async (id) => {
-    setIsSyncing(true);
-    try {
-      const res = await zeninFetch(`/db/exchange-sync/${id}`, { method: "POST" });
-      if (res.ok) {
-        // We should trigger a full workspace refresh here if possible,
-        // or just rely on the user to refresh.
-        // Actually, the app likely has a refresh logic.
-        window.location.reload(); // Hard refresh for now to ensure all state updates
-      }
-    } catch (err) {
-      console.error("Sync failed", err);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
   const insightFlowSteps = {
     attribution: ["Dashboard", "Overview", "Drilldown", "Insight Detail", "Action / Export"],
     exposure: ["Dashboard", "Overview", "Detailed Exposure", "Insights & Risk", "Portfolio Response"],
@@ -2369,84 +2304,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
   };
 
 
-  const renderConnectionsModal = () => {
-    if (!showConnectionsModal) return null;
-    return (
-      <div className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true" style={{ zIndex: 1000 }}>
-        <div className="portfolio-v2-flow-shell" style={{ maxWidth: '500px' }}>
-          <div className="portfolio-v2-flow-top">
-            <h2>Exchange Connections</h2>
-            <button type="button" className="portfolio-v2-flow-close" onClick={() => setShowConnectionsModal(false)}>✕</button>
-          </div>
-          <div className="portfolio-v2-flow-body" style={{ padding: '20px' }}>
-            <div className="portfolio-v2-flow-list stacked">
-              {exchangeKeys.map(k => (
-                <div key={k.id} className="portfolio-v2-flow-action-row" style={{ cursor: 'default', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <strong style={{ textTransform: 'capitalize' }}>{k.exchange}</strong>
-                    <small style={{ color: 'var(--color-text-secondary)' }}>{k.apiKey.slice(0, 8)}...</small>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      className="portfolio-v2-flow-btn ghost"
-                      onClick={() => handleSyncExchange(k.id)}
-                      disabled={isSyncing}
-                      style={{ padding: '4px 12px', fontSize: '12px' }}
-                    >
-                      {isSyncing ? "Syncing..." : "Sync"}
-                    </button>
-                    <button
-                      className="portfolio-v2-flow-btn ghost"
-                      style={{ color: '#ef4444', padding: '4px 12px', fontSize: '12px' }}
-                      onClick={() => handleRemoveExchangeKey(k.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {exchangeKeys.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '20px', color: 'var(--color-text-secondary)' }}>
-                  No exchanges connected yet.
-                </div>
-              )}
-            </div>
-
-            <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.08)' }} />
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px' }}>
-              <h3 style={{ margin: 0 }}>Add New Connection</h3>
-              <div style={{ fontSize: '10px', color: 'var(--color-brand-cyan)', background: 'rgba(6,182,212,0.1)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(6,182,212,0.2)' }}>
-                🛡️ ONLY "ENABLE READING" REQUIRED
-              </div>
-            </div>
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              const formData = new FormData(e.target);
-              handleAddExchangeKey({
-                exchange: formData.get("exchange"),
-                apiKey: formData.get("apiKey"),
-                apiSecret: formData.get("apiSecret"),
-                extraData: { address: formData.get("address") }
-              });
-              e.target.reset();
-            }} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
-              <select name="exchange" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} required>
-                <option value="binance">Binance (Spot/Perp)</option>
-                <option value="hyperliquid">Hyperliquid (Perp)</option>
-                <option value="bybit">Bybit (Perp)</option>
-              </select>
-              <input name="apiKey" placeholder="API Key / Address" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} required />
-              <input name="apiSecret" placeholder="API Secret (Optional for HL)" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} />
-              <input name="address" placeholder="Wallet Address (Optional)" className="portfolio-v2-select" style={{ width: '100%', padding: '8px' }} />
-              <button type="submit" className="portfolio-v2-flow-btn primary" style={{ width: '100%', padding: '10px' }}>Connect Exchange</button>
-            </form>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   useEffect(() => {
     document.body.classList.add("portfolio-active");
     document.documentElement.classList.add("portfolio-active");
@@ -2484,7 +2341,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <button
               type="button"
               className="portfolio-v2-link"
-              onClick={() => setShowConnectionsModal(true)}
+              onClick={onOpenConnections}
             >
               Connections
             </button>
@@ -2979,7 +2836,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         benchmarkSymbol={benchmarkSymbol}
         currency={displayCurrency}
         balance={liveAvailableBalance}
-        onOpenConnections={() => setShowConnectionsModal(true)}
+        onOpenConnections={onOpenConnections}
       />
       {renderInsightFlow()}
 
@@ -3104,7 +2961,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
         onApplyView={applySavedPortfolioView}
         onReviewItem={reviewSavedPortfolioItem}
       />
-      {renderConnectionsModal()}
     </div>
   );
 }
