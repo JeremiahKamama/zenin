@@ -4,65 +4,33 @@ Zenin is a multi-asset trading dashboard that combines portfolio management, opt
 
 This README reflects the current implementation in this repository.
 
-## Render Postgres -> Supabase migration
+## Supabase runtime auth
 
-Zenin now supports migrating the existing Render-hosted PostgreSQL database into Supabase without changing application code.
+Zenin now uses Supabase for frontend authentication while keeping the existing Express API and PostgreSQL-backed application data model.
 
-### 1) Create the Supabase database
+Frontend env in `frontend/.env`:
 
-- Create a Supabase project and copy:
-  - the runtime connection string you want the backend to use after cutover
-  - the direct database connection string for admin/migration operations
+```bash
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
+```
 
-Recommended env layout in `backend/.env` or your deployment secrets:
+Backend env in `backend/.env`:
 
 ```bash
 DATABASE_URL=postgresql://...runtime-or-pooler-url...
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
 SUPABASE_DIRECT_URL=postgresql://...direct-db-url...
-MIGRATION_SOURCE_DATABASE_URL=postgresql://...old-render-db-url...
-MIGRATION_TARGET_DATABASE_URL=postgresql://...supabase-direct-db-url...
 PGSSLMODE=require
 PGSSL_REJECT_UNAUTHORIZED=true
 ```
 
-### 2) Run the migration script
+Render deployment note:
 
-From `backend/`:
-
-```bash
-npm run db:migrate:supabase
-```
-
-That performs a dry run and validates both connections. To execute the copy:
-
-```bash
-npm run db:migrate:supabase -- --yes
-```
-
-What the script does:
-
-- dumps the `public` schema from the old database with `pg_dump`
-- restores it into Supabase with `pg_restore`
-- avoids ownership/privilege replay to stay compatible with managed Postgres
-
-Requirements:
-
-- PostgreSQL client tools installed locally (`pg_dump`, `pg_restore`)
-- the destination should be the Supabase direct database URL, not a read-only proxy
-
-### 3) Cut over the app
-
-- Point backend `DATABASE_URL` at the Supabase runtime connection string.
-- Keep `SUPABASE_DIRECT_URL` available for future admin scripts and maintenance.
-- Restart the backend and confirm:
-  - `GET /health`
-  - auth/session flows
-  - portfolio/watchlist persistence
-  - options calculations and journal writes
-
-### 4) Render deployment note
-
-The Render blueprint now expects `DATABASE_URL` to be provided as an external secret instead of provisioning a Render PostgreSQL instance automatically. Set the Supabase runtime URL in Render before the next deploy.
+- Set `DATABASE_URL` to the Supabase runtime database URL.
+- Set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the backend service.
+- Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` on the frontend build.
 
 ## Entry flows
 
@@ -446,17 +414,21 @@ Notes:
 
 ### Frontend
 - `VITE_API_URL` (optional, defaults to deployed API)
+- `VITE_SUPABASE_URL` (Supabase project URL for browser-side Supabase integrations)
+- `VITE_SUPABASE_PUBLISHABLE_KEY` (Supabase publishable key; safe for browser use, unlike service-role keys)
 
 ### Backend
 - `PORT` (default `4000`)
 - `FRONTEND_URL` (CORS allowlist origin)
 - `DATABASE_URL` (recommended)
+- `SUPABASE_URL` (Supabase project URL used by the backend to verify Supabase access tokens)
+- `SUPABASE_PUBLISHABLE_KEY` (Supabase publishable key used for backend-side token verification)
 - `AUTH_HASH_KEY` (required in production; use a 32+ character strong secret for session/reset/OTP hashing and workspace secret encryption)
 - `DERIVE_API_URL` (optional provider override)
 
 Render deployment note:
 - Set `DATABASE_URL` to the Supabase runtime connection string in Render.
-- Keep `SUPABASE_DIRECT_URL` available for admin scripts and one-off maintenance.
+- Set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the backend service.
 - `getaddrinfo ENOTFOUND ...` usually means the configured database hostname is stale, misspelled, or not reachable from the deployment environment.
 
 Optional Postgres discrete vars (if not using `DATABASE_URL`):

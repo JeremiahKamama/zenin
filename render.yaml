@@ -18,9 +18,11 @@ services:
         value: https://zenin-beta.vercel.app
       - key: DATABASE_URL
         sync: false
-      - key: SUPABASE_DIRECT_URL
-        sync: false
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_DIRECT_URL
         sync: false
       - key: PGSSLMODE
         value: require
@@ -48,6 +50,11 @@ services:
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     pullRequestPreviewsEnabled: false
+    envVars:
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false
     routes:
       # Send all routes to index.html so React Router / client-side nav works
       - type: rewrite

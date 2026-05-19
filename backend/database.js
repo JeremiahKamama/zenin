@@ -171,6 +171,7 @@ function mapAuthUserRow(row) {
   if (!row) return null;
   return {
     ...row,
+    supabaseUserId: row.supabaseUserId || row.supabase_user_id || null,
     passkeys: parseJsonPayload(row.passkeys, []),
     backupCodes: parseJsonPayload(row.backupCodes, []),
     emailVerificationCodeHash: row.emailVerificationCodeHash || row.email_verification_code_hash || null,
@@ -1085,6 +1086,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS app_users (
         id SERIAL PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
+        supabase_user_id TEXT UNIQUE,
         password_hash TEXT NOT NULL DEFAULT '',
         display_name TEXT,
         auth_provider TEXT NOT NULL DEFAULT 'email',
@@ -1109,6 +1111,11 @@ async function initializeDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS supabase_user_id TEXT;
     `);
 
     await client.query(`
@@ -1884,6 +1891,12 @@ async function initializeDatabase() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_active
       ON auth_sessions (user_id, revoked_at, expires_at);
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_supabase_user_id_unique
+      ON app_users (supabase_user_id)
+      WHERE supabase_user_id IS NOT NULL;
     `);
 
     await client.query(`
@@ -3847,13 +3860,14 @@ async function resolveWorkspaceScope(userId, workspaceId = null) {
 }
 
 const userAuth = {
-  createUser: async ({ email, passwordHash, displayName = null, authProvider = "email", emailVerified = false }) => {
+  createUser: async ({ email, passwordHash, displayName = null, authProvider = "email", emailVerified = false, supabaseUserId = null }) => {
     const result = await pool.query(`
-      INSERT INTO app_users (email, password_hash, display_name, auth_provider, email_verified)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO app_users (email, supabase_user_id, password_hash, display_name, auth_provider, email_verified)
+      VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING
         id,
         email,
+        supabase_user_id AS "supabaseUserId",
         password_hash AS "passwordHash",
         display_name AS "displayName",
         auth_provider AS "authProvider",
@@ -3878,6 +3892,7 @@ const userAuth = {
         created_at AS "createdAt";
     `, [
       String(email || "").trim().toLowerCase(),
+      supabaseUserId ? String(supabaseUserId).trim() : null,
       String(passwordHash || ""),
       displayName ? String(displayName) : null,
       String(authProvider || "email"),
@@ -3937,6 +3952,7 @@ const userAuth = {
       SELECT
         id,
         email,
+        supabase_user_id AS "supabaseUserId",
         password_hash AS "passwordHash",
         display_name AS "displayName",
         auth_provider AS "authProvider",
@@ -3975,6 +3991,7 @@ const userAuth = {
       SELECT
         id,
         email,
+        supabase_user_id AS "supabaseUserId",
         password_hash AS "passwordHash",
         display_name AS "displayName",
         auth_provider AS "authProvider",
@@ -4005,6 +4022,157 @@ const userAuth = {
     const row = result.rows[0];
     if (!row) return null;
     return mapAuthUserRow(row);
+  },
+
+  findUserBySupabaseId: async (supabaseUserId) => {
+    const normalizedSupabaseUserId = String(supabaseUserId || "").trim();
+    if (!normalizedSupabaseUserId) return null;
+    const result = await pool.query(`
+      SELECT
+        id,
+        email,
+        supabase_user_id AS "supabaseUserId",
+        password_hash AS "passwordHash",
+        display_name AS "displayName",
+        auth_provider AS "authProvider",
+        email_verified AS "emailVerified",
+        pending_email AS "pendingEmail",
+        pending_email_code_hash AS "pendingEmailCodeHash",
+        pending_email_requested_at AS "pendingEmailRequestedAt",
+        password_changed_at AS "passwordChangedAt",
+        two_factor_enabled AS "twoFactorEnabled",
+        two_factor_method AS "twoFactorMethod",
+        two_factor_secret_hash AS "twoFactorSecretHash",
+        two_factor_provider AS "twoFactorProvider",
+        two_factor_target AS "twoFactorTarget",
+        two_factor_enabled_at AS "twoFactorEnabledAt",
+        backup_codes_json AS "backupCodes",
+        passkeys_json AS passkeys,
+        current_plan AS "currentPlan",
+        current_billing_cycle AS "currentBillingCycle",
+        plan_updated_at AS "planUpdatedAt",
+        failed_login_count AS "failedLoginCount",
+        locked_until AS "lockedUntil",
+        email_verification_code_hash AS "emailVerificationCodeHash",
+        email_verification_requested_at AS "emailVerificationRequestedAt",
+        created_at AS "createdAt"
+      FROM app_users
+      WHERE supabase_user_id = $1
+      LIMIT 1;
+    `, [normalizedSupabaseUserId]);
+    return mapAuthUserRow(result.rows[0]);
+  },
+
+  upsertSupabaseUser: async ({
+    supabaseUserId,
+    email,
+    displayName = null,
+    authProvider = "supabase",
+    emailVerified = true
+  }) => {
+    const normalizedSupabaseUserId = String(supabaseUserId || "").trim();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (!normalizedSupabaseUserId) {
+      throw new Error("Supabase user id is required.");
+    }
+    if (!normalizedEmail) {
+      throw new Error("Supabase email is required.");
+    }
+
+    const existingBySupabaseId = await userAuth.findUserBySupabaseId(normalizedSupabaseUserId);
+    if (existingBySupabaseId) {
+      const result = await pool.query(`
+        UPDATE app_users
+        SET
+          email = $2,
+          display_name = COALESCE(NULLIF(display_name, ''), $3),
+          auth_provider = $4,
+          email_verified = $5,
+          updated_at = NOW()
+        WHERE supabase_user_id = $1
+        RETURNING
+          id,
+          email,
+          supabase_user_id AS "supabaseUserId",
+          password_hash AS "passwordHash",
+          display_name AS "displayName",
+          auth_provider AS "authProvider",
+          email_verified AS "emailVerified",
+          pending_email AS "pendingEmail",
+          pending_email_code_hash AS "pendingEmailCodeHash",
+          pending_email_requested_at AS "pendingEmailRequestedAt",
+          password_changed_at AS "passwordChangedAt",
+          two_factor_enabled AS "twoFactorEnabled",
+          two_factor_method AS "twoFactorMethod",
+          two_factor_secret_hash AS "twoFactorSecretHash",
+          two_factor_provider AS "twoFactorProvider",
+          two_factor_target AS "twoFactorTarget",
+          two_factor_enabled_at AS "twoFactorEnabledAt",
+          backup_codes_json AS "backupCodes",
+          passkeys_json AS passkeys,
+          current_plan AS "currentPlan",
+          current_billing_cycle AS "currentBillingCycle",
+          plan_updated_at AS "planUpdatedAt",
+          failed_login_count AS "failedLoginCount",
+          locked_until AS "lockedUntil",
+          email_verification_code_hash AS "emailVerificationCodeHash",
+          email_verification_requested_at AS "emailVerificationRequestedAt",
+          created_at AS "createdAt";
+      `, [normalizedSupabaseUserId, normalizedEmail, displayName, authProvider, Boolean(emailVerified)]);
+      return mapAuthUserRow(result.rows[0]);
+    }
+
+    const existingByEmail = await userAuth.findUserByEmail(normalizedEmail);
+    if (existingByEmail) {
+      const result = await pool.query(`
+        UPDATE app_users
+        SET
+          supabase_user_id = $2,
+          display_name = COALESCE(NULLIF(display_name, ''), $3),
+          auth_provider = $4,
+          email_verified = $5,
+          updated_at = NOW()
+        WHERE email = $1
+        RETURNING
+          id,
+          email,
+          supabase_user_id AS "supabaseUserId",
+          password_hash AS "passwordHash",
+          display_name AS "displayName",
+          auth_provider AS "authProvider",
+          email_verified AS "emailVerified",
+          pending_email AS "pendingEmail",
+          pending_email_code_hash AS "pendingEmailCodeHash",
+          pending_email_requested_at AS "pendingEmailRequestedAt",
+          password_changed_at AS "passwordChangedAt",
+          two_factor_enabled AS "twoFactorEnabled",
+          two_factor_method AS "twoFactorMethod",
+          two_factor_secret_hash AS "twoFactorSecretHash",
+          two_factor_provider AS "twoFactorProvider",
+          two_factor_target AS "twoFactorTarget",
+          two_factor_enabled_at AS "twoFactorEnabledAt",
+          backup_codes_json AS "backupCodes",
+          passkeys_json AS passkeys,
+          current_plan AS "currentPlan",
+          current_billing_cycle AS "currentBillingCycle",
+          plan_updated_at AS "planUpdatedAt",
+          failed_login_count AS "failedLoginCount",
+          locked_until AS "lockedUntil",
+          email_verification_code_hash AS "emailVerificationCodeHash",
+          email_verification_requested_at AS "emailVerificationRequestedAt",
+          created_at AS "createdAt";
+      `, [normalizedEmail, normalizedSupabaseUserId, displayName, authProvider, Boolean(emailVerified)]);
+      return mapAuthUserRow(result.rows[0]);
+    }
+
+    return userAuth.createUser({
+      email: normalizedEmail,
+      supabaseUserId: normalizedSupabaseUserId,
+      passwordHash: "",
+      displayName,
+      authProvider,
+      emailVerified
+    });
   },
 
   createSession: async ({ userId, tokenHash, expiresAt, ipAddress = null, userAgent = null }) => {

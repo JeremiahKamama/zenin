@@ -33,6 +33,7 @@ import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
+import { ensureZeninSessionFromSupabase, signOutEverywhere, subscribeToSupabaseAuth } from "./utils/supabaseAuth";
 import {
   formatRevenueCatError,
   isRevenueCatCancelledError,
@@ -2590,11 +2591,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     })).filter((group) => group.items.length > 0);
   }, [accessibleSections, isSidebarCollapsed]);
   const handleLogout = useCallback(async () => {
-    try {
-      await zeninFetch("/auth/signout", { method: "POST" });
-    } catch (err) {
-      console.warn("Backend signout failed", err);
-    }
+    await signOutEverywhere();
 
     // Comprehensive cleanup of all Zenin-related local storage items
     const keysToRemove = [
@@ -2643,12 +2640,28 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [bootstrapData, currentBillingCycle, currentPlan, isAdmin]);
 
   useEffect(() => {
+    const unsubscribe = subscribeToSupabaseAuth((event) => {
+      if (event === "SIGNED_OUT") {
+        setAccessCheckLoading(false);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
 
     const hydrateRequiredAuth = async () => {
       try {
-        const res = await zeninFetch("/auth/me");
-        const data = await res.json().catch(() => ({}));
+        let res = await zeninFetch("/auth/me");
+        let data = await res.json().catch(() => ({}));
+        if ((!res.ok || !data?.authenticated || !data?.user) && !allowGuestAccess) {
+          const exchanged = await ensureZeninSessionFromSupabase();
+          if (exchanged?.user) {
+            res = await zeninFetch("/auth/me");
+            data = await res.json().catch(() => ({}));
+          }
+        }
         if (!mounted) return;
         if (!res.ok || !data?.authenticated || !data?.user) {
           if (!allowGuestAccess) {
@@ -3906,6 +3919,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const requestEmailChange = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("email", "info", "Email changes are now managed in Supabase Auth and are temporarily unavailable in the in-app security panel.");
+      return;
+    }
     const nextEmail = profileForms.newEmail.trim().toLowerCase();
     const password = profileForms.emailPassword.trim();
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail);
@@ -3972,6 +3989,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const verifyPendingEmail = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("email", "info", "Email verification now happens through Supabase Auth.");
+      return;
+    }
     const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
     const typedCode = String(profileForms.emailVerificationCode || "").trim();
     if (!pendingEmail) {
@@ -4025,6 +4046,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const updatePassword = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("password", "info", "Password updates are now managed through Supabase Auth. Use the reset flow from /auth.");
+      return;
+    }
     const currentPassword = profileForms.currentPassword.trim();
     const newPassword = profileForms.newPassword.trim();
     const confirmPassword = profileForms.confirmPassword.trim();
@@ -4098,6 +4123,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const enableTwoFactor = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("twofa", "info", "Advanced 2FA and passkey controls are temporarily disabled while Zenin finishes the Supabase Auth transition.");
+      return;
+    }
     const method = String(profileForms.twoFactorMethod || "authenticator");
     const code = profileForms.twoFactorCode.trim();
     if (method !== "passkey" && !/^\d{6}$/.test(code)) {
@@ -4203,6 +4232,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const registerPasskey = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("twofa", "info", "Passkey enrollment is temporarily disabled in-app during the Supabase Auth transition.");
+      return;
+    }
     const passkeyName = profileForms.passkeyName.trim();
     if (passkeyName.length < 2) {
       setProfileMessage("twofa", "error", "Passkey name must be at least 2 characters.");
@@ -4267,6 +4300,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const regenerateBackupCodes = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("twofa", "info", "Backup code management is temporarily disabled in-app during the Supabase Auth transition.");
+      return;
+    }
     if (!profileSecurity.twoFactorEnabled) {
       setProfileMessage("twofa", "error", "Enable 2FA before generating backup codes.");
       return;
@@ -4301,6 +4338,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const disableTwoFactor = async () => {
+    if (!isGuestUser) {
+      setProfileMessage("twofa", "info", "2FA disable is temporarily managed outside the app while Supabase Auth is rolling out.");
+      return;
+    }
     if (!isGuestUser) {
       try {
         const res = await zeninFetch("/auth/2fa/disable", {
@@ -4357,7 +4398,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     return true;
   })();
 
-  const settingsPreviewNote = "Workspace sync: profile, security, preferences, and connected-account metadata now save to your Zenin workspace. They still do not sync trades or permissions to external providers.";
+  const settingsPreviewNote = "Workspace sync: profile, preferences, and connected-account metadata still save to your Zenin workspace. Password, email, and MFA flows are moving to Supabase Auth.";
 
   const sidebarIconMap = {
     Home: HomeIcon,

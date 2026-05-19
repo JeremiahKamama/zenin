@@ -7,6 +7,7 @@ import { applySeo, buildAbsoluteUrl, SITE_URL } from "./utils/seo";
 import { clearPostAuthRedirect, getPostAuthRedirectPath, sanitizeInternalPath, storePostAuthRedirect } from "./utils/authRedirect";
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { getPublicRuntimeConfig } from "./config/runtimeConfigStore";
+import { ensureZeninSessionFromSupabase } from "./utils/supabaseAuth";
 
 const HOME_URL = `${SITE_URL}/`;
 const SOCIAL_IMAGE_URL = buildAbsoluteUrl("/og/zenin-capital-home.svg");
@@ -112,8 +113,6 @@ export default function PublicHomepage() {
   const [openAppChecking, setOpenAppChecking] = useState(false);
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
-  const [authModal, setAuthModal] = useState({ open: false, mode: "signup", error: "" });
-  const [AuthModalComponent, setAuthModalComponent] = useState(null);
   const [billingCycle, setBillingCycle] = useState(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("zenin_pricing_billing_cycle") : "";
     return normalizeBillingCycle(stored || "monthly");
@@ -165,11 +164,11 @@ export default function PublicHomepage() {
     const initialMode = ["signup", "signin", "forgot"].includes(requestedMode) ? requestedMode : "";
     const oauthError = String(params.get("oauthError") || params.get("error") || "").trim();
     if (initialMode || oauthError) {
-      setAuthModal({
-        open: true,
-        mode: initialMode || "signin",
-        error: oauthError
-      });
+      const authUrl = new URL("/auth", window.location.origin);
+      authUrl.searchParams.set("mode", initialMode || "signin");
+      if (queryNext) authUrl.searchParams.set("next", queryNext);
+      if (oauthError) authUrl.searchParams.set("error", oauthError);
+      window.location.replace(`${authUrl.pathname}${authUrl.search}${authUrl.hash}`);
     }
   }, []);
 
@@ -231,21 +230,19 @@ export default function PublicHomepage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    import("./components/AuthModal")
-      .then((mod) => {
-        if (!cancelled) setAuthModalComponent(() => mod.default);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     let mounted = true;
     zeninFetch("/auth/me")
       .then((res) => res.json().catch(() => ({})))
+      .then(async (data) => {
+        if ((!data?.authenticated || !data?.user) && mounted) {
+          const exchanged = await ensureZeninSessionFromSupabase();
+          if (exchanged?.user) {
+            return zeninFetch("/auth/me")
+              .then((res) => res.json().catch(() => ({})));
+          }
+        }
+        return data;
+      })
       .then((data) => {
         if (!mounted) return;
         if (data?.authenticated && data?.user) {
@@ -347,23 +344,13 @@ export default function PublicHomepage() {
       window.location.href = postPlanTarget;
     } else {
       storePostAuthRedirect(postPlanTarget, "/app");
-      setAuthModal({ open: true, mode: "signup", error: "" });
+      window.location.href = `/auth?mode=signup&next=${encodeURIComponent(postPlanTarget)}`;
     }
   };
 
   const openAuthModal = (mode) => {
     storePostAuthRedirect(postPlanTarget, "/app");
-    setAuthModal({ open: true, mode, error: "" });
-  };
-
-  const closeAuthModal = () => {
-    setAuthModal((prev) => ({ ...prev, open: false, error: "" }));
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    url.searchParams.delete("auth");
-    url.searchParams.delete("oauthError");
-    url.searchParams.delete("error");
-    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    window.location.href = `/auth?mode=${encodeURIComponent(mode)}&next=${encodeURIComponent(postPlanTarget)}`;
   };
 
   return (
@@ -896,15 +883,6 @@ export default function PublicHomepage() {
 
       </footer>
       <SpeedInsights />
-      {AuthModalComponent ? (
-        <AuthModalComponent
-          isOpen={authModal.open}
-          initialMode={authModal.mode}
-          initialError={authModal.error}
-          returnTo={postPlanTarget}
-          onClose={closeAuthModal}
-        />
-      ) : null}
     </div>
   );
 }

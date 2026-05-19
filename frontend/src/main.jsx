@@ -3,6 +3,7 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { getGuestWorkspacePath, storePostAuthRedirect } from "./utils/authRedirect";
 import { hasWorkspaceSession } from "./utils/workspacePersistence";
+import { hasSupabaseSessionHint } from "./utils/supabaseAuth";
 
 function resolveEntry(pathname) {
   if (typeof window !== "undefined" && window.__ZENIN_ENTRY__) {
@@ -21,7 +22,7 @@ function redirectUnauthenticatedAppEntry(entry) {
 
   const params = new URLSearchParams(window.location.search);
   const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
-  if (allowGuest || hasWorkspaceSession()) return false;
+  if (allowGuest || hasWorkspaceSession() || hasSupabaseSessionHint()) return false;
 
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   storePostAuthRedirect(target, "/app");

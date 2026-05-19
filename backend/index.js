@@ -12,6 +12,7 @@ const {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } = require("@simplewebauthn/server");
+const { createClient: createSupabaseClient } = require("@supabase/supabase-js");
 const { OAuth2Client } = require("google-auth-library");
 // const appleSignin = require("apple-signin-auth");
 const { sendPasswordResetEmail, sendVerificationEmail } = require("./email");
@@ -445,6 +446,7 @@ function shouldEnforceCsrf(req) {
   const method = String(req.method || "").toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return false;
   if (CSRF_EXEMPT_PATHS.has(String(req.path || ""))) return false;
+  if (getBearerToken(req)) return false;
   const hasOrigin = Boolean(String(req.headers.origin || "").trim());
   const hasCookies = Boolean(String(req.headers.cookie || "").trim());
   return hasOrigin || hasCookies;
@@ -615,6 +617,28 @@ if (AUTH_HASH_KEY.length < 32) {
 const OAUTH_PROVIDERS = ["google", "github", "microsoft"];
 const ARCHIVED_OAUTH_PROVIDERS = new Set(["apple"]);
 const ADMIN_MIGRATION_KEY = String(process.env.ADMIN_MIGRATION_KEY || "").trim();
+const SUPABASE_URL = String(
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  ""
+).trim();
+const SUPABASE_PUBLISHABLE_KEY = String(
+  process.env.SUPABASE_PUBLISHABLE_KEY ||
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  ""
+).trim();
+const supabaseAuthClient =
+  SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
+    ? createSupabaseClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+          detectSessionInUrl: false
+        }
+      })
+    : null;
 const ALLOW_DEV_AUTH_DEBUG =
   process.env.NODE_ENV !== "production" &&
   String(process.env.ENABLE_DEV_AUTH_DEBUG || "").trim().toLowerCase() === "true";
@@ -842,6 +866,7 @@ function sanitizeAuthUser(user = null) {
   const passkeys = Array.isArray(user.passkeys) ? user.passkeys : [];
   return {
     id: Number(user.id),
+    supabaseUserId: user.supabaseUserId || null,
     sessionId: user.sessionId == null ? null : Number(user.sessionId),
     email: String(user.email || "").toLowerCase(),
     displayName: user.displayName || null,
@@ -988,6 +1013,10 @@ function getSessionTokenFromCookie(req) {
   return token || null;
 }
 
+function hasSupabaseAuthConfig() {
+  return Boolean(supabaseAuthClient);
+}
+
 function getCsrfTokenFromCookie(req) {
   const cookies = parseCookies(req);
   const token = String(cookies[CSRF_COOKIE_NAME] || "").trim();
@@ -1077,31 +1106,61 @@ function resolveClientIp(req) {
 }
 
 async function resolveAuthContext(req) {
-  const token = getBearerToken(req) || getSessionTokenFromCookie(req);
   const guestContext = {
     isGuest: true,
     userId: null,
     user: null,
-    token: null
+    token: null,
+    authSource: "guest"
   };
-  if (!token) {
-    return guestContext;
+  const sessionToken = getSessionTokenFromCookie(req);
+  if (sessionToken) {
+    const tokenHash = hashToken(sessionToken);
+    const session = await userAuth.findSessionByTokenHash(tokenHash);
+    if (session && !session.revokedAt && new Date(session.expiresAt).getTime() > Date.now()) {
+      return {
+        isGuest: false,
+        userId: Number(session.userId),
+        user: sanitizeAuthUser(session),
+        token: sessionToken,
+        authSource: "session"
+      };
+    }
   }
-  const tokenHash = hashToken(token);
-  const session = await userAuth.findSessionByTokenHash(tokenHash);
-  if (!session) {
-    return guestContext;
-  }
-  if (session.revokedAt || new Date(session.expiresAt).getTime() <= Date.now()) {
+
+  const bearerToken = getBearerToken(req);
+  if (!bearerToken || !hasSupabaseAuthConfig()) {
     return guestContext;
   }
 
-  return {
-    isGuest: false,
-    userId: Number(session.userId),
-    user: sanitizeAuthUser(session),
-    token
-  };
+  try {
+    const { data, error } = await supabaseAuthClient.auth.getUser(bearerToken);
+    if (error || !data?.user?.id || !data.user.email) {
+      return guestContext;
+    }
+    const provider = String(
+      data.user.app_metadata?.provider ||
+      data.user.identities?.[0]?.provider ||
+      "supabase"
+    ).trim().toLowerCase() || "supabase";
+    const localUser = await userAuth.upsertSupabaseUser({
+      supabaseUserId: data.user.id,
+      email: data.user.email,
+      displayName: data.user.user_metadata?.display_name || data.user.user_metadata?.full_name || data.user.email,
+      authProvider: provider,
+      emailVerified: Boolean(data.user.email_confirmed_at)
+    });
+    return {
+      isGuest: false,
+      userId: Number(localUser.id),
+      user: sanitizeAuthUser(localUser),
+      token: bearerToken,
+      authSource: "supabase"
+    };
+  } catch (error) {
+    console.warn("[Auth] Supabase token verification failed:", error?.message || error);
+    return guestContext;
+  }
 }
 
 app.use(async (req, _res, next) => {
@@ -3521,6 +3580,43 @@ app.get("/api/auth/me", attachActiveWorkspace, async (req, res) => {
     user: sanitizeAuthUser(user),
     workspace: sanitizeWorkspace(req.workspace?.workspace, req.workspace?.membership)
   });
+});
+
+app.post("/api/auth/supabase/exchange", async (req, res) => {
+  try {
+    if (!hasSupabaseAuthConfig()) {
+      return apiError(res, 503, {
+        error: "Supabase Auth is not configured.",
+        message: "Add Supabase URL and publishable key to enable authentication.",
+        code: "SUPABASE_AUTH_NOT_CONFIGURED",
+        retryable: false
+      });
+    }
+    if (!req.auth || req.auth.isGuest || req.auth.authSource !== "supabase") {
+      return apiError(res, 401, {
+        error: "Supabase access token required.",
+        message: "Sign in with Supabase again and retry.",
+        code: "SUPABASE_TOKEN_REQUIRED",
+        retryable: false
+      });
+    }
+
+    const rememberMe = req.body?.rememberMe !== false;
+    const session = await issueSessionForUser(req.auth.userId, req, { persistent: rememberMe });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+
+    const user = await userAuth.findUserById(req.auth.userId);
+    const active = await workspaces.getActiveForUser(req.auth.userId);
+
+    return res.json({
+      success: true,
+      expiresAt: session.expiresAt,
+      user: sanitizeAuthUser(user),
+      workspace: sanitizeWorkspace(active?.workspace, active?.membership)
+    });
+  } catch (error) {
+    return handleServerError(res, "Supabase session exchange failed", error);
+  }
 });
 
 app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {

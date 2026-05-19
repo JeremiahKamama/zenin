@@ -12,6 +12,7 @@
   "dependencies": {
     "@revenuecat/purchases-js": "^1.39.1",
     "@simplewebauthn/browser": "^13.3.0",
+    "@supabase/supabase-js": "^2.106.0",
     "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
     "apexcharts": "^5.10.6",
