@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { startAuthentication } from "@simplewebauthn/browser";
-import { zeninFetch } from "../utils/zeninFetch";
 import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getGuestWorkspacePath, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
-import { getSupabaseClient, isSupabaseConfigured } from "../utils/supabaseAuth";
+import {
+  ensureZeninSessionFromSupabase,
+  getSupabaseClient,
+  isSupabaseConfigured,
+  subscribeToSupabaseAuth
+} from "../utils/supabaseAuth";
 
 const ENABLE_APPLE_OAUTH = false;
 
@@ -12,24 +15,13 @@ function getRedirectUrl(path = "/auth?mode=signin") {
   return `${window.location.origin}${path}`;
 }
 
-function writeStoredAuthUser(user, expiresAt = null) {
-  if (user) {
-    localStorage.setItem("zenin_auth_user", JSON.stringify(user));
-    if (user.email) localStorage.setItem("zenin_email", user.email);
-  }
-  if (expiresAt) {
-    localStorage.setItem("zenin_auth_expires_at", String(expiresAt));
-  } else {
-    localStorage.removeItem("zenin_auth_expires_at");
-  }
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-async function readJson(res) {
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data?.error || `Request failed (${res.status})`);
-  }
-  return data;
+function isStrongPassword(password) {
+  const value = String(password || "");
+  return value.length >= 10 && /[a-z]/i.test(value) && /\d/.test(value) && /[^a-z0-9]/i.test(value);
 }
 
 /**
@@ -37,7 +29,7 @@ async function readJson(res) {
  * Includes a "Continue as Guest" option.
  */
 export default function AuthModal({ isOpen, initialMode = "signup", initialError = "", returnTo = "/app", onClose }) {
-  const [mode, setMode] = useState(initialMode); // 'signin', 'signup', 'forgot', 'forgot_success', 'mfa'
+  const [mode, setMode] = useState(initialMode); // 'signin', 'signup', 'forgot', 'forgot_success'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -45,8 +37,12 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
   const [signinForm, setSigninForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({ email: "", password: "", fullName: "" });
   const [forgotForm, setForgotForm] = useState({ email: "" });
-  const [mfaCode, setMfaCode] = useState("");
-  const [mfaMethod, setMfaMethod] = useState("");
+
+  const redirectToApp = () => {
+    const target = getPostAuthRedirectPath();
+    clearPostAuthRedirect();
+    window.location.href = target;
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -58,11 +54,20 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
   if (!isOpen) return null;
 
-  const redirectToApp = () => {
-    const target = getPostAuthRedirectPath();
-    clearPostAuthRedirect();
-    window.location.href = target;
-  };
+  useEffect(() => {
+    if (!isOpen) return () => {};
+    const unsubscribe = subscribeToSupabaseAuth(async (event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
+        if (exchanged?.user) {
+          redirectToApp();
+        }
+      }
+    });
+    return unsubscribe;
+  }, [isOpen]);
+
+  if (!isOpen) return null;
 
   const handleGuestEntry = () => {
     localStorage.removeItem("zenin_auth_user");
@@ -73,62 +78,30 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     window.location.href = `${guestTarget.pathname}${guestTarget.search}${guestTarget.hash}`;
   };
 
-  const handleSignin = async (e, overrideCode) => {
+  const handleSignin = async (e) => {
     if (e) e.preventDefault();
     setLoading(true);
     setError("");
     try {
-      const payload = { ...signinForm };
-      const code = overrideCode || mfaCode;
-      if (code) payload.verificationCode = code;
-      const res = await zeninFetch("/auth/signin", {
-        method: "POST",
-        body: JSON.stringify(payload),
+      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
+      if (!isValidEmail(signinForm.email)) throw new Error("Enter a valid email address.");
+      if (!signinForm.password.trim()) throw new Error("Enter your password.");
+      const client = getSupabaseClient();
+      const { data, error: authError } = await client.auth.signInWithPassword({
+        email: signinForm.email.trim(),
+        password: signinForm.password
       });
-      const data = await readJson(res);
-      if (data.requiresMfa) {
-        setMfaMethod(data.method || "authenticator");
-        setMfaCode("");
-        setMode("mfa");
-        return;
+      if (authError) throw authError;
+      if (!data.session?.access_token) {
+        throw new Error("Authentication did not return a valid session. Try again.");
       }
-      writeStoredAuthUser(data?.user, data?.expiresAt || null);
+      const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
+      if (!exchanged?.user) {
+        throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
+      }
       redirectToApp();
     } catch (err) {
       setError(err.message || "Failed to sign in");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleMfaSubmit = async (e) => {
-    e.preventDefault();
-    if (!/^\d{6,8}$/.test(mfaCode.trim())) {
-      setError("Enter a valid verification code.");
-      return;
-    }
-    await handleSignin(null, mfaCode.trim());
-  };
-
-  const handlePasskeySignin = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const optionsRes = await zeninFetch("/auth/passkeys/authenticate/generate-options");
-      const options = await optionsRes.json();
-      if (!optionsRes.ok) throw new Error(options?.error || "Failed to get passkey options.");
-      const { challengeId, ...webAuthnOptions } = options;
-      const assertion = await startAuthentication(webAuthnOptions);
-      const verifyRes = await zeninFetch("/auth/passkeys/authenticate/verify", {
-        method: "POST",
-        body: JSON.stringify({ response: assertion, challengeId }),
-      });
-      const data = await readJson(verifyRes);
-      writeStoredAuthUser(data?.user, data?.expiresAt || null);
-      redirectToApp();
-    } catch (err) {
-      const msg = err?.name === "NotAllowedError" ? "Passkey authentication was cancelled." : (err?.message || "Passkey sign-in failed.");
-      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -139,17 +112,33 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      const res = await zeninFetch("/auth/signup", {
-        method: "POST",
-        body: JSON.stringify({
-          email: signupForm.email,
-          password: signupForm.password,
-          displayName: signupForm.fullName
-        }),
+      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
+      if (!signupForm.fullName.trim()) throw new Error("Enter your full name.");
+      if (!isValidEmail(signupForm.email)) throw new Error("Enter a valid email address.");
+      if (!isStrongPassword(signupForm.password)) {
+        throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
+      }
+      const client = getSupabaseClient();
+      const { data, error: authError } = await client.auth.signUp({
+        email: signupForm.email.trim(),
+        password: signupForm.password,
+        options: {
+          emailRedirectTo: getRedirectUrl("/auth?mode=signup"),
+          data: {
+            display_name: signupForm.fullName.trim()
+          }
+        }
       });
-      const data = await readJson(res);
-      writeStoredAuthUser(data?.user, data?.expiresAt || null);
-      redirectToApp();
+      if (authError) throw authError;
+      if (data.session?.access_token) {
+        const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
+        if (exchanged?.user) {
+          redirectToApp();
+          return;
+        }
+      }
+      setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
+      setMode("signin");
     } catch (err) {
       setError(err.message || "Failed to create account");
     } finally {
@@ -161,37 +150,20 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      if (isSupabaseConfigured()) {
-        const client = getSupabaseClient();
-        const { data, error: authError } = await client.auth.signInWithOAuth({
-          provider,
-          options: {
-            redirectTo: getRedirectUrl("/auth?mode=signin")
-          }
-        });
-        if (authError) throw authError;
-        if (data?.url) {
-          window.location.assign(data.url);
-          return;
+      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
+      const client = getSupabaseClient();
+      const { data, error: authError } = await client.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: getRedirectUrl("/auth?mode=signin")
         }
-        throw new Error("Google sign-in could not start. Try again.");
-      }
-
-      const res = await zeninFetch("/auth/oauth/start", {
-        method: "POST",
-        body: JSON.stringify({
-          provider,
-          returnTo: getPostAuthRedirectPath(),
-          entryPath: "/",
-          authMode: mode
-        }),
       });
-      const data = await readJson(res);
-      if (data.authorizationUrl) {
-        window.location.assign(data.authorizationUrl);
-      } else {
-        throw new Error(data.message || "OAuth is not configured.");
+      if (authError) throw authError;
+      if (data?.url) {
+        window.location.assign(data.url);
+        return;
       }
+      throw new Error("Google sign-in could not start. Try again.");
     } catch (err) {
       setError(err.message || "OAuth failed");
     } finally {
@@ -204,11 +176,13 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      const res = await zeninFetch("/auth/forgot-password/request", {
-        method: "POST",
-        body: JSON.stringify(forgotForm),
+      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
+      if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
+      const client = getSupabaseClient();
+      const { error: authError } = await client.auth.resetPasswordForEmail(forgotForm.email.trim(), {
+        redirectTo: getRedirectUrl("/auth?mode=forgot&reset=1")
       });
-      await readJson(res);
+      if (authError) throw authError;
       setMode("forgot_success");
     } catch (err) {
       setError(err.message || "Failed to send reset link");
@@ -274,7 +248,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
             <input 
               className="auth-v2-input"
               type="password"
-              placeholder="Min 8 characters"
+              placeholder="10+ chars, number, symbol"
               value={signupForm.password}
               onChange={e => setSignupForm({...signupForm, password: e.target.value})}
               required
@@ -364,16 +338,6 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               className="auth-v2-btn auth-v2-btn-ghost" 
               type="button"
               style={{ width: '100%' }}
-              onClick={handlePasskeySignin}
-              disabled={loading}
-            >
-              🔑 Sign in with Passkey
-            </button>
-
-            <button 
-              className="auth-v2-btn auth-v2-btn-ghost" 
-              type="button"
-              style={{ width: '100%' }}
               onClick={handleGuestEntry}
             >
               Use as Guest
@@ -406,37 +370,6 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center' }}>
               New to Zenin Capital? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signup")}>Create account</button>
-            </p>
-          </form>
-        )}
-
-        {mode === "mfa" && (
-          <form className="auth-v2-modal-form" onSubmit={handleMfaSubmit}>
-            <h1 style={{ textAlign: 'center' }}>Verification required</h1>
-            <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>
-              Enter the 6-digit code from your {mfaMethod === "authenticator" ? "authenticator app" : mfaMethod === "sms" ? "phone" : "email"}.
-            </p>
-
-            <label className="auth-v2-label">Verification Code</label>
-            <input 
-              className="auth-v2-input"
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="000000"
-              maxLength={8}
-              value={mfaCode}
-              onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
-              autoFocus
-              required
-            />
-
-            <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} type="submit" style={{ width: '100%' }}>
-              {loading ? "Verifying..." : "Verify"}
-            </button>
-
-            <p className="auth-v2-bottom-link" style={{ textAlign: 'center' }}>
-              <button type="button" className="auth-v2-link-btn" onClick={() => { setMode("signin"); setMfaCode(""); setError(""); }}>Back to sign in</button>
             </p>
           </form>
         )}

@@ -42,8 +42,8 @@ const APP_RUNTIME_CONFIG = {
       Watchlist: 'starter',
       Analytics: 'pro',
       Journal: 'pro',
-      Options: 'pro',
-      Predictions: 'pro',
+      Options: 'desk',
+      Predictions: 'desk',
       'Tax Estimator': 'starter',
       Metrics: 'pro'
     }
@@ -52,20 +52,20 @@ const APP_RUNTIME_CONFIG = {
     fallbackCategories: ['stocks', 'crypto', 'indicators', 'commodities'],
     fallbackAssetsByCategory: {
       stocks: [
-        { symbol: 'AAPL', name: 'Apple Inc.', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Mega Cap Tech', price: 169.3, priceChangePercent: 0.84 },
-        { symbol: 'MSFT', name: 'Microsoft Corporation', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Mega Cap Tech', price: 412.8, priceChangePercent: 0.46 },
-        { symbol: 'NVDA', name: 'NVIDIA Corporation', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'AI Infrastructure', price: 875.6, priceChangePercent: 1.18 },
-        { symbol: 'HIMS', name: 'Hims & Hers Health', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Digital Health', price: 51.2, priceChangePercent: -0.72 }
+        { symbol: 'AAPL', name: 'Apple Inc.', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Mega Cap Tech' },
+        { symbol: 'MSFT', name: 'Microsoft Corporation', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Mega Cap Tech' },
+        { symbol: 'NVDA', name: 'NVIDIA Corporation', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'AI Infrastructure' },
+        { symbol: 'HIMS', name: 'Hims & Hers Health', type: 'stock', marketType: 'equity', category: 'stocks', theme: 'Digital Health' }
       ],
       crypto: [
-        { symbol: 'BTC', name: 'Bitcoin', type: 'crypto', marketType: 'spot', category: 'crypto', price: 94250, priceChangePercent: 0.38 },
-        { symbol: 'ETH', name: 'Ethereum', type: 'crypto', marketType: 'spot', category: 'crypto', price: 3240, priceChangePercent: -0.21 },
-        { symbol: 'SOL', name: 'Solana', type: 'crypto', marketType: 'spot', category: 'crypto', price: 146.8, priceChangePercent: 1.08 }
+        { symbol: 'BTC', name: 'Bitcoin', type: 'crypto', marketType: 'spot', category: 'crypto' },
+        { symbol: 'ETH', name: 'Ethereum', type: 'crypto', marketType: 'spot', category: 'crypto' },
+        { symbol: 'SOL', name: 'Solana', type: 'crypto', marketType: 'spot', category: 'crypto' }
       ],
       indicators: [
-        { symbol: 'CPI', name: 'Consumer Price Index', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' },
-        { symbol: 'GDP', name: 'Gross Domestic Product', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' },
-        { symbol: 'FEDFUNDS', name: 'Federal Funds Rate', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' }
+        { symbol: 'USA', name: 'United States', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'USA' },
+        { symbol: 'DEU', name: 'Germany', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'DEU' },
+        { symbol: 'JPN', name: 'Japan', type: 'indicator', marketType: 'macro', category: 'indicators', country: 'JPN' }
       ],
       commodities: [
         { symbol: 'WTI', name: 'WTI Crude Oil', type: 'commodity', marketType: 'futures', category: 'commodities' },

@@ -96,6 +96,7 @@ export function useLivePriceStream({
             {
               price: Number.isFinite(price) ? price : null,
               priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+              source: quote?.source || null,
               updatedAt: updatedAt || new Date().toISOString(),
             },
           ];
@@ -109,6 +110,7 @@ export function useLivePriceStream({
         priceCacheRef?.current?.set(symbol, {
           price: quote.price ?? previous?.price ?? null,
           priceChangePercent: quote.priceChangePercent ?? previous?.priceChangePercent ?? null,
+          source: quote.source ?? previous?.source ?? null,
           updatedAt: quote.updatedAt,
         });
       });
@@ -126,6 +128,7 @@ export function useLivePriceStream({
           ...row,
           price: quote.price ?? row?.price,
           priceChangePercent: quote.priceChangePercent ?? row?.priceChangePercent,
+          priceSource: quote.source ?? row?.priceSource,
           _liveDirection: direction,
           _liveUpdatedAt: quote.updatedAt,
         };

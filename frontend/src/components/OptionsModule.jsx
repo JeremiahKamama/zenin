@@ -455,7 +455,7 @@ useEffect(() => {
                setSpotPrices(prev => ({ ...prev, [symbol]: price }));
              }
           })
-          .catch(err => console.warn(`Spot price unavailable for ${symbol}; using fallback pricing.`, err))
+          .catch(err => console.warn(`Spot price unavailable for ${symbol}; leaving source-backed pricing unavailable.`, err))
           .finally(() => {
             fetchState.spotInFlight.delete(symbol);
           });
@@ -496,7 +496,7 @@ useEffect(() => {
     ? "HYPE can be quoted via Derive RFQ, so the chain ladder may look sparse even when the market is live."
     : "";
 
-  const getHyperliquidFallbackSpot = async (assetSymbol) => {
+  const fetchHyperliquidSpot = async (assetSymbol) => {
     try {
       const data = await zeninFetchJson(`/crypto-market`, { signal: controller.signal });
       if (controller.signal.aborted) return null;
@@ -576,13 +576,13 @@ useEffect(() => {
           }));
           setSpotSources((prev) => ({ ...prev, [activeAsset]: "lyra" }));
         } else {
-          const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
+          const hyperliquidSpot = await fetchHyperliquidSpot(activeAsset);
           if (!isMounted) return;
-          if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
-            resolvedSpot = fallbackSpot;
+          if (Number.isFinite(hyperliquidSpot) && hyperliquidSpot > 0) {
+            resolvedSpot = hyperliquidSpot;
             setSpotPrices((prev) => ({
               ...prev,
-              [activeAsset]: fallbackSpot
+              [activeAsset]: hyperliquidSpot
             }));
             setSpotSources((prev) => ({ ...prev, [activeAsset]: "hyperliquid" }));
           } else {
@@ -622,7 +622,7 @@ useEffect(() => {
 
     } catch (err) {
       if (controller.signal.aborted || err?.code === "REQUEST_ABORTED") return;
-      console.warn("Options chain unavailable; simulator is using fallback pricing.", err);
+      console.warn("Options chain unavailable; keeping source-backed chain data unavailable.", err);
       if (isMounted) {
         setOptionsError(cached?.payload ? "" : (err?.message || "Options data is temporarily unavailable."));
         setOptionsStale(true);
@@ -630,12 +630,12 @@ useEffect(() => {
         setMarketStructure(inferredMarketStructure);
         setMarketStructureLabel(inferredMarketStructureLabel);
         setMarketStructureNote(inferredMarketStructureNote);
-        const fallbackSpot = await getHyperliquidFallbackSpot(activeAsset);
+        const hyperliquidSpot = await fetchHyperliquidSpot(activeAsset);
         if (!isMounted) return;
-        if (Number.isFinite(fallbackSpot) && fallbackSpot > 0) {
+        if (Number.isFinite(hyperliquidSpot) && hyperliquidSpot > 0) {
           setSpotPrices((prev) => ({
             ...prev,
-            [activeAsset]: fallbackSpot
+            [activeAsset]: hyperliquidSpot
           }));
           setSpotSources((prev) => ({ ...prev, [activeAsset]: "hyperliquid" }));
         } else {
@@ -1274,7 +1274,7 @@ useEffect(() => {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
           <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
-            <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>IV / OI Heatmap (sample)</div>
+            <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>IV / OI Heatmap</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {filteredChain.slice(0, 8).map((row) => {
                 const callIv = Number(row?.call?.iv || 0) * 100;

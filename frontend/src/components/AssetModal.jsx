@@ -97,7 +97,7 @@ export function AssetModal({
   });
 
   const [performanceMap, setPerformanceMap] = useState({});
-  const [liveQuote, setLiveQuote] = useState({ price: null, priceChangePercent: null });
+  const [liveQuote, setLiveQuote] = useState({ price: null, priceChangePercent: null, source: null });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [shake, setShake] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -170,7 +170,7 @@ export function AssetModal({
   }, [activeInterval, assetSymbol, assetType]);
 
   useEffect(() => {
-    setLiveQuote({ price: null, priceChangePercent: null });
+    setLiveQuote({ price: null, priceChangePercent: null, source: null });
   }, [assetSymbol, assetType]);
 
   useEffect(() => {
@@ -193,7 +193,8 @@ export function AssetModal({
         if (row?.currency) setFetchedCurrency(row.currency);
         setLiveQuote({
           price: Number.isFinite(price) ? price : null,
-          priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+          priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+          source: row?.source || data?.providers?.[0]?.source || null
         });
       } catch {
         if (cancelled) return;
@@ -800,7 +801,7 @@ export function AssetModal({
               </span>
               <span className="yahoo-currency-label">{activeCurrency}</span>
               {isMarketOpen && (
-                <span className="yahoo-live-badge">● LIVE</span>
+                <span className="yahoo-live-badge">● {liveQuote.source || asset?.priceSource || "LIVE"}</span>
               )}
             </div>
 

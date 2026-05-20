@@ -36,7 +36,7 @@ Render deployment note:
 
 - `GET /` shows the public homepage (marketing/overview).
 - `GET /app` opens the trading app.
-- `GET /auth` opens sign up / sign in / forgot-password and account-security flows.
+- `GET /auth` opens sign up, sign in, and Supabase-backed password recovery flows.
 - `Open App` from the homepage now performs a preflight check:
   - verifies whether a valid auth session exists (`/api/auth/me`)
   - syncs subscription tier (`starter`/`pro`/`desk`) and billing cycle (`monthly`/`yearly`)
@@ -47,7 +47,7 @@ Render deployment note:
 
 ### 1) Public homepage and app entry
 - Public landing page at `/` with product overview and quick entry CTAs
-- Dedicated auth workspace at `/auth` for sign up/sign in/password recovery and security actions
+- Dedicated auth workspace at `/auth` for sign up, sign in, OAuth, and password recovery
 - Full app workspace at `/app` (including company deep-dive routes at `/app/company/:symbol`)
 - Current onboarding behavior: users can still enter `/app` directly while auth hard-enforcement is pending
 - Responsive homepage mock dashboard now includes:
@@ -67,6 +67,7 @@ Render deployment note:
 ### 3) Watchlist
 - Category-based asset browsing (stocks, crypto, bonds, metals, commodities, indicators)
 - Starred/watchlist-only views with ordering preserved from DB
+- Shared Desk watchlists are gated by workspace plan; locked workspaces show read-only category context instead of stale shared rows
 - TradFi/crypto/indicator search with fuzzy matching
 - Stock theme filters (default + custom themes)
 - Earnings calendar cards for stock watchlist symbols (cached with long refresh cadence to avoid reload-time re-pulls)
@@ -129,18 +130,17 @@ Render deployment note:
 - CSV and PDF export support
 
 ### 10) Account and security
-- **Full MFA Suite**: Production-grade implementation of TOTP (Google Authenticator) and WebAuthn (Passkeys).
-- **Secure Recovery**: Cryptographically secure backup codes with one-way SHA-256 hashing and one-time consumption.
+- **Supabase Auth Transition**: Sign up, sign in, OAuth, email changes, and password recovery now route through Supabase-backed identity.
+- **MFA Transition**: Legacy in-app TOTP/passkey/backup-code controls are hidden for signed-in users until Supabase-backed management is exposed.
 - **Account Lockout**: Brute-force protection with automatic 15-minute lockout after 5 failed login attempts.
-- **Session Lifecycle**: Strict session rotation on all security status changes (2FA enable/disable) and server-side revocation.
-- **Advanced Encryption**: Industry-standard AES-256-GCM encryption for TOTP secrets and Exchange API credentials at rest.
-- **OAuth Discovery**: Provider discovery and mocked social sign-in for development/testing.
-- **Multi-step Auth UX**: Secure onboarding flow with staged screens for sign-up, passkey setup, and recovery.
+- **Session Lifecycle**: Central session checks run through `/api/auth/me` and the Supabase session exchange.
+- **Advanced Encryption**: Exchange API credentials are encrypted at rest.
+- **OAuth Discovery**: Supabase OAuth is wired from the frontend; backend legacy provider scaffolding remains for migration cleanup.
 
 ### 11) Settings & account panel
-- Profile and security controls (email/password/2FA/passkeys UI scaffolding in settings/auth)
+- Profile controls route email and password changes through the active Supabase auth surfaces
 - General preferences (timezone, refresh cadence, visibility controls)
-- Connected accounts modal for exchange/prediction market metadata
+- Connected accounts modal distinguishes live-sync providers from read-only metadata sources
 - Notification + layout preference toggles
 
 ### 12) Admin Console (New)
@@ -184,10 +184,10 @@ Render deployment note:
 ## Current limitations (as of May 18, 2026)
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
-- **Execution Connectivity**: "Connected Accounts" are currently metadata representations only; actual live trade routing to external CEX/Brokers is not yet implemented. Trading in the Asset Modal currently executes against a local database simulator.
+- **Execution Connectivity**: Connected Accounts are read-only. Binance, Bybit, and Hyperliquid can sync portfolio data; other venues are stored as metadata until provider adapters are available. Live trade routing to external venues is not implemented.
 - **Auth enforcement mode**: Homepage `Open App` now validates session/tier first, but direct `/app` URL access still allows guest mode by design for current rollout.
 - **OAuth provider setup**: Google/Apple/GitHub/Microsoft routes are scaffolded in backend; production OAuth client credentials/callback exchange are not yet configured.
-- **Recovery delivery**: While recovery flows are implemented, production-grade email/SMS delivery integrations are still pending connection to external providers.
+- **MFA management**: Password recovery uses Supabase email delivery; advanced MFA/passkey management is not yet exposed in the in-app Settings panel.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
 - **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
 - **Homepage device preview assets**: Footer laptop/phone visuals currently use themed mock content (not live in-app screenshots).
@@ -448,7 +448,7 @@ See `backend/.env.example` for template values.
 ## Next steps
 
 1. Replace `/api/auth/oauth/mock` with real OAuth code exchange (Google/Apple/GitHub/Microsoft) and provider-specific scopes.
-2. Integrate trusted delivery providers for MFA and password reset notifications (email + SMS).
+2. Expose Supabase-backed MFA/passkey management in Settings once the supported route is ready.
 3. Add refresh-token rotation / short-lived access tokens and account-level security telemetry (device/session management UI).
 4. Add automated backend tests for auth, session expiry/revocation, and per-user data isolation on all `/api/db/*` endpoints.
 5. Replace homepage footer mock device content with captured in-app Options and Analytics screenshots for production marketing parity.

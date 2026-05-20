@@ -33,7 +33,8 @@ import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
-import { ensureZeninSessionFromSupabase, signOutEverywhere, subscribeToSupabaseAuth } from "./utils/supabaseAuth";
+import { ensureZeninSessionFromSupabase, getSupabaseClient, isSupabaseConfigured, signOutEverywhere, subscribeToSupabaseAuth } from "./utils/supabaseAuth";
+import { updateAccountPlan } from "./utils/accountPlan";
 import {
   formatRevenueCatError,
   isRevenueCatCancelledError,
@@ -185,6 +186,74 @@ function getDefaultConnectionLabel(provider, venueType = "cex") {
   return `${label} main`;
 }
 
+function buildClientConnectionCapability(provider) {
+  const providerId = normalizeProviderId(provider);
+  const syncAvailable = SYNC_ENABLED_PROVIDERS.has(providerId);
+  return {
+    accessMode: providerId === "hyperliquid" ? "watch_only" : "read_only_metadata",
+    syncAvailable,
+    syncStatus: syncAvailable ? "sync_supported" : "metadata_only",
+    nextAction: syncAvailable
+      ? "Run sync to import holdings, balances, and fills."
+      : "Saved for workspace context. Live sync is not available for this provider yet.",
+    supportMessage: syncAvailable
+      ? "Zenin can import live portfolio data from this provider with read-only access."
+      : "Zenin stores this source as read-only metadata until a provider adapter is available."
+  };
+}
+
+function getConnectionCapability(account) {
+  if (account?.connectionCapability && typeof account.connectionCapability === "object") {
+    const fallback = buildClientConnectionCapability(account.provider || account.exchange);
+    return {
+      ...fallback,
+      ...account.connectionCapability,
+      syncAvailable: typeof account.connectionCapability.syncAvailable === "boolean"
+        ? account.connectionCapability.syncAvailable
+        : fallback.syncAvailable
+    };
+  }
+  return buildClientConnectionCapability(account?.provider || account?.exchange);
+}
+
+function getConnectionStatusCopy(account) {
+  const capability = getConnectionCapability(account);
+  const status = String(account?.lastSyncStatus || "").trim().toLowerCase();
+  if (capability.accessMode === "watch_only") {
+    return {
+      label: "Watch-only",
+      detail: status === "success" ? "Live wallet snapshot synced." : "Public address saved for portfolio context.",
+      action: status === "success" ? "Review imported holdings in Portfolio." : "Open Portfolio after sync completes."
+    };
+  }
+  if (!capability.syncAvailable || status === "sync_unavailable") {
+    return {
+      label: "Metadata only",
+      detail: capability.supportMessage,
+      action: capability.nextAction
+    };
+  }
+  if (status === "success") {
+    return {
+      label: "Live sync ready",
+      detail: "Holdings, balances, and fills were imported with read-only access.",
+      action: "Review imported holdings in Portfolio."
+    };
+  }
+  if (status === "error") {
+    return {
+      label: "Sync needs attention",
+      detail: account?.lastSyncMeta?.error || "Zenin saved the credential but could not complete the latest sync.",
+      action: "Check the provider credential, then reconnect or retry sync."
+    };
+  }
+  return {
+    label: "Ready to sync",
+    detail: capability.supportMessage,
+    action: capability.nextAction
+  };
+}
+
 function isGuestAccessRequested() {
   if (typeof window === "undefined") return false;
   const params = new URLSearchParams(window.location.search);
@@ -230,6 +299,10 @@ function formatPlanLabel(plan, billingCycle = "monthly") {
   if (normalized === "desk") return `Desk Plan (${cycle})`;
   if (normalized === "pro") return `Pro Plan (${cycle})`;
   return `Starter Plan (${cycle})`;
+}
+
+function getGuestWorkspaceLabel() {
+  return "Demo Workspace";
 }
 
 function normalizeCurrentPlan(plan) {
@@ -602,6 +675,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [watchlistStale, setWatchlistStale] = useState(false);
   const [watchlistNotice, setWatchlistNotice] = useState("");
+  const [sharedWatchlistAccess, setSharedWatchlistAccess] = useState({ shared: false, allowed: true, requiredPlan: "starter" });
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -673,8 +747,9 @@ function App() {
   }, [portfolio]);
 
   useEffect(() => {
+    if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) return;
     localStorage.setItem("zenin_watchlist_assets", JSON.stringify(Array.isArray(watchlistAssets) ? watchlistAssets : []));
-  }, [watchlistAssets]);
+  }, [sharedWatchlistAccess.allowed, sharedWatchlistAccess.shared, watchlistAssets]);
 
   useEffect(() => {
     localStorage.setItem("zenin_active_options_trades", JSON.stringify(Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []));
@@ -1062,6 +1137,7 @@ function App() {
           priceCacheRef.current.set(normalized, {
             price: Number.isFinite(price) ? price : null,
             priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+            source: quote?.source || priceData?.providers?.[0]?.source || null,
             ts: Date.now()
           });
         });
@@ -1141,7 +1217,7 @@ function App() {
           setAssets((prev) => mergeAssetPrices(getFallbackAssetsForCategory(activeCategory), prev));
         }
         setWatchlistStale(true);
-        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Using local demo market data while live data is unavailable.");
+        setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Live market data is unavailable. Showing saved symbols without fresh prices.");
         setLoading(false);
       });
   }, [activeCategory]);
@@ -2196,7 +2272,8 @@ const handleOptionTradeClosed = async (tradeId) => {
         if (!Number.isFinite(price) && !Number.isFinite(priceChangePercent)) return;
         combined.set(symbol, {
           price: Number.isFinite(price) ? price : null,
-          priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+          priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+          source: quote?.source || null
         });
       });
 
@@ -2208,7 +2285,8 @@ const handleOptionTradeClosed = async (tradeId) => {
         return {
           ...holding,
           price: quote.price ?? holding.price,
-          priceChangePercent: quote.priceChangePercent ?? holding.priceChangePercent
+          priceChangePercent: quote.priceChangePercent ?? holding.priceChangePercent,
+          priceSource: quote.source ?? holding.priceSource
         };
       }));
     };
@@ -2241,6 +2319,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const addToWatchlist = async (asset) => {
+    if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
+      setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to manage this shared watchlist.`);
+      return false;
+    }
     const mt = resolveMarketType(asset);
     const payload = {
       symbol: normalizeSymbolKey(asset.symbol),
@@ -2281,6 +2363,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const removeFromWatchlist = async ({ symbol, marketType, category = null, theme = null }) => {
+    if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
+      setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to manage this shared watchlist.`);
+      return false;
+    }
     const mt = String(marketType || "").trim().toLowerCase() || "spot";
     const normalizedSymbol = normalizeSymbolKey(symbol);
     const params = new URLSearchParams({ marketType: mt });
@@ -2432,10 +2518,11 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (!parsed) return getGuestWorkspaceLabel();
       if (isAdminUser(parsed)) return "Admin";
       return formatPlanLabel(parsed?.currentPlan, parsed?.currentBillingCycle);
     } catch {
-      return "Starter Plan";
+      return getGuestWorkspaceLabel();
     }
   });
   const [currentBillingCycle, setCurrentBillingCycle] = useState(() => {
@@ -2610,12 +2697,10 @@ const handleOptionTradeClosed = async (tradeId) => {
     })).filter((group) => group.items.length > 0);
   }, [accessibleSections, isSidebarCollapsed]);
   const handleLogout = useCallback(async () => {
-    await signOutEverywhere();
-
-    // Comprehensive cleanup of all Zenin-related local storage items
     const keysToRemove = [
       "zenin_auth_user",
       "zenin_auth_expires_at",
+      "zenin_supabase_session_present",
       "zenin_email",
       "zenin_balance",
       "zenin_portfolio",
@@ -2635,13 +2720,25 @@ const handleOptionTradeClosed = async (tradeId) => {
       "zenin_post_auth_next"
     ];
 
-    keysToRemove.forEach(key => localStorage.removeItem(key));
-    if (typeof sessionStorage !== "undefined") {
-      sessionStorage.removeItem(getConnectPromptSessionKey(authUserId));
+    try {
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.removeItem(getConnectPromptSessionKey(authUserId));
+      }
+    } catch {
+      // Continue with signout and redirect even when browser storage is unavailable.
     }
-    
-    // Hard redirect to clear any memory-resident state
-    window.location.href = "/";
+
+    try {
+      await Promise.race([
+        signOutEverywhere(),
+        new Promise((resolve) => setTimeout(resolve, 900))
+      ]);
+    } catch {
+      // Local auth state is already cleared; avoid trapping the user on a failed network request.
+    } finally {
+      window.location.replace("/");
+    }
   }, [authUserId]);
 
   const {
@@ -2695,7 +2792,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           setAuthDisplayName("");
           setCurrentPlan("starter");
           setCurrentBillingCycle("monthly");
-          setAccountPlanLabel("Starter Plan");
+          setAccountPlanLabel(getGuestWorkspaceLabel());
           setProfileSecurity((prev) => ({
             ...buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || prev?.email || "user@zenin.app"),
             passwordHash: prev?.passwordHash || ""
@@ -2743,7 +2840,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         setAuthDisplayName("");
         setCurrentPlan("starter");
         setCurrentBillingCycle("monthly");
-        setAccountPlanLabel("Starter Plan");
+        setAccountPlanLabel(getGuestWorkspaceLabel());
         setActiveWorkspace(null);
         setWorkspaceMembers([]);
         setWorkspaceInvites([]);
@@ -2812,14 +2909,25 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     const incomingBalances = Array.isArray(bootstrapData?.balances) ? bootstrapData.balances : [];
     const incomingHoldings = Array.isArray(bootstrapData?.holdings) ? bootstrapData.holdings : [];
-    const incomingWatchlist = Array.isArray(bootstrapData?.watchlistAssets) ? bootstrapData.watchlistAssets : [];
+    const nextSharedWatchlistAccess = bootstrapData?.sharedWatchlistAccess && typeof bootstrapData.sharedWatchlistAccess === "object"
+      ? {
+        shared: !!bootstrapData.sharedWatchlistAccess.shared,
+        allowed: bootstrapData.sharedWatchlistAccess.allowed !== false,
+        requiredPlan: bootstrapData.sharedWatchlistAccess.requiredPlan || "desk"
+      }
+      : { shared: false, allowed: true, requiredPlan: "starter" };
+    const sharedWatchlistLocked = nextSharedWatchlistAccess.shared && !nextSharedWatchlistAccess.allowed;
+    const incomingWatchlist = !sharedWatchlistLocked && Array.isArray(bootstrapData?.watchlistAssets) ? bootstrapData.watchlistAssets : [];
     const incomingTrades = Array.isArray(bootstrapData?.trades)
       ? bootstrapData.trades.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0)
       : [];
-    const localWatchlist = readStoredArray("zenin_watchlist_assets");
+    const localWatchlist = sharedWatchlistLocked ? [] : readStoredArray("zenin_watchlist_assets");
     const mergedWatchlist = mergeWatchlistEntries(localWatchlist, incomingWatchlist);
     const backendKeys = new Set(incomingWatchlist.map((asset) => getAssetCatalogKey(asset)));
     const missingLocalAssets = localWatchlist.filter((asset) => !backendKeys.has(getAssetCatalogKey(asset)));
+    if (sharedWatchlistLocked && typeof localStorage !== "undefined") {
+      localStorage.removeItem("zenin_watchlist_assets");
+    }
 
     startTransition(() => {
       const nextCashBalances = {};
@@ -2841,7 +2949,11 @@ const handleOptionTradeClosed = async (tradeId) => {
           .map(mapOptionHoldingToTrade)
           .filter(Boolean)
       );
-      setWatchlistAssets((prev) => mergeAssetPrices(mergedWatchlist, prev));
+      setSharedWatchlistAccess(nextSharedWatchlistAccess);
+      setWatchlistAssets((prev) => sharedWatchlistLocked ? [] : mergeAssetPrices(mergedWatchlist, prev));
+      if (sharedWatchlistLocked) {
+        setWatchlistNotice(`Shared Desk watchlists require ${formatPlanLabel(nextSharedWatchlistAccess.requiredPlan || "desk")} access. Showing read-only market context instead.`);
+      }
       setTrades(incomingTrades);
       setTradeFeeSummary(bootstrapData?.feeSummary || null);
       if (bootstrapData?.activeWorkspace?.plan) {
@@ -2872,6 +2984,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           lastVerifiedScope: account.lastVerifiedScope || "unknown",
           riskLevel: account.riskLevel || "standard",
           syncAvailable: account.syncAvailable !== false,
+          connectionCapability: account.connectionCapability || buildClientConnectionCapability(account.extraData?.providerLabel || account.exchange),
           connectedAt: account.createdAt || null,
           lastSyncAt: account.lastSyncAt || null,
           lastSyncStatus: account.lastSyncStatus || "idle",
@@ -2885,7 +2998,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       );
     });
 
-    if (missingLocalAssets.length > 0) {
+    if (!sharedWatchlistLocked && missingLocalAssets.length > 0) {
       zeninFetch(`/db/watchlist/bulk`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3605,15 +3718,16 @@ const handleOptionTradeClosed = async (tradeId) => {
   const selectedProviderId = normalizeProviderId(accountForm.provider);
   const selectedProviderCanSync = SYNC_ENABLED_PROVIDERS.has(selectedProviderId);
   const selectedProviderIsHyperliquid = selectedProviderId === "hyperliquid";
+  const selectedProviderCapability = buildClientConnectionCapability(accountForm.provider);
   const apiKeyFieldLabel = selectedProviderIsHyperliquid ? "Wallet address" : "API Key / Account ID";
   const apiKeyPlaceholder = selectedProviderIsHyperliquid
     ? "Enter public wallet address"
     : "Enter read-only API key or account ID";
   const showApiSecretField = accountForm.venueType === "cex" && selectedProviderCanSync;
-  const selectedProviderSyncLabel = selectedProviderCanSync ? "Live sync today" : "Save only";
+  const selectedProviderSyncLabel = selectedProviderCanSync ? "Live sync available" : "Metadata only";
   const selectedProviderSyncHelp = selectedProviderCanSync
-    ? "Zenin can pull holdings, balances, and fills after you connect."
-    : "Zenin will save this source now; live sync will arrive with a provider adapter.";
+    ? "Zenin can pull holdings, balances, and fills with read-only access."
+    : selectedProviderCapability.supportMessage;
 
   const onboardingVenuePreview = useMemo(
     () =>
@@ -3828,6 +3942,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         }
 
         const addedKey = await res.json();
+        const connectionCapability = addedKey.connectionCapability || buildClientConnectionCapability(accountForm.provider);
 
         let syncPayload = { syncAvailable: false, message: "Connection saved." };
         if (canSyncProvider) {
@@ -3853,10 +3968,11 @@ const handleOptionTradeClosed = async (tradeId) => {
           lastVerifiedScope: addedKey.lastVerifiedScope || permissionScope,
           riskLevel: addedKey.riskLevel || riskLevel,
           syncAvailable: canSyncProvider,
+          connectionCapability,
           connectedAt: new Date().toISOString(),
           lastSyncAt: canSyncProvider ? new Date().toISOString() : null,
           lastSyncStatus: canSyncProvider ? "success" : "sync_unavailable",
-          lastSyncMeta: canSyncProvider ? syncPayload : { reason: "Sync adapter is not available for this provider yet." }
+          lastSyncMeta: canSyncProvider ? syncPayload : { reason: connectionCapability.supportMessage }
         };
         const nextAccounts = [nextAccount, ...connectedAccounts];
         setConnectedAccounts(nextAccounts);
@@ -3869,7 +3985,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           tradesCount: Number(syncPayload?.tradesCount || 0),
           message: canSyncProvider
             ? `Synced ${Number(syncPayload?.holdingsCount || 0)} holdings and ${Number(syncPayload?.tradesCount || 0)} fills.`
-            : "Connection saved. Live sync is not available for this provider yet."
+            : connectionCapability.nextAction
         });
       } else {
         // Guest user fallback (localStorage)
@@ -3885,6 +4001,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           lastVerifiedScope: "read_only",
           riskLevel: "standard",
           syncAvailable: canSyncProvider,
+          connectionCapability: buildClientConnectionCapability(accountForm.provider),
           connectedAt: new Date().toISOString(),
           lastSyncStatus: canSyncProvider ? "local_only" : "sync_unavailable"
         };
@@ -3896,7 +4013,9 @@ const handleOptionTradeClosed = async (tradeId) => {
           syncAvailable: canSyncProvider,
           holdingsCount: 0,
           tradesCount: 0,
-          message: canSyncProvider ? "Connection saved in this browser." : "Connection saved in this browser. Live sync requires a workspace session."
+          message: canSyncProvider
+            ? "Connection saved in this browser. Sign in to run workspace sync."
+            : "Connection saved in this browser as metadata. Live sync requires a provider adapter and workspace session."
         });
       }
     } catch (error) {
@@ -3969,10 +4088,6 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const requestEmailChange = async () => {
-    if (!isGuestUser) {
-      setProfileMessage("email", "info", "Email changes are now managed in Supabase Auth and are temporarily unavailable in the in-app security panel.");
-      return;
-    }
     const nextEmail = profileForms.newEmail.trim().toLowerCase();
     const password = profileForms.emailPassword.trim();
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail);
@@ -3988,25 +4103,26 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     if (!isGuestUser) {
       try {
-        const res = await zeninFetch("/account/email/request", {
-          method: "POST",
-          body: JSON.stringify({ newEmail: nextEmail, currentPassword: password })
+        if (!isSupabaseConfigured()) {
+          throw new Error("Secure account authentication is not configured.");
+        }
+        const client = getSupabaseClient();
+        const { error: authError } = await client.auth.updateUser({
+          email: nextEmail
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || "Email change request failed.");
+        if (authError) {
+          throw authError;
         }
-        if (data?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || nextEmail));
-        }
+        setProfileSecurity((prev) => ({
+          ...prev,
+          pendingEmail: nextEmail,
+          pendingEmailRequestedAt: new Date().toISOString()
+        }));
         setProfileForms((prev) => ({ ...prev, newEmail: "", emailPassword: "", emailVerificationCode: "" }));
         setProfileMessage(
           "email",
           "success",
-          data?.devVerificationCode
-            ? `Verification sent to ${nextEmail}. Dev code: ${data.devVerificationCode}`
-            : `Verification sent to ${nextEmail}. Enter the code to confirm.`
+          `Confirmation links were sent for ${nextEmail}. Approve the email change from your inbox to finish updating your sign-in address.`
         );
         return;
       } catch (error) {
@@ -4040,7 +4156,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const verifyPendingEmail = async () => {
     if (!isGuestUser) {
-      setProfileMessage("email", "info", "Email verification now happens through Supabase Auth.");
+      setProfileMessage("email", "info", "Confirm the email-change links sent by Supabase, then refresh this page.");
       return;
     }
     const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
@@ -4096,10 +4212,6 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const updatePassword = async () => {
-    if (!isGuestUser) {
-      setProfileMessage("password", "info", "Password updates are now managed through Supabase Auth. Use the reset flow from /auth.");
-      return;
-    }
     const currentPassword = profileForms.currentPassword.trim();
     const newPassword = profileForms.newPassword.trim();
     const confirmPassword = profileForms.confirmPassword.trim();
@@ -4110,18 +4222,26 @@ const handleOptionTradeClosed = async (tradeId) => {
         return;
       }
       try {
-        const res = await zeninFetch("/account/password", {
-          method: "POST",
-          body: JSON.stringify({ currentPassword, newPassword })
+        if (!isSupabaseConfigured()) {
+          throw new Error("Secure account authentication is not configured.");
+        }
+        if (newPassword.length < 10) {
+          throw new Error("New password must be at least 10 characters.");
+        }
+        if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
+          throw new Error("Use letters, numbers, and a symbol in your new password.");
+        }
+        const client = getSupabaseClient();
+        const { error: authError } = await client.auth.updateUser({
+          password: newPassword
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || "Password update failed.");
+        if (authError) {
+          throw authError;
         }
-        if (data?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
-        }
+        setProfileSecurity((prev) => ({
+          ...prev,
+          passwordChangedAt: new Date().toISOString()
+        }));
         setProfileForms((prev) => ({
           ...prev,
           currentPassword: "",
@@ -4174,7 +4294,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const enableTwoFactor = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Advanced 2FA and passkey controls are temporarily disabled while Zenin finishes the Supabase Auth transition.");
+      setProfileMessage("twofa", "info", "Multi-factor authentication is now managed through Supabase. Zenin sign-in is unified, but in-app MFA enrollment is not exposed yet.");
       return;
     }
     const method = String(profileForms.twoFactorMethod || "authenticator");
@@ -4182,46 +4302,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (method !== "passkey" && !/^\d{6}$/.test(code)) {
       setProfileMessage("twofa", "error", "Enter a valid 6-digit verification code.");
       return;
-    }
-
-    if (!isGuestUser) {
-      const target = method === "sms"
-        ? profileForms.phoneNumber.trim()
-        : method === "email"
-          ? profileForms.recoveryEmail.trim().toLowerCase()
-          : "";
-      const provider = method === "authenticator" ? profileForms.authenticatorService : method === "sms" ? "SMS OTP" : "Email OTP";
-      const secret = method === "authenticator" ? (totpSetup.secret || "") : "";
-      if (method === "authenticator" && !secret) {
-        setProfileMessage("twofa", "error", "Generate a QR code first.");
-        return;
-      }
-      try {
-        const res = await zeninFetch("/auth/2fa/enable", {
-          method: "POST",
-          body: JSON.stringify({
-            method,
-            verificationCode: code,
-            provider,
-            target,
-            secret
-          })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || "2FA enable failed.");
-        }
-        if (data?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
-        }
-        setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
-        setProfileMessage("twofa", "success", `${provider} 2FA enabled.`);
-        return;
-      } catch (error) {
-        setProfileMessage("twofa", "error", error?.message || "2FA enable failed.");
-        return;
-      }
     }
 
     if (method === "authenticator") {
@@ -4283,50 +4363,13 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const registerPasskey = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Passkey enrollment is temporarily disabled in-app during the Supabase Auth transition.");
+      setProfileMessage("twofa", "info", "Passkey enrollment is not exposed in Zenin settings yet. Use the unified Supabase sign-in surfaces while passkey management is being completed.");
       return;
     }
     const passkeyName = profileForms.passkeyName.trim();
     if (passkeyName.length < 2) {
       setProfileMessage("twofa", "error", "Passkey name must be at least 2 characters.");
       return;
-    }
-
-    if (!isGuestUser) {
-      try {
-        // Step 1: Get registration options from the server
-        const optionsRes = await zeninFetch("/auth/passkeys/register/generate-options");
-        const options = await optionsRes.json();
-        if (!optionsRes.ok) throw new Error(options?.error || "Failed to get registration options.");
-
-        // Step 2: Start the WebAuthn registration ceremony in the browser
-        const startRegistration = await getStartRegistration();
-        const attResp = await startRegistration(options);
-
-        // Step 3: Send the result back to the server for verification
-        const verifyRes = await zeninFetch("/auth/passkeys/register/verify", {
-          method: "POST",
-          body: JSON.stringify({
-            response: attResp,
-            name: passkeyName,
-            provider: profileForms.passkeyProvider
-          })
-        });
-        const verifyData = await verifyRes.json().catch(() => ({}));
-        if (!verifyRes.ok) throw new Error(verifyData?.error || "Passkey verification failed.");
-
-        if (verifyData?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(verifyData.user));
-          setProfileSecurity(profileSecurityFromUser(verifyData.user, verifyData.user.email || userEmail));
-        }
-        setProfileForms((prev) => ({ ...prev, passkeyName: "Primary Device" }));
-        setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
-        return;
-      } catch (error) {
-        const msg = error?.name === "NotAllowedError" ? "Passkey registration was cancelled." : (error?.message || "Passkey registration failed.");
-        setProfileMessage("twofa", "error", msg);
-        return;
-      }
     }
 
     const newPasskey = {
@@ -4351,7 +4394,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const regenerateBackupCodes = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Backup code management is temporarily disabled in-app during the Supabase Auth transition.");
+      setProfileMessage("twofa", "info", "Backup-code management is not exposed in Zenin settings yet.");
       return;
     }
     if (!profileSecurity.twoFactorEnabled) {
@@ -4362,56 +4405,14 @@ const handleOptionTradeClosed = async (tradeId) => {
       setProfileMessage("twofa", "error", "Select and enable a 2FA method first.");
       return;
     }
-    if (!isGuestUser) {
-      try {
-        const res = await zeninFetch("/auth/2fa/backup-codes/regenerate", {
-          method: "POST",
-          body: JSON.stringify({})
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || "Backup code regeneration failed.");
-        }
-        if (data?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
-        }
-        setProfileMessage("twofa", "success", "Backup codes regenerated.");
-        return;
-      } catch (error) {
-        setProfileMessage("twofa", "error", error?.message || "Backup code regeneration failed.");
-        return;
-      }
-    }
     setProfileSecurity((prev) => ({ ...prev, backupCodes: createBackupCodes() }));
     setProfileMessage("twofa", "success", "Backup codes regenerated.");
   };
 
   const disableTwoFactor = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "2FA disable is temporarily managed outside the app while Supabase Auth is rolling out.");
+      setProfileMessage("twofa", "info", "2FA disable is managed through Supabase until Zenin exposes the in-app controls.");
       return;
-    }
-    if (!isGuestUser) {
-      try {
-        const res = await zeninFetch("/auth/2fa/disable", {
-          method: "POST",
-          body: JSON.stringify({})
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || "2FA disable failed.");
-        }
-        if (data?.user) {
-          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
-          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || userEmail));
-        }
-        setProfileMessage("twofa", "info", "2FA disabled for this workspace profile.");
-        return;
-      } catch (error) {
-        setProfileMessage("twofa", "error", error?.message || "2FA disable failed.");
-        return;
-      }
     }
     setProfileSecurity((prev) => ({
       ...prev,
@@ -4448,7 +4449,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     return true;
   })();
 
-  const settingsPreviewNote = "Workspace sync: profile, preferences, and connected-account metadata still save to your Zenin workspace. Password, email, and MFA flows are moving to Supabase Auth.";
+  const settingsPreviewNote = "Workspace sync: profile, preferences, and connected-account metadata still save to your Zenin workspace. Identity now runs through Supabase, while advanced MFA and passkey management are still being surfaced inside Zenin.";
 
   const sidebarIconMap = {
     Home: HomeIcon,
@@ -4470,6 +4471,14 @@ const handleOptionTradeClosed = async (tradeId) => {
   const isSidebarVisuallyCollapsed = isSidebarCollapsed;
   const usesWorkspaceShell = routeState.type !== "company";
   const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
+  const sharedWatchlistLocked = sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed;
+  const hasDeskFeatureAccess = isAdmin || normalizeCurrentPlan(currentPlan) === "desk";
+  const lockedWatchlistPreviewAssets = useMemo(() => (
+    sharedWatchlistLocked
+      ? mergeAssetPrices(getFallbackAssetsForCategory(activeCategory), assets)
+      : watchlistAssets
+  ), [activeCategory, assets, sharedWatchlistLocked, watchlistAssets]);
+  const lockedWatchlistPlanLabel = formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk");
   const renderConnectNudge = (surface = "home") => {
     if (!shouldShowConnectNudge) return null;
     return (
@@ -4510,10 +4519,6 @@ const handleOptionTradeClosed = async (tradeId) => {
             <div className="sidebar-console-topbar">
               <strong>ZENIN</strong>
               <span className="sidebar-console-live"><i /> Live</span>
-              <span className="sidebar-console-market">{activeWorkspace?.name || "Workspace"}</span>
-              {activeWorkspace?.seatLimit ? (
-                <span className="sidebar-console-market">{`${activeWorkspace.seatCount || 0}/${activeWorkspace.seatLimit} seats`}</span>
-              ) : null}
               <span className="sidebar-console-plan">{accountPlanLabel}</span>
               <button
                 className="sidebar-toggle-btn mobile-close-btn"
@@ -4753,6 +4758,70 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         {activeSection === "Watchlist" && (
           <div className="view-container">
+            {sharedWatchlistLocked ? (
+              <>
+                <section className="desk-watchlist-lock" role="status">
+                  <span>Shared Desk watchlist</span>
+                  <h2>Upgrade to {lockedWatchlistPlanLabel} to reopen the shared list</h2>
+                  <p>
+                    This workspace previously used a shared watchlist. Zenin is hiding member-managed rows so stale symbols do not linger locally, but the category view stays available for market context.
+                  </p>
+                  <div className="settings-inline-actions">
+                    <button
+                      type="button"
+                      className="settings-primary-btn"
+                      onClick={() => {
+                        setIsSettingsOpen(true);
+                        setActiveSettingsCategory("Subscription");
+                      }}
+                    >
+                      View Upgrade Path
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-secondary-btn"
+                      onClick={() => setActiveCategory("indicators")}
+                    >
+                      Review Indicators
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-secondary-btn"
+                      onClick={() => setActiveCategory("commodities")}
+                    >
+                      Review Commodities
+                    </button>
+                  </div>
+                </section>
+                {watchlistNotice ? (
+                  <div className="stale-banner">
+                    <span className="status-icon">⚠</span>
+                    {watchlistNotice}
+                  </div>
+                ) : null}
+                <Watchlist
+                  categories={categories.length ? categories : fallbackCategories}
+                  activeCategory={activeCategory}
+                  onCategorySelect={handleCategorySelect}
+                  assets={assets}
+                  watchlistAssets={lockedWatchlistPreviewAssets}
+                  onAdd={() => {}}
+                  loading={loading}
+                  activeTheme={activeTheme}
+                  onThemeSelect={setActiveTheme}
+                  stockThemes={stockThemes}
+                  isInWatchlist={() => true}
+                  onToggleStar={() => {
+                    setWatchlistNotice(`Upgrade to ${lockedWatchlistPlanLabel} to manage this shared watchlist.`);
+                    return "locked";
+                  }}
+                  onPageChange={handlePageChange}
+                  liveStatus={liveStreamStatus}
+                  lastLivePriceAt={lastLivePriceAt}
+                />
+              </>
+            ) : (
+              <>
             <div className="search-section" ref={searchSectionRef}>
               <div className="search-controls">
                 <input
@@ -4858,6 +4927,8 @@ const handleOptionTradeClosed = async (tradeId) => {
               liveStatus={liveStreamStatus}
               lastLivePriceAt={lastLivePriceAt}
             />
+              </>
+            )}
           </div>
         )}
 
@@ -4906,6 +4977,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                   setActiveSection("Journal");
                 }}
                 onOpenConnections={() => openConnectWindow("manual")}
+                hasDeskFeatureAccess={hasDeskFeatureAccess}
+                onOpenPlans={() => {
+                  setIsSettingsOpen(true);
+                  setActiveSettingsCategory("Subscription");
+                }}
               />
 
           </div>
@@ -4913,7 +4989,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
        {activeSection === "Analytics" && (
         <div className="view-container">
-          <AnalyticsModule backendUrl={BACKEND_URL} />
+          <AnalyticsModule backendUrl={BACKEND_URL} hasDeskFeatureAccess={hasDeskFeatureAccess} />
         </div>
       )}
 
@@ -5121,42 +5197,52 @@ const handleOptionTradeClosed = async (tradeId) => {
                               placeholder="name@example.com"
                             />
                           </label>
-                          <label className="settings-field">
-                            <span>Current Password</span>
-                            <input
-                              type="password"
-                              value={profileForms.emailPassword}
-                              onChange={(e) => setProfileForms((prev) => ({ ...prev, emailPassword: e.target.value }))}
-                              placeholder="Enter current password"
-                            />
-                          </label>
-                          <label className="settings-field">
-                            <span>Verification Code</span>
-                            <input
-                              type="text"
-                              value={profileForms.emailVerificationCode}
-                              onChange={(e) => setProfileForms((prev) => ({
-                                ...prev,
-                                emailVerificationCode: e.target.value.replace(/\D/g, "").slice(0, 6)
-                              }))}
-                              placeholder="6-digit code"
-                            />
-                          </label>
+                          {isGuestUser ? (
+                            <>
+                              <label className="settings-field">
+                                <span>Current Password</span>
+                                <input
+                                  type="password"
+                                  value={profileForms.emailPassword}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, emailPassword: e.target.value }))}
+                                  placeholder="Enter current password"
+                                />
+                              </label>
+                              <label className="settings-field">
+                                <span>Verification Code</span>
+                                <input
+                                  type="text"
+                                  value={profileForms.emailVerificationCode}
+                                  onChange={(e) => setProfileForms((prev) => ({
+                                    ...prev,
+                                    emailVerificationCode: e.target.value.replace(/\D/g, "").slice(0, 6)
+                                  }))}
+                                  placeholder="6-digit code"
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <p className="settings-meta">
+                              Supabase will send a confirmation link to your new inbox before your sign-in email changes.
+                            </p>
+                          )}
                           <div className="settings-inline-actions">
                             <button
                               className="settings-primary-btn"
                               onClick={requestEmailChange}
-                              disabled={!canSendEmailVerification}
+                              disabled={isGuestUser ? !canSendEmailVerification : !String(profileForms?.newEmail || "").trim()}
                             >
-                              Send Verification
+                              {isGuestUser ? "Send Verification" : "Request Email Change"}
                             </button>
-                            <button
-                              className="settings-secondary-btn"
-                              onClick={verifyPendingEmail}
-                              disabled={!canConfirmEmailVerification}
-                            >
-                              Confirm Verification
-                            </button>
+                            {isGuestUser ? (
+                              <button
+                                className="settings-secondary-btn"
+                                onClick={verifyPendingEmail}
+                                disabled={!canConfirmEmailVerification}
+                              >
+                                Confirm Verification
+                              </button>
+                            ) : null}
                           </div>
                           {profileFeedback.email?.text ? (
                             <p className={`settings-status ${profileFeedback.email.type}`}>{profileFeedback.email.text}</p>
@@ -5172,41 +5258,62 @@ const handleOptionTradeClosed = async (tradeId) => {
                       </button>
                       {expandedSettingsPanels["profile-password"] && (
                         <div className="settings-panel-body">
-                          <label className="settings-field">
-                            <span>Current Password</span>
-                            <input
-                              type="password"
-                              value={profileForms.currentPassword}
-                              onChange={(e) => setProfileForms((prev) => ({ ...prev, currentPassword: e.target.value }))}
-                              placeholder="Enter current password"
-                            />
-                          </label>
-                          <label className="settings-field">
-                            <span>New Password</span>
-                            <input
-                              type="password"
-                              value={profileForms.newPassword}
-                              onChange={(e) => setProfileForms((prev) => ({ ...prev, newPassword: e.target.value }))}
-                              placeholder="Use at least 10 characters"
-                            />
-                          </label>
-                          <label className="settings-field">
-                            <span>Confirm New Password</span>
-                            <input
-                              type="password"
-                              value={profileForms.confirmPassword}
-                              onChange={(e) => setProfileForms((prev) => ({ ...prev, confirmPassword: e.target.value }))}
-                              placeholder="Re-enter new password"
-                            />
-                          </label>
+                          {isGuestUser ? (
+                            <label className="settings-field">
+                              <span>Current Password</span>
+                              <input
+                                type="password"
+                                value={profileForms.currentPassword}
+                                onChange={(e) => setProfileForms((prev) => ({ ...prev, currentPassword: e.target.value }))}
+                                placeholder="Enter current password"
+                              />
+                            </label>
+                          ) : (
+                            <p className="settings-meta">
+                              Password changes now run through the Supabase recovery route so the account session and email verification stay in sync.
+                            </p>
+                          )}
+                          {isGuestUser ? (
+                            <>
+                              <label className="settings-field">
+                                <span>New Password</span>
+                                <input
+                                  type="password"
+                                  value={profileForms.newPassword}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, newPassword: e.target.value }))}
+                                  placeholder="Use at least 10 characters"
+                                />
+                              </label>
+                              <label className="settings-field">
+                                <span>Confirm New Password</span>
+                                <input
+                                  type="password"
+                                  value={profileForms.confirmPassword}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                                  placeholder="Re-enter new password"
+                                />
+                              </label>
+                            </>
+                          ) : null}
                           <div className="settings-inline-actions">
-                            <button
-                              className="settings-primary-btn"
-                              onClick={updatePassword}
-                              disabled={!canUpdatePassword}
-                            >
-                              Update Password
-                            </button>
+                            {isGuestUser ? (
+                              <button
+                                className="settings-primary-btn"
+                                onClick={updatePassword}
+                                disabled={!canUpdatePassword}
+                              >
+                                Update Demo Password
+                              </button>
+                            ) : (
+                              <button
+                                className="settings-primary-btn"
+                                onClick={() => {
+                                  window.location.href = "/auth?mode=forgot&next=/app";
+                                }}
+                              >
+                                Open Password Recovery
+                              </button>
+                            )}
                           </div>
                           {profileSecurity.passwordChangedAt ? (
                             <p className="settings-meta">
@@ -5238,168 +5345,187 @@ const handleOptionTradeClosed = async (tradeId) => {
                               <span className="settings-chip">{profileSecurity.twoFactorProvider}</span>
                             ) : null}
                           </div>
-
-                          <label className="settings-field">
-                            <span>Security Method</span>
-                            <select
-                              value={profileForms.twoFactorMethod}
-                              onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorMethod: e.target.value }))}
-                            >
-                              <option value="authenticator">Authenticator App</option>
-                              <option value="passkey">Passkey</option>
-                              <option value="sms">SMS OTP</option>
-                              <option value="email">Email OTP</option>
-                            </select>
-                          </label>
-
-                          {profileForms.twoFactorMethod === "authenticator" ? (
+                          {isGuestUser ? (
                             <>
                               <label className="settings-field">
-                                <span>Authenticator Service</span>
+                                <span>Security Method</span>
                                 <select
-                                  value={profileForms.authenticatorService}
-                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, authenticatorService: e.target.value }))}
+                                  value={profileForms.twoFactorMethod}
+                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorMethod: e.target.value }))}
                                 >
-                                  {authenticatorOptions.map((service) => (
-                                    <option key={service} value={service}>{service}</option>
-                                  ))}
+                                  <option value="authenticator">Authenticator App</option>
+                                  <option value="passkey">Passkey</option>
+                                  <option value="sms">SMS OTP</option>
+                                  <option value="email">Email OTP</option>
                                 </select>
                               </label>
-                              <p className="settings-meta">Scan QR in your app, then enter the 6-digit code below.</p>
-                              {!isGuestUser && !totpSetup.secret && !totpSetup.loading ? (
-                                <button className="settings-secondary-btn" style={{ margin: "12px 0" }} onClick={fetchTotpSetup}>Generate QR Code</button>
-                              ) : null}
-                              {totpSetup.loading ? (
-                                <p className="settings-meta" style={{ margin: "12px 0" }}>Generating...</p>
-                              ) : null}
-                              {totpSetup.qrCodeDataUrl && totpSetup.secret ? (
-                                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "12px", margin: "16px 0" }}>
-                                  <div style={{ background: "#fff", padding: "12px", borderRadius: "3px", display: "inline-block" }}>
-                                    <img src={totpSetup.qrCodeDataUrl} alt="TOTP QR Code" width="160" height="160" style={{ display: "block" }} />
-                                  </div>
-                                  <div>
-                                    <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Secret Key</span>
-                                    <p style={{ fontFamily: "monospace", fontSize: "1.05rem", color: "var(--text)", margin: "4px 0 0 0", letterSpacing: "1px", wordBreak: "break-all" }}>{totpSetup.secret}</p>
-                                  </div>
-                                </div>
-                              ) : null}
-                            </>
-                          ) : null}
 
-                          {profileForms.twoFactorMethod === "passkey" ? (
-                            <>
-                              <label className="settings-field">
-                                <span>Passkey Service</span>
-                                <select
-                                  value={profileForms.passkeyProvider}
-                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyProvider: e.target.value }))}
+                              {profileForms.twoFactorMethod === "authenticator" ? (
+                                <>
+                                  <label className="settings-field">
+                                    <span>Authenticator Service</span>
+                                    <select
+                                      value={profileForms.authenticatorService}
+                                      onChange={(e) => setProfileForms((prev) => ({ ...prev, authenticatorService: e.target.value }))}
+                                    >
+                                      {authenticatorOptions.map((service) => (
+                                        <option key={service} value={service}>{service}</option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <p className="settings-meta">Scan QR in your app, then enter the 6-digit code below.</p>
+                                  {!isGuestUser && !totpSetup.secret && !totpSetup.loading ? (
+                                    <button className="settings-secondary-btn" style={{ margin: "12px 0" }} onClick={fetchTotpSetup}>Generate QR Code</button>
+                                  ) : null}
+                                  {totpSetup.loading ? (
+                                    <p className="settings-meta" style={{ margin: "12px 0" }}>Generating...</p>
+                                  ) : null}
+                                  {totpSetup.qrCodeDataUrl && totpSetup.secret ? (
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "12px", margin: "16px 0" }}>
+                                      <div style={{ background: "#fff", padding: "12px", borderRadius: "3px", display: "inline-block" }}>
+                                        <img src={totpSetup.qrCodeDataUrl} alt="TOTP QR Code" width="160" height="160" style={{ display: "block" }} />
+                                      </div>
+                                      <div>
+                                        <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Secret Key</span>
+                                        <p style={{ fontFamily: "monospace", fontSize: "1.05rem", color: "var(--text)", margin: "4px 0 0 0", letterSpacing: "1px", wordBreak: "break-all" }}>{totpSetup.secret}</p>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </>
+                              ) : null}
+
+                              {profileForms.twoFactorMethod === "passkey" ? (
+                                <>
+                                  <label className="settings-field">
+                                    <span>Passkey Service</span>
+                                    <select
+                                      value={profileForms.passkeyProvider}
+                                      onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyProvider: e.target.value }))}
+                                    >
+                                      {passkeyOptions.map((provider) => (
+                                        <option key={provider} value={provider}>{provider}</option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label className="settings-field">
+                                    <span>Passkey Name</span>
+                                    <input
+                                      type="text"
+                                      value={profileForms.passkeyName}
+                                      onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyName: e.target.value }))}
+                                      placeholder="MacBook Pro / iPhone / YubiKey"
+                                    />
+                                  </label>
+                                </>
+                              ) : null}
+
+                              {profileForms.twoFactorMethod === "sms" ? (
+                                <label className="settings-field">
+                                  <span>Phone Number</span>
+                                  <input
+                                    type="text"
+                                    value={profileForms.phoneNumber}
+                                    onChange={(e) => setProfileForms((prev) => ({ ...prev, phoneNumber: e.target.value }))}
+                                    placeholder="+1 555 123 4567"
+                                  />
+                                </label>
+                              ) : null}
+
+                              {profileForms.twoFactorMethod === "email" ? (
+                                <label className="settings-field">
+                                  <span>Recovery Email</span>
+                                  <input
+                                    type="email"
+                                    value={profileForms.recoveryEmail}
+                                    onChange={(e) => setProfileForms((prev) => ({ ...prev, recoveryEmail: e.target.value }))}
+                                    placeholder="security@example.com"
+                                  />
+                                </label>
+                              ) : null}
+
+                              {profileForms.twoFactorMethod !== "passkey" ? (
+                                <label className="settings-field">
+                                  <span>Verification Code</span>
+                                  <input
+                                    type="text"
+                                    value={profileForms.twoFactorCode}
+                                    onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                                    placeholder="6-digit code"
+                                  />
+                                </label>
+                              ) : null}
+
+                              <div className="settings-inline-actions">
+                                {profileForms.twoFactorMethod === "passkey" ? (
+                                  <button
+                                    className="settings-primary-btn"
+                                    onClick={registerPasskey}
+                                    disabled={!canEnableTwoFactor}
+                                  >
+                                    Register Passkey
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="settings-primary-btn"
+                                    onClick={enableTwoFactor}
+                                    disabled={!canEnableTwoFactor}
+                                  >
+                                    Enable 2FA
+                                  </button>
+                                )}
+                                <button
+                                  className="settings-secondary-btn"
+                                  onClick={regenerateBackupCodes}
+                                  disabled={!profileSecurity.twoFactorEnabled}
                                 >
-                                  {passkeyOptions.map((provider) => (
-                                    <option key={provider} value={provider}>{provider}</option>
+                                  Regenerate Backup Codes
+                                </button>
+                                <button
+                                  className="settings-secondary-btn"
+                                  onClick={disableTwoFactor}
+                                  disabled={!profileSecurity.twoFactorEnabled}
+                                >
+                                  Disable 2FA
+                                </button>
+                              </div>
+
+                              {profileSecurity.passkeys?.length ? (
+                                <div className="settings-passkey-list">
+                                  {profileSecurity.passkeys.map((passkey) => (
+                                    <div key={passkey.id} className="settings-passkey-item">
+                                      <strong>{passkey.name}</strong>
+                                      <span>{passkey.provider}</span>
+                                    </div>
                                   ))}
-                                </select>
-                              </label>
-                              <label className="settings-field">
-                                <span>Passkey Name</span>
-                                <input
-                                  type="text"
-                                  value={profileForms.passkeyName}
-                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyName: e.target.value }))}
-                                  placeholder="MacBook Pro / iPhone / YubiKey"
-                                />
-                              </label>
-                            </>
-                          ) : null}
-
-                          {profileForms.twoFactorMethod === "sms" ? (
-                            <label className="settings-field">
-                              <span>Phone Number</span>
-                              <input
-                                type="text"
-                                value={profileForms.phoneNumber}
-                                onChange={(e) => setProfileForms((prev) => ({ ...prev, phoneNumber: e.target.value }))}
-                                placeholder="+1 555 123 4567"
-                              />
-                            </label>
-                          ) : null}
-
-                          {profileForms.twoFactorMethod === "email" ? (
-                            <label className="settings-field">
-                              <span>Recovery Email</span>
-                              <input
-                                type="email"
-                                value={profileForms.recoveryEmail}
-                                onChange={(e) => setProfileForms((prev) => ({ ...prev, recoveryEmail: e.target.value }))}
-                                placeholder="security@example.com"
-                              />
-                            </label>
-                          ) : null}
-
-                          {profileForms.twoFactorMethod !== "passkey" ? (
-                            <label className="settings-field">
-                              <span>Verification Code</span>
-                              <input
-                                type="text"
-                                value={profileForms.twoFactorCode}
-                                onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
-                                placeholder="6-digit code"
-                              />
-                            </label>
-                          ) : null}
-
-                          <div className="settings-inline-actions">
-                            {profileForms.twoFactorMethod === "passkey" ? (
-                              <button
-                                className="settings-primary-btn"
-                                onClick={registerPasskey}
-                                disabled={!canEnableTwoFactor}
-                              >
-                                Register Passkey
-                              </button>
-                            ) : (
-                              <button
-                                className="settings-primary-btn"
-                                onClick={enableTwoFactor}
-                                disabled={!canEnableTwoFactor}
-                              >
-                                Enable 2FA
-                              </button>
-                            )}
-                            <button
-                              className="settings-secondary-btn"
-                              onClick={regenerateBackupCodes}
-                              disabled={!profileSecurity.twoFactorEnabled}
-                            >
-                              Regenerate Backup Codes
-                            </button>
-                            <button
-                              className="settings-secondary-btn"
-                              onClick={disableTwoFactor}
-                              disabled={!profileSecurity.twoFactorEnabled}
-                            >
-                              Disable 2FA
-                            </button>
-                          </div>
-
-                          {profileSecurity.passkeys?.length ? (
-                            <div className="settings-passkey-list">
-                              {profileSecurity.passkeys.map((passkey) => (
-                                <div key={passkey.id} className="settings-passkey-item">
-                                  <strong>{passkey.name}</strong>
-                                  <span>{passkey.provider}</span>
                                 </div>
-                              ))}
-                            </div>
-                          ) : null}
+                              ) : null}
 
-                          {profileSecurity.backupCodes?.length ? (
-                            <div className="settings-backup-grid">
-                              {profileSecurity.backupCodes.map((code) => (
-                                <code key={code}>{code}</code>
-                              ))}
-                            </div>
+                              {profileSecurity.backupCodes?.length ? (
+                                <div className="settings-backup-grid">
+                                  {profileSecurity.backupCodes.map((code) => (
+                                    <code key={code}>{code}</code>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="settings-meta">Backup codes will appear once 2FA is enabled.</p>
+                              )}
+                            </>
                           ) : (
-                            <p className="settings-meta">Backup codes will appear once 2FA is enabled.</p>
+                            <div className="settings-account-managed-note">
+                              <p className="settings-meta" style={{ marginTop: 0 }}>
+                                Zenin now uses Supabase as the source of truth for identity. In-app MFA, backup-code, and passkey enrollment controls are hidden until the Supabase-backed management route is available.
+                              </p>
+                              <div className="settings-inline-actions">
+                                <button
+                                  className="settings-primary-btn"
+                                  onClick={() => {
+                                    window.location.href = "/auth?mode=signin&next=/app";
+                                  }}
+                                >
+                                  Open Account Access
+                                </button>
+                              </div>
+                            </div>
                           )}
 
                           {profileFeedback.twofa?.text ? (
@@ -5871,23 +5997,26 @@ const handleOptionTradeClosed = async (tradeId) => {
                       {expandedSettingsPanels["accounts-connected"] && (
                         <div className="settings-panel-body">
                           {connectedAccounts.length === 0 ? (
-                            <p className="settings-meta">No connected CEX, DEX, brokerage, or prediction market accounts yet.</p>
+                            <p className="settings-meta">No saved CEX, DEX, brokerage, or prediction market sources yet. Add one read-only source to preserve portfolio context; only supported providers can live sync today.</p>
                           ) : (
                             <div className="connected-accounts-list">
-                              {connectedAccounts.map((acc) => (
-                                <div key={acc.id} className="connected-account-item">
-                                  <div>
-                                    <strong>{acc.provider}</strong>
-                                    <p>
-                                      {acc.username} • {acc.venueType.toUpperCase()}
-                                      {acc.lastSyncStatus ? ` • ${String(acc.lastSyncStatus).toUpperCase()}` : ""}
-                                      {acc.permissionScope ? ` • ${String(acc.permissionScope).replace(/_/g, " ").toUpperCase()}` : ""}
-                                      {acc.riskLevel ? ` • ${String(acc.riskLevel).toUpperCase()}` : ""}
-                                    </p>
+                              {connectedAccounts.map((acc) => {
+                                const statusCopy = getConnectionStatusCopy(acc);
+                                return (
+                                  <div key={acc.id} className="connected-account-item">
+                                    <div>
+                                      <strong>{acc.provider}</strong>
+                                      <p>
+                                        {acc.username} • {String(acc.venueType || "source").toUpperCase()} • {statusCopy.label}
+                                        {acc.permissionScope ? ` • ${String(acc.permissionScope).replace(/_/g, " ").toUpperCase()}` : ""}
+                                      </p>
+                                      <p>{statusCopy.detail}</p>
+                                      <p>{statusCopy.action}</p>
+                                    </div>
+                                    <span>{acc.lastSyncAt ? new Date(acc.lastSyncAt).toLocaleString() : acc.apiKeyMasked}</span>
                                   </div>
-                                  <span>{acc.lastSyncAt ? new Date(acc.lastSyncAt).toLocaleString() : acc.apiKeyMasked}</span>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                           <button className="settings-primary-btn" onClick={openConnectWindow}>
@@ -6033,9 +6162,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                   <div className="connect-account-shell">
                     <aside className="connect-account-trust-panel">
                       <div className="connect-account-kicker">Secure setup</div>
-                      <h2>{connectPromptMode === "onboarding" ? "Bring in your portfolio data" : "Connect another account"}</h2>
+                      <h2>{connectPromptMode === "onboarding" ? "Add your first source" : "Add another source"}</h2>
                       <p>
-                        Connect read-only credentials or watch-only addresses to unlock portfolio context, analytics, and tax tracking inside your Zenin workspace.
+                        Save read-only credentials or watch-only addresses for workspace context. Supported providers can sync holdings and fills now; the rest are stored as metadata until adapters ship.
                       </p>
                       <div className="connect-account-trust-grid">
                         <div className="connect-account-trust-card">
@@ -6045,8 +6174,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                         </div>
                         <div className="connect-account-trust-card">
                           <span>Coverage</span>
-                          <strong>Portfolio + research</strong>
-                          <em>Holdings, balances, fills, and performance context.</em>
+                          <strong>Sync where supported</strong>
+                          <em>Binance, Bybit, and Hyperliquid can import data today. Other venues are metadata only.</em>
                         </div>
                       </div>
                       <div className="connect-account-security-list">
@@ -6060,7 +6189,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         </div>
                         <div>
                           <strong>Start with one venue</strong>
-                          <span>You can add more exchanges, brokerages, or prediction accounts after the first sync.</span>
+                          <span>Pick a live-sync provider for imported holdings, or save any listed venue as read-only context.</span>
                         </div>
                       </div>
                       <div className="connect-account-provider-preview">
@@ -6069,7 +6198,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           return (
                             <span key={venue} className={canSync ? "can-sync" : "save-only"}>
                               {venue}
-                              <em>{canSync ? "Sync" : "Save"}</em>
+                              <em>{canSync ? "Live sync" : "Metadata"}</em>
                             </span>
                           );
                         })}
@@ -6080,7 +6209,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <div className="connect-account-header">
                         <div>
                           <span>{connectPromptMode === "onboarding" ? "Finish setup" : "Account link"}</span>
-                          <strong>{connectPromptMode === "onboarding" ? "Connect your first venue" : "Add a read-only source"}</strong>
+                          <strong>{connectPromptMode === "onboarding" ? "Choose a useful first source" : "Add a read-only source"}</strong>
                         </div>
                         <button className="close-btn" onClick={() => setIsConnectWindowOpen(false)} aria-label="Close connect account modal">&times;</button>
                       </div>
@@ -6142,8 +6271,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <>
                         <div className="connect-account-status-strip">
                           <div>
-                            <span>Unlocks</span>
-                            <strong>Live portfolio, analytics, tax tracking</strong>
+                            <span>Access</span>
+                            <strong>{selectedProviderIsHyperliquid ? "Watch-only public address" : "Read-only source record"}</strong>
                           </div>
                           <div>
                             <span>{selectedProviderSyncLabel}</span>
@@ -6260,8 +6389,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                             {selectedProviderIsHyperliquid
                               ? "Hyperliquid connects from a public wallet address only. No API secret is needed."
                               : selectedProviderCanSync
-                                ? "Use read-only credentials only. Connect one venue now and add the rest from Portfolio."
-                                : "This provider can be saved now. Live sync support will be added through a provider adapter."}
+                                ? "Use read-only credentials only. After saving, Zenin imports supported portfolio data into your workspace."
+                                : "This provider is saved as metadata only. It will not import balances or fills until a provider adapter is available."}
                           </p>
                         )}
 
@@ -6278,7 +6407,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             onClick={connectAccount}
                             disabled={isSyncingAccount || !accountForm.apiKey.trim() || (showApiSecretField && !accountForm.apiSecret.trim())}
                           >
-                            {isSyncingAccount ? (selectedProviderCanSync ? "Syncing..." : "Saving...") : "Connect account"}
+                            {isSyncingAccount ? (selectedProviderCanSync ? "Syncing..." : "Saving...") : (selectedProviderCanSync ? "Save and sync" : "Save metadata")}
                           </button>
                         </div>
                           </>

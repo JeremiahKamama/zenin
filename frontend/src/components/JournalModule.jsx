@@ -119,6 +119,7 @@ export function JournalModule({
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
   const [selectedCalendarTradeDate, setSelectedCalendarTradeDate] = useState("");
   const [reviewNote, setReviewNote] = useState(() => localStorage.getItem(JOURNAL_REVIEW_NOTE_KEY) || "");
+  const [isReviewModeActive, setIsReviewModeActive] = useState(false);
   const drawerRef = useRef(null);
   const reviewComposerRef = useRef(null);
   const journalSyncReadyRef = useRef(false);
@@ -1671,7 +1672,17 @@ export function JournalModule({
     saveWorkspaceDoc("journal:review_note", reviewNote).catch((error) => {
       console.warn("Journal review note sync skipped.", error);
     });
+    setIsReviewModeActive(true);
     notify("Review saved to your Zenin workspace.", "success");
+  };
+
+  const enterReviewMode = () => {
+    setIsReviewModeActive(true);
+    requestAnimationFrame(() => {
+      reviewComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      reviewComposerRef.current?.focus();
+    });
+    notify("Review mode focused.", "info");
   };
 
   const handleExportChoice = (choice) => {
@@ -1855,7 +1866,8 @@ export function JournalModule({
             onExportChoice={handleExportChoice}
             onNewEntry={openNewEntry}
             onSaveSnapshot={saveReviewSnapshot}
-            onJumpToReview={() => reviewComposerRef.current?.focus()}
+            onJumpToReview={enterReviewMode}
+            reviewModeActive={isReviewModeActive}
           />
           <JournalDebriefDashboard
             dateKey={activeDebriefDate}
@@ -1888,6 +1900,7 @@ export function JournalModule({
             onSaveReview={saveReviewSnapshot}
             onAddToJournal={addReviewToJournal}
             onNewEntry={openNewEntry}
+            reviewModeActive={isReviewModeActive}
           />
         </>
       )}
@@ -1952,7 +1965,8 @@ function JournalDebriefHeader({
   onExportChoice,
   onNewEntry,
   onSaveSnapshot,
-  onJumpToReview
+  onJumpToReview,
+  reviewModeActive = false
 }) {
   return (
     <CompactPageHeader
@@ -1966,21 +1980,29 @@ function JournalDebriefHeader({
             <span>Sync State</span>
             <strong>{syncTimestampLabel}</strong>
           </div>
-          <button type="button" className="journal-btn secondary" onClick={onNewEntry}>New Entry</button>
-          <div className="journal-export-wrap" ref={exportMenuRef}>
-            <button type="button" className="journal-btn secondary" onClick={() => setExportMenuOpen((value) => !value)}>
-              Export
+          <div className="journal-debrief-action-cluster">
+            <button type="button" className="journal-btn secondary" onClick={onNewEntry}>New Entry</button>
+            <div className="journal-export-wrap" ref={exportMenuRef}>
+              <button type="button" className="journal-btn secondary" onClick={() => setExportMenuOpen((value) => !value)}>
+                Export
+              </button>
+              {exportMenuOpen ? (
+                <div className="journal-export-menu" role="menu">
+                  <button type="button" role="menuitem" onClick={() => onExportChoice("entries")}>Export entries CSV</button>
+                  <button type="button" role="menuitem" onClick={() => onExportChoice("analytics")}>Export analytics report</button>
+                  <button type="button" role="menuitem" onClick={() => onExportChoice("review")}>Export review summary</button>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className={`journal-btn secondary ${reviewModeActive ? "active" : ""}`.trim()}
+              onClick={onJumpToReview}
+            >
+              Review Mode
             </button>
-            {exportMenuOpen ? (
-              <div className="journal-export-menu" role="menu">
-                <button type="button" role="menuitem" onClick={() => onExportChoice("entries")}>Export entries CSV</button>
-                <button type="button" role="menuitem" onClick={() => onExportChoice("analytics")}>Export analytics report</button>
-                <button type="button" role="menuitem" onClick={() => onExportChoice("review")}>Export review summary</button>
-              </div>
-            ) : null}
+            <button type="button" className="journal-btn primary" onClick={onSaveSnapshot}>Save Snapshot</button>
           </div>
-          <button type="button" className="journal-btn secondary" onClick={onJumpToReview}>Review Mode</button>
-          <button type="button" className="journal-btn primary" onClick={onSaveSnapshot}>Save Snapshot</button>
         </div>
       )}
     />
@@ -2017,7 +2039,8 @@ function JournalDebriefDashboard({
   reviewComposerRef,
   onSaveReview,
   onAddToJournal,
-  onNewEntry
+  onNewEntry,
+  reviewModeActive = false
 }) {
   const safeRuleAdherence = ruleAdherence == null ? "—" : `${ruleAdherence.toFixed(0)}%`;
   const safeDiscipline = emotionalDiscipline == null ? "—" : `${emotionalDiscipline.toFixed(0)}%`;
@@ -2196,7 +2219,7 @@ function JournalDebriefDashboard({
           </div>
         </article>
 
-        <article className="journal-debrief-panel journal-debrief-lessons">
+        <article className={`journal-debrief-panel journal-debrief-lessons ${reviewModeActive ? "review-mode-active" : ""}`.trim()}>
           <div className="journal-debrief-panel-head">
             <div>
               <span className="journal-debrief-kicker">Lessons Board</span>
@@ -2223,6 +2246,11 @@ function JournalDebriefDashboard({
           </div>
           <label className="journal-debrief-review-note">
             <span>Closeout note</span>
+            {reviewModeActive ? (
+              <div className="journal-review-mode-banner">
+                Review mode is active. Capture the one rule to repeat, the one mistake to remove, and the next session adjustment before you save the snapshot.
+              </div>
+            ) : null}
             <textarea
               ref={reviewComposerRef}
               value={reviewNote}

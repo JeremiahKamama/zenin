@@ -111,6 +111,8 @@ const historyQuerySchema = z.object({
 
 const pricesQuerySchema = z.object({
   symbols: z.string().optional(),
+  symbol: z.string().optional(),
+  type: z.enum(["tradfi", "crypto"]).optional(),
   quoteType: z.enum(["tradfi", "crypto"]).optional().default("tradfi"),
 });
 

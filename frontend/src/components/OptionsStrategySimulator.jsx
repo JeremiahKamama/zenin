@@ -307,29 +307,21 @@ const OptionsStrategySimulator = ({
 
   const visible = strategies.slice(0, maxVisible);
   const selectedStrategy = visible.find(s => s.id === selectedStrategyId);
+  const hasSourceBackedChain = Array.isArray(chain) && chain.length > 0;
 
   // Helper to generate normalized legs with current chain data
   const generateLegs = useMemo(() => {
     if (!selectedStrategy) return [];
 
     const liveChain = Array.isArray(chain) && chain.length > 0 ? chain : [];
-    const fallbackSpot = Number(spotPrice) > 0 ? Number(spotPrice) : 100;
-    const fallbackChain = Array.from({ length: 11 }, (_, idx) => {
-      const offset = idx - 5;
-      const strike = Number((fallbackSpot * (1 + offset * 0.04)).toFixed(2));
-      const distance = Math.abs(strike - fallbackSpot) / fallbackSpot;
-      const mark = Math.max(fallbackSpot * (0.025 - Math.min(distance, 0.02)), fallbackSpot * 0.005);
-      return {
-        strike,
-        call: { mark, bid: mark * 0.96, ask: mark * 1.04, delta: Math.max(0.15, 0.55 - offset * 0.06), gamma: 0.01, theta: -0.05, vega: 0.12 },
-        put: { mark, bid: mark * 0.96, ask: mark * 1.04, delta: Math.min(-0.15, -0.45 - offset * 0.06), gamma: 0.01, theta: -0.05, vega: 0.12 }
-      };
-    });
-    const sorted = [...(liveChain.length ? liveChain : fallbackChain)].sort((a, b) => a.strike - b.strike);
-    let effectiveSpot = spotPrice;
-    if (!effectiveSpot || effectiveSpot <= 0) {
-      effectiveSpot = sorted[Math.floor(sorted.length / 2)].strike;
+    if (!liveChain.length) return [];
+
+    const sorted = [...liveChain].sort((a, b) => a.strike - b.strike);
+    let effectiveSpot = Number(spotPrice);
+    if (!Number.isFinite(effectiveSpot) || effectiveSpot <= 0) {
+      effectiveSpot = Number(sorted[Math.floor(sorted.length / 2)]?.strike);
     }
+    if (!Number.isFinite(effectiveSpot) || effectiveSpot <= 0) return [];
 
     const atmIdx = sorted.findIndex(r => r.strike >= effectiveSpot);
     const safeAtmIdx = atmIdx === -1 ? sorted.length - 1 : atmIdx;
@@ -417,6 +409,11 @@ const OptionsStrategySimulator = ({
   const handleExecute = async () => {
     if (!selectedStrategy || !onStrategyChosen) return;
     const dollars = Number(notionalDollars);
+    if (!generateLegs.length) {
+      if (showToast) showToast("Sync a live options chain before executing a strategy.", "error");
+      else alert("Sync a live options chain before executing a strategy.");
+      return;
+    }
     if (!dollars || dollars <= 0) {
       if (showToast) showToast("Please enter a valid dollar amount.", "error");
       else alert("Please enter a valid dollar amount.");
@@ -424,7 +421,9 @@ const OptionsStrategySimulator = ({
     }
     
     // Derived qty from notional dollars
-    const effectiveSpot = spotPrice || (chain.length > 0 ? chain[Math.floor(chain.length / 2)].strike : 100);
+    const effectiveSpot = Number(spotPrice) > 0
+      ? Number(spotPrice)
+      : Number(chain[Math.floor(chain.length / 2)]?.strike || 0);
     const derivedQty = dollars / (effectiveSpot || 1);
 
     setIsSubmitting(true);
@@ -664,12 +663,25 @@ const OptionsStrategySimulator = ({
                                     </div>
                                     <button
                                       onClick={handleExecute}
-                                      disabled={isSubmitting}
-                                      style={{ background: "var(--color-primary, #38bdf8)", color: "var(--options-sim-primary-text)", border: "none", borderRadius: "6px", padding: "0 16px", height: "35px", fontWeight: "600", fontSize: "0.85rem", cursor: "pointer", transition: "opacity 0.2s" }}
+                                      disabled={isSubmitting || !generateLegs.length}
+                                      style={{ background: "var(--color-primary, #38bdf8)", color: "var(--options-sim-primary-text)", border: "none", borderRadius: "6px", padding: "0 16px", height: "35px", fontWeight: "600", fontSize: "0.85rem", cursor: generateLegs.length ? "pointer" : "not-allowed", opacity: generateLegs.length ? 1 : 0.55, transition: "opacity 0.2s" }}
                                     >
                                       {isSubmitting ? "..." : "Execute"}
                                     </button>
                                   </div>
+                                  {!hasSourceBackedChain && (
+                                    <div style={{
+                                      marginTop: "10px",
+                                      padding: "8px 12px",
+                                      background: "rgba(245,158,11,0.1)",
+                                      border: "1px solid rgba(245,158,11,0.24)",
+                                      borderRadius: "6px",
+                                      color: "var(--options-sim-warning-text, #fbbf24)",
+                                      fontSize: "0.75rem"
+                                    }}>
+                                      Strategy execution waits for a source-backed options chain. No synthetic strikes are used here.
+                                    </div>
+                                  )}
                                   {error && (
                                     <div style={{ 
                                       marginTop: "10px", 

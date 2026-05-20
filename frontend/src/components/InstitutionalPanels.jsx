@@ -294,6 +294,31 @@ export function SharedWatchlistWorkspacePanel({
 }
 
 export function PortfolioInstitutionalSuite({
+  hasDeskFeatureAccess = false,
+  onOpenPlans,
+  ...props
+}) {
+  if (!hasDeskFeatureAccess) {
+    return (
+      <section className="desk-feature-lock institutional-desk-lock" role="status">
+        <span>Desk feature</span>
+        <h2>Institutional desk tools require Desk</h2>
+        <p>
+          Shared decisions, report templates, AI desk briefs, treasury monitoring, and portfolio command workflows are only available on a Desk workspace.
+        </p>
+        {onOpenPlans ? (
+          <button type="button" className="settings-primary-btn" onClick={onOpenPlans}>
+            View Plans
+          </button>
+        ) : null}
+      </section>
+    );
+  }
+
+  return <PortfolioInstitutionalSuiteUnlocked {...props} />;
+}
+
+function PortfolioInstitutionalSuiteUnlocked({
   portfolio = [],
   trades = [],
   activeOptionsTrades = [],
@@ -437,6 +462,11 @@ export function PortfolioInstitutionalSuite({
     .map(stripText)
     .filter(Boolean)
     .slice(0, 3);
+
+  useEffect(() => {
+    if (!hasLiveBook || assistantOutput) return;
+    setAssistantOutput(generateAssistantOutput(assistantPrompt));
+  }, [assistantOutput, assistantPrompt, hasLiveBook]);
 
   const generateAssistantOutput = (prompt) => {
     const leader = topHoldings[0];
@@ -683,6 +713,19 @@ export function PortfolioInstitutionalSuite({
       </div>
 
       <div className="watchlist-panel glass institutional-panel">
+        <DensePanelHeader title="Crypto Treasury Monitor" subtitle="Runway, reserve mix, and venue concentration for crypto-native operating capital." />
+        <div className="institutional-grid two-up">
+          {treasuryRows.map((item) => (
+            <div key={item.label} className="institutional-surface">
+              <div className="institutional-kicker">{item.label}</div>
+              <strong className="institutional-big-value">{item.value}</strong>
+              <span className="institutional-helper">{item.helper}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="watchlist-panel glass institutional-panel">
         <DensePanelHeader title="AI Desk Assistant" subtitle="Operator prompts tuned for portfolio movement, risk, and investor communication." />
         <div className="institutional-inline-actions" style={{ marginBottom: 10 }}>
           {[
@@ -708,19 +751,6 @@ export function PortfolioInstitutionalSuite({
                 <span>{item.output}</span>
               </div>
               <em>{formatSavedAt(item.createdAt)}</em>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="watchlist-panel glass institutional-panel">
-        <DensePanelHeader title="Crypto Treasury Monitor" subtitle="Runway, reserve mix, and venue concentration for crypto-native operating capital." />
-        <div className="institutional-grid two-up">
-          {treasuryRows.map((item) => (
-            <div key={item.label} className="institutional-surface">
-              <div className="institutional-kicker">{item.label}</div>
-              <strong className="institutional-big-value">{item.value}</strong>
-              <span className="institutional-helper">{item.helper}</span>
             </div>
           ))}
         </div>

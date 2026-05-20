@@ -125,10 +125,12 @@ export function HomeModule({
   const [marketSortBy, setMarketSortBy] = useState("marketCap");
   const [marketRefreshNonce, setMarketRefreshNonce] = useState(0);
   const [macroData, setMacroData] = useState([]);
+  const [homeEquitiesSnapshot, setHomeEquitiesSnapshot] = useState(null);
   const [eventsData, setEventsData] = useState([]);
   const [marketDataLoading, setMarketDataLoading] = useState(false);
   const [showSavedItemsDrawer, setShowSavedItemsDrawer] = useState(false);
   const [showSignalArchiveDrawer, setShowSignalArchiveDrawer] = useState(false);
+  const [pendingDismissCard, setPendingDismissCard] = useState(null);
   const [savedHomeViews, setSavedHomeViews] = useState(() => readStoredJson(HOME_SAVED_VIEWS_STORAGE_KEY, []));
   const [savedHomeAlerts, setSavedHomeAlerts] = useState(() => readStoredJson(HOME_ALERTS_STORAGE_KEY, []));
   const [savedHomeTasks, setSavedHomeTasks] = useState(() => readStoredJson(HOME_TASKS_STORAGE_KEY, []));
@@ -361,10 +363,6 @@ export function HomeModule({
     const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
     const value = Number(perf?.[intervalCode]);
     if (Number.isFinite(value)) return value;
-    if (intervalCode === "1D") {
-      const fallbackDaily = Number(asset?.priceChangePercent);
-      return Number.isFinite(fallbackDaily) ? fallbackDaily : null;
-    }
     return null;
   };
 
@@ -379,13 +377,10 @@ export function HomeModule({
       const key = `${String(asset?.symbol || "").toUpperCase()}:${moverType}`;
       const perf = moversPerformanceByKey[key];
       const exactValue = Number(perf?.[intervalCode]);
-      const dailyFallback = Number(asset?.priceChangePercent);
 
       summary.total += 1;
       if (Number.isFinite(exactValue)) {
         summary.resolved += 1;
-      } else if (intervalCode === "1D" && Number.isFinite(dailyFallback)) {
-        summary.fallback += 1;
       } else {
         summary.unavailable += 1;
       }
@@ -737,9 +732,10 @@ export function HomeModule({
       setMarketDataLoading(true);
       
       try {
-        const [macroRes, eventsRes] = await Promise.all([
+        const [macroRes, eventsRes, equitiesRes] = await Promise.all([
           fetch(`${BACKEND_URL}/macro-indicators?country=USA`),
-          fetch(`${BACKEND_URL}/economic-calendar`)
+          fetch(`${BACKEND_URL}/economic-calendar`),
+          fetch(`${BACKEND_URL}/analytics/equities`)
         ]);
         
         if (macroRes.ok) {
@@ -750,6 +746,11 @@ export function HomeModule({
         if (eventsRes.ok) {
           const data = await eventsRes.json();
           if (data.events) setEventsData(data.events);
+        }
+
+        if (equitiesRes.ok) {
+          const data = await equitiesRes.json();
+          setHomeEquitiesSnapshot(data);
         }
       } catch (err) {
         console.error("Market Context: Fetch failed", err);
@@ -886,8 +887,7 @@ export function HomeModule({
       const key = `${symbol}:${moverType}`;
       const perf = moversPerformanceByKey[key];
       const exactValue = Number(perf?.[intervalCode]);
-      const dailyFallback = Number(asset?.priceChangePercent);
-      const unavailable = !(Number.isFinite(exactValue) || (intervalCode === "1D" && Number.isFinite(dailyFallback)));
+      const unavailable = !Number.isFinite(exactValue);
       if (!unavailable) return acc;
       const inferredType = moverType === "crypto" ? "Crypto" : "Stock";
       const issue = idx % 2 === 0 ? "Price data missing" : "Reference data missing";
@@ -1357,28 +1357,27 @@ export function HomeModule({
       }).slice(0, 6);
     }
 
-    const vix = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : 13.85;
-    const rates = Number.isFinite(Number(todayView.rates)) ? Number(todayView.rates) : 5.5;
+    const vix = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : null;
+    const rates = Number.isFinite(Number(todayView.rates)) ? Number(todayView.rates) : null;
     
-    // Improved gold/crude selection to prioritize futures and handle zero/null prices
-    const getMacroPrice = (symbols, keywords, fallback) => {
+    const getMacroPrice = (symbols, keywords) => {
       const asset = moversUniverse.find((a) => 
         symbols.includes(String(a?.symbol || "").toUpperCase()) || 
         keywords.some(k => String(a?.name || "").toLowerCase().includes(k))
       );
-      return (asset && Number(asset.price) > 0) ? Number(asset.price) : fallback;
+      return (asset && Number(asset.price) > 0) ? Number(asset.price) : null;
     };
 
-    const goldPrice = getMacroPrice(["GC", "GLD", "XAUUSD=X"], ["gold spot", "gold futures"], 2386.4);
-    const crudePrice = getMacroPrice(["CL", "WTI", "USO"], ["wti crude", "crude oil"], 77.02);
+    const goldPrice = getMacroPrice(["GC", "GLD", "XAUUSD=X"], ["gold spot", "gold futures"]);
+    const crudePrice = getMacroPrice(["CL", "WTI", "USO"], ["wti crude", "crude oil"]);
+    const formatOptionalMoney = (value) => Number.isFinite(Number(value)) ? formatMoney(value) : "—";
+    const formatOptionalFixed = (value, suffix = "") => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}${suffix}` : "—";
 
     return [
-      { indicator: "US CPI (YoY)", value: "3.36%", change: "-0.10pp", tone: "negative", series: [62, 60, 61, 59, 60, 58, 59] },
-      { indicator: "Fed Funds Rate", value: `${rates.toFixed(2)}%`, change: "—", tone: "neutral", series: [50, 50, 50, 50, 50, 50, 50] },
-      { indicator: "US 10Y Yield", value: "4.31%", change: "+4.2 bps", tone: "positive", series: [42, 44, 47, 52, 50, 53, 55] },
-      { indicator: "VIX Index", value: vix.toFixed(2), change: "-5.3%", tone: "positive", series: [58, 52, 50, 46, 48, 44, 42] },
-      { indicator: "Gold (Spot)", value: formatMoney(goldPrice), change: "+0.72%", tone: "positive", series: [40, 42, 45, 43, 48, 51, 53], color: "#f59e0b" },
-      { indicator: "WTI Crude", value: formatMoney(crudePrice), change: "-1.90%", tone: "negative", series: [55, 54, 49, 47, 42, 40, 38], color: "#ef4444" }
+      { indicator: "Fed Funds Rate", value: formatOptionalFixed(rates, "%"), change: "—", tone: "neutral", series: [] },
+      { indicator: "VIX Index", value: formatOptionalFixed(vix), change: "—", tone: "neutral", series: [] },
+      { indicator: "Gold (Spot)", value: formatOptionalMoney(goldPrice), change: "—", tone: "neutral", series: [], color: "#f59e0b" },
+      { indicator: "WTI Crude", value: formatOptionalMoney(crudePrice), change: "—", tone: "neutral", series: [], color: "#ef4444" }
     ];
   }, [macroData, formatMoney, moversUniverse, todayView.rates, todayView.vix]);
 
@@ -1873,19 +1872,68 @@ export function HomeModule({
 
   const marketBreadthPct = moversWithChange.length
     ? Math.round((moversWithChange.filter((asset) => Number(asset.__moverChange || 0) >= 0).length / moversWithChange.length) * 100)
-    : 68;
-  const putCallRatio = activeOptionsTrades.length
-    ? Math.max(0.35, Math.min(1.85, 0.72 + activeOptionsTrades.length * 0.05))
-    : 0.82;
-  const goldAsset = moversUniverse.find((asset) => ["GLD", "GC"].includes(String(asset?.symbol || "").toUpperCase()) || String(asset?.name || "").toLowerCase().includes("gold"));
-  const vixValue = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : 13.85;
-  const riskOn = vixValue < 20 && marketBreadthPct >= 50;
+    : null;
+  const vixValue = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : null;
+  const riskOn = Number.isFinite(vixValue) && Number.isFinite(marketBreadthPct) && vixValue < 20 && marketBreadthPct >= 50;
+  const finvizDesk = homeEquitiesSnapshot?.finvizDesk || {};
+  const finvizBreadth = homeEquitiesSnapshot?.marketBreadth || null;
+  const finvizFactorLeader = finvizDesk?.factorLeader || null;
+  const finvizRevisionSummary = finvizDesk?.revisionSummary || {};
+  const finvizMoverLeader = Array.isArray(finvizDesk?.moversRows) ? finvizDesk.moversRows[0] : null;
+  const finvizFlowRows = Array.isArray(homeEquitiesSnapshot?.fundFlows) ? homeEquitiesSnapshot.fundFlows : [];
+  const largeCapFlow = finvizFlowRows.find((row) => row?.symbol === "SPY" && row?.period === "1M") || null;
   const marketSummaryCards = [
-    { label: "Equities Breadth (S&P 500)", value: `${marketBreadthPct}%`, change: "+1.21%", tone: "positive", caption: "Advancing > Declining", color: "#22c55e", seed: marketBreadthPct },
-    { label: "Options Put/Call Ratio", value: putCallRatio.toFixed(2), change: "-6.3%", tone: "positive", caption: "7D Avg: 0.88", color: "#3b82f6", seed: putCallRatio * 100 },
-    { label: "US 10Y Yield", value: "4.31%", change: "+4.2 bps", tone: "negative", caption: "1D Change", color: "#ef4444", seed: 431 },
-    { label: "Gold (Spot)", value: formatMoney(Number(goldAsset?.price || 2386.4)), change: "+0.72%", tone: "positive", caption: "Prior / 1D Change", color: "#f59e0b", seed: Number(goldAsset?.price || 2386.4) },
-    { label: "Volatility Index (VIX)", value: vixValue.toFixed(2), change: "-5.3%", tone: "positive", caption: "1D Change", color: "#a855f7", seed: vixValue * 10 }
+    {
+      label: "Equities Breadth (S&P 500)",
+      value: Number.isFinite(Number(finvizBreadth?.above50dmaPct))
+        ? `${Math.round(Number(finvizBreadth.above50dmaPct))}%`
+        : Number.isFinite(Number(marketBreadthPct))
+        ? `${marketBreadthPct}%`
+        : "—",
+      change: Number.isFinite(Number(finvizBreadth?.adLine)) ? `${Number(finvizBreadth.adLine) >= 0 ? "+" : ""}${Number(finvizBreadth.adLine).toFixed(0)}` : "—",
+      tone: Number.isFinite(Number(finvizBreadth?.adLine)) ? Number(finvizBreadth.adLine) >= 0 ? "positive" : "negative" : "neutral",
+      caption: "Finviz breadth proxy",
+      color: "#22c55e",
+      seed: Number.isFinite(Number(finvizBreadth?.above50dmaPct)) ? Number(finvizBreadth.above50dmaPct) : Number(marketBreadthPct) || 0,
+    },
+    {
+      label: "Factor Leader",
+      value: finvizFactorLeader?.factor ? String(finvizFactorLeader.factor).toUpperCase() : "—",
+      change: Number.isFinite(Number(finvizFactorLeader?.score)) ? `${Number(finvizFactorLeader.score) >= 0 ? "+" : ""}${Number(finvizFactorLeader.score).toFixed(2)}` : "—",
+      tone: Number.isFinite(Number(finvizFactorLeader?.score)) ? Number(finvizFactorLeader.score) >= 0 ? "positive" : "negative" : "neutral",
+      caption: "Finviz style rotation",
+      color: "#3b82f6",
+      seed: Number(finvizFactorLeader?.score || 0) * 10,
+    },
+    {
+      label: "Earnings Revision Breadth",
+      value: Number.isFinite(Number(finvizRevisionSummary?.breadthPct)) ? `${Number(finvizRevisionSummary.breadthPct)}%` : "—",
+      change: Number.isFinite(Number(finvizRevisionSummary?.positive)) || Number.isFinite(Number(finvizRevisionSummary?.negative))
+        ? `${Number(finvizRevisionSummary?.positive || 0)} up / ${Number(finvizRevisionSummary?.negative || 0)} down`
+        : "—",
+      tone: Number.isFinite(Number(finvizRevisionSummary?.breadthPct)) ? Number(finvizRevisionSummary.breadthPct) >= 50 ? "positive" : "negative" : "neutral",
+      caption: "Finviz ratings feed",
+      color: "#8b5cf6",
+      seed: Number(finvizRevisionSummary?.breadthPct || 0),
+    },
+    {
+      label: "US Large Cap Flow (1M)",
+      value: Number.isFinite(Number(largeCapFlow?.netFlowUsdBn)) ? formatCompactMoney(Number(largeCapFlow.netFlowUsdBn) * 1e9) : "—",
+      change: Number.isFinite(Number(largeCapFlow?.netFlowUsdBn)) ? `${Number(largeCapFlow.netFlowUsdBn) >= 0 ? "+" : ""}${Number(largeCapFlow.netFlowUsdBn).toFixed(2)}B` : "—",
+      tone: Number.isFinite(Number(largeCapFlow?.netFlowUsdBn)) ? Number(largeCapFlow.netFlowUsdBn) >= 0 ? "positive" : "negative" : "neutral",
+      caption: "SPY proxy flow",
+      color: "#06b6d4",
+      seed: Number(largeCapFlow?.netFlowUsdBn || 0) * 10,
+    },
+    {
+      label: "Top Equity Mover",
+      value: String(finvizMoverLeader?.symbol || "—"),
+      change: Number.isFinite(Number(finvizMoverLeader?.move)) ? formatSignedPercent(finvizMoverLeader.move) : "—",
+      tone: Number.isFinite(Number(finvizMoverLeader?.move)) ? Number(finvizMoverLeader.move) >= 0 ? "positive" : "negative" : "neutral",
+      caption: finvizMoverLeader?.company || "Finviz screener",
+      color: "#f59e0b",
+      seed: Number.isFinite(Number(finvizMoverLeader?.move)) ? Number(finvizMoverLeader.move) * 10 : 0,
+    }
   ];
 
   const refreshMarketDetail = () => {
@@ -2297,13 +2345,13 @@ export function HomeModule({
                 <div className="home-exec-signal-meta">{card.meta}</div>
               </div>
               <div className="home-exec-signal-actions">
-                <button type="button" className="home-exec-btn secondary small" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
-                <div className="home-exec-triage-tools">
-                  <button type="button" onClick={() => { snoozeAttentionCard(card, 24); setHomeToast("Signal snoozed for 24 hours."); }}>Snooze</button>
-                  <button type="button" onClick={() => { if (window.confirm("Archive this portfolio issue?")) { archiveAttentionCard(card, "dismissed"); setHomeToast("Signal archived."); } }}>Dismiss</button>
+                  <button type="button" className="home-exec-btn secondary small" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
+                  <div className="home-exec-triage-tools">
+                    <button type="button" onClick={() => { snoozeAttentionCard(card, 24); setHomeToast("Signal snoozed for 24 hours."); }}>Snooze</button>
+                    <button type="button" onClick={() => setPendingDismissCard(card)}>Dismiss</button>
+                  </div>
                 </div>
-              </div>
-            </article>
+              </article>
           ))}
           {visibleAttentionCards.length === 0 ? (
             <article className="home-exec-signal-row empty">
@@ -2587,6 +2635,16 @@ export function HomeModule({
           setSnoozedAttentionCards((prev) => (Array.isArray(prev) ? prev.filter((entry) => entry?.id !== id) : []));
         }}
       />
+      <HomeSignalDismissModal
+        card={pendingDismissCard}
+        onClose={() => setPendingDismissCard(null)}
+        onConfirm={() => {
+          if (!pendingDismissCard) return;
+          archiveAttentionCard(pendingDismissCard, "dismissed");
+          setPendingDismissCard(null);
+          setHomeToast("Signal archived.");
+        }}
+      />
     </div>
   );
 }
@@ -2798,6 +2856,35 @@ function HomeSignalArchiveDrawer({
           ))}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function HomeSignalDismissModal({ card, onClose, onConfirm }) {
+  if (!card) return null;
+  return (
+    <div className="home-v3-drawer-overlay home-signal-modal-overlay" onMouseDown={onClose}>
+      <div
+        className="home-signal-modal"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Archive signal"
+      >
+        <div className="home-signal-modal-head">
+          <span className={`home-exec-severity ${card.variant || "info"}`}>{card.severity || "Signal"}</span>
+          <h2>Archive this signal?</h2>
+        </div>
+        <p>
+          <strong>{card.title}</strong>
+          {" "}
+          will move into Signal Archive and stop appearing in the live tape until you restore it.
+        </p>
+        <div className="home-signal-modal-actions">
+          <button type="button" className="home-exec-btn secondary" onClick={onClose}>Cancel</button>
+          <button type="button" className="home-exec-btn" onClick={onConfirm}>Archive signal</button>
+        </div>
+      </div>
     </div>
   );
 }

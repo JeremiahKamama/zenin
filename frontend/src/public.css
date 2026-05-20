@@ -3212,3 +3212,132 @@ body.page-dark-theme #root {
     display: none;
   }
 }
+
+.auth-v2-shell,
+.auth-v2-shell *,
+.auth-v2-shell *::before,
+.auth-v2-shell *::after {
+  box-sizing: border-box;
+}
+
+.auth-v2-main {
+  grid-template-columns: minmax(0, 520px);
+  align-items: center;
+  justify-content: center;
+  min-height: 100svh;
+  padding: clamp(24px, 5vw, 56px) 18px;
+}
+
+.auth-v2-card {
+  width: min(520px, 100%);
+  padding: clamp(24px, 4vw, 36px) !important;
+  border-radius: 6px !important;
+}
+
+.auth-v2-card h1,
+.auth-v2-modal-card h1 {
+  letter-spacing: 0;
+}
+
+.auth-v2-input,
+.auth-v2-modal-card .auth-v2-input,
+.auth-v2-btn,
+.auth-v2-modal-card .auth-v2-btn {
+  width: 100%;
+}
+
+.auth-v2-input,
+.auth-v2-modal-card .auth-v2-input {
+  display: block;
+  padding: 0 14px;
+}
+
+.auth-v2-password-row {
+  margin-bottom: 16px;
+}
+
+.auth-v2-password-row .auth-v2-input {
+  margin-bottom: 0;
+  padding-right: 48px;
+}
+
+.auth-v2-eye-btn {
+  width: 34px;
+  height: 34px;
+  right: 6px;
+  color: #8fa0b6;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+}
+
+.auth-v2-eye-btn:hover,
+.auth-v2-eye-btn:focus-visible {
+  color: #dffbff;
+  border-color: rgba(103, 232, 249, 0.28);
+  background: rgba(103, 232, 249, 0.08);
+  outline: none;
+}
+
+.auth-v2-eye-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.auth-v2-signup-rules {
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid rgba(132, 152, 174, 0.16);
+  background: rgba(7, 11, 16, 0.56);
+}
+
+.auth-v2-signup-rules li {
+  font-size: 12px;
+}
+
+.auth-v2-desk-strip {
+  border-radius: 5px;
+  gap: 6px 14px;
+}
+
+.auth-v2-check-row {
+  gap: 16px;
+}
+
+.auth-v2-oauth-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.auth-v2-bottom-link {
+  margin-top: 28px;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .auth-v2-main {
+    padding: 14px;
+  }
+
+  .auth-v2-card {
+    padding: 22px !important;
+  }
+
+  .auth-v2-desk-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-v2-desk-strip em {
+    grid-row: auto;
+    grid-column: auto;
+    justify-self: start;
+  }
+}

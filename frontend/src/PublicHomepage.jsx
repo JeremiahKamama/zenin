@@ -8,6 +8,7 @@ import { clearPostAuthRedirect, getPostAuthRedirectPath, sanitizeInternalPath, s
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { getPublicRuntimeConfig } from "./config/runtimeConfigStore";
 import { ensureZeninSessionFromSupabase } from "./utils/supabaseAuth";
+import { updateAccountPlan } from "./utils/accountPlan";
 
 const HOME_URL = `${SITE_URL}/`;
 const SOCIAL_IMAGE_URL = buildAbsoluteUrl("/og/zenin-capital-home.svg");
@@ -283,12 +284,10 @@ export default function PublicHomepage() {
 
     setPricingBusyPlan(normalizedPlan);
     try {
-      const res = await zeninFetch("/account/plan", {
-        method: "POST",
-        body: JSON.stringify({ plan: normalizedPlan, billingCycle: normalizedBillingCycle })
+      const data = await updateAccountPlan({
+        plan: normalizedPlan,
+        billingCycle: normalizedBillingCycle
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Failed to update plan.");
       if (data?.user) {
         setAuthUser(data.user);
         saveAuthUser(data.user);

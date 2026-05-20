@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import "./public.css";
-import { ZeninLogo } from "./components/Branding";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "./utils/authRedirect";
@@ -38,6 +37,26 @@ function getRedirectUrl(path = "/auth?mode=signin") {
   return `${window.location.origin}${path}`;
 }
 
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 3l18 18" />
+      <path d="M10.6 5.2A10.7 10.7 0 0 1 12 5c6.1 0 9.5 7 9.5 7a17 17 0 0 1-2.1 3" />
+      <path d="M6.6 6.8C3.9 8.5 2.5 12 2.5 12s3.4 7 9.5 7a9.8 9.8 0 0 0 4.2-.9" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </svg>
+  );
+}
+
 export default function AuthPage() {
   const [mode, setMode] = useState(getModeFromLocation);
   const [loading, setLoading] = useState(false);
@@ -46,6 +65,7 @@ export default function AuthPage() {
   const [signupForm, setSignupForm] = useState({ email: "", password: "", displayName: "" });
   const [signinForm, setSigninForm] = useState({ email: "", password: "" });
   const [forgotForm, setForgotForm] = useState({ email: "", newPassword: "" });
+  const [visiblePasswords, setVisiblePasswords] = useState({ signup: false, signin: false, reset: false });
   const [rememberMe, setRememberMe] = useState(true);
   const [recoveryReady, setRecoveryReady] = useState(isRecoveryLinkActive);
 
@@ -82,7 +102,7 @@ export default function AuthPage() {
   useEffect(() => {
     applySeo({
       title: "Zenin Capital | Sign In",
-      description: "Access your Zenin Capital workspace with Supabase-powered authentication.",
+      description: "Access your Zenin Capital workspace with secure authentication.",
       robots: "noindex, nofollow, noarchive",
       pathname: typeof window !== "undefined" ? window.location.pathname : "/auth",
       canonicalPath: "/auth",
@@ -141,7 +161,8 @@ export default function AuthPage() {
   }, []);
 
   const onSignUp = () => runAction(async () => {
-    if (!isSupabaseConfigured()) throw new Error("Supabase Auth is not configured for this frontend.");
+    if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
+    if (!signupForm.displayName.trim()) throw new Error("Enter your display name.");
     if (!isValidEmail(signupForm.email)) throw new Error("Enter a valid email address.");
     if (!isStrongPassword(signupForm.password)) {
       throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
@@ -165,13 +186,13 @@ export default function AuthPage() {
         return;
       }
     }
-    setMessage("Check your inbox to confirm your email, then return to sign in.");
     updateMode("signin");
     setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
+    setMessage("Check your inbox to confirm your email, then return to sign in.");
   });
 
   const onSignIn = () => runAction(async () => {
-    if (!isSupabaseConfigured()) throw new Error("Supabase Auth is not configured for this frontend.");
+    if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
     if (!isValidEmail(signinForm.email)) throw new Error("Enter a valid email address.");
     if (!signinForm.password.trim()) throw new Error("Enter your password.");
     const client = getSupabaseClient();
@@ -181,17 +202,17 @@ export default function AuthPage() {
     });
     if (authError) throw authError;
     if (!data.session?.access_token) {
-      throw new Error("Supabase did not return a session. Try again.");
+      throw new Error("Authentication did not return a valid session. Try again.");
     }
     const exchanged = await ensureZeninSessionFromSupabase({ rememberMe });
     if (!exchanged?.user) {
-      throw new Error("Signed in with Supabase, but Zenin could not start your workspace session.");
+      throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
     }
     redirectToApp();
   });
 
   const onForgotRequest = () => runAction(async () => {
-    if (!isSupabaseConfigured()) throw new Error("Supabase Auth is not configured for this frontend.");
+    if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
     if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
     const client = getSupabaseClient();
     const { error: authError } = await client.auth.resetPasswordForEmail(forgotForm.email.trim(), {
@@ -202,7 +223,7 @@ export default function AuthPage() {
   });
 
   const onResetPassword = () => runAction(async () => {
-    if (!isSupabaseConfigured()) throw new Error("Supabase Auth is not configured for this frontend.");
+    if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
     if (!recoveryReady) throw new Error("Open the recovery link from your email first.");
     if (!isStrongPassword(forgotForm.newPassword)) {
       throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
@@ -221,7 +242,7 @@ export default function AuthPage() {
   });
 
   const onOAuth = (provider) => runAction(async () => {
-    if (!isSupabaseConfigured()) throw new Error("Supabase Auth is not configured for this frontend.");
+    if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
     const client = getSupabaseClient();
     const { data, error: authError } = await client.auth.signInWithOAuth({
       provider,
@@ -235,6 +256,16 @@ export default function AuthPage() {
     }
   });
 
+  const signupPasswordRules = [
+    { label: "At least 10 characters", ok: signupForm.password.length >= 10 },
+    { label: "Includes a number", ok: /\d/.test(signupForm.password) },
+    { label: "Includes a symbol", ok: /[^a-z0-9]/i.test(signupForm.password) },
+  ];
+
+  const togglePasswordVisibility = (field) => {
+    setVisiblePasswords((prev) => ({ ...prev, [field]: !prev[field] }));
+  };
+
   return (
     <div className="auth-v2-shell">
       <div className="auth-v2-bg" aria-hidden="true" />
@@ -244,16 +275,10 @@ export default function AuthPage() {
             <span>←</span> Back to home
           </button>
 
-          <div className="auth-v2-desk-strip" aria-label="Workspace status">
-            <ZeninLogo compact />
-            <strong>{mode === "signin" ? "Workspace Access" : mode === "forgot" ? "Recovery Desk" : "Account Setup"}</strong>
-            <span>Supabase Auth</span>
-          </div>
-
           {mode === "signup" ? (
             <>
               <h1>Create your workspace</h1>
-              <p className="auth-v2-subtitle">Supabase now handles sign-in, email confirmation, and recovery for Zenin Capital.</p>
+              <p className="auth-v2-subtitle">Secure sign-in, email confirmation, and recovery for Zenin Capital.</p>
 
               <label className="auth-v2-label" htmlFor="signup-name">Display name</label>
               <input
@@ -262,6 +287,7 @@ export default function AuthPage() {
                 value={signupForm.displayName}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, displayName: e.target.value }))}
                 placeholder="Your name"
+                autoComplete="name"
               />
 
               <label className="auth-v2-label" htmlFor="signup-email">Email address</label>
@@ -272,17 +298,36 @@ export default function AuthPage() {
                 value={signupForm.email}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, email: e.target.value }))}
                 placeholder="you@example.com"
+                autoComplete="email"
               />
 
               <label className="auth-v2-label" htmlFor="signup-password">Password</label>
-              <input
-                id="signup-password"
-                className="auth-v2-input"
-                type="password"
-                value={signupForm.password}
-                onChange={(e) => setSignupForm((prev) => ({ ...prev, password: e.target.value }))}
-                placeholder="Create a strong password"
-              />
+              <div className="auth-v2-password-row">
+                <input
+                  id="signup-password"
+                  className="auth-v2-input"
+                  type={visiblePasswords.signup ? "text" : "password"}
+                  value={signupForm.password}
+                  onChange={(e) => setSignupForm((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder="Create a strong password"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="auth-v2-eye-btn"
+                  onClick={() => togglePasswordVisibility("signup")}
+                  aria-label={visiblePasswords.signup ? "Hide password" : "Show password"}
+                  title={visiblePasswords.signup ? "Hide password" : "Show password"}
+                >
+                  {visiblePasswords.signup ? <EyeOffIcon /> : <EyeIcon />}
+                </button>
+              </div>
+
+              <ul className="auth-v2-rule-list auth-v2-signup-rules" aria-label="Password requirements">
+                {signupPasswordRules.map((rule) => (
+                  <li key={rule.label} className={rule.ok ? "ok" : ""}>{rule.label}</li>
+                ))}
+              </ul>
 
               <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onSignUp}>
                 {loading ? "Creating account..." : "Create account"}
@@ -293,9 +338,6 @@ export default function AuthPage() {
                 <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuth("google")}>
                   Continue with Google
                 </button>
-                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuth("apple")}>
-                  Continue with Apple
-                </button>
               </div>
 
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Sign in</button></p>
@@ -305,7 +347,7 @@ export default function AuthPage() {
           {mode === "signin" ? (
             <>
               <h1>Sign in</h1>
-              <p className="auth-v2-subtitle">Continue to your Zenin workspace with Supabase-managed authentication.</p>
+              <p className="auth-v2-subtitle">Continue to your Zenin workspace with secure authentication.</p>
 
               <label className="auth-v2-label" htmlFor="signin-email">Email address</label>
               <input
@@ -315,17 +357,30 @@ export default function AuthPage() {
                 value={signinForm.email}
                 onChange={(e) => setSigninForm((prev) => ({ ...prev, email: e.target.value }))}
                 placeholder="you@example.com"
+                autoComplete="email"
               />
 
               <label className="auth-v2-label" htmlFor="signin-password">Password</label>
-              <input
-                id="signin-password"
-                className="auth-v2-input"
-                type="password"
-                value={signinForm.password}
-                onChange={(e) => setSigninForm((prev) => ({ ...prev, password: e.target.value }))}
-                placeholder="Your password"
-              />
+              <div className="auth-v2-password-row">
+                <input
+                  id="signin-password"
+                  className="auth-v2-input"
+                  type={visiblePasswords.signin ? "text" : "password"}
+                  value={signinForm.password}
+                  onChange={(e) => setSigninForm((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder="Your password"
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  className="auth-v2-eye-btn"
+                  onClick={() => togglePasswordVisibility("signin")}
+                  aria-label={visiblePasswords.signin ? "Hide password" : "Show password"}
+                  title={visiblePasswords.signin ? "Hide password" : "Show password"}
+                >
+                  {visiblePasswords.signin ? <EyeOffIcon /> : <EyeIcon />}
+                </button>
+              </div>
 
               <div className="auth-v2-check-row">
                 <label className="auth-v2-checkbox">
@@ -344,9 +399,6 @@ export default function AuthPage() {
                 <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuth("google")}>
                   Continue with Google
                 </button>
-                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-apple-btn" disabled={loading} onClick={() => onOAuth("apple")}>
-                  Continue with Apple
-                </button>
               </div>
 
               <p className="auth-v2-bottom-link">Need an account? <button className="auth-v2-link-btn" onClick={() => updateMode("signup")}>Create one</button></p>
@@ -358,7 +410,7 @@ export default function AuthPage() {
               <h1>{recoveryReady ? "Set a new password" : "Reset password"}</h1>
               <p className="auth-v2-subtitle">
                 {recoveryReady
-                  ? "Choose a new password for your Supabase-managed Zenin account."
+                  ? "Choose a new password for your Zenin account."
                   : "Send a recovery link to your email, then return here to complete the reset."}
               </p>
 
@@ -372,6 +424,7 @@ export default function AuthPage() {
                     value={forgotForm.email}
                     onChange={(e) => setForgotForm((prev) => ({ ...prev, email: e.target.value }))}
                     placeholder="you@example.com"
+                    autoComplete="email"
                   />
 
                   <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onForgotRequest}>
@@ -381,14 +434,26 @@ export default function AuthPage() {
               ) : (
                 <>
                   <label className="auth-v2-label" htmlFor="reset-password">New password</label>
-                  <input
-                    id="reset-password"
-                    className="auth-v2-input"
-                    type="password"
-                    value={forgotForm.newPassword}
-                    onChange={(e) => setForgotForm((prev) => ({ ...prev, newPassword: e.target.value }))}
-                    placeholder="Enter a new password"
-                  />
+                  <div className="auth-v2-password-row">
+                    <input
+                      id="reset-password"
+                      className="auth-v2-input"
+                      type={visiblePasswords.reset ? "text" : "password"}
+                      value={forgotForm.newPassword}
+                      onChange={(e) => setForgotForm((prev) => ({ ...prev, newPassword: e.target.value }))}
+                      placeholder="Enter a new password"
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="auth-v2-eye-btn"
+                      onClick={() => togglePasswordVisibility("reset")}
+                      aria-label={visiblePasswords.reset ? "Hide password" : "Show password"}
+                      title={visiblePasswords.reset ? "Hide password" : "Show password"}
+                    >
+                      {visiblePasswords.reset ? <EyeOffIcon /> : <EyeIcon />}
+                    </button>
+                  </div>
 
                   <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onResetPassword}>
                     {loading ? "Updating..." : "Update password"}
@@ -403,7 +468,7 @@ export default function AuthPage() {
           {error ? <p className="auth-v2-error-inline">{error}</p> : null}
           {message ? <p className="auth-v2-success-inline">✓ {message}</p> : null}
           {!isSupabaseConfigured() ? (
-            <p className="auth-v2-error-inline">Supabase environment variables are missing on this frontend build.</p>
+            <p className="auth-v2-error-inline">Authentication environment variables are missing on this frontend build.</p>
           ) : null}
         </section>
       </main>

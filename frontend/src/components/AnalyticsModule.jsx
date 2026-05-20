@@ -64,6 +64,15 @@ const EMPTY_EQUITIES = {
   reitData: { benchmarks: [] },
   mmfYields: [],
   fundsList: [],
+  finvizDesk: {
+    factorLeader: null,
+    revisionAlertsRows: [],
+    insiderRows: [],
+    moversRows: [],
+    earningsRiskRows: [],
+    revisionSummary: { positive: 0, negative: 0, breadthPct: 0 },
+  },
+  providers: null,
 };
 
 const EMPTY_EQUITIES_SPEC = {
@@ -105,6 +114,7 @@ const EMPTY_MACRO = {
   fxRates: [],
   forexMovers: { gainers: [], losers: [] },
   riskIndicators: [],
+  providers: null,
 };
 
 const EMPTY_COMMODITIES = {
@@ -120,6 +130,7 @@ const EMPTY_COMMODITIES = {
   calendar: [],
   alerts: [],
   correlation: [],
+  providers: null,
 };
 
 const COMMODITY_GROUPS = ["all", "energy", "metals", "agriculture", "fertilizers", "industrial", "battery", "soft", "livestock"];
@@ -187,7 +198,10 @@ async function fetchApiJson(baseUrl, path, options = {}) {
 
   for (const candidate of candidates) {
     try {
-      const response = await fetch(`${candidate}${path}`, options);
+      const response = await fetch(`${candidate}${path}`, {
+        credentials: options.credentials || "include",
+        ...options,
+      });
       if (!response.ok) {
         lastError = new Error(`HTTP ${response.status}`);
         continue;
@@ -293,6 +307,29 @@ function describeMacroOverviewRow(row) {
   return "Latest available sourced release.";
 }
 
+function getSourceQuality(input = {}) {
+  const status = String(input?.status || "").trim().toLowerCase();
+  const source = String(input?.source || input?.sourceType || input?.provider || "").trim();
+  const reason = input?.stale_reason || input?.reason || input?.detail || "";
+  const sourceLower = source.toLowerCase();
+  if (input?.unavailable || status === "unavailable") {
+    return { key: "unavailable", label: "Configured but unavailable", tone: "negative", source, reason };
+  }
+  if (input?.stale || status === "stale" || status === "degraded") {
+    return { key: "stale", label: "Stale", tone: "warning", source, reason };
+  }
+  if (input?.isFallback || sourceLower.includes("catalog") || sourceLower.includes("fallback")) {
+    return { key: "fallback", label: "Fallback", tone: "watch", source, reason };
+  }
+  if (sourceLower.includes("proxy") || sourceLower.includes("finviz") || sourceLower.includes("yahoo")) {
+    return { key: "proxy", label: "Proxy", tone: "info", source, reason };
+  }
+  if (status === "missing_key") {
+    return { key: "unavailable", label: "Configured but unavailable", tone: "negative", source, reason: reason || "Provider key is missing." };
+  }
+  return { key: "live", label: "Live", tone: "positive", source, reason };
+}
+
 function MiniSparkline({ points = [], width = 92, height = 24, color = "#38bdf8" }) {
   const values = (Array.isArray(points) ? points : []).map((v) => Number(v)).filter((v) => Number.isFinite(v));
   if (values.length < 2) return <span style={{ color: "#64748b" }}>—</span>;
@@ -317,6 +354,11 @@ function MiniSparkline({ points = [], width = 92, height = 24, color = "#38bdf8"
 function normalizeCryptoPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || payload?.asOf || null,
+    stale: Boolean(payload?.stale),
+    unavailable: Boolean(payload?.unavailable),
+    isFallback: Boolean(payload?.isFallback),
+    stale_reason: payload?.stale_reason || null,
+    source: payload?.source || "Hyperliquid + Aster + Lighter + Dune + Farside",
     perpMetrics: Array.isArray(payload?.perpMetrics)
       ? payload.perpMetrics
       : Array.isArray(payload?.oiAndFunding)
@@ -348,6 +390,11 @@ function normalizeCryptoPayload(payload) {
 function normalizeOptionsPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || payload?.asOf || null,
+    stale: Boolean(payload?.stale),
+    unavailable: Boolean(payload?.unavailable),
+    isFallback: Boolean(payload?.isFallback),
+    stale_reason: payload?.stale_reason || null,
+    source: payload?.source || "Deribit + Finviz",
     totalOptionsOpenInterestUsd:
       payload?.totalOptionsOpenInterestUsd ?? payload?.totalOptionsOI ?? null,
     optionsVolumeByAsset: Array.isArray(payload?.optionsVolumeByAsset)
@@ -371,6 +418,11 @@ function normalizeOptionsPayload(payload) {
 function normalizeEquitiesPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || null,
+    stale: Boolean(payload?.stale),
+    unavailable: Boolean(payload?.unavailable),
+    isFallback: Boolean(payload?.isFallback),
+    stale_reason: payload?.stale_reason || null,
+    source: payload?.source || "Finviz + Yahoo Finance + Massive",
     benchmarkIndexHistory: Array.isArray(payload?.benchmarkIndexHistory) ? payload.benchmarkIndexHistory : [],
     benchmarkPerformance: Array.isArray(payload?.benchmarkPerformance) ? payload.benchmarkPerformance : [],
     sectorPerformance: Array.isArray(payload?.sectorPerformance) ? payload.sectorPerformance : [],
@@ -394,16 +446,31 @@ function normalizeEquitiesPayload(payload) {
     reitData: payload?.reitData || { benchmarks: [] },
     mmfYields: Array.isArray(payload?.mmfYields) ? payload.mmfYields : [],
     fundsList: Array.isArray(payload?.fundsList) ? payload.fundsList : [],
+    finvizDesk: payload?.finvizDesk || {
+      factorLeader: null,
+      revisionAlertsRows: [],
+      insiderRows: [],
+      moversRows: [],
+      earningsRiskRows: [],
+      revisionSummary: { positive: 0, negative: 0, breadthPct: 0 },
+    },
+    providers: payload?.providers || null,
   };
 }
 
 function normalizeMacroPayload(payload) {
   return {
     updatedAt: payload?.updatedAt || null,
+    stale: Boolean(payload?.stale),
+    unavailable: Boolean(payload?.unavailable),
+    isFallback: Boolean(payload?.isFallback),
+    stale_reason: payload?.stale_reason || null,
+    source: payload?.source || "FRED + BLS + World Bank + ForexFactory",
     macroData: Array.isArray(payload?.macroData) ? payload.macroData : [],
     fxRates: Array.isArray(payload?.fxRates) ? payload.fxRates : [],
     forexMovers: payload?.forexMovers || { gainers: [], losers: [] },
     riskIndicators: Array.isArray(payload?.riskIndicators) ? payload.riskIndicators : [],
+    providers: payload?.providers || null,
   };
 }
 
@@ -415,6 +482,11 @@ function normalizeCommoditiesPayload(payload) {
     : [];
   return {
     updatedAt: payload?.updatedAt || payload?.asOf || null,
+    stale: Boolean(payload?.stale),
+    unavailable: Boolean(payload?.unavailable),
+    isFallback: Boolean(payload?.isFallback),
+    stale_reason: payload?.stale_reason || null,
+    source: payload?.source || "Yahoo Finance + FRED + EIA + Finviz",
     overview: payload?.overview || null,
     list: rows,
     priceSeries: Array.isArray(payload?.priceSeries) ? payload.priceSeries : [],
@@ -426,6 +498,7 @@ function normalizeCommoditiesPayload(payload) {
     calendar: Array.isArray(payload?.calendar) ? payload.calendar : [],
     alerts: Array.isArray(payload?.alerts) ? payload.alerts : [],
     correlation: Array.isArray(payload?.correlation) ? payload.correlation : [],
+    providers: payload?.providers || null,
   };
 }
 
@@ -467,7 +540,7 @@ const getCorrelationTone = (value) => {
 
 
 
-export function AnalyticsModule({ backendUrl }) {
+export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   const analyticsConfig = getAppRuntimeConfig()?.analytics || {};
   const macroCategoryOptions = Array.isArray(analyticsConfig?.macroCategoryOptions) && analyticsConfig.macroCategoryOptions.length
     ? analyticsConfig.macroCategoryOptions
@@ -488,6 +561,7 @@ export function AnalyticsModule({ backendUrl }) {
   const [equitiesSpecData, setEquitiesSpecData] = useState(EMPTY_EQUITIES_SPEC);
   const [macroData, setMacroData] = useState(EMPTY_MACRO);
   const [commoditiesData, setCommoditiesData] = useState(EMPTY_COMMODITIES);
+  const [providerStatus, setProviderStatus] = useState(null);
   const [loading, setLoading] = useState({ crypto: false, options: false, equities: false, macro: false, commodities: false });
   const [refreshing, setRefreshing] = useState({ crypto: false, options: false, equities: false, macro: false, commodities: false });
   const [errors, setErrors] = useState({ crypto: "", options: "", equities: "", macro: "", commodities: "" });
@@ -972,6 +1046,7 @@ export function AnalyticsModule({ backendUrl }) {
         calendar: rowsFrom(calendarRes, "events").length ? rowsFrom(calendarRes, "events") : rowsFrom(calendarRes, "calendar"),
         alerts: rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : rowsFrom(alertsRes, "alerts"),
         correlation: rowsFrom(correlationRes, "rows").length ? rowsFrom(correlationRes, "rows") : rowsFrom(correlationRes, "correlation"),
+        providers: overviewRes?.providers || listRes?.providers || fundamentalsRes?.providers || prev.providers || null,
       }));
       setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items")));
       markTabLoaded("commodities");
@@ -982,7 +1057,6 @@ export function AnalyticsModule({ backendUrl }) {
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      controller.abort();
     };
   }, [
     activeTab,
@@ -995,6 +1069,34 @@ export function AnalyticsModule({ backendUrl }) {
     selectedCommodityTimeRange,
     retryNonce,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const loadProviderStatus = async () => {
+      try {
+        const payload = await fetchApiJson(backendUrl, "/data/providers", {
+          signal: controller.signal,
+        });
+        if (!cancelled) {
+          setProviderStatus(payload?.providers || null);
+        }
+      } catch {
+        if (!cancelled) {
+          setProviderStatus(null);
+        }
+      }
+    };
+
+    loadProviderStatus();
+    const timer = window.setInterval(loadProviderStatus, 120_000);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [backendUrl, retryNonce]);
 
   useEffect(() => {
     if (activeTab !== "commodities") return;
@@ -1092,7 +1194,6 @@ export function AnalyticsModule({ backendUrl }) {
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      controller.abort();
     };
   }, [activeTab, backendUrl, retryNonce]);
 
@@ -1188,7 +1289,6 @@ export function AnalyticsModule({ backendUrl }) {
     loadSpec();
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, [activeTab, backendUrl, compareItems, searchQuery, selectedFundId, selectedMMFId, selectedMMFCountry, selectedREITCountry, selectedMainCategory, selectedSymbol]);
 
@@ -1421,6 +1521,7 @@ export function AnalyticsModule({ backendUrl }) {
 
   const equitiesDeskSnapshot = useMemo(() => {
     const breadth = equitiesSpecData.marketBreadth || equitiesData.marketBreadth || {};
+    const finvizDesk = equitiesData.finvizDesk || EMPTY_EQUITIES.finvizDesk;
     const advancers = pickFirstNumber(breadth.advancers, breadth.advanceCount, breadth.advances, breadth.gainers) ?? 0;
     const decliners = pickFirstNumber(breadth.decliners, breadth.declineCount, breadth.declines, breadth.losers) ?? 0;
     const newHighs = pickFirstNumber(breadth.newHighs, breadth.highs52w, breadth.highs) ?? 0;
@@ -1437,7 +1538,7 @@ export function AnalyticsModule({ backendUrl }) {
     const topSector = [...(filteredEquities.sectorPerformance || [])]
       .filter((row) => toFiniteNumber(row?.[rangeKey]) != null)
       .sort((a, b) => Number(b?.[rangeKey]) - Number(a?.[rangeKey]))[0] || null;
-    const factorLeader = [...(filteredEquities.styleFactors || [])]
+    const factorLeader = finvizDesk.factorLeader || [...(filteredEquities.styleFactors || [])]
       .filter((row) => pickFirstNumber(row?.[rangeKey], row?.score, row?.zScore, row?.value) != null)
       .sort((a, b) => (pickFirstNumber(b?.[rangeKey], b?.score, b?.zScore, b?.value) ?? -Infinity) - (pickFirstNumber(a?.[rangeKey], a?.score, a?.zScore, a?.value) ?? -Infinity))[0] || null;
     const benchmarkLeader = [...(filteredEquities.benchmarkIndexHistory || [])]
@@ -1449,9 +1550,9 @@ export function AnalyticsModule({ backendUrl }) {
     const benchmarkMove = pickFirstNumber(benchmarkLeader?.[rangeKey], benchmarkLeader?.daily, benchmarkLeader?.weekly, benchmarkLeader?.monthly) ?? 0;
     const equalWeightProxy = avgSectorMove - benchmarkMove;
     const earningsRows = filteredEquities.earningsCalendar || [];
-    const positiveRevisions = earningsRows.filter((row) => String(row?.revisionTrend || row?.trend || "").toLowerCase().includes("up")).length;
-    const negativeRevisions = earningsRows.filter((row) => String(row?.revisionTrend || row?.trend || "").toLowerCase().includes("down")).length;
-    const earningsBreadth = earningsRows.length ? Math.round((positiveRevisions / earningsRows.length) * 100) : 0;
+    const positiveRevisions = pickFirstNumber(finvizDesk?.revisionSummary?.positive) ?? earningsRows.filter((row) => String(row?.revisionTrend || row?.trend || "").toLowerCase().includes("up")).length;
+    const negativeRevisions = pickFirstNumber(finvizDesk?.revisionSummary?.negative) ?? earningsRows.filter((row) => String(row?.revisionTrend || row?.trend || "").toLowerCase().includes("down")).length;
+    const earningsBreadth = pickFirstNumber(finvizDesk?.revisionSummary?.breadthPct) ?? (earningsRows.length ? Math.round((positiveRevisions / earningsRows.length) * 100) : 0);
     const concentrationRows = [...(filteredEquities.stocks || [])]
       .map((row) => ({
         symbol: String(row?.symbol || row?.ticker || "—").toUpperCase(),
@@ -1493,7 +1594,17 @@ export function AnalyticsModule({ backendUrl }) {
     });
     const breadthTapeSeries = (filteredEquities.sectorPerformance || []).slice(0, 12).map((row) => pickFirstNumber(row?.daily, row?.weekly, row?.monthly) ?? 0);
     const breadthHistogram = (filteredEquities.sectorPerformance || []).slice(0, 12).map((row) => pickFirstNumber(row?.weekly, row?.daily, row?.monthly) ?? 0);
-    const moversRows = [...(filteredEquities.stocks || [])]
+    const moversRows = Array.isArray(finvizDesk?.moversRows) && finvizDesk.moversRows.length
+      ? finvizDesk.moversRows.map((row, idx) => ({
+          id: row.id || `finviz-mover-${idx}`,
+          symbol: String(row.symbol || "—").toUpperCase(),
+          company: row.company || row.name || "Security",
+          sector: row.sector || "—",
+          factors: row.factors || row.factor || "Finviz mover",
+          move: pickFirstNumber(row.move, row.changePct, row.dailyChangePct) ?? 0,
+          marketCap: row.marketCap || (row.marketCapRaw ? formatCompactMoney(row.marketCapRaw) : "—"),
+        }))
+      : [...(filteredEquities.stocks || [])]
       .map((row) => ({
         symbol: String(row?.symbol || row?.ticker || "—").toUpperCase(),
         company: row?.name || row?.company || row?.issuer || "Security",
@@ -1505,7 +1616,16 @@ export function AnalyticsModule({ backendUrl }) {
       .filter((row) => row.symbol && Number.isFinite(row.move))
       .sort((a, b) => Math.abs(b.move) - Math.abs(a.move))
       .slice(0, 8);
-    const revisionAlertsRows = earningsRows
+    const revisionAlertsRows = Array.isArray(finvizDesk?.revisionAlertsRows) && finvizDesk.revisionAlertsRows.length
+      ? finvizDesk.revisionAlertsRows.slice(0, 5).map((row, idx) => ({
+          id: row.id || `finviz-rev-${idx}`,
+          ticker: row.ticker || "—",
+          change: row.change || "Monitor",
+          broker: row.broker || row.analyst || row.source || "Finviz analyst feed",
+          time: row.time || row.date || "—",
+          severity: row.severity || "Med",
+        }))
+      : earningsRows
       .filter((row) => String(row?.revisionTrend || row?.trend || "").trim())
       .slice(0, 5)
       .map((row, idx) => ({
@@ -1516,7 +1636,16 @@ export function AnalyticsModule({ backendUrl }) {
         time: row.time || row.date || "—",
         severity: String(row.revisionTrend || "").toLowerCase().includes("down") ? "High" : "Med",
       }));
-    const insiderRows = (filteredEquities.corporateActions || [])
+    const insiderRows = Array.isArray(finvizDesk?.insiderRows) && finvizDesk.insiderRows.length
+      ? finvizDesk.insiderRows.slice(0, 5).map((row, idx) => ({
+          id: row.id || `finviz-ins-${idx}`,
+          ticker: row.ticker || "—",
+          type: row.type || "Action",
+          details: row.details || row.note || "—",
+          date: row.date || "—",
+          severity: row.severity || "Med",
+        }))
+      : (filteredEquities.corporateActions || [])
       .filter((row) => /(insider|buyback|repurchase)/i.test(`${row?.action || ""} ${row?.detail || ""}`))
       .slice(0, 5)
       .map((row, idx) => ({
@@ -1527,14 +1656,23 @@ export function AnalyticsModule({ backendUrl }) {
         date: row.date || "—",
         severity: /(insider)/i.test(String(row?.action || "")) ? "Low" : "Med",
       }));
-    const earningsRiskRows = earningsRows.slice(0, 5).map((row, idx) => ({
+    const earningsRiskRows = Array.isArray(finvizDesk?.earningsRiskRows) && finvizDesk.earningsRiskRows.length
+      ? finvizDesk.earningsRiskRows.slice(0, 5).map((row, idx) => ({
+          id: row.id || `finviz-risk-${idx}`,
+          ticker: row.ticker || row.symbol || "—",
+          company: row.company || row.name || row.symbol || "Issuer",
+          date: row.date || row.reportDate || "—",
+          eps: row.eps ?? "—",
+          move: formatPercent(pickFirstNumber(row?.expectedMovePct, row?.move, row?.impliedMovePct, row?.historicalMovePct) ?? 0),
+        }))
+      : earningsRows.slice(0, 5).map((row, idx) => ({
       id: row.id || `risk-${idx}`,
       ticker: row.symbol || row.ticker || "—",
       company: row.company || row.name || row.symbol || "Issuer",
       date: row.date || row.reportDate || "—",
       eps: row.epsEstimate ?? row.eps ?? "—",
       move: formatPercent(pickFirstNumber(row?.expectedMovePct, row?.impliedMovePct, row?.historicalMovePct) ?? 0),
-    }));
+      }));
     const riskCounts = {
       high: earningsRiskRows.filter((row) => String(row.move).startsWith("+") && parseFloat(String(row.move)) >= 5).length,
       med: earningsRiskRows.filter((row) => parseFloat(String(row.move)) >= 3 && parseFloat(String(row.move)) < 5).length,
@@ -1565,7 +1703,7 @@ export function AnalyticsModule({ backendUrl }) {
       insiderRows,
       riskCounts,
     };
-  }, [equitiesData.marketBreadth, equitiesData.marketBreadth, equitiesSpecData.marketBreadth, filteredEquities, rangeKey]);
+  }, [equitiesData.finvizDesk, equitiesData.marketBreadth, equitiesData.marketBreadth, equitiesSpecData.marketBreadth, filteredEquities, rangeKey]);
 
   const selectedCommodityRow = useMemo(
     () =>
@@ -1659,15 +1797,27 @@ export function AnalyticsModule({ backendUrl }) {
       tertiary: row.category || row.indicator || selectedCategory,
       signal: row.trend || row.status || row.importance || "Monitor",
       tone: Number(row.change ?? row.delta ?? 0) >= 0 ? "positive" : "neutral",
+      source: row.source || row.sourceType || "Macro feed",
+      asOf: row.asOf || row.releaseDate || row.period || null,
+      delta: row.change ?? row.delta ?? null,
     }));
     const commodityRows = (filteredCommodities.rows || []).slice(0, 8).map((row, idx) => ({
       id: row.id || `commodity-${idx}`,
-      asset: row.symbol || row.name || "CMD",
+      asset: row.name || row.symbol || "CMD",
+      symbol: row.symbol || row.name || "CMD",
       primary: row.latestPrice == null ? "—" : formatMoney(row.latestPrice),
       secondary: formatPercent(row.dailyChangePct),
       tertiary: row.group || "Commodity",
       signal: row.curveStructure || row.region || "Global",
       tone: Number(row.dailyChangePct) >= 0 ? "positive" : "negative",
+      priceValue: row.latestPrice ?? null,
+      dailyChangePct: row.dailyChangePct ?? null,
+      ytdChangePct: row.ytdChangePct ?? null,
+      oneYearReturnPct: row.oneYearReturnPct ?? null,
+      proxySymbol: row.proxySymbol || null,
+      source: row.source || null,
+      region: row.region || "Global",
+      stale: Boolean(row.stale),
     }));
 
     const configs = {
@@ -1678,6 +1828,7 @@ export function AnalyticsModule({ backendUrl }) {
         primaryLabel: "Total perp OI",
         primaryValue: formatCompactMoney(cryptoTotalOi),
         primaryDelta: etfTotalFlow ? `${etfTotalFlow >= 0 ? "+" : ""}${formatCompactMoney(etfTotalFlow)} ETF net` : "ETF flow pending",
+        quality: getSourceQuality(cryptoData),
         metrics: [
           { label: "ETF net flow", value: formatCompactMoney(etfTotalFlow), helper: `${(cryptoData.etfInflows || []).length} rows`, tone: etfTotalFlow >= 0 ? "positive" : "negative" },
           { label: "Perp venues", value: String(perpVenueCount || "—"), helper: selectedPerpExchange, tone: "info" },
@@ -1707,6 +1858,7 @@ export function AnalyticsModule({ backendUrl }) {
         primaryLabel: "Options volume",
         primaryValue: formatCompactMoney(optionsTotalVolume),
         primaryDelta: `${(optionsData.greeks || []).length} greek rows`,
+        quality: getSourceQuality(optionsData),
         metrics: [
           { label: "Open interest", value: formatCompactMoney(optionsData.totalOptionsOpenInterestUsd), helper: "USD notional", tone: "info" },
           { label: "Max pain map", value: String((optionsData.optionsMaxPain || []).length), helper: "Strikes tracked", tone: "neutral" },
@@ -1728,6 +1880,15 @@ export function AnalyticsModule({ backendUrl }) {
           { label: "Strike OI", value: `${(optionsData.oiByStrike || []).length} strikes`, helper: "Crowding" },
           { label: "Route volume", value: formatCompactMoney(optionsTotalVolume), helper: "Exchange split" },
         ],
+        optionsMeta: {
+          greeks: Array.isArray(optionsData.greeks) ? optionsData.greeks : [],
+          maxPain: Array.isArray(optionsData.optionsMaxPain) ? optionsData.optionsMaxPain : [],
+          routes: Array.isArray(optionsData.volumeByExchangeRoute) ? optionsData.volumeByExchangeRoute : [],
+          oiByStrike: Array.isArray(optionsData.oiByStrike) ? optionsData.oiByStrike : [],
+          volumeByAsset: Array.isArray(optionsData.optionsVolumeByAsset) ? optionsData.optionsVolumeByAsset : [],
+          source: optionsData.source || "Deribit + Finviz",
+          updatedAt: optionsData.updatedAt || currentUpdatedAt,
+        },
       },
       equities: {
         kicker: "Equity factor tape",
@@ -1736,6 +1897,7 @@ export function AnalyticsModule({ backendUrl }) {
         primaryLabel: "Market breadth",
         primaryValue: `${breadth.newHighs ?? "—"} / ${breadth.newLows ?? "—"}`,
         primaryDelta: topSector ? `${topSector.sector || topSector.name} leads ${timeRange}` : "Leadership pending",
+        quality: getSourceQuality(equitiesData),
         metrics: [
           { label: "Above 50DMA", value: formatPercent(breadth.above50dmaPct), helper: "Participation", tone: Number(breadth.above50dmaPct) >= 50 ? "positive" : "warning" },
           { label: "Above 200DMA", value: formatPercent(breadth.above200dmaPct), helper: "Long trend", tone: Number(breadth.above200dmaPct) >= 50 ? "positive" : "warning" },
@@ -1759,6 +1921,7 @@ export function AnalyticsModule({ backendUrl }) {
         primaryLabel: "Regime",
         primaryValue: regimeLabel || "Monitor",
         primaryDelta: regimeScore == null ? "Score pending" : `Score ${formatFixed(regimeScore, 1)}`,
+        quality: getSourceQuality(macroData),
         metrics: [
           { label: "Overview", value: String((macroOverview || []).length), helper: selectedGeoCode, tone: "info" },
           { label: "Calendar", value: String((macroCalendarRows || []).length), helper: "Upcoming prints", tone: "warning" },
@@ -1775,6 +1938,13 @@ export function AnalyticsModule({ backendUrl }) {
         })).concat([
           { label: "Regime note", value: regimeLabel || "Monitor", helper: regimeExplain || "Composite signal" },
         ]).slice(0, 4),
+        macroMeta: {
+          overview: macroOverview || [],
+          riskIndicators: macroData.riskIndicators || [],
+          forexMovers: forexMoverRows || [],
+          calendar: macroCalendarRows || [],
+          sourceInfo: macroSourceInfo || null,
+        },
       },
       commodities: {
         kicker: "Physical market monitor",
@@ -1783,6 +1953,7 @@ export function AnalyticsModule({ backendUrl }) {
         primaryLabel: "Selected contract",
         primaryValue: selectedCommoditySymbol || "WTI",
         primaryDelta: selectedCommodityLatestPrice == null ? "Price pending" : formatMoney(selectedCommodityLatestPrice),
+        quality: getSourceQuality(commoditiesData),
         metrics: [
           { label: "Tracked contracts", value: String(filteredCommodities.rows.length), helper: selectedCommodityGroup, tone: "info" },
           { label: "Top mover", value: topCommodityMover?.symbol || "—", helper: formatPercent(topCommodityMover?.dailyChangePct), tone: Number(topCommodityMover?.dailyChangePct) >= 0 ? "positive" : "negative" },
@@ -1798,6 +1969,20 @@ export function AnalyticsModule({ backendUrl }) {
           { label: "Seasonality", value: String((commoditiesData.seasonality || []).length), helper: selectedCommodityTimeRange },
           { label: "Alerts", value: String((commodityAlertRules || []).length + (commoditiesData.alerts || []).length), helper: "Saved + live" },
         ],
+        commodityMeta: {
+          selectedSymbol: selectedCommoditySymbol,
+          selectedGroup: selectedCommodityGroup,
+          selectedTimeRange: selectedCommodityTimeRange,
+          selectedRow: selectedCommodityRow,
+          curveRows: Array.isArray(commoditiesData.curve) ? commoditiesData.curve : [],
+          fundamentals: Array.isArray(commoditiesData.fundamentals) ? commoditiesData.fundamentals : [],
+          flows: Array.isArray(commoditiesData.flows) ? commoditiesData.flows : [],
+          seasonality: Array.isArray(commoditiesData.seasonality) ? commoditiesData.seasonality : [],
+          compare: Array.isArray(commoditiesData.compare) ? commoditiesData.compare : [],
+          calendar: Array.isArray(commoditiesData.calendar) ? commoditiesData.calendar : [],
+          correlation: Array.isArray(commoditiesData.correlation) ? commoditiesData.correlation : [],
+          alerts: Array.isArray(commoditiesData.alerts) ? commoditiesData.alerts : [],
+        },
       },
     };
 
@@ -1818,6 +2003,7 @@ export function AnalyticsModule({ backendUrl }) {
     activeTab === "equities"
       ? "Breadth, factors, sectors, earnings, and index concentration in one compact operator view."
       : "Switch between Crypto, Options, Equities, Macro, and Commodities analytics.";
+  const deskAnalyticsLocked = !hasDeskFeatureAccess && ["options", "equities", "macro", "commodities"].includes(activeTab);
   const analyticsToolbar =
     activeTab === "equities" ? (
       <div className="analytics-equities-toolbar">
@@ -1863,13 +2049,13 @@ export function AnalyticsModule({ backendUrl }) {
   return (
     <AnalyticsLayout
       eyebrow="Analytics"
-      title={analyticsLayoutTitle}
-      description={analyticsLayoutDescription}
+      title={deskAnalyticsLocked ? "Desk analytics locked" : analyticsLayoutTitle}
+      description={deskAnalyticsLocked ? "Upgrade the workspace to Desk to view this analytics workspace." : analyticsLayoutDescription}
       updatedAt={currentUpdatedAt}
       isRefreshing={currentRefreshing}
       activeTab={activeTab}
       onTabChange={setActiveTab}
-      toolbar={analyticsToolbar}
+      toolbar={deskAnalyticsLocked ? null : analyticsToolbar}
       notice={actionNotice}
     >
 
@@ -1889,8 +2075,15 @@ export function AnalyticsModule({ backendUrl }) {
       ) : null}
 
       {/* Content */}
-      {!currentBlockingLoad && renderResearchBoard()}
-      {!currentBlockingLoad && !(currentError && !currentHasLoaded) ? (
+      {!currentBlockingLoad && deskAnalyticsLocked ? (
+        <section className="desk-feature-lock analytics-desk-access-lock" role="status">
+          <span>Desk analytics</span>
+          <h2>Desk analytics require a Desk workspace</h2>
+          <p>Options, equities, macro, and commodities desk workspaces are restricted to Desk subscriptions. Crypto analytics remains available here.</p>
+        </section>
+      ) : null}
+      {!currentBlockingLoad && !deskAnalyticsLocked && renderResearchBoard()}
+      {!currentBlockingLoad && !deskAnalyticsLocked && !(currentError && !currentHasLoaded) ? (
         <ResearchWorkspacePanel
           scope={activeTab}
           title={`${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Research Workspace`}
@@ -2254,13 +2447,29 @@ export function AnalyticsModule({ backendUrl }) {
                   gap: 14,
                 }}
               >
+                {/* ── Options Volume Per Asset (with venue badges) ── */}
                 <AnalyticsTableCard
                   title="Options volume per asset"
                   subtitle="By asset, with exchange route where available"
                   emptyText="No options volume rows returned yet."
                   columns={[
                     { key: "asset", label: "Asset" },
-                    { key: "exchange", label: "Exchange" },
+                    {
+                      key: "exchange",
+                      label: "Venue",
+                      render: (v) => {
+                        const exLower = String(v || "").toLowerCase();
+                        const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
+                          : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
+                          : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
+                          : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                        return (
+                          <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
+                            {v || "—"}
+                          </span>
+                        );
+                      }
+                    },
                     { key: "route", label: "Route" },
                     {
                       key: "volumeUsd",
@@ -2281,12 +2490,28 @@ export function AnalyticsModule({ backendUrl }) {
                   )}
                 />
 
+                {/* ── Options Max Pain (with venue badges) ── */}
                 <AnalyticsTableCard
                   title="Options max pain"
                   subtitle="By exchange, asset and expiry"
                   emptyText="No options max pain rows returned yet."
                   columns={[
-                    { key: "exchange", label: "Exchange" },
+                    {
+                      key: "exchange",
+                      label: "Venue",
+                      render: (v) => {
+                        const exLower = String(v || "").toLowerCase();
+                        const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
+                          : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
+                          : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
+                          : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                        return (
+                          <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
+                            {v || "—"}
+                          </span>
+                        );
+                      }
+                    },
                     { key: "asset", label: "Asset" },
                     { key: "expiry", label: "Expiry" },
                     {
@@ -2305,12 +2530,28 @@ export function AnalyticsModule({ backendUrl }) {
                   }))}
                 />
 
+                {/* ── Options Volume by Exchange Route (with venue badges) ── */}
                 <AnalyticsTableCard
                   title="Options volume by exchange route"
                   subtitle="Aggregated route table requested for Binance, Derive and Deribit"
                   emptyText="No exchange-route rows returned yet."
                   columns={[
-                    { key: "exchange", label: "Exchange" },
+                    {
+                      key: "exchange",
+                      label: "Venue",
+                      render: (v) => {
+                        const exLower = String(v || "").toLowerCase();
+                        const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
+                          : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
+                          : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
+                          : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                        return (
+                          <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
+                            {v || "—"}
+                          </span>
+                        );
+                      }
+                    },
                     { key: "route", label: "Route" },
                     { key: "asset", label: "Asset" },
                     {
@@ -2332,35 +2573,176 @@ export function AnalyticsModule({ backendUrl }) {
                   )}
                 />
 
-                <AnalyticsTableCard
-                  title="Options Greeks"
-                  subtitle="Deribit rows plus Finviz-derived optionable-underlying proxies"
-                  emptyText="No Greeks returned yet."
-                  columns={[
-                    { key: "instrument", label: "Instrument" },
-                    { key: "delta", label: "Delta", align: "right", render: v => v?.toFixed(2) },
-                    { key: "gamma", label: "Gamma", align: "right", render: v => v?.toFixed(2) },
-                    { key: "vega", label: "Vega", align: "right", render: v => v?.toFixed(2) },
-                    { key: "theta", label: "Theta", align: "right", render: v => v?.toFixed(2) },
-                    { key: "iv", label: "IV", align: "right", render: v => formatPercent(v) },
-                  ]}
-                  rows={(optionsData.greeks || []).map((r, i) => ({ id: `grk-${i}`, ...r }))}
-                />
+                {/* ── GREEKS SENSITIVITY DASHBOARD ── */}
+                <div className="analytics-card" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--color-border-subtle)" }}>
+                    <div className="analytics-section-title" style={{ fontSize: 14 }}>Greeks Sensitivity Dashboard</div>
+                    <div className="analytics-card-subtitle">Delta, Gamma, Vega, Theta risk sensitivities with directional magnitude</div>
+                  </div>
 
-                <AnalyticsTableCard
-                  title="Options OI by Strike & Expiry"
-                  subtitle="Latest options open interest"
-                  emptyText="No OI rows returned yet."
-                  columns={[
-                    { key: "asset", label: "Asset" },
-                    { key: "strike", label: "Strike", align: "right", render: v => formatMoney(v, 0) },
-                    { key: "expiry", label: "Expiry", align: "right" },
-                    { key: "type", label: "Type", align: "center" },
-                    { key: "oi", label: "OI", align: "right", render: v => formatMoney(v, 0) },
-                    { key: "exchange", label: "Exchange", align: "right" },
-                  ]}
-                  rows={(optionsData.oiByStrike || []).map((r, i) => ({ id: `oi-${i}`, ...r }))}
-                />
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                          <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Instrument</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Delta</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Gamma</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Vega</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Theta</th>
+                          <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>IV</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(optionsData.greeks || []).map((r, i) => {
+                          const greekKeys = ["delta", "gamma", "vega", "theta"];
+                          const renderMeter = (val, key) => {
+                            const num = Number(val);
+                            if (!Number.isFinite(num)) return <span style={{ color: "var(--color-text-secondary)" }}>—</span>;
+                            const maxAbs = key === "delta" ? 1 : key === "gamma" ? 0.1 : key === "vega" ? 50 : 20;
+                            const pct = Math.min(Math.abs(num) / maxAbs * 100, 100);
+                            const isPositive = num >= 0;
+                            const barColor = isPositive ? "var(--color-brand-cyan)" : "#f87171";
+                            const barGrad = isPositive ? "linear-gradient(90deg, rgba(6,182,212,0.5), var(--color-brand-cyan))" : "linear-gradient(90deg, rgba(248,113,113,0.5), #f87171)";
+
+                            return (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 80 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                  <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: "bold", color: barColor }}>{num.toFixed(3)}</span>
+                                </div>
+                                <div style={{ position: "relative", height: 6, background: "rgba(255,255,255,0.04)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.08)" }}>
+                                  <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: barGrad, borderRadius: 99, transition: "width 0.3s ease" }} />
+                                </div>
+                              </div>
+                            );
+                          };
+
+                          return (
+                            <tr
+                              key={`grk-row-${i}`}
+                              style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
+                              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                            >
+                              <td style={{ padding: "10px 12px", fontWeight: "bold", color: "var(--color-text-primary)", fontSize: 12 }}>{r.instrument}</td>
+                              {greekKeys.map(k => (
+                                <td key={k} style={{ padding: "10px 8px" }}>{renderMeter(r[k], k)}</td>
+                              ))}
+                              <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold", fontSize: 12, color: "var(--color-text-primary)" }}>
+                                {formatPercent(r.iv)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!(optionsData.greeks || []).length && (
+                          <tr>
+                            <td colSpan={6} style={{ padding: 24, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 12 }}>
+                              No Greeks returned yet — awaiting Deribit + Finviz data.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* ── OI BY STRIKE with ITM/OTM + VENUE BADGES ── */}
+                <div className="analytics-card" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--color-border-subtle)" }}>
+                    <div className="analytics-section-title" style={{ fontSize: 14 }}>Options OI by Strike & Expiry</div>
+                    <div className="analytics-card-subtitle">Open interest with moneyness indicators and venue attribution</div>
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                          <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Asset</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>Strike</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expiry</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "center" }}>Type</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "center" }}>Moneyness</th>
+                          <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>OI</th>
+                          <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>Venue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(optionsData.oiByStrike || []).map((r, i) => {
+                          const strikeNum = Number(r.strike);
+                          const spotNum = Number(r.spot || r.spotPrice || r.currentPrice || 0);
+                          const typeRaw = String(r.type || "").toUpperCase();
+                          const isCall = typeRaw.includes("C") || typeRaw.includes("CALL");
+
+                          let moneyness = "—";
+                          let moneyStyle = { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.12)" };
+                          if (spotNum > 0 && Number.isFinite(strikeNum)) {
+                            if (isCall) {
+                              moneyness = strikeNum < spotNum ? "ITM" : strikeNum > spotNum ? "OTM" : "ATM";
+                            } else {
+                              moneyness = strikeNum > spotNum ? "ITM" : strikeNum < spotNum ? "OTM" : "ATM";
+                            }
+                          }
+                          if (moneyness === "ITM") {
+                            moneyStyle = { color: "#4ade80", bg: "rgba(74,222,128,0.1)", border: "rgba(74,222,128,0.2)" };
+                          } else if (moneyness === "OTM") {
+                            moneyStyle = { color: "#fb923c", bg: "rgba(251,146,60,0.1)", border: "rgba(251,146,60,0.2)" };
+                          } else if (moneyness === "ATM") {
+                            moneyStyle = { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" };
+                          }
+
+                          const exLower = String(r.exchange || "").toLowerCase();
+                          const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
+                            : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
+                            : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
+                            : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+
+                          return (
+                            <tr
+                              key={`oi-row-${i}`}
+                              style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
+                              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                            >
+                              <td style={{ padding: "10px 12px", fontWeight: "bold", color: "var(--color-text-primary)" }}>{r.asset}</td>
+                              <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold" }}>{formatMoney(r.strike, 0)}</td>
+                              <td style={{ padding: "10px 8px", color: "var(--color-text-secondary)", fontSize: 11 }}>{r.expiry}</td>
+                              <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                                <span style={{
+                                  fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4,
+                                  background: isCall ? "rgba(6,182,212,0.1)" : "rgba(248,113,113,0.1)",
+                                  border: isCall ? "1px solid rgba(6,182,212,0.2)" : "1px solid rgba(248,113,113,0.2)",
+                                  color: isCall ? "var(--color-brand-cyan)" : "#f87171"
+                                }}>
+                                  {typeRaw || "—"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                                <span style={{
+                                  fontSize: 9, fontWeight: "bold", padding: "2px 6px", borderRadius: 4,
+                                  background: moneyStyle.bg, border: `1px solid ${moneyStyle.border}`, color: moneyStyle.color
+                                }}>
+                                  {moneyness}
+                                </span>
+                              </td>
+                              <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold" }}>{formatMoney(r.oi, 0)}</td>
+                              <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                                <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
+                                  {r.exchange || "—"}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!(optionsData.oiByStrike || []).length && (
+                          <tr>
+                            <td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 12 }}>
+                              No OI rows returned yet — awaiting Deribit chain data.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </>
           ) : activeTab === "equities" ? (
@@ -3506,6 +3888,7 @@ export function AnalyticsModule({ backendUrl }) {
                     <StatusPill tone="purple">{chartRange}</StatusPill>
                   </div>
                 </div>
+                <ProviderStatusStrip providers={macroData.providers || equitiesData.providers || providerStatus} />
 
                 <ControlPanel
                   title="Dashboard controls"
@@ -3845,54 +4228,182 @@ export function AnalyticsModule({ backendUrl }) {
                 />
               ) : null}
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-                <AnalyticsTableCard
-                  title="Macro Indicators"
-                  subtitle="Rates, inflation, labor and PMI/yield-curve context"
-                  emptyText="No macro indicator rows."
-                  columns={[
-                    { key: "indicator", label: "Indicator" },
-                    { key: "country", label: "Market" },
-                    { key: "value", label: "Value", align: "right", render: (v, row) => `${Number(v).toFixed(2)} ${row.unit || ""}`.trim() },
-                    {
-                      key: "trend",
-                      label: "Trend",
-                      align: "right",
-                      render: (v) => <StatusPill tone={getTrendTone(v)}>{v || "Flat"}</StatusPill>,
-                    },
-                  ]}
-                  rows={(macroData.macroData || []).map((row, idx) => ({ id: `macro-${idx}`, ...row }))}
-                />
-                <AnalyticsTableCard
-                  title="FX Rates"
-                  subtitle="Live FX rates. Click a pair to inspect price movement and intervals."
-                  emptyText="No FX rows."
-                  columns={[
-                    { key: "pair", label: "Pair" },
-                    { key: "rate", label: "Rate", align: "right", render: (v) => Number(v).toFixed(4) },
-                    {
-                      key: "daily",
-                      label: "Daily",
-                      align: "right",
-                      render: (v) => {
-                        const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
-                        return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
-                      },
-                    },
-                    {
-                      key: "weekly",
-                      label: "Weekly",
-                      align: "right",
-                      render: (v) => {
-                        const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
-                        return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
-                      },
-                    },
-                  ]}
-                  rows={(macroData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
-                  onRowClick={openFxAsset}
-                />
+              {/* ── DATA-NATIVE MACRO TERMINAL ───────────────────────────────── */}
+              <div className="analytics-card" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "14px 16px", borderBottom: "1px solid var(--color-border-subtle)" }}>
+                  <div>
+                    <div className="analytics-section-title" style={{ fontSize: 15 }}>Macro Indicators Terminal</div>
+                    <div className="analytics-card-subtitle">Rates · Inflation · Labor · PMI · Yield-Curve — with live source provenance and prior-release delta</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {[
+                      { label: "FRED", color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.25)" },
+                      { label: "BLS", color: "#fb923c", bg: "rgba(251,146,60,0.1)", border: "rgba(251,146,60,0.25)" },
+                      { label: "World Bank", color: "#4ade80", bg: "rgba(74,222,128,0.1)", border: "rgba(74,222,128,0.25)" },
+                      { label: "Yahoo", color: "#c084fc", bg: "rgba(192,132,252,0.1)", border: "rgba(192,132,252,0.25)" },
+                    ].map(s => (
+                      <span key={s.label} style={{ fontSize: 9, fontWeight: "bold", padding: "2px 6px", borderRadius: 3, background: s.bg, border: `1px solid ${s.border}`, color: s.color }}>
+                        {s.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                        <th style={{ padding: "8px 16px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Indicator / Source</th>
+                        <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Market</th>
+                        <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>As-Of</th>
+                        <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>Current</th>
+                        <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>Prior</th>
+                        <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "center" }}>Trend</th>
+                        <th style={{ padding: "8px 16px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>Risk Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(macroData.macroData || []).map((row, idx) => {
+                        /* ── Source badge ── */
+                        const srcRaw = String(row.source || row.sourceType || "").toLowerCase();
+                        const srcMeta = srcRaw.includes("fred") ? { label: "FRED", color: "#38bdf8", bg: "rgba(56,189,248,0.08)", border: "rgba(56,189,248,0.2)" }
+                          : srcRaw.includes("bls") ? { label: "BLS", color: "#fb923c", bg: "rgba(251,146,60,0.08)", border: "rgba(251,146,60,0.2)" }
+                          : srcRaw.includes("world") || srcRaw.includes("wb") ? { label: "World Bank", color: "#4ade80", bg: "rgba(74,222,128,0.08)", border: "rgba(74,222,128,0.2)" }
+                          : srcRaw.includes("yahoo") ? { label: "Yahoo", color: "#c084fc", bg: "rgba(192,132,252,0.08)", border: "rgba(192,132,252,0.2)" }
+                          : { label: row.source || "Live", color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+
+                        /* ── Trend arrow ── */
+                        const trendRaw = String(row.trend || "").toLowerCase();
+                        const trendUp = trendRaw.includes("up") || trendRaw.includes("rising") || trendRaw.includes("expan") || trendRaw.includes("accel");
+                        const trendDown = trendRaw.includes("down") || trendRaw.includes("falling") || trendRaw.includes("contract") || trendRaw.includes("decel");
+                        const trendArrow = trendUp ? "↑" : trendDown ? "↓" : "→";
+                        const trendColor = trendUp ? "var(--color-brand-cyan)" : trendDown ? "#f87171" : "#94a3b8";
+
+                        /* ── Risk status ── */
+                        const riskRaw = String(row.riskStatus || row.status || "").toLowerCase();
+                        const riskElevated = riskRaw.includes("elevated") || riskRaw.includes("watch") || riskRaw.includes("tight");
+                        const riskLabel = row.riskStatus || (riskElevated ? "Watch" : "Normal");
+                        const riskStyle = riskElevated
+                          ? { bg: "rgba(239,68,68,0.1)", border: "rgba(239,68,68,0.25)", color: "#f87171" }
+                          : { bg: "rgba(74,222,128,0.07)", border: "rgba(74,222,128,0.2)", color: "#4ade80" };
+
+                        /* ── Prior vs current delta ── */
+                        const current = Number(row.value);
+                        const prior = Number(row.prior ?? row.previousValue ?? row.prevValue ?? NaN);
+                        const hasPrior = Number.isFinite(prior);
+                        const delta = hasPrior ? current - prior : null;
+
+                        /* ── As-of date ── */
+                        const asOf = row.asOf || row.releaseDate || row.period || "—";
+
+                        return (
+                          <tr
+                            key={`macro-row-${idx}`}
+                            style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
+                            onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                          >
+                            {/* Indicator + source badge */}
+                            <td style={{ padding: "10px 16px" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                <span style={{ fontWeight: "bold", color: "var(--color-text-primary)", fontSize: 12 }}>{row.indicator}</span>
+                                <span style={{
+                                  alignSelf: "flex-start", fontSize: 9, fontWeight: "bold",
+                                  padding: "1px 5px", borderRadius: 3,
+                                  background: srcMeta.bg, border: `1px solid ${srcMeta.border}`, color: srcMeta.color
+                                }}>
+                                  {srcMeta.label}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Market / Country */}
+                            <td style={{ padding: "10px 8px", color: "var(--color-text-secondary)", fontSize: 11 }}>{row.country || selectedGeoCode}</td>
+
+                            {/* As-of period */}
+                            <td style={{ padding: "10px 8px", textAlign: "right" }}>
+                              <span style={{ fontFamily: "monospace", fontSize: 10, padding: "2px 5px", borderRadius: 3, background: "rgba(148,163,184,0.06)", color: "var(--color-text-secondary)", border: "1px solid rgba(148,163,184,0.12)" }}>
+                                {asOf}
+                              </span>
+                            </td>
+
+                            {/* Current value */}
+                            <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold", fontSize: 13, color: "var(--color-text-primary)" }}>
+                              {Number.isFinite(current) ? `${current.toFixed(2)}${row.unit ? ` ${row.unit}` : ""}` : "—"}
+                              {delta !== null && (
+                                <span style={{ display: "block", fontSize: 9, color: delta > 0 ? "var(--color-brand-cyan)" : delta < 0 ? "#f87171" : "#94a3b8", marginTop: 1 }}>
+                                  {delta > 0 ? "+" : ""}{delta.toFixed(2)} vs prior
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Prior value */}
+                            <td style={{ padding: "10px 8px", textAlign: "right", color: "var(--color-text-secondary)", fontFamily: "monospace", fontSize: 11 }}>
+                              {hasPrior ? prior.toFixed(2) : "—"}
+                            </td>
+
+                            {/* Trend arrow */}
+                            <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                              <span style={{ fontSize: 18, color: trendColor, fontWeight: "bold", lineHeight: 1 }}>{trendArrow}</span>
+                              <div style={{ fontSize: 9, color: "var(--color-text-secondary)", marginTop: 1 }}>{row.trend || "Flat"}</div>
+                            </td>
+
+                            {/* Risk status */}
+                            <td style={{ padding: "10px 16px", textAlign: "right" }}>
+                              <span style={{
+                                display: "inline-flex", alignItems: "center", gap: 4,
+                                padding: "3px 7px", borderRadius: 4, fontSize: 10, fontWeight: "bold",
+                                background: riskStyle.bg, border: `1px solid ${riskStyle.border}`, color: riskStyle.color
+                              }}>
+                                <span style={{ width: 5, height: 5, borderRadius: "50%", background: riskStyle.color, flexShrink: 0 }} />
+                                {riskLabel}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!(macroData.macroData || []).length && (
+                        <tr>
+                          <td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 12 }}>
+                            No macro indicator rows — select a geography and indicator above.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
+
+              {/* ── FX Rates (unchanged) ─────────────────────────────────── */}
+              <AnalyticsTableCard
+                title="FX Rates"
+                subtitle="Live FX rates. Click a pair to inspect price movement and intervals."
+                emptyText="No FX rows."
+                columns={[
+                  { key: "pair", label: "Pair" },
+                  { key: "rate", label: "Rate", align: "right", render: (v) => Number(v).toFixed(4) },
+                  {
+                    key: "daily",
+                    label: "Daily",
+                    align: "right",
+                    render: (v) => {
+                      const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
+                      return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
+                    },
+                  },
+                  {
+                    key: "weekly",
+                    label: "Weekly",
+                    align: "right",
+                    render: (v) => {
+                      const tone = Number(v) > 0 ? "positive" : Number(v) < 0 ? "negative" : "neutral";
+                      return <span style={{ color: getToneColor(tone) }}>{formatPercent(v)}</span>;
+                    },
+                  },
+                ]}
+                rows={(macroData.fxRates || []).map((row, idx) => ({ id: `fx-${idx}`, ...row }))}
+                onRowClick={openFxAsset}
+              />
 
               <AnalyticsTableCard
                 title="Forex Movers"
@@ -4124,6 +4635,7 @@ export function AnalyticsModule({ backendUrl }) {
                     <option value="MAX">MAX</option>
                   </select>
                 </div>
+                <ProviderStatusStrip providers={commoditiesData.providers || providerStatus} />
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                   <AnalyticsStatCard
@@ -4371,19 +4883,113 @@ export function AnalyticsModule({ backendUrl }) {
               ) : null}
 
               {selectedCommodityView === "flows" ? (
-                <AnalyticsTableCard
-                  title={`Commodity Flows • ${selectedCommoditySymbol}`}
-                  subtitle="ETF, fund and futures positioning context"
-                  emptyText="No flow rows."
-                  columns={[
-                    { key: "date", label: "Date" },
-                    { key: "type", label: "Type" },
-                    { key: "value", label: "Value", align: "right", render: (v) => formatCompactMoney(v) },
-                    { key: "trend", label: "Trend", align: "right" },
-                    { key: "sourceType", label: "Source Type", align: "right" },
-                  ]}
-                  rows={(commoditiesData.flows || []).map((row, idx) => ({ id: row.id || `cmd-fl-${idx}`, ...row }))}
-                />
+                <div className="analytics-card" style={{ display: "grid", gap: 16 }}>
+                  <div style={{ borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: 12 }}>
+                    <div className="analytics-section-title" style={{ fontSize: 15 }}>Flow Attribution Dashboard • {selectedCommoditySymbol}</div>
+                    <div className="analytics-card-subtitle">Managed money, ETF changes, and commercial hedger positioning</div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+                    {/* Left: Custom flow ledger */}
+                    <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
+                      <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Flow Ledger</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                            <th style={{ padding: "6px 4px" }}>Date</th>
+                            <th style={{ padding: "6px 4px" }}>Allocation Type</th>
+                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Net Flow</th>
+                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Source</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(commoditiesData.flows || []).map((row, idx) => {
+                            const valNum = Number(row.value);
+                            const isPositive = valNum > 0;
+                            const isNegative = valNum < 0;
+                            return (
+                              <tr key={`fl-row-${idx}`} style={{ borderBottom: "1px solid rgba(148,163,184,0.08)" }}>
+                                <td style={{ padding: "8px 4px", color: "var(--color-text-secondary)", fontSize: 11 }}>{row.date}</td>
+                                <td style={{ padding: "8px 4px", fontWeight: "bold" }}>
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    padding: "2px 6px",
+                                    borderRadius: 4,
+                                    fontSize: 10,
+                                    background: String(row.type).toLowerCase().includes("etf") ? "rgba(56,189,248,0.1)" : "rgba(168,85,247,0.1)",
+                                    border: String(row.type).toLowerCase().includes("etf") ? "1px solid rgba(56,189,248,0.2)" : "1px solid rgba(168,85,247,0.2)",
+                                    color: String(row.type).toLowerCase().includes("etf") ? "#38bdf8" : "#c084fc"
+                                  }}>
+                                    {row.type}
+                                  </span>
+                                </td>
+                                <td style={{ padding: "8px 4px", textAlign: "right", color: isPositive ? "var(--color-brand-cyan)" : isNegative ? "#f87171" : "var(--color-text-primary)", fontWeight: "bold" }}>
+                                  {isPositive ? "+" : ""}{formatCompactMoney(row.value)}
+                                </td>
+                                <td style={{ padding: "8px 4px", textAlign: "right", color: "var(--color-text-secondary)", fontSize: 10 }}>{row.sourceType || "OPEC / CFTC"}</td>
+                              </tr>
+                            );
+                          })}
+                          {!(commoditiesData.flows || []).length && (
+                            <tr>
+                              <td colSpan={4} style={{ padding: 16, textAlign: "center", color: "var(--color-text-secondary)" }}>No flow data available.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Right: Net Allocation Visual Bars */}
+                    <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)", display: "flex", flexDirection: "column", gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Flow Allocation Intensity</div>
+                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>Relative net exposure shifts by capital pools</div>
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 8 }}>
+                        {(commoditiesData.flows || []).slice(0, 4).map((row, idx) => {
+                          const valNum = Number(row.value);
+                          const maxVal = Math.max(...(commoditiesData.flows || []).map(r => Math.abs(Number(r.value))), 1e7);
+                          const percentage = Math.min((Math.abs(valNum) / maxVal) * 100, 100);
+                          const isPositive = valNum > 0;
+                          
+                          return (
+                            <div key={`fl-bar-${idx}`} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+                                <span style={{ color: "var(--color-text-primary)", fontWeight: "bold" }}>{row.type}</span>
+                                <span style={{ color: "var(--color-text-secondary)" }}>{row.date}</span>
+                              </div>
+                              <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.04)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.1)" }}>
+                                <div
+                                  style={{
+                                    position: "absolute",
+                                    left: isPositive ? "50%" : "auto",
+                                    right: isPositive ? "auto" : "50%",
+                                    width: `${percentage / 2}%`,
+                                    height: "100%",
+                                    background: isPositive ? "linear-gradient(90deg, rgba(6,182,212,0.6), var(--color-brand-cyan))" : "linear-gradient(90deg, #f87171, #ef4444)",
+                                    borderRadius: 99
+                                  }}
+                                />
+                                <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: "100%", background: "rgba(148,163,184,0.3)" }} />
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: isPositive ? "var(--color-brand-cyan)" : "#f87171" }}>
+                                <span>{isPositive ? "NET BUYING" : "NET SELLING"}</span>
+                                <span style={{ fontWeight: "bold" }}>{isPositive ? "+" : ""}{formatCompactMoney(row.value)}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {!(commoditiesData.flows || []).length && (
+                          <div style={{ padding: 12, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 11 }}>
+                            Awaiting allocation positioning metrics...
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               ) : null}
 
               {selectedCommodityView === "seasonality" ? (
@@ -4451,19 +5057,168 @@ export function AnalyticsModule({ backendUrl }) {
               ) : null}
 
               {selectedCommodityView === "curve" ? (
-                <AnalyticsTableCard
-                  title={`Futures Curve • ${selectedCommoditySymbol}`}
-                  subtitle="Contract structure and spread"
-                  emptyText="No curve rows."
-                  columns={[
-                    { key: "contract", label: "Contract" },
-                    { key: "price", label: "Price", align: "right", render: (v) => formatMoney(v, 2) },
-                    { key: "spread", label: "Spread", align: "right", render: (v) => formatPercent(v) },
-                    { key: "curveStructure", label: "Structure", align: "right" },
-                    { key: "sourceType", label: "Source Type", align: "right" },
-                  ]}
-                  rows={(commoditiesData.curve || []).map((row, idx) => ({ id: row.id || `cmd-cv-${idx}`, ...row }))}
-                />
+                <div className="analytics-card" style={{ display: "grid", gap: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: 12 }}>
+                    <div>
+                      <div className="analytics-section-title" style={{ fontSize: 15 }}>Futures Curve Term Structure • {selectedCommoditySymbol}</div>
+                      <div className="analytics-card-subtitle">Prompt-to-forward months curve structure and spread attribution</div>
+                    </div>
+                    {(() => {
+                      const curveRows = commoditiesData.curve || [];
+                      const structure = curveRows[0]?.curveStructure || (curveRows[1] && Number(curveRows[0]?.price) > Number(curveRows[1]?.price) ? "Backwardation" : "Contango");
+                      const isBack = String(structure).toLowerCase().includes("back");
+                      return (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>Structure:</span>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              padding: "4px 8px",
+                              borderRadius: 4,
+                              background: isBack ? "rgba(239, 68, 68, 0.12)" : "rgba(6, 182, 212, 0.12)",
+                              border: isBack ? "1px solid rgba(239, 68, 68, 0.3)" : "1px solid rgba(6, 182, 212, 0.3)",
+                              color: isBack ? "#f87171" : "#22d3ee",
+                              fontSize: 11,
+                              fontWeight: "bold",
+                            }}
+                          >
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isBack ? "#ef4444" : "#06b6d4" }} />
+                            {structure}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+                    {/* Left: Interactive Curve Ladder */}
+                    <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
+                      <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Curve Ladder</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                            <th style={{ padding: "6px 4px" }}>Contract</th>
+                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Price</th>
+                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Spread</th>
+                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Source</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(commoditiesData.curve || []).map((row, idx) => {
+                            const isPrompt = idx === 0;
+                            const spreadNum = Number(row.spread);
+                            const spreadColor = spreadNum > 0 ? "var(--color-brand-cyan)" : spreadNum < 0 ? "#f87171" : "var(--color-text-secondary)";
+                            return (
+                              <tr
+                                key={`cv-row-${idx}`}
+                                style={{
+                                  borderBottom: "1px solid rgba(148,163,184,0.08)",
+                                  background: isPrompt ? "rgba(56,189,248,0.06)" : "transparent",
+                                  fontWeight: isPrompt ? "bold" : "normal",
+                                }}
+                              >
+                                <td style={{ padding: "8px 4px", color: isPrompt ? "var(--color-brand-cyan)" : "var(--color-text-primary)" }}>
+                                  {row.contract} {isPrompt && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(56,189,248,0.2)", marginLeft: 4 }}>PROMPT</span>}
+                                </td>
+                                <td style={{ padding: "8px 4px", textAlign: "right" }}>{formatMoney(row.price, 2)}</td>
+                                <td style={{ padding: "8px 4px", textAlign: "right", color: spreadColor }}>
+                                  {spreadNum > 0 ? "+" : ""}{formatPercent(row.spread)}
+                                </td>
+                                <td style={{ padding: "8px 4px", textAlign: "right", color: "var(--color-text-secondary)", fontSize: 10 }}>
+                                  {row.sourceType || "EIA"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {!(commoditiesData.curve || []).length && (
+                            <tr>
+                              <td colSpan={4} style={{ padding: 16, textAlign: "center", color: "var(--color-text-secondary)" }}>No curve data available.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Right: SVG Visual Curve Plot */}
+                    <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Structure Chart</div>
+                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginBottom: 12 }}>Visual mapping of prices over chronological tenors</div>
+                      </div>
+
+                      {(() => {
+                        const curveData = commoditiesData.curve || [];
+                        if (curveData.length < 2) {
+                          return (
+                            <div style={{ height: 120, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-secondary)", fontSize: 11 }}>
+                              Awaiting multi-contract curve data for chart render...
+                            </div>
+                          );
+                        }
+                        const prices = curveData.map(d => Number(d.price)).filter(Number.isFinite);
+                        const maxP = Math.max(...prices);
+                        const minP = Math.min(...prices);
+                        const spreadP = maxP - minP || 1;
+
+                        const width = 280;
+                        const height = 110;
+                        const paddingX = 20;
+                        const paddingY = 15;
+
+                        const points = curveData.map((d, i) => {
+                          const x = paddingX + (i / (curveData.length - 1)) * (width - 2 * paddingX);
+                          const y = height - paddingY - ((Number(d.price) - minP) / spreadP) * (height - 2 * paddingY);
+                          return { x, y, price: d.price, contract: d.contract };
+                        });
+
+                        const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+
+                        return (
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                            <div style={{ position: "relative", width: "100%", maxWidth: width }}>
+                              {/* Price boundary labels */}
+                              <div style={{ position: "absolute", top: 0, left: 2, fontSize: 9, color: "var(--color-text-secondary)" }}>{formatMoney(maxP, 2)}</div>
+                              <div style={{ position: "absolute", bottom: 12, left: 2, fontSize: 9, color: "var(--color-text-secondary)" }}>{formatMoney(minP, 2)}</div>
+
+                              <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: "visible" }}>
+                                {/* Horizontal gridlines */}
+                                <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
+                                <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
+                                <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
+
+                                {/* Curve line */}
+                                <path d={linePath} fill="none" stroke="var(--color-brand-cyan)" strokeWidth="2" />
+
+                                {/* Data point dots */}
+                                {points.map((p, idx) => (
+                                  <g key={`dot-${idx}`}>
+                                    <circle cx={p.x} cy={p.y} r="3.5" fill="var(--color-surface)" stroke="var(--color-brand-cyan)" strokeWidth="2" />
+                                    {(idx === 0 || idx === curveData.length - 1) && (
+                                      <text x={p.x} y={p.y - 8} textAnchor="middle" fill="#e2e8f0" fontSize="8" fontWeight="bold">
+                                        {formatMoney(p.price, 1)}
+                                      </text>
+                                    )}
+                                  </g>
+                                ))}
+                              </svg>
+                            </div>
+
+                            {/* X-axis labels */}
+                            <div style={{ display: "flex", justifyContent: "space-between", width: "100%", maxWidth: width, padding: "0 10px", marginTop: 4 }}>
+                              {curveData.map((d, i) => (
+                                <span key={`lbl-${i}`} style={{ fontSize: 9, color: i === 0 ? "var(--color-brand-cyan)" : "var(--color-text-secondary)", fontWeight: i === 0 ? "bold" : "normal" }}>
+                                  {d.contract}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
               ) : null}
 
               {selectedCommodityView === "compare" ? (
@@ -4482,23 +5237,104 @@ export function AnalyticsModule({ backendUrl }) {
                 />
               ) : null}
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
                 <AnalyticsTableCard
-                  title={`Fundamentals • ${selectedCommoditySymbol}`}
-                  subtitle="Inventory, production and demand metrics"
+                  title={`Inventory Deltas & Material Balance • ${selectedCommoditySymbol}`}
+                  subtitle="Stockpiles, production draws and demand indicators"
                   emptyText="No fundamental rows."
                   columns={[
-                    { key: "metric", label: "Metric" },
-                    { key: "value", label: "Value", align: "right", render: (v) => Number(v).toLocaleString() },
-                    { key: "unit", label: "Unit", align: "right" },
+                    {
+                      key: "metric",
+                      label: "Material Indicator / Source",
+                      render: (v, row) => (
+                        <div>
+                          <div style={{ fontWeight: "bold", color: "var(--color-text-primary)" }}>{v}</div>
+                          <span style={{
+                            display: "inline-block",
+                            fontSize: 9,
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                            background: "rgba(148,163,184,0.08)",
+                            border: "1px solid rgba(148,163,184,0.15)",
+                            color: "var(--color-text-secondary)",
+                            marginTop: 2
+                          }}>
+                            Sourced: {selectedCommoditySymbol === "GC" || selectedCommoditySymbol === "SI" ? "FRED" : "EIA Weekly Report"}
+                          </span>
+                        </div>
+                      )
+                    },
+                    {
+                      key: "value",
+                      label: "Reported Stock",
+                      align: "right",
+                      render: (v, row) => {
+                        const valNum = Number(v);
+                        if (!Number.isFinite(valNum)) return "—";
+                        return (
+                          <div style={{ fontFamily: "monospace", fontSize: 13, fontWeight: "bold", color: "var(--color-text-primary)" }}>
+                            {valNum.toLocaleString()} <span style={{ fontSize: 10, fontWeight: "normal", color: "var(--color-text-secondary)" }}>{row.unit || ""}</span>
+                          </div>
+                        );
+                      }
+                    },
+                    {
+                      key: "status",
+                      label: "Inventory Delta",
+                      align: "right",
+                      render: (_, row) => {
+                        const metricLower = String(row.metric || "").toLowerCase();
+                        const isDrawdown = metricLower.includes("draw") || metricLower.includes("decrease") || metricLower.includes("deficit") || Number(row.value) < 0;
+                        const isBuild = metricLower.includes("build") || metricLower.includes("increase") || metricLower.includes("surplus") || (Number(row.value) > 0 && !metricLower.includes("draw"));
+                        
+                        if (isDrawdown) {
+                          return (
+                            <span style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              background: "rgba(249,115,22,0.1)",
+                              border: "1px solid rgba(249,115,22,0.25)",
+                              color: "#f97316",
+                              fontSize: 10,
+                              fontWeight: "bold"
+                            }}>
+                              ▼ DRAWDOWN
+                            </span>
+                          );
+                        } else if (isBuild) {
+                          return (
+                            <span style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              background: "rgba(6,182,212,0.1)",
+                              border: "1px solid rgba(6,182,212,0.25)",
+                              color: "var(--color-brand-cyan)",
+                              fontSize: 10,
+                              fontWeight: "bold"
+                            }}>
+                              ▲ BUILD
+                            </span>
+                          );
+                        }
+                        return <span style={{ color: "var(--color-text-secondary)", fontSize: 10 }}>CONTAINED</span>;
+                      }
+                    }
                   ]}
                   rows={(commoditiesData.fundamentals || []).map((row, idx) => ({ id: row.id || `cmd-fn-${idx}`, ...row }))}
                 />
-                <AnalyticsTableCard
-                  title="Event Calendar & Saved Alerts"
-                  subtitle="Live catalysts plus your saved workspace rules"
-                  emptyText="No calendar/alert rows."
-                  headerExtra={
+
+                <div className="analytics-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: 12 }}>
+                    <div>
+                      <div className="analytics-section-title" style={{ fontSize: 15 }}>Catalyst Timeline & Workspace Rules</div>
+                      <div className="analytics-card-subtitle">Live events feed, catalyst schedules and custom workspace alerts</div>
+                    </div>
                     <button
                       type="button"
                       onClick={() =>
@@ -4513,22 +5349,101 @@ export function AnalyticsModule({ backendUrl }) {
                           },
                         ])
                       }
-                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(56,189,248,0.5)", background: "rgba(56,189,248,0.16)", color: "#7dd3fc", cursor: "pointer", fontSize: 12 }}
+                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(56,189,248,0.5)", background: "rgba(56,189,248,0.16)", color: "#7dd3fc", cursor: "pointer", fontSize: 11, fontWeight: "bold" }}
                     >
-                      Add Alert
+                      + Add Workspace Alert
                     </button>
-                  }
-                  columns={[
-                    { key: "date", label: "Date" },
-                    { key: "event", label: "Event" },
-                    { key: "importance", label: "Importance", align: "right" },
-                    { key: "sourceType", label: "Source Type", align: "right" },
-                  ]}
-                  rows={[
-                    ...(commoditiesData.calendar || []).map((row, idx) => ({ id: row.id || `cmd-cal-${idx}`, date: row.date, event: row.event || row.title, importance: row.importance || "medium", sourceType: row.sourceType || "Economic calendar API" })),
-                    ...(commodityAlertRules || []).map((row, idx) => ({ id: row.id || `cmd-al-${idx}`, date: "Alert", event: row.rule || row.name, importance: row.status || "active", sourceType: row.sourceType || "Saved workspace rule" })),
-                  ]}
-                />
+                  </div>
+
+                  <div style={{ position: "relative", paddingLeft: 20, borderLeft: "2px solid rgba(148, 163, 184, 0.15)", margin: "8px 0 8px 10px", display: "flex", flexDirection: "column", gap: 14 }}>
+                    {(() => {
+                      const calEvents = (commoditiesData.calendar || []).map((row, idx) => ({
+                        id: row.id || `cmd-cal-${idx}`,
+                        date: row.date,
+                        event: row.event || row.title,
+                        importance: row.importance || "medium",
+                        sourceType: row.sourceType || "Economic calendar API",
+                        isAlert: false
+                      }));
+                      const alertRulesMapped = (commodityAlertRules || []).map((row, idx) => ({
+                        id: row.id || `cmd-al-${idx}`,
+                        date: "Alert Rule",
+                        event: row.rule || row.name,
+                        importance: row.status || "active",
+                        sourceType: row.sourceType || "Saved workspace rule",
+                        isAlert: true
+                      }));
+                      const mergedFeed = [...calEvents, ...alertRulesMapped];
+
+                      if (!mergedFeed.length) {
+                        return (
+                          <div style={{ padding: 16, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 12 }}>
+                            No active catalysts or saved alerts found.
+                          </div>
+                        );
+                      }
+
+                      return mergedFeed.map((row, idx) => {
+                        const isHigh = String(row.importance).toLowerCase() === "high" || String(row.importance).toLowerCase() === "active";
+                        const nodeColor = row.isAlert ? "#a855f7" : isHigh ? "#ef4444" : "#e2e8f0";
+                        const importanceBadge = String(row.importance).toUpperCase();
+                        
+                        return (
+                          <div key={`timeline-item-${idx}`} style={{ position: "relative" }}>
+                            <div
+                              style={{
+                                position: "absolute",
+                                left: -26,
+                                top: 4,
+                                width: 10,
+                                height: 10,
+                                borderRadius: "50%",
+                                background: "var(--color-surface)",
+                                border: `3px solid ${nodeColor}`,
+                                boxShadow: isHigh ? "0 0 8px rgba(239,68,68,0.5)" : "none",
+                                zIndex: 2
+                              }}
+                            />
+
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(148,163,184,0.08)", borderRadius: 6, padding: "8px 10px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                                <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)" }}>{row.event}</div>
+                                <span style={{
+                                  fontSize: 8,
+                                  fontWeight: "bold",
+                                  padding: "2px 5px",
+                                  borderRadius: 4,
+                                  background: isHigh ? "rgba(239,68,68,0.1)" : "rgba(148,163,184,0.08)",
+                                  color: isHigh ? "#f87171" : "var(--color-text-secondary)",
+                                  border: isHigh ? "1px solid rgba(239,68,68,0.2)" : "1px solid rgba(148,163,184,0.15)"
+                                }}>
+                                  {importanceBadge}
+                                </span>
+                              </div>
+                              
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--color-text-secondary)", marginTop: 2 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                  <span style={{ color: "var(--color-brand-cyan)", fontWeight: "medium" }}>{row.date}</span>
+                                  <span>•</span>
+                                  <span>{row.sourceType}</span>
+                                </div>
+                                {!row.isAlert && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setCommodityAlertRules(prev => [...prev, { id: `rule-${Date.now()}`, symbol: selectedCommoditySymbol, rule: `Trigger alert on event: ${row.event}`, status: "active", sourceType: "Saved workspace rule" }])}
+                                    style={{ background: "transparent", border: "none", color: "var(--color-brand-cyan)", fontSize: 9, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                                  >
+                                    Track catalyst
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
               </div>
             </>
           ) : null}
@@ -4555,7 +5470,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
   const rows = Array.isArray(config.rows) ? config.rows : [];
   const metrics = Array.isArray(config.metrics) ? config.metrics : [];
   const rail = Array.isArray(config.rail) ? config.rail : [];
-  if (activeTab === "equities" || activeTab === "macro" || activeTab === "commodities") {
+  if (activeTab === "equities" || activeTab === "options" || activeTab === "macro" || activeTab === "commodities") {
     return (
       <AnalyticsSpecializedDesk
         config={config}
@@ -4577,11 +5492,20 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
           <div className="analytics-research-kicker">{config.kicker}</div>
           <h2>{config.title}</h2>
           <p>{config.summary}</p>
+          <SourceQualityStrip
+            fallback={config.quality || { source: config.primaryLabel }}
+            items={[
+              config.quality,
+              ...(rows || []).slice(0, 2),
+              ...(rail || []).slice(0, 1),
+            ]}
+          />
         </div>
         <div className="analytics-research-primary">
           <span>{config.primaryLabel}</span>
           <strong>{config.primaryValue}</strong>
           <em>{config.primaryDelta}</em>
+          <SourceQualityBadge quality={config.quality} compact />
         </div>
       </div>
 
@@ -4591,6 +5515,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
             <em>{metric.helper}</em>
+            <SourceQualityBadge quality={metric.quality || config.quality} compact />
           </div>
         ))}
       </div>
@@ -4602,7 +5527,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
               <span>Live matrix</span>
               <strong>{config.title.replace(" Desk", "").replace(" Board", "")}</strong>
             </div>
-            <em>{formatDateTime(updatedAt)}</em>
+            <em><SourceQualityBadge quality={config.quality} compact /> {formatDateTime(updatedAt)}</em>
           </div>
           <div className="analytics-research-table-wrap">
             <table className="analytics-research-table">
@@ -4627,6 +5552,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
                     <td>{row.tertiary}</td>
                     <td>
                       <span className={`analytics-research-signal ${row.tone || "neutral"}`}>{row.signal}</span>
+                      <SourceQualityBadge quality={row.source ? row : config.quality} compact />
                     </td>
                   </tr>
                 ))}
@@ -4671,12 +5597,218 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
 
 function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D" }) {
   const isEquities = activeTab === "equities";
+  const isOptions = activeTab === "options";
   const isMacro = activeTab === "macro";
   const isCommodities = activeTab === "commodities";
   const visibleRows = rows.length ? rows : [{ asset: "Source pending", primary: "—", secondary: "—", tertiary: "Monitor", signal: "Awaiting data", tone: "neutral" }];
   const visibleRail = rail.length ? rail : [{ label: "Source", value: "Pending", helper: "Awaiting data" }];
   const curveRows = visibleRows.slice(0, 6);
   const maxCurve = Math.max(...curveRows.map((row) => Math.abs(Number(String(row.secondary).replace(/[^0-9.-]/g, ""))) || 1), 1);
+
+  if (isOptions) {
+    const optionsMeta = config.optionsMeta || {};
+    const greekRows = Array.isArray(optionsMeta.greeks) ? optionsMeta.greeks : [];
+    const routeRows = Array.isArray(optionsMeta.routes) ? optionsMeta.routes : [];
+    const maxPainRows = Array.isArray(optionsMeta.maxPain) ? optionsMeta.maxPain : [];
+    const oiRows = Array.isArray(optionsMeta.oiByStrike) ? optionsMeta.oiByStrike : [];
+    const venueRows = routeRows.reduce((acc, row) => {
+      const venue = String(row.exchange || "Unknown").trim() || "Unknown";
+      const existing = acc.get(venue) || { venue, volumeUsd: 0, routes: 0 };
+      existing.volumeUsd += Number(row.volumeUsd ?? row.volume) || 0;
+      existing.routes += 1;
+      acc.set(venue, existing);
+      return acc;
+    }, new Map());
+    const orderedVenues = [...venueRows.values()].sort((a, b) => Number(b.volumeUsd) - Number(a.volumeUsd));
+    const strikeCrowdingRows = oiRows
+      .map((row, idx) => ({
+        id: row.id || `opt-oi-${idx}`,
+        asset: row.asset || "Asset",
+        expiry: row.expiry || "Expiry",
+        strike: row.strike || "—",
+        type: row.type || "—",
+        oi: Number(row.oi) || 0,
+      }))
+      .sort((a, b) => Number(b.oi) - Number(a.oi))
+      .slice(0, 6);
+    const expiryQueueRows = maxPainRows.slice(0, 6);
+    const topGreek = greekRows[0] || null;
+    const totalRouteVolume = routeRows.reduce((sum, row) => sum + (Number(row.volumeUsd ?? row.volume) || 0), 0);
+
+    return (
+      <section className="analytics-desk-shell analytics-options-command">
+        <div className="analytics-options-topline">
+          <div className="analytics-desk-hero analytics-options-hero">
+            <div>
+              <span>{config.kicker}</span>
+              <h2>{config.title}</h2>
+              <p>{config.summary}</p>
+              <SourceQualityStrip fallback={config.quality} items={[config.quality, ...visibleRows.slice(0, 2), ...visibleRail.slice(0, 1)]} />
+            </div>
+            <div className="analytics-desk-command cyan">
+              <span>{config.primaryLabel}</span>
+              <strong>{config.primaryValue}</strong>
+              <em>{config.primaryDelta}</em>
+              <SourceQualityBadge quality={config.quality} compact />
+            </div>
+          </div>
+          <div className="analytics-options-metrics">
+            {metrics.map((metric, idx) => (
+              <article key={`${metric.label}-${idx}`} className={`analytics-options-tile ${metric.tone || "neutral"}`}>
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+                <em>{metric.helper}</em>
+                <SourceQualityBadge quality={metric.quality || config.quality} compact />
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <div className="analytics-options-grid">
+          <div className="analytics-desk-panel analytics-options-surface">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Surface monitor</span>
+                <strong>Greeks, venue flow, and underlyings with the strongest live context</strong>
+              </div>
+              <em><SourceQualityBadge quality={config.quality} compact /> {optionsMeta.source || "Deribit + Finviz"}</em>
+            </div>
+            <div className="analytics-options-surface-rows">
+              {visibleRows.slice(0, 8).map((row, idx) => (
+                <div key={row.id || `opt-row-${idx}`} className="analytics-options-surface-row">
+                  <div>
+                    <strong>{row.asset}</strong>
+                    <span>{row.tertiary}</span>
+                  </div>
+                  <b>{row.primary}</b>
+                  <em className={`analytics-options-tone ${row.tone || "neutral"}`}>{row.secondary}</em>
+                  <i>{row.signal} <SourceQualityBadge quality={row.source ? row : config.quality} compact /></i>
+                </div>
+              ))}
+            </div>
+            <div className="analytics-options-footstrip">
+              <div><span>Surface nodes</span><strong>{greekRows.length}</strong></div>
+              <div><span>Venue routes</span><strong>{routeRows.length}</strong></div>
+              <div><span>Lead venue</span><strong>{orderedVenues[0]?.venue || "Pending"}</strong></div>
+              <div><span>Lead asset</span><strong>{topGreek?.asset || topGreek?.instrument || "Pending"}</strong></div>
+            </div>
+          </div>
+
+          <aside className="analytics-desk-panel analytics-options-watchstack">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Venue watch stack</span>
+                <strong>Source coverage, route split, and expiry pressure</strong>
+              </div>
+            </div>
+
+            <div className="analytics-options-watch-section">
+              <span>Venue flow split</span>
+              <div className="analytics-options-watch-table">
+                {orderedVenues.length ? orderedVenues.slice(0, 4).map((row) => (
+                  <div key={row.venue} className="analytics-options-watch-row">
+                    <strong>{row.venue}</strong>
+                    <b>{formatCompactMoney(row.volumeUsd)}</b>
+                    <em>{row.routes} routes</em>
+                  </div>
+                )) : <div className="analytics-options-watch-empty">No venue flow rows.</div>}
+              </div>
+            </div>
+
+            <div className="analytics-options-watch-section">
+              <span>Max pain queue</span>
+              <div className="analytics-options-watch-table">
+                {expiryQueueRows.length ? expiryQueueRows.map((row, idx) => (
+                  <div key={row.id || `mp-${idx}`} className="analytics-options-watch-row">
+                    <strong>{row.asset || "Asset"}</strong>
+                    <b>{row.expiry || "Expiry"}</b>
+                    <em>{formatMoney(row.maxPain, 0)}</em>
+                  </div>
+                )) : <div className="analytics-options-watch-empty">No max pain rows.</div>}
+              </div>
+            </div>
+
+            <div className="analytics-options-watch-section">
+              <span>Strike crowding</span>
+              <div className="analytics-options-watch-table">
+                {strikeCrowdingRows.length ? strikeCrowdingRows.map((row) => (
+                  <div key={row.id} className="analytics-options-watch-row">
+                    <strong>{row.asset} {row.type}</strong>
+                    <b>{row.strike}</b>
+                    <em>{row.oi.toLocaleString()} OI</em>
+                  </div>
+                )) : <div className="analytics-options-watch-empty">No strike OI rows.</div>}
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div className="analytics-options-bottom-grid">
+          <div className="analytics-desk-panel analytics-options-route-panel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Route volume</span>
+                <strong>Where current options activity is concentrating</strong>
+              </div>
+              <em>{formatCompactMoney(totalRouteVolume)} tracked</em>
+            </div>
+            <div className="analytics-options-route-list">
+              {routeRows.length ? routeRows.slice(0, 8).map((row, idx) => (
+                <div key={row.id || `route-${idx}`} className="analytics-options-route-row">
+                  <strong>{row.exchange || "Venue"}</strong>
+                  <span>{row.route || "Route"}</span>
+                  <em>{row.asset || "Basket"}</em>
+                  <b>{formatCompactMoney(row.volumeUsd ?? row.volume)}</b>
+                </div>
+              )) : <div className="analytics-options-watch-empty">No route rows.</div>}
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-options-greeks-panel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Greeks / volatility surface</span>
+                <strong>Live proxy nodes now feeding the desk</strong>
+              </div>
+            </div>
+            <div className="analytics-options-greek-grid">
+              {greekRows.length ? greekRows.slice(0, 6).map((row, idx) => (
+                <div key={row.id || `greek-${idx}`} className="analytics-options-greek-card">
+                  <span>{row.asset || row.instrument || `Node ${idx + 1}`}</span>
+                  <strong>{row.iv == null ? "IV pending" : formatPercent(row.iv)}</strong>
+                  <em>Δ {formatFixed(row.delta, 2)} · Γ {formatFixed(row.gamma, 4)}</em>
+                  <b>Vega {formatFixed(row.vega, 2)} · Theta {formatFixed(row.theta, 2)}</b>
+                </div>
+              )) : <div className="analytics-options-watch-empty">No greek rows.</div>}
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-options-source-panel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Source trust</span>
+                <strong>Make live vs proxy coverage legible</strong>
+              </div>
+            </div>
+            <div className="analytics-options-source-list">
+              {visibleRail.map((item, idx) => (
+                <div key={`${item.label}-${idx}`} className="analytics-options-source-row">
+                  <strong>{item.label}</strong>
+                  <span>{item.value}</span>
+                  <em>{item.helper}</em>
+                </div>
+              ))}
+              <div className="analytics-options-source-row">
+                <strong>Feed mix</strong>
+                <span>{optionsMeta.source || "Deribit + Finviz"}</span>
+                <em>{formatDateTime(optionsMeta.updatedAt || updatedAt)}</em>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   if (isEquities) {
     const snapshot = equitiesDeskSnapshot || {
@@ -4705,6 +5837,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     };
     return (
       <section className="analytics-desk-shell analytics-factor-desk analytics-equities-live-desk">
+        <SourceQualityStrip fallback={config.quality} items={[config.quality, ...(snapshot.sectorMatrixRows || []).slice(0, 2), ...(snapshot.moversRows || []).slice(0, 1)]} />
         <section className="analytics-desk-panel analytics-equities-top-strip">
           {[
             {
@@ -4761,6 +5894,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               <span>{card.label}</span>
               <strong>{card.value}</strong>
               <em>{card.helper}</em>
+              <SourceQualityBadge quality={config.quality} compact />
               <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "#f06b63" : card.tone === "warning" ? "#f5b544" : "#58c783"} />
             </article>
           ))}
@@ -4773,7 +5907,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>Factor & sector rotation matrix</span>
                 <strong>Leadership, breadth, and relative strength by sector</strong>
               </div>
-              <em>Score: z-score proxy vs current desk window</em>
+              <em><SourceQualityBadge quality={{ ...config.quality, source: "Finviz ETF proxy breadth" }} compact /> Score: z-score proxy vs current desk window</em>
             </div>
             <div className="analytics-equities-matrix-scroll">
               <table className="analytics-equities-matrix-table">
@@ -4971,6 +6105,10 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
   }
 
   if (isMacro) {
+    const macroMeta = config.macroMeta || {};
+    const sourceOverviewRows = Array.isArray(macroMeta.overview) ? macroMeta.overview.slice(0, 6) : [];
+    const riskRows = Array.isArray(macroMeta.riskIndicators) ? macroMeta.riskIndicators.slice(0, 5) : [];
+    const fxRows = Array.isArray(macroMeta.forexMovers) ? macroMeta.forexMovers.slice(0, 6) : [];
     return (
       <section className="analytics-desk-shell analytics-macro-command">
         <div className="analytics-macro-topline">
@@ -4979,11 +6117,13 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               <span>{config.kicker}</span>
               <h2>Macro Command Board</h2>
               <p>{config.summary}</p>
+              <SourceQualityStrip fallback={config.quality} items={[config.quality, ...sourceOverviewRows.slice(0, 2), ...riskRows.slice(0, 1)]} />
             </div>
             <div className="analytics-desk-command amber">
               <span>{config.primaryLabel}</span>
               <strong>{config.primaryValue}</strong>
               <em>{config.primaryDelta}</em>
+              <SourceQualityBadge quality={config.quality} compact />
             </div>
           </div>
           <div className="analytics-macro-metrics">
@@ -4992,6 +6132,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>{metric.label}</span>
                 <strong>{metric.value}</strong>
                 <em>{metric.helper}</em>
+                <SourceQualityBadge quality={metric.quality || config.quality} compact />
               </article>
             ))}
           </div>
@@ -5002,7 +6143,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             <div className="analytics-desk-panel-head">
               <span>Rates / growth matrix</span>
               <strong>Country signal stack</strong>
-              <em>{formatDateTime(updatedAt)}</em>
+              <em><SourceQualityBadge quality={config.quality} compact /> {formatDateTime(updatedAt)}</em>
             </div>
             <div className="analytics-macro-lanes">
               {visibleRows.map((row, idx) => (
@@ -5012,6 +6153,8 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                   <b>{row.primary}</b>
                   <em>{row.secondary}</em>
                   <i className={`analytics-desk-chip ${row.tone || "neutral"}`}>{row.signal}</i>
+                  <SourceQualityBadge quality={row.source ? row : config.quality} compact />
+                  <small>{row.source || "Macro feed"}{row.asOf ? ` · ${row.asOf}` : ""}</small>
                 </div>
               ))}
             </div>
@@ -5031,63 +6174,221 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             ))}
           </aside>
         </div>
+
+        <div className="analytics-macro-bottom-grid">
+          <div className="analytics-desk-panel analytics-macro-riskstrip">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Risk strip</span>
+                <strong>Live market stress proxies aligned to the macro regime</strong>
+              </div>
+            </div>
+            <div className="analytics-macro-risk-cards">
+              {riskRows.length ? riskRows.map((row, idx) => (
+                <article key={row.id || `risk-${idx}`} className={`analytics-macro-risk-card ${String(row.status || "").toLowerCase().includes("elevated") ? "warning" : "neutral"}`}>
+                  <span>{row.indicator}</span>
+                  <strong>{row.value == null ? "—" : `${Number(row.value).toFixed(2)}${row.unit ? ` ${row.unit}` : ""}`}</strong>
+                  <em>{row.status || "Normal"}</em>
+                </article>
+              )) : <div className="analytics-options-watch-empty">No risk rows.</div>}
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-macro-sourcegrid">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>Source and release cadence</span>
+                <strong>What is driving the board right now</strong>
+              </div>
+              <em>{macroMeta.sourceInfo?.source || "Mixed macro providers"}</em>
+            </div>
+            <div className="analytics-macro-source-list">
+              {sourceOverviewRows.length ? sourceOverviewRows.map((row, idx) => (
+                <div key={row.id || `macro-src-${idx}`} className="analytics-macro-source-row">
+                  <strong>{row.indicator || row.name || `Metric ${idx + 1}`}</strong>
+                  <span>{row.source || row.sourceType || "Source pending"}</span>
+                  <em>{row.asOf ? formatDateTime(row.asOf) : row.period || "Latest release"}</em>
+                </div>
+              )) : <div className="analytics-options-watch-empty">No source rows.</div>}
+            </div>
+          </div>
+
+          <div className="analytics-desk-panel analytics-macro-fxpanel">
+            <div className="analytics-desk-panel-head">
+              <div>
+                <span>FX mover tape</span>
+                <strong>Cross-asset confirmation from currencies</strong>
+              </div>
+            </div>
+            <div className="analytics-macro-fx-list">
+              {fxRows.length ? fxRows.map((row, idx) => (
+                <div key={row.id || `fx-${idx}`} className="analytics-macro-fx-row">
+                  <strong>{row.pair || row.symbol || "Pair"}</strong>
+                  <span>{row.rate == null ? "—" : Number(row.rate).toFixed(4)}</span>
+                  <em className={Number(row.daily) >= 0 ? "positive" : "negative"}>{formatPercent(row.daily)}</em>
+                </div>
+              )) : <div className="analytics-options-watch-empty">No FX mover rows.</div>}
+            </div>
+          </div>
+        </div>
       </section>
     );
   }
 
   if (isCommodities) {
-    const commodityNames = ["WTI Crude", "Brent Crude", "Nat Gas", "Gold", "Silver", "Copper", "Wheat", "Soybeans"];
-    const commodityUnits = ["USD/bbl", "USD/bbl", "USD/MMBtu", "USD/oz", "USD/oz", "USD/mt", "USD/bu", "USD/bu"];
-    const terminalRows = (visibleRows.length ? visibleRows : commodityNames.map((name, idx) => ({
-      id: `commodity-terminal-${idx}`,
-      asset: name,
-      primary: "—",
-      secondary: "—",
-      tertiary: commodityUnits[idx],
-      signal: "Monitor",
-      tone: idx % 3 === 0 ? "negative" : "positive",
-    }))).slice(0, 8).map((row, idx) => {
-      const price = Number(String(row.primary).replace(/[^0-9.-]/g, ""));
-      const cleanPrice = Number.isFinite(price) && price > 0 ? price : [76.24, 80.85, 2.31, 2358.4, 30.12, 9821, 6.45, 12.37][idx] || 0;
-      const slope = Number(String(row.secondary).replace(/[^0-9.-]/g, ""));
-      const cleanSlope = Number.isFinite(slope) ? slope : [-2.48, -2.22, 21.6, 1.56, 6.94, -1.83, 1.55, 1.21][idx] || 0;
-      const tone = cleanSlope >= 0 ? "positive" : "negative";
+    const commodityMeta = config.commodityMeta || {};
+    const curveRows = Array.isArray(commodityMeta.curveRows) ? commodityMeta.curveRows : [];
+    const fundamentals = Array.isArray(commodityMeta.fundamentals) ? commodityMeta.fundamentals : [];
+    const flows = Array.isArray(commodityMeta.flows) ? commodityMeta.flows : [];
+    const seasonality = Array.isArray(commodityMeta.seasonality) ? commodityMeta.seasonality : [];
+    const compareRows = Array.isArray(commodityMeta.compare) ? commodityMeta.compare : [];
+    const calendarRows = Array.isArray(commodityMeta.calendar) ? commodityMeta.calendar : [];
+    const correlationRows = Array.isArray(commodityMeta.correlation) ? commodityMeta.correlation : [];
+    const alertRows = Array.isArray(commodityMeta.alerts) ? commodityMeta.alerts : [];
+
+    const parseNumeric = (value) => {
+      const amount = Number(String(value ?? "").replace(/[^0-9+-.]/g, ""));
+      return Number.isFinite(amount) ? amount : null;
+    };
+
+    const toSymbol = (value, fallback = "CMD") => String(value || fallback).trim().toUpperCase();
+
+    const normalizeCurvePoints = (rowSymbol) => {
+      const points = curveRows.filter((row) => {
+        const symbol = toSymbol(row?.symbol || row?.underlying || row?.commodity || row?.asset, rowSymbol);
+        return symbol === toSymbol(rowSymbol);
+      });
+      if (!points.length) return [];
+      return points
+        .map((point, idx) => ({
+          label: point?.label || point?.contract || point?.tenor || point?.month || `T${idx + 1}`,
+          value:
+            parseNumeric(point?.value) ??
+            parseNumeric(point?.price) ??
+            parseNumeric(point?.settlement) ??
+            parseNumeric(point?.close),
+        }))
+        .filter((point) => Number.isFinite(point.value));
+    };
+
+    const realRows = (visibleRows.length ? visibleRows : config.rows || []).slice(0, 8).map((row, idx) => {
+      const symbol = toSymbol(row.symbol || row.asset, `CMD${idx + 1}`);
+      const price = parseNumeric(row.priceValue) ?? parseNumeric(row.primary) ?? parseNumeric(row.value) ?? 0;
+      const daily = Number(row.dailyChangePct);
+      const ytd = Number(row.ytdChangePct);
+      const oneYear = Number(row.oneYearReturnPct);
+      const curvePoints = normalizeCurvePoints(symbol);
+      const front = curvePoints[0]?.value ?? price;
+      const back = curvePoints[curvePoints.length - 1]?.value ?? price;
+      const slope = front ? ((back - front) / Math.abs(front)) * 100 : daily;
+      const flowRow = flows.find((item) => toSymbol(item?.symbol || item?.commodity || item?.asset, symbol) === symbol) || null;
+      const fundamentalRow = fundamentals.find((item) => toSymbol(item?.symbol || item?.commodity || item?.asset, symbol) === symbol) || null;
+      const seasonalityRow = seasonality.find((item) => toSymbol(item?.symbol || item?.commodity || item?.asset, symbol) === symbol) || null;
+      const tone = Number.isFinite(slope) && slope < 0 ? "negative" : "positive";
       return {
         ...row,
-        asset: row.asset || commodityNames[idx] || "Commodity",
-        unit: row.tertiary || commodityUnits[idx] || "USD",
-        price: cleanPrice,
-        slope: cleanSlope,
+        symbol,
+        asset: row.asset || row.name || symbol,
+        unit: row.tertiary || row.unit || row.currency || "USD",
+        price: front || price,
+        daily: Number.isFinite(daily) ? daily : 0,
+        ytd: Number.isFinite(ytd) ? ytd : null,
+        oneYear: Number.isFinite(oneYear) ? oneYear : null,
+        slope: Number.isFinite(slope) ? slope : 0,
         tone,
-        oneM: cleanPrice * (1 - cleanSlope / 500),
-        threeM: cleanPrice * (1 - cleanSlope / 380),
-        sixM: cleanPrice * (1 - cleanSlope / 300),
-        twelveM: cleanPrice * (1 - cleanSlope / 220),
-        inventory: idx % 3 === 0 ? "Low" : idx % 3 === 1 ? "Normal" : "High",
-        demand: idx % 2 === 0 ? "Improving" : "Stable",
-        risk: idx % 4 === 0 ? "High" : idx % 3 === 0 ? "Medium" : "Low",
+        curvePoints,
+        source: row.source || flowRow?.source || fundamentalRow?.source || "Market feed",
+        inventory:
+          flowRow?.inventorySignal ||
+          flowRow?.inventory ||
+          fundamentalRow?.inventory ||
+          fundamentalRow?.stockLevel ||
+          "Monitor",
+        demand:
+          flowRow?.demandSignal ||
+          fundamentalRow?.demandProxy ||
+          seasonalityRow?.pattern ||
+          "Monitor",
+        risk:
+          calendarRows.find((item) => toSymbol(item?.symbol || item?.commodity || item?.asset, symbol) === symbol)?.severity ||
+          "Moderate",
       };
     });
+
+    const terminalRows = realRows.length
+      ? realRows
+      : [{
+          id: "commodity-fallback",
+          symbol: commodityMeta.selectedSymbol || "CMD",
+          asset: commodityMeta.selectedSymbol || "Commodity",
+          unit: "USD",
+          price: 0,
+          daily: 0,
+          ytd: 0,
+          oneYear: 0,
+          slope: 0,
+          tone: "neutral",
+          curvePoints: [],
+          source: "Awaiting source",
+          inventory: "Monitor",
+          demand: "Monitor",
+          risk: "Moderate",
+        }];
+
     const leader = terminalRows[0] || {};
+    const selectedCurvePoints = normalizeCurvePoints(commodityMeta.selectedSymbol || leader.symbol || "CMD");
+    const compareDeskRows = (compareRows.length ? compareRows : terminalRows).slice(0, 5);
     const stressRows = [
-      { section: "Energy Inventories", rows: terminalRows.slice(0, 4) },
-      { section: "Metal Warehouse Stocks", rows: terminalRows.slice(3, 6) },
-      { section: "Agriculture Weather Alerts", rows: terminalRows.slice(5, 8) },
-    ];
-    const supplyQueue = terminalRows.slice(0, 7).map((row, idx) => ({
-      event: [
-        "OPEC+ output extension likely",
-        "Refinery outage watch",
-        "Warehouse drawdown detected",
-        "Weather risk expanding",
-        "Freight pressure rising",
-        "Export sales revision",
-        "Plant maintenance window",
-      ][idx],
-      region: ["Global", "US Gulf Coast", "LME", "US Plains", "Red Sea", "USDA", "Australia"][idx],
-      impact: row.asset,
-      probability: idx % 2 === 0 ? "65%" : "--",
-      severity: row.risk,
+      {
+        section: "Flow monitor",
+        rows: (flows.length ? flows : []).slice(0, 4).map((row, idx) => ({
+          id: `flow-${idx}`,
+          label: row?.date || row?.type || "Flow snapshot",
+          value: row?.value,
+          unit: "contracts",
+          note: row?.trend || row?.sourceWhy || row?.sourceType || "Flow proxy",
+          tone: String(row?.trend || "").toLowerCase().includes("decline") ? "negative" : "positive",
+        })),
+      },
+      {
+        section: "Fundamental stack",
+        rows: (fundamentals.length ? fundamentals : []).slice(0, 4).map((row, idx) => ({
+          id: `fund-${idx}`,
+          label: row?.metric || `Metric ${idx + 1}`,
+          value: row?.value,
+          unit: row?.unit || "",
+          note: row?.sourceWhy || row?.sourceType || "Fundamental snapshot",
+          tone: "neutral",
+        })),
+      },
+      {
+        section: "Calendar & catalysts",
+        rows: (calendarRows.length ? calendarRows : []).slice(0, 4).map((row, idx) => ({
+          id: `cal-${idx}`,
+          label: row?.event || `Catalyst ${idx + 1}`,
+          value: row?.date,
+          unit: "",
+          note: row?.importance || row?.sourceWhy || row?.sourceType || "Calendar event",
+          tone: String(row?.importance || "").toLowerCase().includes("high") ? "negative" : "warning",
+        })),
+      },
+    ].filter((section) => section.rows.length);
+    const seasonalityMonitorRows = (seasonality.length ? seasonality : [])
+      .filter((row) => Number.isFinite(Number(row?.avgReturnPct)))
+      .slice(0, 6)
+      .map((row, idx) => ({
+        id: `season-${idx}`,
+        label: row?.month || `Month ${idx + 1}`,
+        value: Number(row?.avgReturnPct),
+        observations: row?.observations,
+        score: row?.seasonalityScore,
+      }));
+    const supplyQueue = (calendarRows.length ? calendarRows : terminalRows).slice(0, 7).map((row, idx) => ({
+      event: row?.event || row?.title || row?.headline || row?.asset || row?.symbol || `Commodity catalyst ${idx + 1}`,
+      region: row?.region || row?.market || row?.exchange || row?.country || "Global",
+      impact: row?.symbol || row?.commodity || row?.asset || commodityMeta.selectedSymbol || "Desk",
+      probability: row?.probability || row?.odds || "—",
+      severity: row?.severity || row?.risk || "Moderate",
     }));
 
     return (
@@ -5097,19 +6398,25 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             <span>{config.kicker}</span>
             <h2>Commodities Curve Desk</h2>
             <p>{config.summary}</p>
+            <SourceQualityStrip fallback={config.quality} items={[config.quality, ...terminalRows.slice(0, 2), ...fundamentals.slice(0, 1), ...flows.slice(0, 1)]} />
           </div>
           <div className="analytics-commodity-controls">
             <label>
               <span>Group</span>
-              <strong>{String(visibleRail[0]?.helper || "All Commodities")}</strong>
+              <strong>{commodityMeta.selectedGroup || "all"}</strong>
             </label>
             <label>
               <span>Curve</span>
-              <strong>Front 12M</strong>
+              <strong>{selectedCurvePoints.length ? `${selectedCurvePoints.length} nodes` : "Front month"}</strong>
             </label>
             <label>
               <span>Timeframe</span>
-              <strong>1D</strong>
+              <strong>{commodityMeta.selectedTimeRange || "1D"}</strong>
+            </label>
+            <label>
+              <span>Source</span>
+              <strong>{leader.source || commodityMeta.selectedRow?.source || "Market feed"}</strong>
+              <SourceQualityBadge quality={leader.source ? leader : config.quality} compact />
             </label>
             <button type="button" onClick={() => handleRefreshAnalytics("Commodities")}>Refresh</button>
             <button
@@ -5135,17 +6442,26 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
         <div className="analytics-commodity-tape">
           <article className="analytics-commodity-regime">
             <span>Commodity Regime</span>
-            <strong>{leader.slope < 0 ? "Backwardation / Supply Tight" : "Contango / Demand Firm"}</strong>
-            <em>Confidence: {Math.min(98, Math.max(42, Math.round(Math.abs(leader.slope || 0) * 9 + 52)))} / 100</em>
+            <strong>{Number(leader.slope) < 0 ? "Backwardation / Supply Tight" : "Contango / Carry Favored"}</strong>
+            <em>Confidence: {Math.min(98, Math.max(42, Math.round(Math.abs(Number(leader.slope) || 0) * 6 + 48)))} / 100</em>
+          </article>
+          <article className="analytics-commodity-regime analytics-commodity-regime-secondary">
+            <span>Selected Contract</span>
+            <strong>{commodityMeta.selectedSymbol || leader.symbol || "CMD"}</strong>
+            <em>{commodityMeta.selectedRow?.name || leader.asset || "Desk focus"}</em>
           </article>
           {terminalRows.slice(0, 7).map((row, idx) => (
             <article key={`commodity-tape-${row.id || idx}`} className="analytics-commodity-ticker">
-              <span>{row.asset}</span>
-              <strong className={row.tone}>{formatPercent(row.slope)}</strong>
-              <em>{row.signal || row.demand}</em>
+              <span>{row.symbol}</span>
+              <strong className={row.tone}>{formatPercent(row.daily || row.slope || 0)}</strong>
+              <em>{row.source || row.demand}</em>
+              <SourceQualityBadge quality={row.source ? row : config.quality} compact />
               <div className="analytics-mini-spark" aria-hidden="true">
-                {[0, 1, 2, 3, 4, 5, 6].map((point) => (
-                  <i key={point} style={{ height: `${28 + ((idx + point * 3) % 6) * 8}px` }} />
+                {(row.curvePoints.length ? row.curvePoints : [0, 1, 2, 3, 4, 5, 6]).map((point, pointIdx) => (
+                  <i
+                    key={typeof point === "number" ? point : point.label || pointIdx}
+                    style={{ height: `${22 + ((point?.value || pointIdx + idx + 1) % 6) * 7}px` }}
+                  />
                 ))}
               </div>
             </article>
@@ -5159,54 +6475,51 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>Futures Curve & Inventory Matrix</span>
                 <strong>Curve slope, inventories, demand proxy, and supply risk</strong>
               </div>
-              <em>Data as of {formatDateTime(updatedAt)}</em>
+              <em><SourceQualityBadge quality={config.quality} compact /> Data as of {formatDateTime(updatedAt)}</em>
             </div>
             <div className="analytics-commodity-table-wrap">
               <table className="analytics-commodity-table">
                 <thead>
                   <tr>
                     <th>Commodity</th>
-                    <th>Curve (12M)</th>
+                    <th>Curve</th>
                     <th>Spot</th>
-                    <th>1M</th>
-                    <th>3M</th>
-                    <th>6M</th>
-                    <th>12M</th>
+                    <th>Daily</th>
+                    <th>YTD</th>
+                    <th>1Y</th>
                     <th>Curve Slope</th>
-                    <th>Inventory Signal</th>
+                    <th>Flow / Inventory</th>
                     <th>Demand Proxy</th>
-                    <th>Weather / Supply Risk</th>
+                    <th>Risk</th>
+                    <th>Source</th>
                   </tr>
                 </thead>
                 <tbody>
                   {terminalRows.map((row, idx) => (
                     <tr key={`commodity-row-${row.id || idx}`}>
                       <td>
-                        <strong>{row.asset}</strong>
+                        <strong>{row.symbol}</strong>
                         <span>{row.unit}</span>
                       </td>
                       <td>
                         <div className={`analytics-row-spark ${row.tone}`} aria-hidden="true">
-                          {[0, 1, 2, 3, 4, 5, 6, 7].map((point) => (
-                            <i key={point} style={{ height: `${14 + ((idx + point * 2) % 7) * 4}px` }} />
+                          {(row.curvePoints.length ? row.curvePoints.slice(0, 8) : [0, 1, 2, 3, 4, 5, 6, 7]).map((point, pointIdx) => (
+                            <i
+                              key={typeof point === "number" ? point : point.label || pointIdx}
+                              style={{ height: `${14 + (((point?.value || pointIdx + idx + 1) * 100) % 7) * 4}px` }}
+                            />
                           ))}
                         </div>
                       </td>
-                      <td>{formatFixed(row.price, row.price > 1000 ? 0 : 2)}</td>
-                      <td>{formatFixed(row.oneM, row.price > 1000 ? 0 : 2)}</td>
-                      <td>{formatFixed(row.threeM, row.price > 1000 ? 0 : 2)}</td>
-                      <td>{formatFixed(row.sixM, row.price > 1000 ? 0 : 2)}</td>
-                      <td>{formatFixed(row.twelveM, row.price > 1000 ? 0 : 2)}</td>
+                      <td>{formatFixed(row.price, Math.abs(row.price) > 1000 ? 0 : 2)}</td>
+                      <td className={Number(row.daily) >= 0 ? "positive" : "negative"}>{formatPercent(row.daily || 0)}</td>
+                      <td className={Number(row.ytd) >= 0 ? "positive" : "negative"}>{row.ytd == null ? "—" : formatPercent(row.ytd)}</td>
+                      <td className={Number(row.oneYear) >= 0 ? "positive" : "negative"}>{row.oneYear == null ? "—" : formatPercent(row.oneYear)}</td>
                       <td className={row.tone}>{formatPercent(row.slope)}</td>
-                      <td>
-                        <b className={row.inventory === "Low" ? "negative" : row.inventory === "High" ? "warning" : "positive"}>{row.inventory}</b>
-                      </td>
-                      <td>
-                        <b className={row.demand === "Improving" ? "positive" : "neutral"}>{row.demand}</b>
-                      </td>
-                      <td>
-                        <b className={row.risk === "High" ? "negative" : row.risk === "Medium" ? "warning" : "positive"}>{row.risk}</b>
-                      </td>
+                      <td><b>{row.inventory}</b></td>
+                      <td><b>{row.demand}</b></td>
+                      <td><b className={String(row.risk).toLowerCase().includes("high") ? "negative" : String(row.risk).toLowerCase().includes("mod") ? "warning" : "positive"}>{row.risk}</b></td>
+                      <td>{row.source || "Feed"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -5225,13 +6538,19 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               <div key={section.section} className="analytics-stress-section">
                 <div className="analytics-stress-title">
                   <span>{section.section}</span>
-                  <em>View all</em>
+                  <em>{section.rows.length} rows</em>
                 </div>
                 {section.rows.map((row, idx) => (
                   <div key={`stress-${section.section}-${row.id || idx}`} className="analytics-stress-row">
-                    <strong>{row.asset}</strong>
-                    <b className={row.tone}>{formatPercent(row.slope)}</b>
-                    <span>{row.risk}</span>
+                    <strong>{row.label || row.symbol || row.asset || "Row"}</strong>
+                    <b className={row.tone || (Number(row.value) >= 0 ? "positive" : "negative")}>
+                      {Number.isFinite(Number(row.value))
+                        ? `${formatFixed(Number(row.value), Math.abs(Number(row.value)) > 1000 ? 0 : 2)}${row.unit ? ` ${row.unit}` : ""}`
+                        : Number.isFinite(Number(row.slope))
+                          ? formatPercent(row.slope)
+                          : row.inventory || row.source || "—"}
+                    </b>
+                    <span>{row.note || row.risk || row.region || row.source || "Monitor"}</span>
                   </div>
                 ))}
               </div>
@@ -5250,22 +6569,22 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             </div>
             <div className="analytics-curve-comparison">
               <div className="analytics-curve-legend">
-                {terminalRows.slice(0, 5).map((row, idx) => (
+                {compareDeskRows.map((row, idx) => (
                   <span key={`legend-${row.id || idx}`}>
                     <i className={row.tone} />
-                    {row.asset} <b className={row.tone}>{formatPercent(row.slope)}</b>
+                    {row.symbol || row.asset} <b className={row.tone}>{formatPercent(Number(row.slope) || Number(row.dailyChangePct) || 0)}</b>
                   </span>
                 ))}
               </div>
               <div className="analytics-curve-chart">
-                {terminalRows.slice(0, 5).map((row, idx) => (
+                {compareDeskRows.map((row, idx) => (
                   <div
                     key={`chart-line-${row.id || idx}`}
-                    className={`analytics-curve-line ${row.tone}`}
+                    className={`analytics-curve-line ${row.tone || (Number(row.slope) >= 0 ? "positive" : "negative")}`}
                     style={{
                       top: `${34 + idx * 13}px`,
-                      width: `${54 + Math.min(34, Math.abs(row.slope) * 2)}%`,
-                      transform: `rotate(${row.slope >= 0 ? -10 : 9}deg)`,
+                      width: `${54 + Math.min(34, Math.abs(Number(row.slope) || Number(row.dailyChangePct) || 0) * 2)}%`,
+                      transform: `rotate(${(Number(row.slope) || Number(row.dailyChangePct) || 0) >= 0 ? -10 : 9}deg)`,
                     }}
                   />
                 ))}
@@ -5281,12 +6600,30 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               </div>
               <em>Data as of {formatDateTime(updatedAt)}</em>
             </div>
-            {terminalRows.slice(0, 7).map((row, idx) => (
+            {(seasonalityMonitorRows.length ? seasonalityMonitorRows : (flows.length ? flows : terminalRows)).slice(0, 7).map((row, idx) => (
               <div key={`inventory-${row.id || idx}`} className="analytics-inventory-row">
-                <span>{row.asset} stocks</span>
-                <strong>{formatFixed(row.price * (idx + 4), 1)}</strong>
-                <b className={row.tone}>{formatPercent(row.slope)}</b>
-                <em>{row.inventory}</em>
+                <span>
+                  {row.month
+                    ? `${row.month} seasonality`
+                    : `${row.symbol || row.asset || "Commodity"} ${row.inventoryLabel || row.metric || "monitor"}`}
+                </span>
+                <strong>
+                  {row.month
+                    ? `${formatPercent(row.value || 0)} avg`
+                    : row.value != null
+                      ? formatFixed(row.value, 1)
+                      : row.inventory || row.level || row.source || "—"}
+                </strong>
+                <b className={row.tone || (Number(row.changePct ?? row.value) >= 0 ? "positive" : "negative")}>
+                  {row.month
+                    ? `score ${formatFixed((Number(row.score) || 0) * 100, 0)}`
+                    : Number.isFinite(Number(row.changePct))
+                      ? formatPercent(row.changePct)
+                      : Number.isFinite(Number(row.slope))
+                        ? formatPercent(row.slope)
+                        : "—"}
+                </b>
+                <em>{row.month ? `${row.observations || 0} obs.` : row.note || row.inventory || row.region || "Monitor"}</em>
               </div>
             ))}
           </div>
@@ -5307,14 +6644,33 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               </div>
             ))}
           </div>
+
+          <div className="analytics-desk-panel analytics-commodity-alerts">
+            <div className="analytics-commodity-panel-head">
+              <div>
+                <span>Desk alerts</span>
+                <strong>Saved and live commodity triggers</strong>
+              </div>
+            </div>
+            {alertRows.length ? alertRows.slice(0, 6).map((row, idx) => (
+              <div key={row.id || `alert-${idx}`} className="analytics-commodity-alert-row">
+                <strong>{row.symbol || commodityMeta.selectedSymbol || "Commodity"}</strong>
+                <span>{row.rule || row.message || row.title || "Alert rule"}</span>
+                <em>{row.status || row.severity || "active"}</em>
+              </div>
+            )) : <div className="analytics-options-watch-empty">No live commodity alerts.</div>}
+          </div>
         </div>
 
         <div className="analytics-commodity-footer">
           <span>Data sources</span>
-          {["Bloomberg", "Refinitiv", "EIA", "LME", "COMEX", "USDA", "NOAA", "VesselFinder"].map((source) => (
+          {[leader.source, ...fundamentals.map((item) => item?.source), ...flows.map((item) => item?.source), ...calendarRows.map((item) => item?.source)]
+            .filter(Boolean)
+            .slice(0, 8)
+            .map((source) => (
             <strong key={source}>{source}</strong>
           ))}
-          <em>Calc engine v2.4.1</em>
+          <em>{correlationRows.length ? `Correlation rows ${correlationRows.length}` : "Live desk snapshot"}</em>
         </div>
       </section>
     );
@@ -5520,13 +6876,88 @@ function StatusPill({ children, tone = "neutral" }) {
   );
 }
 
-function MetricCard({ icon, label, value, helper, chip, tone = "neutral" }) {
+function SourceQualityBadge({ quality, compact = false }) {
+  const resolved = getSourceQuality(quality);
+  const title = [resolved.source, resolved.reason].filter(Boolean).join(" - ");
+  return (
+    <span
+      className={`analytics-source-quality ${resolved.key} ${compact ? "compact" : ""}`}
+      title={title || resolved.label}
+    >
+      {resolved.label}
+    </span>
+  );
+}
+
+function SourceQualityStrip({ items = [], fallback }) {
+  const rows = (Array.isArray(items) ? items : []).filter(Boolean);
+  const usableRows = rows.length ? rows : (fallback ? [fallback] : []);
+  if (!usableRows.length) return null;
+  return (
+    <div className="analytics-source-quality-strip" aria-label="Source quality">
+      <span>Source quality</span>
+      {usableRows.slice(0, 4).map((item, idx) => {
+        const quality = getSourceQuality(item);
+        return (
+          <em key={`${quality.key}-${quality.source || idx}`}>
+            <SourceQualityBadge quality={quality} compact />
+            {quality.source ? <strong>{quality.source}</strong> : null}
+          </em>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProviderStatusStrip({ providers }) {
+  const orderedProviders = ["fred", "bls", "eia", "massive"]
+    .map((key) => ({ key, ...(providers?.[key] || {}) }))
+    .filter((provider) => provider?.name || provider?.configured || provider?.status);
+
+  if (!orderedProviders.length) return null;
+
+  const labelForStatus = (provider) => {
+    const status = String(provider?.status || "").toLowerCase();
+    if (status === "connected") return "Live";
+    if (status === "configured" || status === "idle") return "Ready";
+    if (status === "missing_key") return "Key needed";
+    if (status === "not_applicable") return "Mapped";
+    if (status === "unavailable") return "Unavailable";
+    return status ? status.replace(/_/g, " ") : "Ready";
+  };
+
+  return (
+    <div className="analytics-provider-strip" aria-label="Data provider status">
+      <span>Data feeds</span>
+      {orderedProviders.map((provider) => {
+        const status = String(provider.status || (provider.configured ? "configured" : "missing_key")).toLowerCase();
+        const statusClass = status.replace(/[^a-z0-9_-]/g, "-");
+        return (
+          <em
+            key={provider.key}
+            className={`analytics-provider-chip ${statusClass}`}
+            title={provider.detail || provider.name}
+          >
+            <strong>{provider.name || provider.key.toUpperCase()}</strong>
+            <SourceQualityBadge quality={provider} compact />
+            {labelForStatus(provider)}
+          </em>
+        );
+      })}
+    </div>
+  );
+}
+
+function MetricCard({ icon, label, value, helper, chip, tone = "neutral", quality = null }) {
   const color = getToneColor(tone);
   return (
     <div className={`analytics-card analytics-metric-card ${tone}`}>
       <div className="analytics-metric-topline">
         <span className="analytics-metric-icon" style={{ color }}>{icon || label?.slice(0, 1) || "•"}</span>
-        {chip ? <StatusPill tone={tone}>{chip}</StatusPill> : null}
+        <span className="analytics-metric-badges">
+          {quality ? <SourceQualityBadge quality={quality} compact /> : null}
+          {chip ? <StatusPill tone={tone}>{chip}</StatusPill> : null}
+        </span>
       </div>
       <div className="analytics-card-label">{label}</div>
       <div className="analytics-metric-value" style={{ color }}>{value}</div>
@@ -5535,7 +6966,7 @@ function MetricCard({ icon, label, value, helper, chip, tone = "neutral" }) {
   );
 }
 
-function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" }) {
+function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral", quality = null }) {
   return (
     <MetricCard
       icon={title?.slice(0, 1)}
@@ -5544,6 +6975,7 @@ function AnalyticsStatCard({ title, value, subvalue, source, tone = "neutral" })
       helper={subvalue}
       chip={source}
       tone={tone}
+      quality={quality || { source }}
     />
   );
 }
@@ -5711,14 +7143,19 @@ function DataTable({ columns, rows = [], emptyText, loading = false, filters, pa
   );
 }
 
-function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra, filters, pagination, loading, exportLabel, onRowClick }) {
+function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, headerExtra, filters, pagination, loading, exportLabel, onRowClick, quality = null }) {
   return (
     <div className="analytics-card analytics-table-card">
       {(title || subtitle || headerExtra) ? (
         <DensePanelHeader
           title={title}
           subtitle={subtitle}
-          actions={headerExtra ? <InlineControlGroup>{headerExtra}</InlineControlGroup> : null}
+          actions={
+            <InlineControlGroup>
+              {quality ? <SourceQualityBadge quality={quality} compact /> : null}
+              {headerExtra}
+            </InlineControlGroup>
+          }
           className="analytics-dense-panel-header"
         />
       ) : null}
@@ -5736,7 +7173,7 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, he
   );
 }
 
-function ChartCard({ title, subtitle, rows = [], color = "#22D3EE", children }) {
+function ChartCard({ title, subtitle, rows = [], color = "#22D3EE", quality = null, children }) {
   const values = rows.map((row) => Number(row?.value)).filter(Number.isFinite);
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;
@@ -5754,6 +7191,7 @@ function ChartCard({ title, subtitle, rows = [], color = "#22D3EE", children }) 
           <div className="analytics-section-title">{title}</div>
           {subtitle ? <div className="analytics-card-subtitle">{subtitle}</div> : null}
         </div>
+        {quality ? <SourceQualityBadge quality={quality} compact /> : null}
       </div>
       {rows.length ? (
         <div className="analytics-chart-shell">

@@ -6,7 +6,6 @@ import { calculateOptionPnL } from "../utils/optionsPnL";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
-import { PortfolioInstitutionalSuite } from "./InstitutionalPanels";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -17,6 +16,11 @@ const PORTFOLIO_EXPORTS_KEY = "zenin_portfolio_exports";
 const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
 const FEE_SOURCE_EXCHANGE_REPORTED = "exchange_reported";
 const FEE_SOURCE_CHEAPEST_AVENUE = "cheapest_avenue";
+
+function formatRiskLabel(value, fallback = "Watch") {
+  const normalized = String(value || "").trim();
+  return (normalized || fallback).replace(/-/g, " ");
+}
 
 function normalizeFeeSourceValue(value, fallback = FEE_SOURCE_EXCHANGE_REPORTED) {
   const normalized = String(value || "")
@@ -100,7 +104,9 @@ export function PortfolioModule({
   onSelectAsset,
   onOpenPredictions,
   onOpenJournal,
-  onOpenConnections
+  onOpenConnections,
+  hasDeskFeatureAccess = false,
+  onOpenPlans
 }){
   const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
     ? getAppRuntimeConfig().ui.g7Currencies
@@ -124,6 +130,7 @@ export function PortfolioModule({
   const [flowOutcome, setFlowOutcome] = useState({ title: "", message: "", tone: "success" });
   const [displayCurrency, setDisplayCurrency] = useState("USD");
   const [assetClassFilter, setAssetClassFilter] = useState("all");
+  const [activePortfolioTab, setActivePortfolioTab] = useState("holdings");
   const [showPredictionGuide, setShowPredictionGuide] = useState(false);
   const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
   const isSyncing = false;
@@ -136,6 +143,11 @@ export function PortfolioModule({
   const [savedPortfolioExports, setSavedPortfolioExports] = useState(() => readStoredJson(PORTFOLIO_EXPORTS_KEY, []));
   const prefsHydratedRef = useRef(false);
   const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
+  const handleOpenConnections = () => {
+    if (typeof onOpenConnections === "function") {
+      onOpenConnections();
+    }
+  };
 
   const syncPortfolioCollection = async (namespace, rows, limit = 100) => {
     return saveWorkspaceCollection(namespace, rows, limit);
@@ -872,6 +884,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
           symbol,
           name: item?.name || symbol,
           allocation,
+          positionValue: Number(holding.positionValue || 0),
+          positionGain: Number(holding.positionGain || 0),
           markValueMain: holding.kind === "spot" ? formatCurrency(holding.rawValue, holding.currency) : formatCurrency(holding.positionValue, "USD"),
           markValueSub: `${quantity.toFixed(4)} ${symbol}`,
           pnlMain: formatSignedMoney(holding.positionGain),
@@ -899,6 +913,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
         symbol,
         name: trade?.strategy || "Options",
         allocation,
+        positionValue: Number(holding.positionValue || 0),
+        positionGain: pnl,
         markValueMain: formatMoney(holding.positionValue),
         markValueSub: `${qty.toFixed(5)} Units`,
         pnlMain: formatSignedMoney(pnl),
@@ -1601,6 +1617,266 @@ const isProfitable = currentAccountEquity >= initialBalance;
     savedPortfolioHistory.length +
     savedPortfolioExports.length;
 
+  const formatSignedPercent = (value, digits = 1) => {
+    const numeric = Number(value || 0);
+    return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(digits)}%`;
+  };
+
+  const benchmarkSnapshot = useMemo(() => {
+    const values = Array.isArray(benchmarkSeries)
+      ? benchmarkSeries.map((point) => Number(point?.[1])).filter((value) => Number.isFinite(value))
+      : [];
+    if (values.length < 2) {
+      return {
+        returnPct: 0,
+        relativePct: totalReturnPct,
+      };
+    }
+    const start = values[0];
+    const latest = values[values.length - 1];
+    const returnPct = Math.abs(start) > 1e-8 ? ((latest - start) / Math.abs(start)) * 100 : 0;
+    return {
+      returnPct,
+      relativePct: totalReturnPct - returnPct,
+    };
+  }, [benchmarkSeries, totalReturnPct]);
+
+  const lossHarvestSnapshot = useMemo(() => {
+    const candidates = combinedHoldings
+      .filter((holding) => Number(holding?.positionGain || 0) < 0)
+      .sort((a, b) => Number(a?.positionGain || 0) - Number(b?.positionGain || 0));
+    const totalLoss = Math.abs(candidates.reduce((sum, row) => sum + Number(row?.positionGain || 0), 0));
+    return {
+      count: candidates.length,
+      totalLoss,
+      estimatedSavings: totalLoss * 0.2,
+      top: candidates[0] || null,
+    };
+  }, [combinedHoldings]);
+
+  const rebalanceActionMap = useMemo(() => {
+    return new Map(
+      (Array.isArray(rebalanceSuggestions) ? rebalanceSuggestions : []).map((row) => [
+        String(row?.symbol || "").toUpperCase(),
+        row,
+      ])
+    );
+  }, [rebalanceSuggestions]);
+
+  const topDriftRow = actionableRebalanceRows[0] || rebalanceSuggestions[0] || null;
+
+  const projectedAlignment = useMemo(() => {
+    const before = Math.max(18, 100 - (Number(rebalanceMetrics.totalDrift || 0) * 3.8));
+    const after = Math.min(96, before + Math.max(6, Number(rebalanceMetrics.tradesRequired || 0) * 3.4));
+    return {
+      before,
+      after,
+    };
+  }, [rebalanceMetrics.totalDrift, rebalanceMetrics.tradesRequired]);
+
+  const driftDistribution = useMemo(() => {
+    const rows = Array.isArray(rebalanceSuggestions) ? rebalanceSuggestions : [];
+    if (!rows.length) return [0, 0, 100];
+    const overweight = rows.filter((row) => Number(row?.drift || 0) > 2).length;
+    const underweight = rows.filter((row) => Number(row?.drift || 0) < -2).length;
+    const inRange = Math.max(0, rows.length - overweight - underweight);
+    const total = overweight + underweight + inRange || 1;
+    return [
+      Number(((overweight / total) * 100).toFixed(2)),
+      Number(((underweight / total) * 100).toFixed(2)),
+      Number(((inRange / total) * 100).toFixed(2)),
+    ];
+  }, [rebalanceSuggestions]);
+
+  const rebalanceDonutOptions = useMemo(() => ({
+    chart: { type: "donut", background: "transparent", sparkline: { enabled: true } },
+    labels: ["Overweight", "Underweight", "In Range"],
+    colors: ["#f87171", "#67e8f9", "#1f2937"],
+    stroke: { show: false },
+    legend: { show: false },
+    dataLabels: { enabled: false },
+    tooltip: {
+      theme: "dark",
+      y: {
+        formatter: (value) => `${Number(value || 0).toFixed(1)}% of positions`,
+      },
+    },
+    plotOptions: {
+      pie: {
+        donut: {
+          size: "74%",
+          labels: {
+            show: true,
+            name: {
+              show: true,
+              color: "#94a3b8",
+              fontSize: "12px",
+              offsetY: -6,
+            },
+            value: {
+              show: true,
+              color: "#f8fafc",
+              fontSize: "24px",
+              fontWeight: 700,
+              offsetY: 10,
+              formatter: () => `${projectedAlignment.after.toFixed(0)}%`,
+            },
+            total: {
+              show: true,
+              label: "Alignment",
+              color: "#94a3b8",
+              fontSize: "12px",
+              formatter: () => "Projected",
+            },
+          },
+        },
+      },
+    },
+  }), [projectedAlignment.after]);
+
+  const portfolioSummaryCards = useMemo(() => {
+    const optionsWeight = currentAccountEquity > 0 ? (totalOptionsValue / currentAccountEquity) * 100 : 0;
+    return [
+      {
+        label: "Total Value",
+        value: formatMoney(currentAccountEquity),
+        detail: `${formatSignedMoney(totalGainLoss)} (${formatSignedPercent(totalReturnPct, 2)})`,
+        tone: totalGainLoss >= 0 ? "positive" : "negative",
+      },
+      {
+        label: "Day Change",
+        value: formatSignedMoney(totalGainLoss),
+        detail: formatSignedPercent(totalReturnPct, 2),
+        tone: totalGainLoss >= 0 ? "positive" : "negative",
+      },
+      {
+        label: "Cash",
+        value: formatMoney(liveAvailableBalance),
+        detail: `${cashWeight.toFixed(1)}% of NAV`,
+        tone: cashWeight >= 10 ? "positive" : "neutral",
+      },
+      {
+        label: "Options Exposure",
+        value: formatMoney(totalOptionsValue),
+        detail: `${optionsWeight.toFixed(1)}% of NAV`,
+        tone: optionsWeight > 0 ? "neutral" : "muted",
+      },
+      {
+        label: `Benchmark (${benchmarkSymbol})`,
+        value: formatSignedPercent(benchmarkSnapshot.returnPct, 2),
+        detail: `Relative ${formatSignedPercent(benchmarkSnapshot.relativePct, 2)}`,
+        tone: benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative",
+      },
+      {
+        label: "YTD Return",
+        value: formatSignedPercent(totalReturnPct, 2),
+        detail: "Portfolio return",
+        tone: totalReturnPct >= 0 ? "positive" : "negative",
+      },
+      {
+        label: "Beta / Sharpe",
+        value: `${metrics.beta || "N/A"} / ${metrics.sharpe || "N/A"}`,
+        detail: healthStatus.label,
+        tone: healthStatus.tone,
+      },
+    ];
+  }, [
+    benchmarkSnapshot.relativePct,
+    benchmarkSnapshot.returnPct,
+    benchmarkSymbol,
+    cashWeight,
+    currentAccountEquity,
+    healthStatus.label,
+    healthStatus.tone,
+    liveAvailableBalance,
+    metrics.beta,
+    metrics.sharpe,
+    totalGainLoss,
+    totalOptionsValue,
+    totalReturnPct,
+  ]);
+
+  const attentionCards = useMemo(() => {
+    const topExposure = exposureSummary.sector || exposureSummary.country || exposureSummary.currency;
+    return [
+      {
+        id: "concentration",
+        title: "Concentration Risk",
+        metric: topExposure ? `${Number(topExposure.weight || 0).toFixed(1)}%` : "No signal",
+        detail: topExposure ? `${topExposure.name} leads current portfolio concentration.` : "Add diversified holdings to unlock concentration monitoring.",
+        action: "Review Concentration",
+        tone: Number(topExposure?.weight || 0) >= 25 ? "warning" : "neutral",
+        onClick: () => {
+          setActivePortfolioTab("exposure");
+          if (topExposure) {
+            setFlowSelection(topExposure);
+          }
+        },
+      },
+      {
+        id: "drift",
+        title: "Biggest Drift",
+        metric: topDriftRow ? `${topDriftRow.symbol} ${formatSignedPercent(topDriftRow.drift, 1)}` : "In range",
+        detail: topDriftRow ? `${topDriftRow.action} vs. target allocation.` : "Holdings are within drift bands right now.",
+        action: "Review Drift",
+        tone: topDriftRow && Math.abs(Number(topDriftRow.drift || 0)) >= 5 ? "accent" : "neutral",
+        onClick: () => {
+          if (topDriftRow) {
+            openInsightFlow("rebalancing", topDriftRow);
+          }
+        },
+      },
+      {
+        id: "tax",
+        title: "Tax Impact Opportunity",
+        metric: lossHarvestSnapshot.count ? `${lossHarvestSnapshot.count} positions` : "No immediate harvest",
+        detail: lossHarvestSnapshot.count
+          ? `Estimated tax offset ${formatMoney(lossHarvestSnapshot.estimatedSavings)} from unrealized losses.`
+          : "Loss-harvest candidates appear here when the book is in drawdown.",
+        action: "Review Tax Impact",
+        tone: lossHarvestSnapshot.count ? "risk" : "neutral",
+        onClick: () => {
+          setActivePortfolioTab("holdings");
+          if (lossHarvestSnapshot.top) {
+            const row = lossHarvestSnapshot.top;
+            const raw = row.row || {};
+            setSelectedHolding({
+              symbol: String(raw?.symbol || raw?.asset || "N/A").toUpperCase(),
+              quantity: Number(raw?.quantity || raw?.qty || 0),
+              price: Number(raw?.price || raw?.currentMark || 0),
+              positionValue: Number(row.positionValue || 0),
+              positionGain: Number(row.positionGain || 0),
+            });
+          }
+        },
+      },
+    ];
+  }, [exposureSummary, formatMoney, lossHarvestSnapshot, topDriftRow]);
+
+  const benchmarkRiskRows = useMemo(() => ([
+    { label: "Benchmark", value: benchmarkSymbol },
+    { label: "Portfolio YTD", value: formatSignedPercent(totalReturnPct, 2), tone: totalReturnPct >= 0 ? "positive" : "negative" },
+    { label: "Benchmark YTD", value: formatSignedPercent(benchmarkSnapshot.returnPct, 2), tone: benchmarkSnapshot.returnPct >= 0 ? "positive" : "negative" },
+    { label: "YTD Relative", value: formatSignedPercent(benchmarkSnapshot.relativePct, 2), tone: benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative" },
+    { label: "Beta", value: String(metrics.beta || "N/A") },
+    { label: "Tracking Error", value: `${Math.abs(Number(benchmarkSnapshot.relativePct || 0)).toFixed(2)}%` },
+    { label: "Sharpe Ratio", value: String(metrics.sharpe || "N/A") },
+  ]), [benchmarkSnapshot.relativePct, benchmarkSnapshot.returnPct, benchmarkSymbol, metrics.beta, metrics.sharpe, totalReturnPct]);
+
+  const demotedPredictionRows = useMemo(() => predictionMarketRows.slice(0, 4), [predictionMarketRows]);
+
+  const openHoldingSnapshot = (row) => {
+    if (!row) return;
+    const raw = row.raw || {};
+    setSelectedHolding({
+      symbol: String(row.symbol || raw?.symbol || raw?.asset || "N/A").toUpperCase(),
+      quantity: Number(raw?.quantity || raw?.qty || 0),
+      price: Number(raw?.price || raw?.currentMark || 0),
+      positionValue: Number(row.positionValue || 0),
+      positionGain: Number(row.positionGain || 0),
+    });
+  };
+
   const applySavedPortfolioView = (view) => {
     if (!view || typeof view !== "object") return;
     setChartMode(view.chartMode || "equity");
@@ -1653,6 +1929,307 @@ const isProfitable = currentAccountEquity >= initialBalance;
       });
       setInsightFlowStep(5);
     }
+  };
+
+  const renderPortfolioTabContent = () => {
+    if (activePortfolioTab === "attribution") {
+      const groups = [
+        { key: "sector", label: "Sectors" },
+        { key: "region", label: "Regions" },
+        { key: "factor", label: "Factors" },
+      ];
+      return (
+        <div className="portfolio-command-tab-panel">
+          <div className="portfolio-command-panel-head">
+            <div>
+              <h3>What Drove Performance</h3>
+              <p>Contribution by sector, region, and factor so you can see what really moved the book.</p>
+            </div>
+            <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>Open Attribution Flow</button>
+          </div>
+          <div className="portfolio-command-card-grid three">
+            {groups.map((group) => {
+              const row = attributionRows?.[group.key]?.[0] || null;
+              return (
+                <button
+                  key={group.key}
+                  type="button"
+                  className="portfolio-command-mini-card"
+                  onClick={() => {
+                    if (row) {
+                      setFlowSelection(row);
+                    }
+                    openInsightFlow("attribution", row);
+                  }}
+                >
+                  <span>{group.label}</span>
+                  <strong>{row?.name || "No lead contributor"}</strong>
+                  <em className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>
+                    {row ? formatSignedMoney(row.pnl) : "$0.00"}
+                  </em>
+                </button>
+              );
+            })}
+          </div>
+          <div className="portfolio-command-table-wrap">
+            <table className="portfolio-command-table compact">
+              <thead>
+                <tr>
+                  <th>Bucket</th>
+                  <th>Leader</th>
+                  <th>Contribution</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.flatMap((group) => (attributionRows?.[group.key] || []).slice(0, 3).map((row) => (
+                  <tr key={`${group.key}-${row.name}`}>
+                    <td>{group.label}</td>
+                    <td>{row.name}</td>
+                    <td className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.pnl)}</td>
+                    <td>
+                      <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution", row)}>Review</button>
+                    </td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    if (activePortfolioTab === "exposure") {
+      return (
+        <div className="portfolio-command-tab-panel">
+          <div className="portfolio-command-panel-head">
+            <div>
+              <h3>Where You&apos;re Overweight</h3>
+              <p>Find concentration risk across sectors, countries, and currencies, then send it to a rebalance response.</p>
+            </div>
+            <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure")}>Open Exposure Flow</button>
+          </div>
+          <div className="portfolio-command-card-grid three">
+            {(exposureRows || []).slice(0, 6).map((row) => (
+              <button
+                key={`${row.bucket}-${row.name}`}
+                type="button"
+                className={`portfolio-command-mini-card risk-${String(row.risk || "low").toLowerCase().replace(/\s+/g, "-")}`}
+                onClick={() => openInsightFlow("exposure", row)}
+              >
+                <span>{row.bucket}</span>
+                <strong>{row.name}</strong>
+                <em>{row.weight.toFixed(1)}%</em>
+              </button>
+            ))}
+          </div>
+          <div className="portfolio-command-table-wrap">
+            <table className="portfolio-command-table compact">
+              <thead>
+                <tr>
+                  <th>Bucket</th>
+                  <th>Name</th>
+                  <th>Weight</th>
+                  <th>Risk</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(exposureRows || []).slice(0, 10).map((row) => (
+                  <tr key={`exp-${row.bucket}-${row.name}`}>
+                    <td>{row.bucket}</td>
+                    <td>{row.name}</td>
+                    <td>{row.weight.toFixed(1)}%</td>
+                    <td>{formatRiskLabel(row.risk)}</td>
+                    <td>
+                      <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure", row)}>Inspect</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    if (activePortfolioTab === "fees") {
+      return (
+        <div className="portfolio-command-tab-panel">
+          <div className="portfolio-command-panel-head">
+            <div>
+              <h3>Fees</h3>
+              <p>Execution costs across venues, benchmark comparison, and savings opportunities versus the cheapest avenue.</p>
+            </div>
+          </div>
+          <div className="portfolio-command-card-grid three">
+            <div className="portfolio-command-mini-card static">
+              <span>Gross Fees Paid</span>
+              <strong>{formatMoney(feeDashboard.estimatedUsd)}</strong>
+              <em>{feeDashboard.tradeCount} charged trades</em>
+            </div>
+            <div className="portfolio-command-mini-card static">
+              <span>Recorded Fills</span>
+              <strong>{feeDashboard.fillCount}</strong>
+              <em>{feeDashboard.platforms.length} venue buckets</em>
+            </div>
+            <div className="portfolio-command-mini-card static">
+              <span>vs Cheapest Avenue</span>
+              <strong className={feeDashboard.comparisonDeltaUsd <= 0 ? "positive" : "negative"}>
+                {feeDashboard.comparison ? formatSignedMoney(-feeDashboard.comparisonDeltaUsd) : "N/A"}
+              </strong>
+              <em>{feeDashboard.comparison ? "Benchmark delta" : "No benchmark comparison yet"}</em>
+            </div>
+          </div>
+          <div className="portfolio-command-activity-list">
+            {(feeDashboard.platforms || []).slice(0, 8).map((row) => (
+              <div key={`fee-${row.platform}`} className="portfolio-command-activity-row">
+                <div className="portfolio-command-activity-copy">
+                  <strong>{row.label}</strong>
+                  <span>{row.breakdown}</span>
+                </div>
+                <div className="portfolio-command-activity-values">
+                  <strong>{formatMoney(row.estimatedUsd)}</strong>
+                  <span>{row.tradeCount} trades</span>
+                </div>
+              </div>
+            ))}
+            {!feeDashboard.platforms.length ? (
+              <div className="portfolio-command-empty">
+                <h3>No recorded fees yet</h3>
+                <p>Connect venues or execute trades through Zenin to populate cost history.</p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+
+    if (activePortfolioTab === "prediction") {
+      return (
+        <div className="portfolio-command-tab-panel">
+          <div className="portfolio-command-panel-head">
+            <div>
+              <h3>Prediction Markets</h3>
+              <p>Event-driven positioning stays visible, but it remains an optional extension to the core portfolio workflow.</p>
+            </div>
+            <div className="portfolio-command-inline-actions">
+              <span className="portfolio-command-beta-pill">Beta</span>
+              <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Open Predictions</button>
+            </div>
+          </div>
+          {predictionMarketRows.length ? (
+            <div className="portfolio-command-card-grid four">
+              {predictionMarketRows.slice(0, 8).map((row) => (
+                <div key={row.market} className="portfolio-command-market-card">
+                  <span>{row.market}</span>
+                  <strong>{formatSignedMoney(row.pnl)}</strong>
+                  <em>{row.netQty.toFixed(2)} qty</em>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="portfolio-command-empty">
+              <h3>No prediction market positions yet</h3>
+              <p>Use the Predictions workspace to track macro and event-driven exposures beside the main book.</p>
+              <div className="portfolio-command-inline-actions">
+                <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Explore Markets</button>
+                <button type="button" className="portfolio-v2-link secondary" onClick={() => setShowPredictionGuide(true)}>Learn how it works</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="portfolio-command-tab-panel">
+        <div className="portfolio-command-panel-head">
+          <div>
+            <h3>Holdings</h3>
+            <p>Default portfolio view with readable allocation, benchmark-relative context, and direct drill-in affordances.</p>
+          </div>
+          <div className="portfolio-command-inline-actions">
+            <label className="portfolio-command-inline-select">
+              <span>Scope</span>
+              <select value={assetClassFilter} onChange={(event) => setAssetClassFilter(event.target.value)} className="portfolio-v2-select">
+                <option value="all">All Assets</option>
+                <option value="equities">Equities</option>
+                <option value="crypto">Crypto</option>
+                <option value="options">Options</option>
+                <option value="commodities">Commodities</option>
+              </select>
+            </label>
+            <label className="portfolio-command-inline-select">
+              <span>Sort</span>
+              <select value={holdingsSortBy} onChange={(event) => setHoldingsSortBy(event.target.value)} className="portfolio-v2-select">
+                <option value="value">Value</option>
+                <option value="pnl">PnL</option>
+                <option value="return">Return</option>
+                <option value="risk">Risk</option>
+              </select>
+            </label>
+            <button type="button" className="portfolio-v2-link" onClick={() => exportExposureReport()}>Export</button>
+          </div>
+        </div>
+        <div className="portfolio-command-table-wrap">
+          <table className="portfolio-command-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Name</th>
+                <th>Asset Class</th>
+                <th>Allocation</th>
+                <th>Unrealized PnL</th>
+                <th>vs Benchmark</th>
+                <th>Weight vs Bench</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {holdingsTableRows.length ? holdingsTableRows.map((row) => {
+                const benchDelta = row.kind === "spot"
+                  ? Number(row?.raw?.priceChangePercent || 0) - Number(benchmarkSnapshot.returnPct || 0)
+                  : null;
+                const driftRow = rebalanceActionMap.get(String(row.symbol || "").toUpperCase());
+                return (
+                  <tr key={row.key}>
+                    <td>{row.symbol}</td>
+                    <td>{row.name}</td>
+                    <td>{row.kind === "options" ? "Options" : String(row?.raw?.marketType || row?.raw?.type || "Asset").replace(/_/g, " ")}</td>
+                    <td>
+                      <div className="portfolio-command-allocation-cell">
+                        <strong>{row.allocation.toFixed(1)}%</strong>
+                        <div className="portfolio-command-allocation-bar"><i style={{ width: `${Math.min(100, Math.max(4, row.allocation))}%` }} /></div>
+                      </div>
+                    </td>
+                    <td className={row.pnlPositive ? "positive" : "negative"}>{row.pnlMain}</td>
+                    <td className={benchDelta == null ? "" : benchDelta >= 0 ? "positive" : "negative"}>
+                      {benchDelta == null ? "—" : formatSignedPercent(benchDelta, 1)}
+                    </td>
+                    <td className={Number(driftRow?.drift || 0) <= 0 ? "positive" : "negative"}>
+                      {driftRow ? formatSignedPercent(driftRow.drift, 1) : "—"}
+                    </td>
+                    <td>
+                      <button type="button" className="portfolio-v2-link" onClick={() => openHoldingSnapshot(row)}>Open</button>
+                    </td>
+                  </tr>
+                );
+              }) : (
+                <tr>
+                  <td colSpan={8}>
+                    <div className="portfolio-command-empty">
+                      <h3>No positions found</h3>
+                      <p>Add holdings or connect accounts to unlock portfolio analysis.</p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
   };
 
   const renderInsightFlow = () => {
@@ -1927,7 +2504,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 >
                   <span>{row.name}</span>
                   <strong>{row.weight.toFixed(1)}%</strong>
-                  <em>{row.risk.replace("-", " ")}</em>
+                  <em>{formatRiskLabel(row.risk)}</em>
                 </button>
               ))}
             </div>
@@ -2314,45 +2891,96 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, []);
 
   return (
-    <div className="portfolio-module portfolio-v2 portfolio-exec-page">
-      <div className="portfolio-v2-head portfolio-exec-head">
-        <div className="portfolio-v2-title-row portfolio-exec-heading">
-          <h2>Portfolio</h2>
+    <div className="portfolio-module portfolio-v2 portfolio-exec-page portfolio-command-page">
+      <header className="portfolio-command-header">
+        <div className="portfolio-command-titleblock">
+          <span className="portfolio-command-eyebrow">Portfolio</span>
+          <h1>Portfolio Command Center</h1>
+          <p>Actionable intelligence. Clear next step.</p>
         </div>
-        <div className="portfolio-v2-toolbar portfolio-exec-toolbar" style={{ justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
-          <div className="portfolio-exec-toolbar-group portfolio-exec-toolbar-meta">
-            <span className={`portfolio-exec-sync ${isSyncing ? "syncing" : ""}`}>
-              {isSyncing ? "Syncing venues" : `Synced ${formatSavedTimestamp(feeDashboard.updatedAt || Date.now())}`}
-            </span>
-          </div>
-          <div className="portfolio-exec-toolbar-group portfolio-exec-toolbar-actions" style={{ gap: "12px", flexWrap: "wrap" }}>
-            <select
-              value={assetClassFilter}
-              onChange={(e) => setAssetClassFilter(e.target.value)}
-              className="portfolio-v2-select"
-              aria-label="Account scope"
-            >
-              <option value="all">All Accounts</option>
-              <option value="equities">Equities</option>
-              <option value="crypto">Crypto</option>
-              <option value="options">Options</option>
-              <option value="commodities">Commodities</option>
-            </select>
+        <div className="portfolio-command-header-actions">
+          <select
+            value={assetClassFilter}
+            onChange={(event) => setAssetClassFilter(event.target.value)}
+            className="portfolio-v2-select"
+            aria-label="Portfolio scope"
+          >
+            <option value="all">All Assets</option>
+            <option value="equities">Equities</option>
+            <option value="crypto">Crypto</option>
+            <option value="options">Options</option>
+            <option value="commodities">Commodities</option>
+          </select>
+          <button type="button" className="portfolio-v2-link" onClick={handleOpenConnections}>Connections</button>
+          <button
+            type="button"
+            className="portfolio-v2-link"
+            onClick={async () => {
+              await savePortfolioView("portfolio-command-center");
+              setFlowOutcome({
+                title: "View saved",
+                message: `The current command-center filters were saved in ${getSaveTargetLabel()}.`,
+                tone: "success",
+              });
+            }}
+          >
+            Save View
+          </button>
+          <button
+            type="button"
+            className="portfolio-v2-link secondary"
+            onClick={() => setShowSavedWorkspaceDrawer(true)}
+          >
+            Saved Items{savedWorkspaceCount ? ` (${savedWorkspaceCount})` : ""}
+          </button>
+        </div>
+      </header>
+
+      <section className="portfolio-command-summary">
+        <div className="portfolio-command-section-head">
+          <span>Portfolio Summary</span>
+          <em>{isSyncing ? "Syncing venues..." : `As of ${formatSavedTimestamp(feeDashboard.updatedAt || Date.now())}`}</em>
+        </div>
+        <div className="portfolio-command-summary-grid">
+          {portfolioSummaryCards.map((card) => (
+            <article key={card.label} className={`portfolio-command-summary-card ${card.tone || "neutral"}`}>
+              <span>{card.label}</span>
+              <strong>{card.value}</strong>
+              <em>{card.detail}</em>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="portfolio-command-attention">
+        <div className="portfolio-command-section-head">
+          <span>What Needs Attention</span>
+          <button type="button" className="portfolio-v2-link" onClick={() => setActivePortfolioTab("exposure")}>View All</button>
+        </div>
+        <div className="portfolio-command-attention-grid">
+          {attentionCards.map((card) => (
             <button
+              key={card.id}
               type="button"
-              className="portfolio-v2-link"
-              onClick={onOpenConnections}
+              className={`portfolio-command-attention-card ${card.tone || "neutral"}`}
+              onClick={card.onClick}
             >
-              Connections
+              <div>
+                <span>{card.title}</span>
+                <strong>{card.metric}</strong>
+                <em>{card.detail}</em>
+              </div>
+              <b>{card.action}</b>
             </button>
-            <button
-              type="button"
-              className="portfolio-v2-link secondary"
-              onClick={() => setShowSavedWorkspaceDrawer(true)}
-            >
-              Saved Items{savedWorkspaceCount ? ` (${savedWorkspaceCount})` : ""}
-            </button>
-            <div className="portfolio-v2-range portfolio-exec-timeframe-strip">
+          ))}
+        </div>
+      </section>
+
+      <section className="portfolio-command-rebalance">
+        <div className="portfolio-command-section-head">
+          <span>Recommended Changes</span>
+          <div className="portfolio-command-inline-actions">
+            <div className="portfolio-v2-range">
               {intervals.map((int) => (
                 <button
                   key={int}
@@ -2364,480 +2992,217 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 </button>
               ))}
             </div>
+            <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>Open Rebalance Flow</button>
           </div>
         </div>
-      </div>
-
-      <div className="portfolio-exec-hero-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
-        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
-          <span className="label">Total Account Equity</span>
-          <strong>{formatMoney(currentAccountEquity)}</strong>
-          <span className={`delta ${totalGainLoss >= 0 ? "positive" : "negative"}`}>
-            {formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)
-          </span>
-        </article>
-        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
-          <span className="label">Cash &amp; Liquidity</span>
-          <strong>{formatMoney(liveAvailableBalance)}</strong>
-          <span className="sub">{cashWeight.toFixed(1)}% of portfolio</span>
-        </article>
-        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
-          <span className="label">Best Performing</span>
-          <strong>{bestPerformer?.symbol || "N/A"}</strong>
-          <span className={`delta ${Number(bestPerformer?.priceChangePercent || 0) >= 0 ? "positive" : "negative"}`}>
-            {bestPerformer ? `${Number(bestPerformer.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer.priceChangePercent || 0).toFixed(2)}%` : "No data"}
-          </span>
-        </article>
-        <article className="portfolio-v2-stat-card portfolio-exec-rail-card">
-          <span className="label">Exposure Summary</span>
-          <div className="portfolio-v2-mini-grid">
-            <div><span>Sector</span><strong>{exposureSummary.sector?.name || "Unclassified"}</strong></div>
-            <div><span>Country</span><strong>{exposureSummary.country?.name || "Global"}</strong></div>
-            <div><span>Currency</span><strong>{exposureSummary.currency?.name || "USD"}</strong></div>
-          </div>
-        </article>
-      </div>
-
-      <div className="portfolio-v2-main-grid portfolio-exec-main-grid" style={{ marginTop: "16px" }}>
-        <div className="portfolio-v2-left">
-          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-performance-panel" style={{ marginBottom: "16px" }}>
-        <div className="section-header portfolio-exec-section-head">
-          <div className="portfolio-exec-section-title-row">
-            <h2>Portfolio Performance</h2>
-            <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
-              Account curve with benchmark overlay
-            </p>
-          </div>
-          <div className="portfolio-exec-control-row">
-            {[
-              ["equity", "Equity"],
-              ["percentage", "% Gain"],
-              ["pnl", "Cash PnL"]
-            ].map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                className={`portfolio-v2-range-btn ${chartMode === mode ? "active" : ""}`}
-                onClick={() => setChartMode(mode)}
-              >
-                {label}
-              </button>
-            ))}
-            <select
-              value={displayCurrency}
-              onChange={(e) => setDisplayCurrency(e.target.value)}
-              className="portfolio-v2-select"
-              aria-label="Currency"
-            >
-              {g7Currencies.map(curr => (
-                <option key={curr} value={curr}>{curr}</option>
-              ))}
-            </select>
-
-            <select
-              value={benchmarkSymbol}
-              onChange={(event) => setBenchmarkSymbol(event.target.value)}
-              className="portfolio-v2-select"
-              aria-label="Benchmark"
-            >
-              <option value="SPY">SPY</option>
-              <option value="QQQ">QQQ</option>
-              <option value="ACWI">ACWI</option>
-            </select>
-          </div>
-        </div>
-        <TradingViewChart
-          options={portfolioChartOptions}
-          series={portfolioPerformanceSeries}
-          priceLines={portfolioPerformanceLines}
-          valueFormatter={(value) => yFormatter(Number(value))}
-          timeFormatter={formatPortfolioChartTime}
-          height={320}
-          width="100%"
-        />
-        <div className="portfolio-exec-chart-footer">
-          {[
-            ["Best Period", performanceSnapshot.bestPeriod],
-            ["Worst Period", performanceSnapshot.worstPeriod],
-            ["Max DD", performanceSnapshot.maxDrawdown],
-            ["Current DD", performanceSnapshot.currentDrawdown]
-          ].map(([label, value]) => (
-            <div key={label}>
-              <span>{label}</span>
-              <strong className={String(value).startsWith("-") ? "negative" : label.includes("Worst") || label.includes("DD") ? "neutral" : "positive"}>{value}</strong>
+        <div className="portfolio-command-rebalance-grid">
+          <div className="portfolio-command-drift-card">
+            <div className="portfolio-command-panel-head">
+              <div>
+                <h3>Rebalance to Restore Target Allocation</h3>
+                <p>Address drift, reduce concentration, and improve portfolio alignment.</p>
+              </div>
             </div>
-          ))}
+            <div className="portfolio-command-drift-visual">
+              <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={250} />
+              <div className="portfolio-command-drift-legend">
+                <span><i className="risk" />Overweight</span>
+                <span><i className="info" />Underweight</span>
+                <span><i className="neutral" />In Range</span>
+              </div>
+            </div>
+            <div className="portfolio-command-stat-rail">
+              {executiveStatRail.map((item) => (
+                <div key={item.label}>
+                  <span>{item.label}</span>
+                  <strong className={item.tone || "neutral"}>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="portfolio-command-change-card">
+            <div className="portfolio-command-panel-head">
+              <div>
+                <h3>Trim / Add Summary</h3>
+                <p>Highest-impact allocation changes from the current drift model.</p>
+              </div>
+            </div>
+            <div className="portfolio-command-change-grid">
+              <div>
+                <span className="portfolio-command-column-label risk">Trim</span>
+                <div className="portfolio-command-change-list">
+                  {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row) => (
+                    <button key={`trim-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                      <strong>{row.symbol}</strong>
+                      <em>{formatMoney(-Math.abs(row.tradeValue || 0))}</em>
+                      <b>{formatSignedPercent(row.drift, 1)}</b>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <span className="portfolio-command-column-label positive">Add</span>
+                <div className="portfolio-command-change-list">
+                  {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row) => (
+                    <button key={`add-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                      <strong>{row.symbol}</strong>
+                      <em>{formatMoney(Math.abs(row.tradeValue || 0))}</em>
+                      <b>{formatSignedPercent(Math.abs(row.drift || 0), 1)}</b>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="portfolio-command-impact-card">
+            <div className="portfolio-command-panel-head">
+              <div>
+                <h3>Execution Impact</h3>
+                <p>Estimated cost, readiness, and alignment improvement before you commit.</p>
+              </div>
+            </div>
+            <div className="portfolio-command-impact-list">
+              <div><span>Trade Count</span><strong>{rebalanceMetrics.tradesRequired}</strong></div>
+              <div><span>Est. Fees</span><strong>{formatMoney(rebalanceMetrics.estimatedFees)}</strong></div>
+              <div><span>Est. Slippage</span><strong>{formatMoney(rebalanceMetrics.estimatedSlippage)}</strong></div>
+              <div><span>Projected Alignment</span><strong>{projectedAlignment.before.toFixed(0)}% → {projectedAlignment.after.toFixed(0)}%</strong></div>
+            </div>
+            <div className="portfolio-command-readiness">
+              <span>Execution Readiness</span>
+              <ul>
+                <li className={liveAvailableBalance > 0 ? "positive" : "negative"}>{liveAvailableBalance > 0 ? "Sufficient cash" : "Low available cash"}</li>
+                <li className={rebalanceMetrics.tradesRequired > 0 ? "positive" : "neutral"}>{rebalanceMetrics.tradesRequired > 0 ? "Actionable trade set" : "No trades required"}</li>
+                <li className={feeDashboard.tradeCount > 0 ? "positive" : "neutral"}>{feeDashboard.tradeCount > 0 ? "Fee history available" : "Fee history still sparse"}</li>
+              </ul>
+            </div>
+            <button type="button" className="portfolio-command-primary-cta" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>
+              Review &amp; Rebalance
+            </button>
+          </div>
         </div>
       </section>
 
-          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-holdings-panel">
-            <div className="section-header portfolio-exec-section-head">
-              <h2>Holdings &amp; Positions</h2>
-              <div className="portfolio-exec-inline-controls">
-                <span className="asset-count">{holdingsTableRows.length} Positions</span>
-                <select
-                  value={holdingsSortBy}
-                  onChange={(e) => setHoldingsSortBy(e.target.value)}
-                  className="portfolio-v2-select"
-                >
-                  <option value="value">Sort: Value</option>
-                  <option value="pnl">Sort: PnL</option>
-                  <option value="return">Sort: Return</option>
-                  <option value="risk">Sort: Risk</option>
-                </select>
-              </div>
-            </div>
-            <div className="portfolio-v2-table-wrap">
-              <table className="portfolio-v2-table">
-                <thead>
-                  <tr>
-                    <th>Symbol / Name</th>
-                    <th>Allocation</th>
-                    <th>Mark / Value</th>
-                    <th>P&amp;L</th>
-                    <th>Funding / OI</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {holdingsTableRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6}>
-                        <div className="portfolio-v2-empty" style={{ padding: '40px 20px', textAlign: 'center' }}>
-                          <div className="portfolio-v2-empty-icon" style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.5 }}>📊</div>
-                          <h3 style={{ margin: '0 0 8px', color: 'var(--color-text-primary)' }}>No positions found</h3>
-                          <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: '13px' }}>Your portfolio is currently empty. Add assets from the watchlist or search to start tracking.</p>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : (
-                    holdingsTableRows.map((row) => (
-                      <tr
-                        key={row.key}
-                        role={row.kind === "spot" ? "button" : undefined}
-                        tabIndex={row.kind === "spot" ? 0 : undefined}
-                        onClick={() => row.kind === "spot" ? onSelectAsset?.(row.raw) : null}
-                        onKeyDown={(event) => {
-                          if (row.kind !== "spot") return;
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            onSelectAsset?.(row.raw);
-                          }
-                        }}
-                      >
-                        <td>
-                          <div className="portfolio-v2-symbol-cell">
-                            <div className="portfolio-v2-symbol-avatar">{row.symbol?.slice(0, 1) || "?"}</div>
-                            <div>
-                              <strong>{row.symbol || "Unknown"}</strong>
-                              <span>{row.name || ""}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td>{(row.allocation || 0).toFixed(2)}%</td>
-                        <td>
-                          <div className="portfolio-v2-stack">
-                            <strong>{row.markValueMain || "$0.00"}</strong>
-                            <span>{row.markValueSub || "0.00"}</span>
-                          </div>
-                        </td>
-                        <td>
-                          <div className={`portfolio-v2-stack ${row.pnlPositive ? "positive" : "negative"}`}>
-                            <strong>{row.pnlMain || "$0.00"}</strong>
-                            <span>{row.pnlSub || "0.00%"}</span>
-                          </div>
-                        </td>
-                        <td>
-                          {row.marketType === "perp" ? (
-                            <div className="portfolio-v2-stack" style={{ fontSize: '11px' }}>
-                              <strong style={{ color: 'var(--color-brand-cyan)' }}>{row.fundingRate != null ? `${(row.fundingRate * 100).toFixed(4)}%` : "—"}</strong>
-                              <span style={{ color: 'var(--color-text-secondary)' }}>{row.openInterest != null ? formatMoney(row.openInterest) : "—"}</span>
-                            </div>
-                          ) : (
-                            <span style={{ color: 'var(--color-text-secondary)', fontSize: '11px' }}>—</span>
-                          )}
-                        </td>
-                        <td>
-                          <span className={`portfolio-v2-status ${row.statusClass || ""}`}>{row.status || "Open"}</span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={2}><span>Total Account Equity</span> <strong>{formatMoney(currentAccountEquity)}</strong></td>
-                    <td colSpan={4}><span>Total Gain/Loss</span> <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>{formatSignedMoney(totalGainLoss)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)</strong></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </section>
-
-          <div className="portfolio-v2-two-col">
-            <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-attribution-panel">
-              <div className="section-header portfolio-exec-section-head">
-                <h2>Performance Attribution</h2>
-                <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>View Flow</button>
-              </div>
-              <div className="portfolio-v2-guided-strip" aria-label="Performance attribution workflow">
-                {["Overview", "Drill down", "Top contributors", "Save insight", "Export"].map((step, idx) => (
-                  <button
-                    key={`attrib-step-${step}`}
-                    type="button"
-                    className={insightFlowStep === idx + 1 && activeInsightFlow === "attribution" ? "active" : ""}
-                    onClick={() => {
-                      setActiveInsightFlow("attribution");
-                      setInsightFlowStep(idx + 1);
-                    }}
-                  >
-                    {step}
-                  </button>
-                ))}
-              </div>
-              <div className="portfolio-v2-attrib-grid">
-                {[{ key: "sector", label: "By Sector" }, { key: "region", label: "By Region" }, { key: "factor", label: "By Factor" }].map((group) => {
-                  const first = attributionRows[group.key]?.[0];
-                  return (
-                    <button
-                      key={group.key}
-                      type="button"
-                      className="portfolio-v2-attrib-card"
-                      onClick={() => openInsightFlow("attribution", first || null)}
-                    >
-                      <span>{group.label}</span>
-                      <strong>{first?.name || "Unclassified"}</strong>
-                      <em className={(first?.pnl || 0) >= 0 ? "positive" : "negative"}>
-                        {first ? formatSignedMoney(first.pnl) : "$0.00"}
-                      </em>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
-            <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-exposure-panel">
-              <div className="section-header portfolio-exec-section-head">
-                <h2>Exposure Heatmap</h2>
-                <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure")}>View Flow</button>
-              </div>
-              <div className="portfolio-v2-guided-strip" aria-label="Exposure heatmap workflow">
-                {["Sector", "Cell detail", "Holdings", "Risk", "Alert"].map((step, idx) => (
-                  <button
-                    key={`exposure-step-${step}`}
-                    type="button"
-                    className={insightFlowStep === idx + 1 && activeInsightFlow === "exposure" ? "active" : ""}
-                    onClick={() => {
-                      setActiveInsightFlow("exposure");
-                      setInsightFlowStep(idx + 1);
-                    }}
-                  >
-                    {step}
-                  </button>
-                ))}
-              </div>
-              <div className="portfolio-v2-heatmap">
-                {exposureRows.slice(0, 3).map((row) => (
-                  <button
-                    key={`${row.bucket}-${row.name}`}
-                    type="button"
-                    className="portfolio-v2-heat-cell"
-                    onClick={() => openInsightFlow("exposure", row)}
-                  >
-                    <span>{row.bucket}</span>
-                    <strong>{row.name}</strong>
-                    <em>{row.weight.toFixed(1)}%</em>
-                  </button>
-                ))}
-              </div>
-            </section>
-          </div>
-
-          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-predictions-panel">
-            <div className="section-header portfolio-exec-section-head">
-              <div className="portfolio-exec-section-title-row">
-                <h2>Prediction Markets</h2>
-                <p className="portfolio-v2-section-kicker">Event-driven exposures tracked beside equities, options, and crypto.</p>
-              </div>
-              <div className="asset-count">{predictionMarketRows.length} Markets</div>
-            </div>
-            {predictionMarketRows.length === 0 ? (
-              <div className="portfolio-v2-empty">
-                <div className="portfolio-v2-empty-icon">↗</div>
-                <h3>No prediction market positions yet</h3>
-                <p>Track event-driven opportunities across markets, macro, crypto, and equities.</p>
-                <div className="portfolio-v2-empty-actions">
-                  <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Explore Markets</button>
-                  <button type="button" className="portfolio-v2-link secondary" onClick={() => setShowPredictionGuide(true)}>Learn how it works</button>
-                </div>
-              </div>
-            ) : (
-              <div className="portfolio-v2-activity-list portfolio-exec-market-list">
-                {predictionMarketRows.slice(0, 6).map((row) => (
-                  <div key={row.market} className="portfolio-v2-activity-row">
-                    <div className="portfolio-v2-activity-main">
-                      <strong>{row.market}</strong>
-                      <span>{row.netQty.toFixed(2)} qty</span>
-                    </div>
-                    <div className={`portfolio-v2-activity-pnl ${row.pnl >= 0 ? "positive" : "negative"}`}>{formatSignedMoney(row.pnl)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+      <section className="portfolio-command-analysis">
+        <div className="portfolio-command-tabs">
+          {[
+            { id: "holdings", label: "Holdings" },
+            { id: "attribution", label: "What Drove Performance" },
+            { id: "exposure", label: "Where You&apos;re Overweight" },
+            { id: "fees", label: "Fees" },
+            { id: "prediction", label: "Prediction Markets", beta: true },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`portfolio-command-tab ${activePortfolioTab === tab.id ? "active" : ""}`}
+              onClick={() => setActivePortfolioTab(tab.id)}
+            >
+              {tab.label}
+              {tab.beta ? <small>Beta</small> : null}
+            </button>
+          ))}
         </div>
-        <aside className="portfolio-v2-right">
-          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-metrics-panel">
-            <div className="section-header portfolio-exec-section-head"><h2>Performance Metrics</h2></div>
-            <div className="portfolio-v2-metric-list">
-              {[
-                { label: "Sharpe Ratio", value: metrics.sharpe },
-                { label: "Sortino Ratio", value: metrics.sortino },
-                { label: "Max Drawdown", value: `${metrics.maxDrawdown}%` },
-                { label: "Alpha (Jensen's)", value: metrics.alpha },
-                { label: "Beta", value: metrics.beta }
-              ].map((m) => (
-                <div key={m.label} className="portfolio-v2-metric-row">
-                  <span>{m.label}</span>
-                  <strong className={m.label === "Max Drawdown" ? "positive" : Number(m.value) < 0 ? "negative" : ""}>{m.value}</strong>
+        <div className="portfolio-command-analysis-grid">
+          <div className="portfolio-command-analysis-main">
+            {renderPortfolioTabContent()}
+          </div>
+          <aside className="portfolio-command-analysis-rail">
+            <section className="portfolio-command-side-card">
+              <div className="portfolio-command-panel-head">
+                <div>
+                  <h3>Benchmark &amp; Risk</h3>
+                  <p>Keep benchmark context visible without overwhelming the main workspace.</p>
                 </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-fees-panel">
-            <div className="section-header portfolio-exec-section-head">
-              <div className="portfolio-exec-section-title-row">
-                <h2>Fees Paid</h2>
-                <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
-                  Historical execution fees across connected venues and cheapest-avenue executions
-                </p>
               </div>
-            </div>
-            {feeDashboard.tradeCount > 0 ? (
-              <>
-                <div className="portfolio-v2-metric-list" style={{ marginBottom: "12px" }}>
-                  <div className="portfolio-v2-metric-row">
-                    <span>Total Paid</span>
-                    <strong>{formatMoney(feeDashboard.estimatedUsd)}</strong>
+              <div className="portfolio-command-side-list">
+                {benchmarkRiskRows.map((row) => (
+                  <div key={row.label}>
+                    <span>{row.label}</span>
+                    <strong className={row.tone || "neutral"}>{row.value}</strong>
                   </div>
-                  <div className="portfolio-v2-metric-row">
-                    <span>Charged Trades</span>
-                    <strong>{feeDashboard.tradeCount}</strong>
-                  </div>
-                  <div className="portfolio-v2-metric-row">
-                    <span>Recorded Fills</span>
-                    <strong>{feeDashboard.fillCount}</strong>
-                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="portfolio-command-side-card">
+              <div className="portfolio-command-panel-head">
+                <div>
+                  <h3>Fees (YTD)</h3>
+                  <p>Cost context and cheapest-avenue comparison.</p>
                 </div>
-                <div className="portfolio-v2-activity-list">
-                  {feeDashboard.platforms.slice(0, 5).map((row) => (
-                    <div key={`fee-platform-${row.platform}`} className="portfolio-v2-activity-row" style={{ alignItems: "flex-start" }}>
-                      <div className="portfolio-v2-activity-main">
-                        <strong>{row.label}</strong>
-                        <span>{row.breakdown}</span>
-                      </div>
-                      <div style={{ textAlign: "right", display: "flex", flexDirection: "column", gap: "4px" }}>
-                        <strong>{formatMoney(row.estimatedUsd)}</strong>
-                        <span style={{ color: "var(--color-text-secondary)", fontSize: "11px" }}>{row.tradeCount} trades</span>
-                      </div>
+              </div>
+              <div className="portfolio-command-side-list">
+                <div><span>Gross Fees Paid</span><strong>{formatMoney(feeDashboard.estimatedUsd)}</strong></div>
+                <div><span>Annual Run Rate</span><strong>{feeDashboard.tradeCount ? `${((feeDashboard.estimatedUsd / Math.max(1, feeDashboard.tradeCount)) * 12).toFixed(2)}` : "N/A"}</strong></div>
+                <div><span>vs Policy</span><strong className={feeDashboard.comparisonDeltaUsd <= 0 ? "positive" : "negative"}>{feeDashboard.comparison ? formatSignedMoney(-feeDashboard.comparisonDeltaUsd) : "N/A"}</strong></div>
+              </div>
+              <button type="button" className="portfolio-v2-link" onClick={() => setActivePortfolioTab("fees")}>View Details</button>
+            </section>
+
+            <section className="portfolio-command-side-card">
+              <div className="portfolio-command-panel-head">
+                <div>
+                  <h3>Recent Activity</h3>
+                  <p>Most recent trades and fills across the portfolio.</p>
+                </div>
+              </div>
+              <div className="portfolio-command-activity-list">
+                {recentActivityRows.length ? recentActivityRows.map((row) => (
+                  <div key={row.id} className="portfolio-command-activity-row">
+                    <div className="portfolio-command-activity-copy">
+                      <strong>{row.symbol} · {row.side}</strong>
+                      <span>{row.when}</span>
                     </div>
-                  ))}
-                </div>
-                <div className="portfolio-v2-empty" style={{ padding: "12px 0 0", textAlign: "left" }}>
-                  <p style={{ margin: 0 }}>
-                    Breakdown: {feeDashboard.breakdown}
-                  </p>
-                  {feeDashboard.comparison && feeDashboard.comparison.benchmarkEligibleFillCount > 0 ? (
-                    <>
-                      <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                        Comparison on synced venue fills:
-                      </p>
-                      <p style={{ margin: "6px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                        {formatFeeSourceLabel(FEE_SOURCE_EXCHANGE_REPORTED)}: {formatMoney(feeDashboard.comparison.exchangeReported.estimatedUsd)} across {feeDashboard.comparison.exchangeReported.fillCount} fills
-                      </p>
-                      <p style={{ margin: "4px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                        {formatFeeSourceLabel(FEE_SOURCE_CHEAPEST_AVENUE)} benchmark: {formatMoney(feeDashboard.comparison.cheapestAvenueBenchmark.estimatedUsd)} across {feeDashboard.comparison.benchmarkEligibleFillCount} comparable fills
-                      </p>
-                      <p style={{ margin: "4px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                        {feeDashboard.comparisonDeltaUsd > 0
-                          ? `Potential savings versus the cheapest avenue benchmark: ${formatMoney(feeDashboard.comparisonDeltaUsd)}.`
-                          : feeDashboard.comparisonDeltaUsd < 0
-                            ? `Exchange-reported fees came in ${formatMoney(Math.abs(feeDashboard.comparisonDeltaUsd))} below the cheapest avenue benchmark.`
-                            : "Exchange-reported fees are aligned with the cheapest avenue benchmark."}
-                      </p>
-                    </>
-                  ) : null}
-                  {feeDashboard.comparison?.cheapestAvenueObserved?.fillCount > 0 ? (
-                    <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                      Cheapest avenue executions recorded: {formatMoney(feeDashboard.comparison.cheapestAvenueObserved.estimatedUsd)} across {feeDashboard.comparison.cheapestAvenueObserved.fillCount} fills.
-                    </p>
-                  ) : null}
-                  {Array.isArray(feeDashboard.sources) && feeDashboard.sources.length > 0 ? (
-                    <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                      Sources: {feeDashboard.sources.map((row) => `${formatFeeSourceLabel(row.source)} (${row.fillCount})`).join(" · ")}
-                    </p>
-                  ) : null}
-                  {feeDashboard.unknownCurrencies.length > 0 ? (
-                    <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                      Some fee assets were kept in native units: {feeDashboard.unknownCurrencies.join(", ")}.
-                    </p>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <div className="portfolio-v2-empty">
-                <div className="portfolio-v2-empty-icon">%</div>
-                <h3>No recorded fees yet</h3>
-                <p>Sync a connected exchange or execute trades through the portfolio flow to populate your fee history.</p>
+                    <div className="portfolio-command-activity-values">
+                      <strong>{formatMoney(row.notional)}</strong>
+                      <span>{row.qty.toFixed(2)} qty</span>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="portfolio-command-empty">
+                    <h3>No recent activity</h3>
+                    <p>Trades will appear here once the portfolio starts moving.</p>
+                  </div>
+                )}
               </div>
-            )}
-          </section>
+            </section>
+          </aside>
+        </div>
+      </section>
 
-          <section className="watchlist-panel glass portfolio-v2-panel portfolio-exec-panel portfolio-exec-rebalance-panel">
-            <div className="section-header portfolio-exec-section-head">
-              <div className="portfolio-exec-section-title-row">
-                <h2>Rebalancing Suggestions</h2>
-                <p style={{ margin: "4px 0 0", color: "var(--color-text-secondary)", fontSize: "12px" }}>
-                  Drift, target weight, and action queue.
-                </p>
-              </div>
-              <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", rebalanceSuggestions[0] || null)}>View Flow</button>
+      {activePortfolioTab !== "prediction" ? (
+        <section className="portfolio-command-prediction-strip">
+          <div className="portfolio-command-panel-head">
+            <div>
+              <h3>Prediction Markets</h3>
+              <p>Optional event-driven extension for macro and cross-asset views.</p>
             </div>
-            <div className="portfolio-exec-rebalance-list">
-              {rebalanceSuggestions.slice(0, 5).map((row) => (
-                <button
-                  key={`reb-side-${row.symbol}`}
-                  type="button"
-                  className="portfolio-exec-rebalance-row"
-                  onClick={() => row.action !== "Hold" && openInsightFlow("rebalancing", row)}
-                >
-                  <span>{row.symbol}</span>
-                  <strong className={row.drift >= 0 ? "negative" : "positive"}>{row.drift >= 0 ? "+" : ""}{row.drift.toFixed(2)}%</strong>
-                  <em>{row.action}</em>
-                </button>
+            <div className="portfolio-command-inline-actions">
+              <span className="portfolio-command-beta-pill">Beta</span>
+              <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>View All Prediction Markets</button>
+            </div>
+          </div>
+          {demotedPredictionRows.length ? (
+            <div className="portfolio-command-card-grid four">
+              {demotedPredictionRows.map((row) => (
+                <div key={row.market} className="portfolio-command-market-card">
+                  <span>{row.market}</span>
+                  <strong>{formatSignedMoney(row.pnl)}</strong>
+                  <em>{row.netQty.toFixed(2)} qty</em>
+                </div>
               ))}
-              {rebalanceSuggestions.length === 0 ? (
-                <div className="portfolio-v2-empty">
-                  <h3>No drift detected</h3>
-                  <p>Add holdings to generate target-weight suggestions.</p>
-                </div>
-              ) : null}
             </div>
-          </section>
+          ) : (
+            <div className="portfolio-command-empty compact">
+              <h3>No prediction market positions yet</h3>
+              <p>Explore macro and event markets when you want portfolio context beyond traditional assets.</p>
+            </div>
+          )}
+        </section>
+      ) : null}
 
-        </aside>
-      </div>
-
-      <PortfolioInstitutionalSuite
-        portfolio={filteredPortfolio}
-        trades={filteredTrades}
-        activeOptionsTrades={filteredOptionsTrades}
-        benchmarkSymbol={benchmarkSymbol}
-        currency={displayCurrency}
-        balance={liveAvailableBalance}
-        onOpenConnections={onOpenConnections}
-      />
       {renderInsightFlow()}
 
       {showPredictionGuide ? (

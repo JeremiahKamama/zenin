@@ -115,15 +115,46 @@ const {
 
 const app = express();
 
+/**
+ * Utility to sanitize loaded environment keys.
+ * If the key is a standard placeholder or missing, it returns an empty string.
+ */
+function cleanApiKey(key) {
+  const cleaned = String(key || "").trim();
+  if (!cleaned) return "";
+  const lower = cleaned.toLowerCase();
+  if (
+    lower.startsWith("replace_") ||
+    lower.startsWith("your_") ||
+    lower.startsWith("re_your_") ||
+    lower === "your_api_key_here" ||
+    lower.includes("placeholder") ||
+    lower.includes("example")
+  ) {
+    return "";
+  }
+  return cleaned;
+}
+
 // --- EODHD Macro Indicators Configuration ---
-const EODHD_API_TOKEN = String(
+const EODHD_API_TOKEN = cleanApiKey(
   process.env.EODHD_API_TOKEN ||
   process.env.EODHD_API_KEY ||
   process.env.EODHD_TOKEN ||
   ""
-).trim().replace(/^,+|,+$/g, "");
+).replace(/^,+|,+$/g, "");
 
 console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES" : "NO"}`);
+
+const FRED_API_KEY = cleanApiKey(process.env.FRED_API_KEY || "");
+const EIA_API_KEY = cleanApiKey(process.env.EIA_API_KEY || "");
+const BLS_API_KEY = cleanApiKey(process.env.BLS_API_KEY || process.env.BLS_REGISTRATION_KEY || "");
+const MASSIVE_API_KEY = cleanApiKey(process.env.MASSIVE_API_KEY || process.env.POLYGON_API_KEY || "");
+const MASSIVE_WS_STOCKS_URL = String(process.env.MASSIVE_WS_STOCKS_URL || "wss://socket.massive.com/stocks").trim();
+const MASSIVE_WS_DELAYED_STOCKS_URL = String(process.env.MASSIVE_WS_DELAYED_STOCKS_URL || "wss://delayed.massive.com/stocks").trim();
+
+const providerMemoryCache = new Map();
+const PROVIDER_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const EARNINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -298,6 +329,288 @@ function sanitizeMacroMetrics(metrics = []) {
 }
 // --------------------------------------------
 
+function hasProviderKey(provider) {
+  const key = String(provider || "").toLowerCase();
+  if (key === "fred") return Boolean(FRED_API_KEY);
+  if (key === "eia") return Boolean(EIA_API_KEY);
+  if (key === "bls") return Boolean(BLS_API_KEY);
+  if (key === "massive") return Boolean(MASSIVE_API_KEY);
+  return false;
+}
+
+function buildProviderStatus(name, configured, status = "idle", detail = "") {
+  return {
+    name,
+    configured: Boolean(configured),
+    status: configured ? status : "missing_key",
+    detail: configured ? detail : "API key not configured",
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function fetchJsonWithTimeout(url, options = {}) {
+  const fetch = await resolveFetch();
+  const controller = new AbortController();
+  const timeoutMs = Number(options.timeoutMs || 8000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: options.method || "GET",
+      headers: options.headers || {},
+      body: options.body,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`${response.status} ${response.statusText}${text ? `: ${text.slice(0, 120)}` : ""}`);
+    }
+    return response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function cachedProviderFetch(cacheKey, fetcher, ttlMs = PROVIDER_CACHE_TTL_MS) {
+  const now = Date.now();
+  const cached = providerMemoryCache.get(cacheKey);
+  if (cached && now - cached.cachedAt < ttlMs) return cached.payload;
+  const payload = await fetcher();
+  providerMemoryCache.set(cacheKey, { payload, cachedAt: now });
+  return payload;
+}
+
+function toProviderNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function latestObservation(observations = []) {
+  return [...(Array.isArray(observations) ? observations : [])]
+    .reverse()
+    .find((row) => toProviderNumber(row?.value) !== null) || null;
+}
+
+function previousObservation(observations = [], latestDate = null) {
+  const rows = [...(Array.isArray(observations) ? observations : [])].reverse();
+  const latestIndex = rows.findIndex((row) => !latestDate || row?.date === latestDate);
+  return rows.slice(latestIndex + 1).find((row) => toProviderNumber(row?.value) !== null) || null;
+}
+
+async function fetchFredSeries(seriesId, { limit = 24, observationStart = null } = {}) {
+  if (!FRED_API_KEY) throw new Error("fred_api_key_missing");
+  const params = new URLSearchParams({
+    series_id: seriesId,
+    api_key: FRED_API_KEY,
+    file_type: "json",
+    sort_order: "desc",
+    limit: String(limit)
+  });
+  if (observationStart) params.set("observation_start", observationStart);
+  const payload = await cachedProviderFetch(`fred:${seriesId}:${limit}:${observationStart || ""}`, () =>
+    fetchJsonWithTimeout(`https://api.stlouisfed.org/fred/series/observations?${params.toString()}`)
+  );
+  const observations = Array.isArray(payload?.observations) ? [...payload.observations].reverse() : [];
+  const latest = latestObservation(observations);
+  const previous = previousObservation(observations, latest?.date);
+  return { seriesId, observations, latest, previous, source: "FRED" };
+}
+
+const FRED_MACRO_SERIES = [
+  { key: "interest_rate", seriesId: "FEDFUNDS", label: "Fed Funds Rate", unit: "%" },
+  { key: "inflation_rate", seriesId: "FPCPITOTLZGUSA", label: "Inflation Rate", unit: "%" },
+  { key: "unemployment_rate", seriesId: "UNRATE", label: "Unemployment Rate", unit: "%" },
+  { key: "consumer_confidence", seriesId: "UMCSENT", label: "Consumer Sentiment", unit: "Index" },
+  { key: "cpi", seriesId: "CPIAUCSL", label: "CPI", unit: "Index" },
+  { key: "core_inflation_rate", seriesId: "CPILFESL", label: "Core CPI", unit: "Index" },
+  { key: "gdp_growth_rate", seriesId: "A191RL1Q225SBEA", label: "Real GDP Growth", unit: "%" }
+];
+
+const FRED_COMMODITY_SERIES = {
+  CL: { seriesId: "DCOILWTICO", metric: "WTI Spot", unit: "USD/bbl", group: "energy" },
+  NG: { seriesId: "DHHNGSP", metric: "Henry Hub Natural Gas", unit: "USD/MMBtu", group: "energy" },
+  GC: { seriesId: "GOLDAMGBD228NLBM", metric: "Gold Fixing", unit: "USD/oz", group: "metals" },
+  SI: { seriesId: "SLVPRUSD", metric: "Silver", unit: "USD/oz", group: "metals" }
+};
+
+async function fetchFredMacroMetrics() {
+  if (!FRED_API_KEY) return { rows: [], status: buildProviderStatus("FRED", false) };
+  const settled = await Promise.allSettled(FRED_MACRO_SERIES.map((item) => fetchFredSeries(item.seriesId, { limit: 18 }).then((series) => {
+    const current = toProviderNumber(series.latest?.value);
+    const previous = toProviderNumber(series.previous?.value);
+    return {
+      key: item.key,
+      label: item.label,
+      current,
+      previous,
+      expectation: null,
+      change: current !== null && previous !== null ? Number((current - previous).toFixed(2)) : null,
+      changePercent: current !== null && previous ? Number((((current - previous) / Math.abs(previous)) * 100).toFixed(2)) : null,
+      unit: item.unit,
+      asOf: series.latest?.date || null,
+      source: "FRED",
+      series: series.observations.map((row) => ({ date: row.date, value: toProviderNumber(row.value) })).filter((row) => row.value !== null)
+    };
+  })));
+  const rows = settled.filter((result) => result.status === "fulfilled").map((result) => result.value);
+  const failed = settled.length - rows.length;
+  return {
+    rows,
+    status: buildProviderStatus("FRED", true, rows.length ? "connected" : "unavailable", failed ? `${failed} series unavailable` : `${rows.length} series connected`)
+  };
+}
+
+async function fetchFredCommoditySeries(symbol, range = "1Y") {
+  const config = FRED_COMMODITY_SERIES[String(symbol || "").toUpperCase()];
+  if (!config || !FRED_API_KEY) return [];
+  const observationStart = range === "1M"
+    ? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : range === "3M"
+    ? new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : range === "MAX"
+    ? null
+    : new Date(Date.now() - 420 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const series = await fetchFredSeries(config.seriesId, { limit: range === "MAX" ? 5000 : 520, observationStart });
+  return series.observations
+    .map((row) => ({ date: row.date, value: toProviderNumber(row.value), source: "FRED", sourceType: config.metric }))
+    .filter((row) => row.value !== null);
+}
+
+const EIA_SERIES_BY_COMMODITY = {
+  CL: [
+    { seriesId: "PET.RWTC.D", metric: "WTI Spot", unit: "USD/bbl" },
+    { seriesId: "PET.WCESTUS1.W", metric: "US Crude Stocks", unit: "Thousand barrels" }
+  ],
+  NG: [
+    { seriesId: "NG.RNGWHHD.D", metric: "Henry Hub Spot", unit: "USD/MMBtu" },
+    { seriesId: "NG.NW2_EPG0_SWO_R48_BCF.W", metric: "Lower 48 Working Gas", unit: "Bcf" }
+  ],
+  RB: [
+    { seriesId: "PET.EMM_EPM0_PTE_NUS_DPG.W", metric: "Retail Gasoline", unit: "USD/gal" }
+  ]
+};
+
+async function fetchEiaSeries(seriesId) {
+  if (!EIA_API_KEY) throw new Error("eia_api_key_missing");
+  const params = new URLSearchParams({ api_key: EIA_API_KEY, series_id: seriesId });
+  const payload = await cachedProviderFetch(`eia:${seriesId}`, () =>
+    fetchJsonWithTimeout(`https://api.eia.gov/series/?${params.toString()}`)
+  );
+  const series = Array.isArray(payload?.series) ? payload.series[0] : null;
+  const rows = Array.isArray(series?.data) ? series.data : [];
+  return rows
+    .map((row) => ({ date: String(row?.[0] || ""), value: toProviderNumber(row?.[1]) }))
+    .filter((row) => row.date && row.value !== null);
+}
+
+async function fetchEiaCommodityFundamentals(symbol) {
+  const configs = EIA_SERIES_BY_COMMODITY[String(symbol || "").toUpperCase()] || [];
+  if (!configs.length || !EIA_API_KEY) return { rows: [], status: buildProviderStatus("EIA", Boolean(EIA_API_KEY), configs.length ? "unavailable" : "not_applicable", configs.length ? "No EIA rows returned" : "No EIA mapping for symbol") };
+  const settled = await Promise.allSettled(configs.map(async (config) => {
+    const rows = await fetchEiaSeries(config.seriesId);
+    const latest = rows[0] || null;
+    const previous = rows[1] || null;
+    return {
+      metric: config.metric,
+      value: latest?.value ?? null,
+      previous: previous?.value ?? null,
+      unit: config.unit,
+      asOf: latest?.date || null,
+      sourceType: "EIA",
+      sourceWhy: "Official U.S. energy market time series",
+      source: "EIA",
+      seriesId: config.seriesId
+    };
+  }));
+  const rows = settled.filter((result) => result.status === "fulfilled").map((result) => result.value).filter((row) => row.value !== null);
+  return {
+    rows,
+    status: buildProviderStatus("EIA", true, rows.length ? "connected" : "unavailable", rows.length ? `${rows.length} energy series connected` : "No EIA rows returned")
+  };
+}
+
+const BLS_MACRO_SERIES = [
+  { id: "CUUR0000SA0", key: "cpi", label: "CPI", unit: "Index" },
+  { id: "CUUR0000SA0L1E", key: "core_inflation_rate", label: "Core CPI", unit: "Index" },
+  { id: "LNS14000000", key: "unemployment_rate", label: "Unemployment Rate", unit: "%" },
+  { id: "WPUFD4", key: "inflation_rate", label: "PPI Final Demand", unit: "Index" }
+];
+
+async function fetchBlsMacroMetrics() {
+  if (!BLS_API_KEY) return { rows: [], status: buildProviderStatus("BLS", false) };
+  const currentYear = new Date().getFullYear();
+  const body = JSON.stringify({
+    seriesid: BLS_MACRO_SERIES.map((row) => row.id),
+    startyear: String(currentYear - 2),
+    endyear: String(currentYear),
+    registrationkey: BLS_API_KEY
+  });
+  const payload = await cachedProviderFetch(`bls:${currentYear}`, () =>
+    fetchJsonWithTimeout("https://api.bls.gov/publicAPI/v2/timeseries/data/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    })
+  );
+  const byId = new Map((payload?.Results?.series || []).map((series) => [series.seriesID, series]));
+  const rows = BLS_MACRO_SERIES.map((config) => {
+    const data = Array.isArray(byId.get(config.id)?.data) ? byId.get(config.id).data : [];
+    const latest = data.find((row) => toProviderNumber(row?.value) !== null);
+    const previous = data.slice(data.indexOf(latest) + 1).find((row) => toProviderNumber(row?.value) !== null);
+    const current = toProviderNumber(latest?.value);
+    const prev = toProviderNumber(previous?.value);
+    return {
+      key: config.key,
+      label: config.label,
+      current,
+      previous: prev,
+      expectation: null,
+      change: current !== null && prev !== null ? Number((current - prev).toFixed(2)) : null,
+      changePercent: current !== null && prev ? Number((((current - prev) / Math.abs(prev)) * 100).toFixed(2)) : null,
+      unit: config.unit,
+      asOf: latest ? `${latest.year}-${String(latest.period || "").replace("M", "").padStart(2, "0")}` : null,
+      source: "BLS",
+      series: data.slice().reverse().map((row) => ({
+        date: `${row.year}-${String(row.period || "").replace("M", "").padStart(2, "0")}`,
+        value: toProviderNumber(row.value)
+      })).filter((row) => row.value !== null)
+    };
+  }).filter((row) => row.current !== null);
+  return {
+    rows,
+    status: buildProviderStatus("BLS", true, rows.length ? "connected" : "unavailable", rows.length ? `${rows.length} series connected` : "No BLS rows returned")
+  };
+}
+
+function buildDataProviderStatus(extra = {}) {
+  return {
+    fred: extra.fred || buildProviderStatus("FRED", Boolean(FRED_API_KEY), "idle", "Configured for macro/commodity series"),
+    eia: extra.eia || buildProviderStatus("EIA", Boolean(EIA_API_KEY), "idle", "Configured for energy fundamentals"),
+    bls: extra.bls || buildProviderStatus("BLS", Boolean(BLS_API_KEY), "idle", "Configured for inflation/labor series"),
+    massive: extra.massive || buildProviderStatus("Massive", Boolean(MASSIVE_API_KEY), "idle", "Configured for WebSocket market data")
+  };
+}
+
+function getMassiveStatus() {
+  if (massiveLastStatus?.configured) return massiveLastStatus;
+  return buildProviderStatus(
+    "Massive",
+    Boolean(MASSIVE_API_KEY),
+    MASSIVE_API_KEY ? "configured" : "missing_key",
+    MASSIVE_API_KEY ? "WebSocket key configured; upstream stream is used when live subscriptions are active" : "API key not configured"
+  );
+}
+
+function summarizePriceProviders(prices = {}, fallbackProvider = "Yahoo Finance") {
+  const counts = {};
+  Object.values(prices || {}).forEach((quote) => {
+    const source = String(quote?.source || fallbackProvider || "Market data").trim();
+    if (!source) return;
+    counts[source] = (counts[source] || 0) + 1;
+  });
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([source, count]) => ({ source, count }));
+}
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const SESSION_COOKIE_NAME = "zenin_session";
@@ -468,7 +781,7 @@ app.get("/api/auth/csrf", (req, res) => {
 
 // Helper to fetch latest results from Dune Analytics
 async function fetchDuneLatestResults(queryId) {
-  const apiKey = process.env.DUNE_API_KEY;
+  const apiKey = cleanApiKey(process.env.DUNE_API_KEY);
   if (!apiKey) {
     console.warn(`[Dune] API key missing. Skipping fetch for query ${queryId}.`);
     return null;
@@ -1355,6 +1668,14 @@ const PLAN_RANK = {
   desk: 2
 };
 
+function getEffectivePlan(userPlan, workspacePlan) {
+  const normalizedUserPlan = normalizePlanInput(userPlan) || "starter";
+  const normalizedWorkspacePlan = normalizePlanInput(workspacePlan) || "starter";
+  return (PLAN_RANK[normalizedWorkspacePlan] || 0) > (PLAN_RANK[normalizedUserPlan] || 0)
+    ? normalizedWorkspacePlan
+    : normalizedUserPlan;
+}
+
 function requirePlan(minPlan) {
   return (req, res, next) => {
     const isAdmin = isSignedInAdmin(req);
@@ -1368,9 +1689,7 @@ function requirePlan(minPlan) {
       ? simulationPlan 
       : (req.auth?.user?.currentPlan || "starter");
     const workspacePlan = req.workspace?.workspace?.plan || "starter";
-    const effectivePlan = (PLAN_RANK[workspacePlan] || 0) > (PLAN_RANK[userPlan] || 0)
-      ? workspacePlan
-      : userPlan;
+    const effectivePlan = getEffectivePlan(userPlan, workspacePlan);
 
     if ((PLAN_RANK[effectivePlan] || 0) < (PLAN_RANK[minPlan] || 0)) {
       return res.status(403).json({ 
@@ -1383,6 +1702,46 @@ function requirePlan(minPlan) {
     }
     next();
   };
+}
+
+function isSharedWorkspaceContext(reqOrContext, userIdOverride = null) {
+  const workspace = reqOrContext?.workspace?.workspace || reqOrContext?.workspace || null;
+  const membership = reqOrContext?.workspace?.membership || reqOrContext?.membership || null;
+  const userId = Number(userIdOverride || reqOrContext?.auth?.userId || membership?.userId || 0);
+  if (!workspace || !membership || !userId) return false;
+  const ownerUserId = Number(workspace.ownerUserId || 0);
+  const seatCount = Number(workspace.seatCount || 1);
+  const role = String(membership.role || "").trim().toLowerCase();
+  return ownerUserId !== userId || seatCount > 1 || role !== "owner";
+}
+
+function hasDeskPlanForWorkspaceFeature(reqOrContext, userPlanOverride = null) {
+  const workspace = reqOrContext?.workspace?.workspace || reqOrContext?.workspace || null;
+  const userPlan = userPlanOverride || reqOrContext?.auth?.user?.currentPlan || "starter";
+  const effectivePlan = getEffectivePlan(userPlan, workspace?.plan || "starter");
+  return (PLAN_RANK[effectivePlan] || 0) >= PLAN_RANK.desk;
+}
+
+function buildSharedWatchlistAccess(context, userId, userPlan) {
+  const shared = isSharedWorkspaceContext(context, userId);
+  const allowed = !shared || hasDeskPlanForWorkspaceFeature(context, userPlan);
+  return {
+    shared,
+    allowed,
+    requiredPlan: shared ? "desk" : "starter"
+  };
+}
+
+function requireDeskForSharedWatchlist(req, res, next) {
+  const access = buildSharedWatchlistAccess(req, req.auth?.userId, req.auth?.user?.currentPlan);
+  if (access.allowed) return next();
+  return apiError(res, 403, {
+    error: "Desk subscription required",
+    message: "Shared Desk watchlists are available on the Desk plan only.",
+    code: "DESK_WATCHLIST_REQUIRED",
+    retryable: false,
+    required: "desk"
+  });
 }
 
 function requireAdmin(req, res, next) {
@@ -2445,7 +2804,8 @@ async function fetchCryptoQuotesBySymbols(symbols = []) {
     const priceChangePercent = computePercentChange(price, prevDayPx);
     quotes[symbol] = {
       price: Number.isFinite(price) ? price : null,
-      priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null
+      priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+      source: Number.isFinite(price) ? "Hyperliquid" : "CoinGecko"
     };
     if (!Number.isFinite(price)) {
       missingSymbols.push(symbol);
@@ -2466,6 +2826,9 @@ async function fetchCryptoQuotesBySymbols(symbols = []) {
         }
         if (Number.isFinite(Number(info.usd_24h_change))) {
           quotes[symbol].priceChangePercent = Number(info.usd_24h_change);
+        }
+        if (Number.isFinite(Number(info.usd))) {
+          quotes[symbol].source = "CoinGecko";
         }
       });
     } catch {
@@ -2520,11 +2883,14 @@ function fetchYFinancePrices(originalSymbols) {
       // Re-key results from YF ticker back to the original symbol
       const result = {};
       for (const orig of originalSymbols) {
-        result[orig] = yfPrices[orig] || {
+        result[orig] = {
+          ...(yfPrices[orig] || {
           price: null,
           priceChangePercent: null,
           isMarketOpen: true,
           marketStatus: "unknown"
+          }),
+          source: yfPrices[orig]?.source || "Yahoo Finance"
         };
       }
       resolve(result);
@@ -2685,7 +3051,17 @@ function computeTrend(value, previous) {
 }
 
 async function fetchAnalyticsMacroRows(country = "USA") {
-  const metrics = sanitizeMacroMetrics(await fetchWorldBankMacroMetrics(country));
+  const [fredResult, blsResult, wbRows] = await Promise.all([
+    String(country).toUpperCase() === "USA" ? fetchFredMacroMetrics().catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+    String(country).toUpperCase() === "USA" ? fetchBlsMacroMetrics().catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+    fetchWorldBankMacroMetrics(country).catch(() => [])
+  ]);
+  const metrics = sanitizeMacroMetrics([...wbRows, ...(blsResult.rows || []), ...(fredResult.rows || [])]);
+  const sourceByKey = new Map(
+    [...wbRows, ...(blsResult.rows || []), ...(fredResult.rows || [])]
+      .filter((row) => row?.key)
+      .map((row) => [row.key, row.source || "World Bank"])
+  );
   return metrics
     .filter((metric) => Number.isFinite(Number(metric.current)))
     .map((metric) => ({
@@ -2697,7 +3073,7 @@ async function fetchAnalyticsMacroRows(country = "USA") {
       trend: computeTrend(metric.current, metric.previous),
       previous: metric.previous,
       asOf: metric.asOf,
-      source: "World Bank"
+      source: sourceByKey.get(metric.key) || "World Bank"
     }));
 }
 
@@ -2821,11 +3197,12 @@ async function buildUserBootstrapPayload(userId, options = {}) {
   const tradeLimit = Math.max(200, Math.min(2000, Number(options.tradeLimit) || 1000));
   const activeWorkspace = options.activeWorkspace || await workspaces.getActiveForUser(userId);
   const activeWorkspaceId = activeWorkspace?.workspace?.id || null;
+  const sharedWatchlistAccess = buildSharedWatchlistAccess(activeWorkspace, userId, options.userPlan);
   const [balances, usdBalance, holdings, watchlistAssets, trades, feeSummary] = await Promise.all([
     userWorkspace.cash.getAll(userId, activeWorkspaceId),
     userWorkspace.balance.get(userId),
     userWorkspace.portfolio.getAll(userId, activeWorkspaceId),
-    userWorkspace.watchlist.getAll(userId, activeWorkspaceId),
+    sharedWatchlistAccess.allowed ? userWorkspace.watchlist.getAll(userId, activeWorkspaceId) : Promise.resolve([]),
     userWorkspace.trades.getAll(userId, tradeLimit, activeWorkspaceId),
     userWorkspace.tradeFills.getSummary(userId, activeWorkspaceId)
   ]);
@@ -2854,6 +3231,7 @@ async function buildUserBootstrapPayload(userId, options = {}) {
     trades: Array.isArray(trades) ? trades : [],
     feeSummary: feeSummary || null,
     categories: Object.keys(watchlistData),
+    sharedWatchlistAccess,
     activeWorkspace: sanitizeWorkspace(activeWorkspace?.workspace, activeWorkspace?.membership),
     workspaceMembers: workspaceMembers.map(sanitizeWorkspaceMember),
     workspaceInvites: workspaceInvites.map(sanitizeWorkspaceInvite),
@@ -2866,6 +3244,7 @@ async function buildUserBootstrapPayload(userId, options = {}) {
       } catch {
         parsedExtra = {};
       }
+      const capability = buildConnectionCapability(item.exchange);
       return {
         id: item.id,
         exchange: item.exchange,
@@ -2874,7 +3253,8 @@ async function buildUserBootstrapPayload(userId, options = {}) {
         canTrade: !!item.canTrade,
         lastVerifiedScope: item.lastVerifiedScope || "unknown",
         riskLevel: item.riskLevel || "standard",
-        syncAvailable: SYNC_ENABLED_EXCHANGES.has(item.exchange),
+        syncAvailable: capability.syncAvailable,
+        connectionCapability: capability,
         extraData: parsedExtra,
         lastSyncAt: item.lastSyncAt || null,
         lastSyncStatus: item.lastSyncStatus || "idle",
@@ -2897,7 +3277,14 @@ app.get("/api/public/config", async (_req, res) => {
 
 app.get("/api/app/bootstrap", requireSignedIn, attachActiveWorkspace, async (req, res) => {
   const tradeLimit = Math.max(200, Math.min(2000, Number(req.query.tradeLimit) || 1000));
-  const snapshotParams = { userId: req.auth.userId, tradeLimit };
+  const snapshotParams = {
+    userId: req.auth.userId,
+    tradeLimit,
+    workspaceId: req.workspace?.workspace?.id || null,
+    workspacePlan: req.workspace?.workspace?.plan || "starter",
+    workspaceSeats: req.workspace?.workspace?.seatCount || 1,
+    userPlan: req.auth?.user?.currentPlan || "starter"
+  };
   const ttlMs = ROUTE_CACHE_TTLS_MS["app-bootstrap"];
 
   try {
@@ -2907,7 +3294,11 @@ app.get("/api/app/bootstrap", requireSignedIn, attachActiveWorkspace, async (req
     }
 
     const payload = await withInflightDedup("app-bootstrap", snapshotParams, async () => {
-      const nextPayload = await buildUserBootstrapPayload(req.auth.userId, { tradeLimit, activeWorkspace: req.workspace });
+      const nextPayload = await buildUserBootstrapPayload(req.auth.userId, {
+        tradeLimit,
+        activeWorkspace: req.workspace,
+        userPlan: req.auth?.user?.currentPlan
+      });
       await writeAllSnapshots("app-bootstrap", snapshotParams, nextPayload);
       return nextPayload;
     });
@@ -3332,6 +3723,22 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, attachActiv
 // ---------------------------------------------------------------------------
 // Exchange Keys Management
 // ---------------------------------------------------------------------------
+function buildConnectionCapability(exchange) {
+  const normalizedExchange = String(exchange || "").trim().toLowerCase();
+  const syncAvailable = SYNC_ENABLED_EXCHANGES.has(normalizedExchange);
+  return {
+    accessMode: normalizedExchange === "hyperliquid" ? "watch_only" : "read_only_metadata",
+    syncAvailable,
+    syncStatus: syncAvailable ? "sync_supported" : "metadata_only",
+    nextAction: syncAvailable
+      ? "Run sync to import holdings, balances, and fills."
+      : "Saved for workspace context. Live sync is not available for this provider yet.",
+    supportMessage: syncAvailable
+      ? "Zenin can import live portfolio data from this provider with read-only access."
+      : "Zenin stores this source as read-only metadata until a provider adapter is available."
+  };
+}
+
 app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const keys = await userWorkspace.exchangeKeys.list(req.auth.userId, req.workspace.workspace.id);
@@ -3350,6 +3757,7 @@ app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, require
       } catch (e) {
         console.warn("Failed to process extraData for key", k.id);
       }
+      const capability = buildConnectionCapability(k.exchange);
       return {
         id: k.id,
         exchange: k.exchange,
@@ -3358,7 +3766,8 @@ app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, require
         canTrade: !!k.canTrade,
         lastVerifiedScope: k.lastVerifiedScope || "unknown",
         riskLevel: k.riskLevel || "standard",
-        syncAvailable: SYNC_ENABLED_EXCHANGES.has(k.exchange),
+        syncAvailable: capability.syncAvailable,
+        connectionCapability: capability,
         extraData: parsedExtra,
         createdAt: k.createdAt,
         lastSyncAt: k.lastSyncAt || null,
@@ -3391,6 +3800,7 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       riskLevel: readOnlyRiskLevel
     };
     const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload, req.workspace.workspace.id);
+    const capability = buildConnectionCapability(key.exchange);
     await workspaces.recordActivity({
       workspaceId: req.workspace.workspace.id,
       actorUserId: req.auth.userId,
@@ -3426,7 +3836,8 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       canTrade: !!key.canTrade,
       lastVerifiedScope: key.lastVerifiedScope || "unknown",
       riskLevel: key.riskLevel || "standard",
-      syncAvailable: SYNC_ENABLED_EXCHANGES.has(key.exchange),
+      syncAvailable: capability.syncAvailable,
+      connectionCapability: capability,
       extraData: normalizedExtraData,
       createdAt: key.createdAt || null,
       lastSyncAt: key.lastSyncAt || null,
@@ -3468,16 +3879,18 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
     const { id } = req.params;
     const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id), req.workspace.workspace.id);
     if (!keyRecord) return res.status(404).json({ error: "Exchange key not found" });
+    const capability = buildConnectionCapability(keyRecord.exchange);
     if (!SYNC_ENABLED_EXCHANGES.has(keyRecord.exchange)) {
       await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
         status: "sync_unavailable",
         syncedAt: new Date().toISOString(),
-        meta: { reason: "Sync adapter is not available for this provider yet." }
+        meta: { reason: capability.supportMessage }
       });
       return res.status(202).json({
         success: true,
         syncAvailable: false,
-        message: "Connection saved. Live sync is not available for this provider yet."
+        connectionCapability: capability,
+        message: capability.nextAction
       });
     }
 
@@ -5592,6 +6005,22 @@ app.get("/api/forex/rates", async (_req, res) => {
   }
 });
 
+app.get("/api/data/providers", async (_req, res) => {
+  const [fred, bls] = await Promise.all([
+    fetchFredMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable")),
+    fetchBlsMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("BLS", Boolean(BLS_API_KEY), "unavailable", error?.message || "BLS unavailable"))
+  ]);
+  res.json({
+    updatedAt: new Date().toISOString(),
+    providers: buildDataProviderStatus({
+      fred,
+      bls,
+      eia: buildProviderStatus("EIA", Boolean(EIA_API_KEY), EIA_API_KEY ? "configured" : "missing_key", EIA_API_KEY ? "Energy series configured for commodity fundamentals" : "API key not configured"),
+      massive: getMassiveStatus()
+    })
+  });
+});
+
 app.get("/api/history", validate(historyQuerySchema, "query"), async (req, res) => {
   const { type, interval = "1D" } = req.query;
   const rawSymbol = String(req.query.symbol || "").trim().toUpperCase();
@@ -6582,8 +7011,14 @@ app.get("/api/macro-indicators", async (req, res) => {
     });
 
     try {
-      const wbMetrics = await fetchWorldBankMacroMetrics(country);
-      const metrics = sanitizeMacroMetrics(wbMetrics);
+      const [fredResult, blsResult, wbSettled] = await Promise.all([
+        country === "USA" ? fetchFredMacroMetrics().catch((error) => ({ rows: [], status: buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable") })) : Promise.resolve({ rows: [], status: buildProviderStatus("FRED", Boolean(FRED_API_KEY), "not_applicable", "FRED macro overlay currently mapped for USA") }),
+        country === "USA" ? fetchBlsMacroMetrics().catch((error) => ({ rows: [], status: buildProviderStatus("BLS", Boolean(BLS_API_KEY), "unavailable", error?.message || "BLS unavailable") })) : Promise.resolve({ rows: [], status: buildProviderStatus("BLS", Boolean(BLS_API_KEY), "not_applicable", "BLS macro overlay currently mapped for USA") }),
+        fetchWorldBankMacroMetrics(country).then((rows) => ({ status: "fulfilled", rows })).catch((error) => ({ status: "rejected", error }))
+      ]);
+      const wbMetrics = wbSettled.status === "fulfilled" ? wbSettled.rows : [];
+      const preferredRows = [...wbMetrics, ...(blsResult.rows || []), ...(fredResult.rows || [])];
+      const metrics = sanitizeMacroMetrics(preferredRows);
       const missingKeys = metrics
         .filter((m) => m.current == null && m.previous == null && m.expectation == null)
         .map((m) => m.key);
@@ -6594,12 +7029,16 @@ app.get("/api/macro-indicators", async (req, res) => {
       const payload = {
         country,
         countryName,
-        source: "World Bank (country-level series)",
+        source: country === "USA" ? "FRED + BLS + World Bank" : "World Bank (country-level series)",
         updatedAt: new Date().toISOString(),
         metrics,
+        providers: buildDataProviderStatus({
+          fred: fredResult.status,
+          bls: blsResult.status
+        }),
         diagnostics: {
           countryCode: country,
-          provider: "world_bank",
+          provider: country === "USA" ? "fred_bls_world_bank" : "world_bank",
           missingIndicatorKeys: missingKeys
         }
       };
@@ -6777,8 +7216,8 @@ app.get("/api/watchlist", async (req, res) => {
 });
 
 app.get("/api/prices", validate(pricesQuerySchema, "query"), async (req, res) => {
-  const rawSymbols = String(req.query.symbols || "");
-  const type = String(req.query.type || "tradfi").trim().toLowerCase();
+  const rawSymbols = String(req.query.symbols || req.query.symbol || "");
+  const type = String(req.query.type || req.query.quoteType || "tradfi").trim().toLowerCase();
   const symbols = [...new Set(
     rawSymbols
       .split(",")
@@ -6809,11 +7248,24 @@ app.get("/api/prices", validate(pricesQuerySchema, "query"), async (req, res) =>
     const payload = await withInflightDedup("prices", snapshotParams, async () => {
       let nextPayload = null;
       if (type === "crypto") {
-        const prices = await fetchCryptoQuotesBySymbols(symbols);
-        nextPayload = { type: "crypto", prices, updatedAt: new Date().toISOString(), stale: false };
+        const prices = await fetchLivePriceSnapshot({ quoteType: "crypto", symbols });
+        nextPayload = {
+          type: "crypto",
+          prices,
+          providers: summarizePriceProviders(prices, "Binance / CoinGecko"),
+          updatedAt: new Date().toISOString(),
+          stale: false
+        };
       } else {
-        const prices = await fetchYFinancePrices(symbols);
-        nextPayload = { type: "tradfi", prices, updatedAt: new Date().toISOString(), stale: false };
+        const prices = await fetchLivePriceSnapshot({ quoteType: "tradfi", symbols });
+        nextPayload = {
+          type: "tradfi",
+          prices,
+          providers: summarizePriceProviders(prices, "Yahoo Finance"),
+          dataProviders: buildDataProviderStatus({ massive: getMassiveStatus() }),
+          updatedAt: new Date().toISOString(),
+          stale: false
+        };
       }
 
       const priceRows = nextPayload?.prices && typeof nextPayload.prices === "object" ? Object.values(nextPayload.prices) : [];
@@ -8446,7 +8898,7 @@ app.post("/api/options/crypto", validate(cryptoOptionsSchema), async (req, res) 
   const marketStructureNote = marketStructure === "rfq"
     ? "HYPE on Derive can be quoted through RFQ, so full strike ladders may appear sparse or be unavailable in snapshots."
     : null;
-  const cacheKey = `${normalizedCurrency}:latest`;
+  const cacheKey = `${normalizedCurrency}:${expiry == null ? "latest" : String(expiry)}`;
   const snapshotParams = {
     currency: normalizedCurrency,
     expiry: expiry == null ? "latest" : String(expiry)
@@ -8628,6 +9080,9 @@ app.post("/api/options/crypto", validate(cryptoOptionsSchema), async (req, res) 
     const avgIv =
       allTickers.reduce((s, t) => s + (firstFiniteNumber(t?.option_pricing?.iv, t?.iv, t?.mark_iv, t?.bid_iv, t?.ask_iv, 0) || 0), 0) /
       (allTickers.length || 1);
+    const putOpenInterest = chain.reduce((sum, row) => sum + Number(row?.put?.openInterest || row?.put?.oi || 0), 0);
+    const callOpenInterest = chain.reduce((sum, row) => sum + Number(row?.call?.openInterest || row?.call?.oi || 0), 0);
+    const putCallRatio = callOpenInterest > 0 ? putOpenInterest / callOpenInterest : 0;
 
     const referenceTicker = allTickers.find(Boolean) || null;
     const spot =
@@ -8639,12 +9094,15 @@ app.post("/api/options/crypto", validate(cryptoOptionsSchema), async (req, res) 
       chain,
       spot,
       market_price: spot,
+      source: "Derive",
+      source_detail: DERIVE_BASE_URLS[0] || "Derive options API",
+      updatedAt: new Date().toISOString(),
       market_structure: marketStructure,
       market_structure_label: marketStructureLabel,
       market_structure_note: marketStructureNote,
       market_metrics: {
         iv: avgIv || 0,
-        p_c_ratio: 0.85
+        p_c_ratio: putCallRatio
       }
     };
 
@@ -9212,7 +9670,7 @@ app.post("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorksp
 // ---------------------------------------------------------------------------
 // Watchlist Endpoints (Database Persistence)
 // ---------------------------------------------------------------------------
-app.get("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+app.get("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requireDeskForSharedWatchlist, async (req, res) => {
   try {
     const assets = await userWorkspace.watchlist.getAll(req.auth.userId, req.workspace?.workspace?.id || null);
     res.json({ assets });
@@ -9221,7 +9679,7 @@ app.get("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWork
   }
 });
 
-app.post("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(watchlistAssetSchema), async (req, res) => {
+app.post("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requireDeskForSharedWatchlist, writeLimiter, validate(watchlistAssetSchema), async (req, res) => {
   try {
     const asset = req.body;
     const result = await userWorkspace.watchlist.add(req.auth.userId, asset, req.workspace?.workspace?.id || null);
@@ -9232,7 +9690,7 @@ app.post("/api/db/watchlist", requireSignedIn, attachActiveWorkspace, requireWor
   }
 });
 
-app.post("/api/db/watchlist/bulk", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(watchlistBulkSchema), async (req, res) => {
+app.post("/api/db/watchlist/bulk", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requireDeskForSharedWatchlist, writeLimiter, validate(watchlistBulkSchema), async (req, res) => {
   try {
     const rawAssets = Array.isArray(req.body?.assets) ? req.body.assets : [];
     if (!rawAssets.length) {
@@ -9278,7 +9736,7 @@ app.post("/api/db/watchlist/bulk", requireSignedIn, attachActiveWorkspace, requi
   }
 });
 
-app.delete("/api/db/watchlist/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+app.delete("/api/db/watchlist/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requireDeskForSharedWatchlist, writeLimiter, async (req, res) => {
   try {
     const symbol = req.params.symbol.replace(/[^a-zA-Z0-9.\-_\s]/g, "").slice(0, 50);
     if (!symbol) {
@@ -9307,7 +9765,7 @@ app.delete("/api/db/watchlist/:symbol", requireSignedIn, attachActiveWorkspace, 
 });
 
 // Check if asset is in watchlist
-app.get("/api/db/watchlist/check/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+app.get("/api/db/watchlist/check/:symbol", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, requireDeskForSharedWatchlist, async (req, res) => {
   try {
     const { symbol } = req.params;
     const { marketType, category = null, theme = null } = req.query;
@@ -9512,17 +9970,6 @@ app.get('/api/analytics/crypto', async (req, res) => {
       ).values()
     ).sort((a, b) => a.symbol.localeCompare(b.symbol) || a.exchange.localeCompare(b.exchange));
 
-    if (uniquePerpMetrics.length === 0) {
-      [
-        { symbol: "BTC", openInterestUsd: 2551394389.72814, fundingRate: 0.0000125, exchange: "Hyperliquid", isFallback: true },
-        { symbol: "ETH", openInterestUsd: 1260632757.9146798, fundingRate: 0.0000125, exchange: "Hyperliquid", isFallback: true },
-        { symbol: "HYPE", openInterestUsd: 867329045.8769996, fundingRate: 0.0000083841, exchange: "Hyperliquid", isFallback: true },
-        { symbol: "BTC", openInterestUsd: 462370604.68500006, fundingRate: -0.00004272, exchange: "Aster", isFallback: true },
-        { symbol: "ETH", openInterestUsd: 207047217.34368002, fundingRate: -0.00001191, exchange: "Aster", isFallback: true },
-        { symbol: "SOL", openInterestUsd: 300179846.42729986, fundingRate: 0.0000125, exchange: "Hyperliquid", isFallback: true }
-      ].forEach((row) => uniquePerpMetrics.push(row));
-    }
-
     const DUNE_QUERY_IDS = {
       MARKET_SHARE: "3834927",
       OVERVIEW: "3834930",
@@ -9540,27 +9987,13 @@ app.get('/api/analytics/crypto', async (req, res) => {
       protocol: row.protocol || "Unknown",
       sharePct: Number(row.share_pct || row.sharePct || 0),
       color: row.color || "#64748b"
-    })) : [
-      { protocol: "Hyperliquid", sharePct: 53.3, color: "#00ff9d" },
-      { protocol: "Aster", sharePct: 14.1, color: "#3d96ff" },
-      { protocol: "edgeX", sharePct: 6.8, color: "#ff3d6b" },
-      { protocol: "Lighter", sharePct: 5.1, color: "#ffcc00" },
-      { protocol: "Variational", sharePct: 4.4, color: "#a855f7" },
-      { protocol: "Others", sharePct: 16.3, color: "#64748b" }
-    ];
+    })) : [];
 
     const perpsOverview = duneOverviewRows ? duneOverviewRows.map((row) => ({
       protocol: row.protocol || "Unknown",
       volume24h: Number(row.volume24h || row.volume_24h || 0),
       openInterest: Number(row.open_interest || row.openInterest || 0)
-    })) : [
-      { protocol: "Hyperliquid", volume24h: 3460000000, openInterest: 7407000000 },
-      { protocol: "ApeX", volume24h: 986740000, openInterest: 125800000 },
-      { protocol: "dYdX", volume24h: 813500000, openInterest: 0 },
-      { protocol: "Aster", volume24h: 786100000, openInterest: 1956000000 },
-      { protocol: "Variational", volume24h: 436460000, openInterest: 612210000 },
-      { protocol: "StandX", volume24h: 430760000, openInterest: 134230000 }
-    ];
+    })) : [];
 
     let etfInflows = await analytics.getEtfInflows(200);
     
@@ -9590,29 +10023,18 @@ app.get('/api/analytics/crypto', async (req, res) => {
     res.json({
       updatedAt: new Date().toISOString(),
       perpMetrics: uniquePerpMetrics,
-      kimchiPremium: { valuePct: 1.2, market: "KRW vs USD" },
+      kimchiPremium: null,
       etfInflows,
       perpsMarketShare,
       perpsOverview,
-      perpVolumeByProtocol: [
-        { protocol: "Hyperliquid", volumeUsd: 1400000000 },
-        { protocol: "Jupiter", volumeUsd: 1100000000 },
-        { protocol: "dYdX", volumeUsd: 850000000 },
-        { protocol: "GMX", volumeUsd: 420000000 },
-        { protocol: "Synthetix", volumeUsd: 310000000 },
-        { protocol: "ApeX", volumeUsd: 980000000 },
-        { protocol: "Aster", volumeUsd: 780000000 }
-      ],
-      revenueByProtocol: [
-        { protocol: "Hyperliquid", revenueUsd: 250000 },
-        { protocol: "Jupiter", revenueUsd: 200000 },
-        { protocol: "dYdX", revenueUsd: 150000 },
-        { protocol: "GMX", revenueUsd: 180000 },
-        { protocol: "Synthetix", revenueUsd: 95000 },
-        { protocol: "ApeX", revenueUsd: 120000 }
-      ],
+      perpVolumeByProtocol: [],
+      revenueByProtocol: [],
       optionsVolumeByAsset: [],
       optionsMaxPain: [],
+      stale: uniquePerpMetrics.length === 0 && perpsMarketShare.length === 0 && perpsOverview.length === 0,
+      stale_reason: uniquePerpMetrics.length === 0 && perpsMarketShare.length === 0 && perpsOverview.length === 0
+        ? "crypto_analytics_sources_unavailable"
+        : undefined,
     });
   } catch (error) {
     handleServerError(res, "Analytics Crypto fetch failed", error);
@@ -9653,18 +10075,6 @@ app.get('/api/analytics/options', async (req, res) => {
         totalOIUsd += (item.open_interest || 0) * (item.mark_price || 0); // Assuming mark_price is in USD equivalent
         btcVol += (item.volume_usd || 0);
 
-        if (item.open_interest > 100 && greeks.length < 5) {
-           greeks.push({
-             instrument: item.instrument_name,
-             asset: "BTC",
-             exchange: "Deribit",
-             delta: item.mark_price > 0 ? (item.bid_price ? 0.45 : -0.45) : 0, // mock greeks roughly since get_book_summary doesn't have all greeks
-             gamma: 0.02,
-             vega: 10.5,
-             theta: -1.2,
-             iv: item.mark_iv || 0
-           });
-        }
         if (item.open_interest > 50 && oiByStrike.length < 10) {
            const parts = item.instrument_name.split("-"); // BTC-24MAY24-60000-C
            oiByStrike.push({
@@ -9701,18 +10111,15 @@ app.get('/api/analytics/options', async (req, res) => {
     res.json({
       updatedAt: new Date().toISOString(),
       stale: false,
-      totalOptionsOpenInterestUsd: totalOIUsd > 0 ? totalOIUsd : 4500000000,
+      source: "Deribit + Finviz",
+      totalOptionsOpenInterestUsd: totalOIUsd,
       optionsVolumeByAsset: [
-        { asset: "BTC", exchange: "Deribit", volumeUsd: btcVol > 0 ? btcVol : 1200000000 },
-        { asset: "ETH", exchange: "Deribit", volumeUsd: ethVol > 0 ? ethVol : 600000000 }
+        ...(btcVol > 0 ? [{ asset: "BTC", exchange: "Deribit", volumeUsd: btcVol }] : []),
+        ...(ethVol > 0 ? [{ asset: "ETH", exchange: "Deribit", volumeUsd: ethVol }] : [])
       ].concat(finvizOptions.optionsVolumeByAsset || []),
-      optionsMaxPain: [
-        { asset: "BTC", expiry: "Next Friday", maxPain: 65000, exchange: "Deribit" },
-        { asset: "ETH", expiry: "Next Friday", maxPain: 3500, exchange: "Deribit" }
-      ].concat(finvizOptions.optionsMaxPain || []),
+      optionsMaxPain: [].concat(finvizOptions.optionsMaxPain || []),
       volumeByExchangeRoute: [
-        { exchange: "Deribit", route: "Direct", volume: btcVol + ethVol > 0 ? btcVol + ethVol : 1800000000 },
-        { exchange: "Binance", route: "Direct", volume: 450000000 }
+        ...(btcVol + ethVol > 0 ? [{ exchange: "Deribit", route: "Direct", volume: btcVol + ethVol, volumeUsd: btcVol + ethVol }] : [])
       ].concat(finvizOptions.volumeByExchangeRoute || []),
       greeks: greeks.concat(finvizOptions.greeks || []),
       oiByStrike: oiByStrike.concat(finvizOptions.oiByStrike || [])
@@ -9725,52 +10132,52 @@ app.get('/api/analytics/options', async (req, res) => {
 
 const COMMODITY_UNIVERSE = [
   // Energy
-  { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global", latestPrice: 82.1, dailyChangePct: -0.55, ytdChangePct: 6.8, oneYearReturnPct: 11.2 },
-  { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", latestPrice: 2.34, dailyChangePct: 1.1, ytdChangePct: -3.2, oneYearReturnPct: -8.6 },
-  { symbol: "RB", name: "RBOB Gasoline", group: "energy", region: "usa", latestPrice: 2.61, dailyChangePct: 0.4, ytdChangePct: 3.7, oneYearReturnPct: 6.2 },
+  { symbol: "CL", name: "WTI Crude Oil", group: "energy", region: "global" },
+  { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa" },
+  { symbol: "RB", name: "RBOB Gasoline", group: "energy", region: "usa" },
 
   // Metals (Precious)
-  { symbol: "GC", name: "Gold", group: "metals", region: "global", latestPrice: 2378.2, dailyChangePct: 0.41, ytdChangePct: 12.9, oneYearReturnPct: 19.4 },
-  { symbol: "SI", name: "Silver", group: "metals", region: "global", latestPrice: 29.4, dailyChangePct: 0.78, ytdChangePct: 10.2, oneYearReturnPct: 14.1 },
+  { symbol: "GC", name: "Gold", group: "metals", region: "global" },
+  { symbol: "SI", name: "Silver", group: "metals", region: "global" },
 
   // Industrial Metals
-  { symbol: "HG", name: "Copper", group: "industrial", region: "global", latestPrice: 4.48, dailyChangePct: -0.2, ytdChangePct: 7.1, oneYearReturnPct: 9.9 },
-  { symbol: "ALI=F", name: "Aluminum", group: "industrial", region: "global", latestPrice: 2540.0, dailyChangePct: 0.15, ytdChangePct: 4.2, oneYearReturnPct: 8.5 },
-  { symbol: "ZNC=F", name: "Zinc", group: "industrial", region: "global", latestPrice: 2840.0, dailyChangePct: -0.42, ytdChangePct: 2.1, oneYearReturnPct: 5.4 },
-  { symbol: "LED=F", name: "Lead", group: "industrial", region: "global", latestPrice: 2150.0, dailyChangePct: 0.1, ytdChangePct: -1.2, oneYearReturnPct: 2.3 },
-  { symbol: "TIN=F", name: "Tin", group: "industrial", region: "global", latestPrice: 32400.0, dailyChangePct: 1.2, ytdChangePct: 15.4, oneYearReturnPct: 22.1 },
-  { symbol: "TIO=F", name: "Iron Ore", group: "industrial", region: "global", latestPrice: 112.5, dailyChangePct: -0.8, ytdChangePct: -8.4, oneYearReturnPct: -4.2 },
+  { symbol: "HG", name: "Copper", group: "industrial", region: "global" },
+  { symbol: "ALI=F", name: "Aluminum", group: "industrial", region: "global" },
+  { symbol: "ZNC=F", name: "Zinc", group: "industrial", region: "global" },
+  { symbol: "LED=F", name: "Lead", group: "industrial", region: "global" },
+  { symbol: "TIN=F", name: "Tin", group: "industrial", region: "global" },
+  { symbol: "TIO=F", name: "Iron Ore", group: "industrial", region: "global" },
 
   // Battery Metals
-  { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global", latestPrice: 45.2, dailyChangePct: -1.4, ytdChangePct: -18.2, oneYearReturnPct: -24.5 },
-  { symbol: "NI=F", name: "Nickel", group: "battery", region: "global", latestPrice: 18450.0, dailyChangePct: 0.35, ytdChangePct: 5.1, oneYearReturnPct: 7.8 },
-  { symbol: "REMX", name: "Rare Earths (ETF)", group: "battery", region: "global", latestPrice: 52.8, dailyChangePct: -0.6, ytdChangePct: -12.4, oneYearReturnPct: -15.8 },
+  { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global" },
+  { symbol: "NI=F", name: "Nickel", group: "battery", region: "global" },
+  { symbol: "REMX", name: "Rare Earths (ETF)", group: "battery", region: "global" },
 
   // Agriculture
-  { symbol: "ZC", name: "Corn", group: "agriculture", region: "global", latestPrice: 4.85, dailyChangePct: -0.63, ytdChangePct: 1.9, oneYearReturnPct: -2.4 },
-  { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", latestPrice: 5.78, dailyChangePct: 0.33, ytdChangePct: 2.4, oneYearReturnPct: 1.1 },
-  { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", latestPrice: 11.93, dailyChangePct: 0.12, ytdChangePct: 3.2, oneYearReturnPct: 4.8 },
-  { symbol: "ZO=F", name: "Oats", group: "agriculture", region: "global", latestPrice: 3.45, dailyChangePct: 0.25, ytdChangePct: 1.8, oneYearReturnPct: 3.2 },
-  { symbol: "ZR=F", name: "Rice", group: "agriculture", region: "global", latestPrice: 18.42, dailyChangePct: -0.15, ytdChangePct: 5.4, oneYearReturnPct: 9.1 },
-  { symbol: "ZL=F", name: "Soybean Oil", group: "agriculture", region: "global", latestPrice: 0.45, dailyChangePct: 0.1, ytdChangePct: -2.1, oneYearReturnPct: -4.5 },
-  { symbol: "ZM=F", name: "Soybean Meal", group: "agriculture", region: "global", latestPrice: 342.0, dailyChangePct: 0.45, ytdChangePct: 2.8, oneYearReturnPct: 5.2 },
+  { symbol: "ZC", name: "Corn", group: "agriculture", region: "global" },
+  { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global" },
+  { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global" },
+  { symbol: "ZO=F", name: "Oats", group: "agriculture", region: "global" },
+  { symbol: "ZR=F", name: "Rice", group: "agriculture", region: "global" },
+  { symbol: "ZL=F", name: "Soybean Oil", group: "agriculture", region: "global" },
+  { symbol: "ZM=F", name: "Soybean Meal", group: "agriculture", region: "global" },
 
   // Soft Commodities
-  { symbol: "KC", name: "Coffee", group: "soft", region: "global", latestPrice: 224.5, dailyChangePct: 1.2, ytdChangePct: 18.4, oneYearReturnPct: 24.2 },
-  { symbol: "CC", name: "Cocoa", group: "soft", region: "global", latestPrice: 9450.0, dailyChangePct: -2.4, ytdChangePct: 142.1, oneYearReturnPct: 215.0 },
-  { symbol: "SB", name: "Sugar", group: "soft", region: "global", latestPrice: 19.42, dailyChangePct: 0.35, ytdChangePct: -4.2, oneYearReturnPct: -2.1 },
-  { symbol: "CT", name: "Cotton", group: "soft", region: "global", latestPrice: 82.4, dailyChangePct: -0.1, ytdChangePct: -2.8, oneYearReturnPct: -5.4 },
-  { symbol: "OJ=F", name: "Orange Juice", group: "soft", region: "global", latestPrice: 382.0, dailyChangePct: 1.8, ytdChangePct: 24.5, oneYearReturnPct: 42.1 },
-  { symbol: "LBR=F", name: "Lumber", group: "soft", region: "global", latestPrice: 540.0, dailyChangePct: -0.8, ytdChangePct: -4.2, oneYearReturnPct: -1.8 },
+  { symbol: "KC", name: "Coffee", group: "soft", region: "global" },
+  { symbol: "CC", name: "Cocoa", group: "soft", region: "global" },
+  { symbol: "SB", name: "Sugar", group: "soft", region: "global" },
+  { symbol: "CT", name: "Cotton", group: "soft", region: "global" },
+  { symbol: "OJ=F", name: "Orange Juice", group: "soft", region: "global" },
+  { symbol: "LBR=F", name: "Lumber", group: "soft", region: "global" },
 
   // Livestock
-  { symbol: "LE=F", name: "Live Cattle", group: "livestock", region: "global", latestPrice: 182.4, dailyChangePct: 0.25, ytdChangePct: 8.4, oneYearReturnPct: 12.1 },
-  { symbol: "GF=F", name: "Feeder Cattle", group: "livestock", region: "global", latestPrice: 248.0, dailyChangePct: 0.42, ytdChangePct: 9.1, oneYearReturnPct: 14.5 },
-  { symbol: "HE=F", name: "Lean Hogs", group: "livestock", region: "global", latestPrice: 92.4, dailyChangePct: -0.15, ytdChangePct: 12.4, oneYearReturnPct: 18.2 },
-  { symbol: "DC=F", name: "Milk", group: "livestock", region: "global", latestPrice: 18.42, dailyChangePct: 0.1, ytdChangePct: -2.4, oneYearReturnPct: -4.8 },
+  { symbol: "LE=F", name: "Live Cattle", group: "livestock", region: "global" },
+  { symbol: "GF=F", name: "Feeder Cattle", group: "livestock", region: "global" },
+  { symbol: "HE=F", name: "Lean Hogs", group: "livestock", region: "global" },
+  { symbol: "DC=F", name: "Milk", group: "livestock", region: "global" },
 
   // Fertilizers
-  { symbol: "UAN", name: "Urea Ammonium Nitrate", group: "fertilizers", region: "global", latestPrice: 318.0, dailyChangePct: 0.28, ytdChangePct: 4.1, oneYearReturnPct: 8.0 },
+  { symbol: "UAN", name: "Urea Ammonium Nitrate", group: "fertilizers", region: "global" },
 ];
 
 const COMMODITY_SOURCE_MAP = {
@@ -9848,106 +10255,71 @@ function buildFallbackCommodityRows(group = "all", reason = "commodity_provider_
   return COMMODITY_UNIVERSE
     .filter((row) => selectedGroup === "all" || row.group === selectedGroup)
     .map((row) => ({
-      ...row,
+      symbol: row.symbol,
+      name: row.name,
+      group: row.group,
+      region: row.region,
+      latestPrice: null,
+      dailyChangePct: null,
+      ytdChangePct: null,
+      oneYearReturnPct: null,
       currency: "USD",
       proxySymbol: getCommodityFinvizProxy(row.symbol),
-      source: "Fallback commodity universe",
+      source: "Commodity catalog",
       stale: true,
+      unavailable: true,
       isFallback: true,
       stale_reason: reason
     }));
 }
 
 function buildCommodityFallbackSeries(item, range = "1Y", reason = "commodity_history_fallback") {
-  const periods = { "1M": 30, "3M": 90, "1Y": 252, YTD: 120, MAX: 260 };
-  const count = periods[String(range || "1Y").toUpperCase()] || 60;
-  const base = Number(item?.latestPrice);
-  const anchor = Number.isFinite(base) && base > 0 ? base : 100;
-  const seed = String(item?.symbol || "CMD").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return Array.from({ length: count }, (_, idx) => {
-    const daysAgo = count - idx - 1;
-    const wave = Math.sin((idx + seed) / 9) * 0.035;
-    const drift = ((idx - count) / Math.max(count, 1)) * 0.04;
-    const value = Number((anchor * (1 + wave + drift)).toFixed(2));
-    return {
-      date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      value,
-      volume: Math.round(25000 + ((idx + seed) % 21) * 1800),
-      isFallback: true,
-      stale_reason: reason
-    };
-  });
+  return [];
 }
 
 function buildFallbackCommodityFundamentals(item, reason = "commodity_fundamentals_fallback") {
   return [
-    { metric: "Latest Price", value: item.latestPrice, unit: "USD", sourceType: "Fallback commodity universe", sourceWhy: "Static desk fallback used when upstream providers are unavailable", isFallback: true, stale_reason: reason },
-    { metric: "Daily Change", value: item.dailyChangePct, unit: "%", sourceType: "Fallback commodity universe", sourceWhy: "Preserves a usable momentum read during provider outages", isFallback: true, stale_reason: reason },
-    { metric: "YTD Return", value: item.ytdChangePct, unit: "%", sourceType: "Fallback commodity universe", sourceWhy: "Static baseline for analytics continuity", isFallback: true, stale_reason: reason },
-    { metric: "1Y Return", value: item.oneYearReturnPct, unit: "%", sourceType: "Fallback commodity universe", sourceWhy: "Static baseline for analytics continuity", isFallback: true, stale_reason: reason },
-    { metric: "Proxy Ticker", value: getCommodityFinvizProxy(item.symbol) || item.symbol, unit: "symbol", sourceType: "Fallback commodity mapping", sourceWhy: "Nearest configured listed proxy", isFallback: true, stale_reason: reason }
+    { metric: "Proxy Ticker", value: getCommodityFinvizProxy(item.symbol) || item.symbol, unit: "symbol", sourceType: "Commodity catalog", sourceWhy: "Nearest configured listed proxy; market values require live provider data", isFallback: true, unavailable: true, stale_reason: reason }
   ].filter((row) => row.value !== null && row.value !== undefined);
 }
 
 function buildFallbackCommodityFlows(item, mode = "etf", reason = "commodity_flows_fallback") {
-  return buildCommodityFallbackSeries(item, "1M", reason).slice(-10).map((row, idx, arr) => ({
-    date: row.date,
-    type: mode === "futures" ? "Futures Volume" : "Price/Volume Proxy",
-    value: row.volume,
-    trend: idx > 0 && row.value > arr[idx - 1].value ? "Up volume with price gain" : "Fallback volume proxy",
-    sourceType: "Fallback commodity universe",
-    sourceWhy: "Deterministic price/volume proxy while provider data is unavailable",
-    isFallback: true,
-    stale_reason: reason
-  }));
+  return [];
 }
 
 function buildFallbackCommoditySeasonality(item, reason = "commodity_seasonality_fallback") {
-  const seed = String(item?.symbol || "CMD").charCodeAt(0) || 67;
-  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((month, idx) => {
-    const avgReturnPct = Number((Math.sin((idx + seed) / 2.7) * 2.4).toFixed(2));
-    return {
-      month,
-      avgReturnPct,
-      seasonalityScore: Number(Math.max(0, Math.min(1, 0.5 + avgReturnPct / 10)).toFixed(2)),
-      observations: 12,
-      sourceType: "Fallback seasonal model",
-      sourceWhy: "Deterministic fallback used when historical futures data is unavailable",
-      isFallback: true,
-      stale_reason: reason
-    };
-  });
+  return [];
 }
 
 function buildFallbackCommodityCurve(item, reason = "commodity_curve_fallback") {
-  const price = Number.isFinite(Number(item.latestPrice)) ? Number(item.latestPrice) : 100;
-  return [
-    { contract: "Front Month", price: roundMaybe(price), spread: 0, curveStructure: "Fallback front month", sourceType: "Fallback commodity universe", sourceWhy: "Static front-month baseline", isFallback: true, stale_reason: reason },
-    { contract: "3M", price: roundMaybe(price * 1.012), spread: roundMaybe(price * 0.012), curveStructure: "Fallback contango", sourceType: "Fallback commodity universe", sourceWhy: "Synthetic curve continuity during provider outages", isFallback: true, stale_reason: reason },
-    { contract: "6M", price: roundMaybe(price * 1.021), spread: roundMaybe(price * 0.021), curveStructure: "Fallback contango", sourceType: "Fallback commodity universe", sourceWhy: "Synthetic curve continuity during provider outages", isFallback: true, stale_reason: reason }
-  ];
+  return [];
 }
 
 function buildFallbackCommodityCalendar(group = "all", reason = "commodity_calendar_fallback") {
-  const selectedGroup = String(group || "all").toLowerCase();
-  return [
-    { id: "cmd-cal-energy", group: "energy", event: "EIA petroleum status report", importance: "high" },
-    { id: "cmd-cal-agriculture", group: "agriculture", event: "USDA crop progress / WASDE watch", importance: "medium" },
-    { id: "cmd-cal-metals", group: "metals", event: "Global PMI and inventory watch", importance: "medium" }
-  ]
-    .filter((event) => selectedGroup === "all" || event.group === selectedGroup)
-    .map((event, idx) => ({
-      ...event,
-      date: new Date(Date.now() + idx * 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      sourceType: "Fallback commodity calendar",
-      sourceWhy: "Canonical event watchlist used when live calendar data is unavailable",
-      isFallback: true,
-      stale_reason: reason
-    }));
+  return [];
 }
 
 async function fetchLiveCommodityRows(group = "all") {
   const livePrices = await fetchYFinancePrices(COMMODITY_UNIVERSE.map((row) => row.symbol));
+  const fredLatestBySymbol = new Map();
+  await Promise.all(COMMODITY_UNIVERSE.map(async (row) => {
+    if (!FRED_COMMODITY_SERIES[row.symbol]) return;
+    try {
+      const fredRows = await fetchFredCommoditySeries(row.symbol, "1Y");
+      const latest = fredRows.at(-1);
+      if (latest && Number.isFinite(Number(latest.value))) {
+        const previous = fredRows.at(-2);
+        fredLatestBySymbol.set(row.symbol, {
+          latestPrice: Number(latest.value),
+          dailyChangePct: previous?.value ? computeReturnPct(previous.value, latest.value) : null,
+          source: "FRED",
+          asOf: latest.date
+        });
+      }
+    } catch {
+      // Keep commodity list resilient when a provider has a partial outage.
+    }
+  }));
   const proxySymbols = [...new Set(COMMODITY_UNIVERSE.map((row) => getCommodityFinvizProxy(row.symbol)).filter(Boolean))];
   const finvizQuotes = await fetchFinvizQuotes(proxySymbols).catch((error) => {
     console.warn("[Commodities] Finviz proxy enrichment skipped:", error?.message || error);
@@ -9962,16 +10334,18 @@ async function fetchLiveCommodityRows(group = "all") {
       const dailyChangePct = Number(quote.priceChangePercent);
       const finvizPrice = parseFinvizScaledNumber(finvizSummary.Price);
       const finvizDaily = parseFinvizPercent(finvizSummary.Change);
+      const fredLatest = fredLatestBySymbol.get(row.symbol);
       return {
         ...row,
-        latestPrice: Number.isFinite(latestPrice) ? latestPrice : Number.isFinite(finvizPrice) ? roundMaybe(finvizPrice) : null,
-        dailyChangePct: Number.isFinite(dailyChangePct) ? roundMaybe(dailyChangePct) : Number.isFinite(finvizDaily) ? roundMaybe(finvizDaily) : null,
+        latestPrice: Number.isFinite(latestPrice) ? latestPrice : Number.isFinite(Number(fredLatest?.latestPrice)) ? roundMaybe(fredLatest.latestPrice) : Number.isFinite(finvizPrice) ? roundMaybe(finvizPrice) : null,
+        dailyChangePct: Number.isFinite(dailyChangePct) ? roundMaybe(dailyChangePct) : Number.isFinite(Number(fredLatest?.dailyChangePct)) ? roundMaybe(fredLatest.dailyChangePct) : Number.isFinite(finvizDaily) ? roundMaybe(finvizDaily) : null,
         ytdChangePct: roundMaybe(parseFinvizPercent(finvizSummary["Perf YTD"])),
         oneYearReturnPct: roundMaybe(parseFinvizPercent(finvizSummary["Perf Year"] ?? finvizSummary["Return% 1Y"])),
         currency: quote.currency || "USD",
         proxySymbol,
-        source: proxySymbol ? "Yahoo Finance + Finviz proxy" : "Yahoo Finance",
-        stale: !Number.isFinite(latestPrice) && !Number.isFinite(finvizPrice)
+        source: Number.isFinite(latestPrice) ? (proxySymbol ? "Yahoo Finance + Finviz proxy" : "Yahoo Finance") : fredLatest ? "FRED" : proxySymbol ? "Finviz proxy" : "Yahoo Finance",
+        asOf: fredLatest?.asOf || null,
+        stale: !Number.isFinite(latestPrice) && !fredLatest && !Number.isFinite(finvizPrice)
       };
     })
     .filter((row) => group === "all" || row.group === group);
@@ -10025,9 +10399,13 @@ app.get("/api/commodities/overview", async (_req, res) => {
     const usingFallbackRows = rows.some((row) => row?.isFallback || row?.stale);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: usingFallbackRows ? "Fallback commodity universe" : "Yahoo Finance",
+      source: usingFallbackRows ? "Commodity catalog" : "Yahoo Finance + FRED + Finviz",
       stale: usingFallbackRows || undefined,
       stale_reason: usingFallbackRows ? rows.find((row) => row?.stale_reason)?.stale_reason || "commodity_price_providers_unavailable" : undefined,
+      providers: buildDataProviderStatus({
+        fred: buildProviderStatus("FRED", Boolean(FRED_API_KEY), FRED_API_KEY ? "connected" : "missing_key", "Commodity spot series overlay"),
+        eia: buildProviderStatus("EIA", Boolean(EIA_API_KEY), EIA_API_KEY ? "connected" : "missing_key", "Energy fundamentals")
+      }),
       overview: {
         categoryCounts: byGroup,
         topMovers,
@@ -10045,7 +10423,7 @@ app.get("/api/commodities/overview", async (_req, res) => {
     const topMovers = [...rows].sort((a, b) => Math.abs(Number(b.dailyChangePct || 0)) - Math.abs(Number(a.dailyChangePct || 0))).slice(0, 5);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: "Fallback commodity universe",
+      source: "Commodity catalog",
       stale: true,
       stale_reason: error?.message || "commodities_overview_fetch_failed",
       overview: { categoryCounts: byGroup, topMovers, favorites: topMovers.slice(0, 3).map((row) => row.symbol), recentViews: [], dataSources: COMMODITY_SOURCE_MAP }
@@ -10058,7 +10436,14 @@ app.get("/api/commodities/search", async (req, res) => {
   if (!q) return res.json({ items: [] });
   const items = COMMODITY_UNIVERSE.filter((row) =>
     `${row.symbol} ${row.name} ${row.group} ${row.region}`.toLowerCase().includes(q)
-  ).slice(0, 12);
+  ).slice(0, 12).map((row) => ({
+    symbol: row.symbol,
+    name: row.name,
+    group: row.group,
+    region: row.region,
+    proxySymbol: getCommodityFinvizProxy(row.symbol),
+    source: "Commodity catalog"
+  }));
   res.json({ items, updatedAt: new Date().toISOString() });
 });
 
@@ -10070,9 +10455,13 @@ app.get("/api/commodities/list", async (req, res) => {
     console.log(`[Commodities] Fetched ${items.length} items for group: ${group}`);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: usingFallbackRows ? "Fallback commodity universe" : "Yahoo Finance",
+      source: usingFallbackRows ? "Commodity catalog" : "Yahoo Finance + FRED + Finviz",
       stale: usingFallbackRows || undefined,
       stale_reason: usingFallbackRows ? items.find((row) => row?.stale_reason)?.stale_reason || "commodity_price_providers_unavailable" : undefined,
+      providers: buildDataProviderStatus({
+        fred: buildProviderStatus("FRED", Boolean(FRED_API_KEY), FRED_API_KEY ? "connected" : "missing_key", "Commodity spot series overlay"),
+        eia: buildProviderStatus("EIA", Boolean(EIA_API_KEY), EIA_API_KEY ? "connected" : "missing_key", "Energy fundamentals")
+      }),
       items,
       list: items
     });
@@ -10081,7 +10470,7 @@ app.get("/api/commodities/list", async (req, res) => {
     const items = buildFallbackCommodityRows(req.query.group || "all", error?.message || "commodities_list_fetch_failed");
     res.json({
       updatedAt: new Date().toISOString(),
-      source: "Fallback commodity universe",
+      source: "Commodity catalog",
       stale: true,
       stale_reason: error?.message || "commodities_list_fetch_failed",
       items,
@@ -10094,11 +10483,15 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
   const range = String(req.query.range || "1Y").toUpperCase();
   const item = getCommodity(req.params.symbol);
   try {
+    const fredSeries = await fetchFredCommoditySeries(item.symbol, range).catch(() => []);
+    if (fredSeries.length) {
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "FRED", series: fredSeries });
+    }
     const stockHistory = await fetchHistoryFromYahoo(item.symbol, range);
     const series = historyRowsToSeries(stockHistory.history);
     if (!series.length) {
       const fallbackSeries = buildCommodityFallbackSeries(item, range, "commodity_price_series_empty");
-      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_price_series_empty", series: fallbackSeries });
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: "commodity_price_series_empty", series: fallbackSeries });
     }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: stockHistory.source || "yahoo", series });
   } catch (error) {
@@ -10106,8 +10499,9 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
     res.json({
       updatedAt: new Date().toISOString(),
       symbol: item.symbol,
-      source: "Fallback commodity universe",
+      source: "Yahoo Finance",
       stale: true,
+      unavailable: true,
       stale_reason: error?.message || "commodity_price_fetch_failed",
       series
     });
@@ -10117,6 +10511,10 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
 app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
   const item = getCommodity(req.params.symbol);
   try {
+    const eiaResult = await fetchEiaCommodityFundamentals(item.symbol).catch((error) => ({
+      rows: [],
+      status: buildProviderStatus("EIA", Boolean(EIA_API_KEY), "unavailable", error?.message || "EIA unavailable")
+    }));
     const proxySymbol = getCommodityFinvizProxy(item.symbol);
     const finvizQuote = proxySymbol ? await fetchFinvizQuote(proxySymbol).catch(() => null) : null;
     const finvizSummary = finvizQuote?.summary || {};
@@ -10150,19 +10548,27 @@ app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
       { metric: "Annualized Volatility", value: annualizedVolFromSeries(series), unit: "%", sourceType: "Yahoo Finance historical futures data", sourceWhy: "Computed from sourced daily returns" },
       { metric: "Latest Volume", value: volume, unit: "contracts", sourceType: "Yahoo Finance futures quote", sourceWhy: "Latest reported volume when available" }
     ].filter((row) => Number.isFinite(Number(row.value)));
-    const items = [...finvizMetrics, ...metrics];
+    const items = [...eiaResult.rows, ...finvizMetrics, ...metrics];
     if (!items.length) {
       const fallbackItems = buildFallbackCommodityFundamentals(item, "commodity_fundamentals_empty");
-      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_fundamentals_empty", metrics: fallbackItems, items: fallbackItems });
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Commodity catalog", stale: true, unavailable: true, stale_reason: "commodity_fundamentals_empty", metrics: fallbackItems, items: fallbackItems });
     }
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: proxySymbol ? "Yahoo Finance + Finviz" : "Yahoo Finance", metrics: items, items });
+    res.json({
+      updatedAt: new Date().toISOString(),
+      symbol: item.symbol,
+      source: eiaResult.rows.length ? "EIA + Yahoo Finance + Finviz" : proxySymbol ? "Yahoo Finance + Finviz" : "Yahoo Finance",
+      providers: buildDataProviderStatus({ eia: eiaResult.status }),
+      metrics: items,
+      items
+    });
   } catch (error) {
     const items = buildFallbackCommodityFundamentals(item, error?.message || "commodity_fundamentals_fetch_failed");
     res.json({
       updatedAt: new Date().toISOString(),
       symbol: item.symbol,
-      source: "Fallback commodity universe",
+      source: "Commodity catalog",
       stale: true,
+      unavailable: true,
       stale_reason: error?.message || "commodity_fundamentals_fetch_failed",
       metrics: items,
       items
@@ -10193,12 +10599,12 @@ app.get("/api/commodities/:symbol/flows", async (req, res) => {
       });
     if (!items.length) {
       const fallbackItems = buildFallbackCommodityFlows(item, mode, "commodity_flows_empty");
-      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_flows_empty", items: fallbackItems, flows: fallbackItems });
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: "commodity_flows_empty", items: fallbackItems, flows: fallbackItems });
     }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", items, flows: items });
   } catch (error) {
     const items = buildFallbackCommodityFlows(item, mode, error?.message || "commodity_flows_fetch_failed");
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Fallback commodity universe", stale: true, stale_reason: error?.message || "commodity_flows_fetch_failed", items, flows: items });
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, mode, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_flows_fetch_failed", items, flows: items });
   }
 });
 
@@ -10231,12 +10637,12 @@ app.get("/api/commodities/:symbol/seasonality", async (req, res) => {
     }).filter((row) => Number.isFinite(Number(row.avgReturnPct)));
     if (!items.length) {
       const fallbackItems = buildFallbackCommoditySeasonality(item, "commodity_seasonality_empty");
-      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback seasonal model", stale: true, stale_reason: "commodity_seasonality_empty", items: fallbackItems, seasonality: fallbackItems });
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: "commodity_seasonality_empty", items: fallbackItems, seasonality: fallbackItems });
     }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", items, seasonality: items });
   } catch (error) {
     const items = buildFallbackCommoditySeasonality(item, error?.message || "commodity_seasonality_fetch_failed");
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback seasonal model", stale: true, stale_reason: error?.message || "commodity_seasonality_fetch_failed", items, seasonality: items });
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_seasonality_fetch_failed", items, seasonality: items });
   }
 });
 
@@ -10251,12 +10657,12 @@ app.get("/api/commodities/:symbol/curve", async (req, res) => {
       : [];
     if (!points.length) {
       const fallbackPoints = buildFallbackCommodityCurve(item, "commodity_curve_empty");
-      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: "commodity_curve_empty", points: fallbackPoints, curve: fallbackPoints });
+      return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: "commodity_curve_empty", points: fallbackPoints, curve: fallbackPoints });
     }
     res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", points, curve: points });
   } catch (error) {
     const points = buildFallbackCommodityCurve(item, error?.message || "commodity_curve_fetch_failed");
-    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Fallback commodity universe", stale: true, stale_reason: error?.message || "commodity_curve_fetch_failed", points, curve: points });
+    res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_curve_fetch_failed", points, curve: points });
   }
 });
 
@@ -10292,11 +10698,11 @@ app.get("/api/commodities/compare", async (req, res) => {
           source: row.source,
           isFallback: true
         }));
-      return res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity universe", stale: true, stale_reason: "commodity_compare_empty", rows: fallbackRows, compare: fallbackRows });
+      return res.json({ updatedAt: new Date().toISOString(), source: "Commodity catalog", stale: true, unavailable: true, stale_reason: "commodity_compare_empty", rows: fallbackRows, compare: fallbackRows });
     }
     res.json({
       updatedAt: new Date().toISOString(),
-      source: usingFallbackRows ? "Fallback commodity universe" : "Yahoo Finance",
+      source: usingFallbackRows ? "Commodity catalog" : "Yahoo Finance",
       stale: usingFallbackRows || undefined,
       stale_reason: usingFallbackRows ? "commodity_price_providers_unavailable" : undefined,
       rows,
@@ -10315,7 +10721,7 @@ app.get("/api/commodities/compare", async (req, res) => {
         source: row.source,
         isFallback: true
       }));
-    res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity universe", stale: true, stale_reason: error?.message || "commodity_compare_fetch_failed", rows, compare: rows });
+    res.json({ updatedAt: new Date().toISOString(), source: "Commodity catalog", stale: true, unavailable: true, stale_reason: error?.message || "commodity_compare_fetch_failed", rows, compare: rows });
   }
 });
 
@@ -10345,12 +10751,12 @@ app.get("/api/commodities/calendar", async (req, res) => {
       }));
     if (!events.length) {
       const fallbackEvents = buildFallbackCommodityCalendar(group, "commodity_calendar_empty");
-      return res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity calendar", stale: true, stale_reason: "commodity_calendar_empty", events: fallbackEvents, calendar: fallbackEvents });
+      return res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", stale: true, unavailable: true, stale_reason: "commodity_calendar_empty", events: fallbackEvents, calendar: fallbackEvents });
     }
     res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", events, calendar: events });
   } catch (error) {
     const events = buildFallbackCommodityCalendar(group, error?.message || "commodity_calendar_fetch_failed");
-    res.json({ updatedAt: new Date().toISOString(), source: "Fallback commodity calendar", stale: true, stale_reason: error?.message || "commodity_calendar_fetch_failed", events, calendar: events });
+    res.json({ updatedAt: new Date().toISOString(), source: "ForexFactory", stale: true, unavailable: true, stale_reason: error?.message || "commodity_calendar_fetch_failed", events, calendar: events });
   }
 });
 
@@ -10390,20 +10796,20 @@ app.get("/api/commodities/correlation", async (req, res) => {
     }
     const rows = [{ pair: `${symbol} vs ${asset}`, coefficient, window: "1y", observations: pairs.length, source: "Yahoo Finance" }];
     if (!Number.isFinite(Number(coefficient))) {
-      rows[0] = { pair: `${symbol} vs ${asset}`, coefficient: 0.12, window: "1y", observations: pairs.length, source: "Fallback correlation proxy", stale: true, isFallback: true };
+      rows[0] = { pair: `${symbol} vs ${asset}`, coefficient: null, window: "1y", observations: pairs.length, source: "Yahoo Finance", stale: true, unavailable: true };
     }
     const usingFallbackRows = rows.some((row) => row?.isFallback || row?.stale);
     res.json({
       updatedAt: new Date().toISOString(),
-      source: usingFallbackRows ? "Fallback correlation proxy" : "Yahoo Finance",
+      source: "Yahoo Finance",
       stale: usingFallbackRows || undefined,
       stale_reason: usingFallbackRows ? "commodity_correlation_insufficient_overlap" : undefined,
       rows,
       correlation: rows
     });
   } catch (error) {
-    const rows = [{ pair: `${symbol} vs ${asset}`, coefficient: 0.12, window: "1y", observations: 0, source: "Fallback correlation proxy", isFallback: true }];
-    res.json({ updatedAt: new Date().toISOString(), source: "Fallback correlation proxy", stale: true, stale_reason: error?.message || "commodity_correlation_fetch_failed", rows, correlation: rows });
+    const rows = [{ pair: `${symbol} vs ${asset}`, coefficient: null, window: "1y", observations: 0, source: "Yahoo Finance", unavailable: true }];
+    res.json({ updatedAt: new Date().toISOString(), source: "Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "commodity_correlation_fetch_failed", rows, correlation: rows });
   }
 });
 
@@ -10469,59 +10875,89 @@ function resolveAfricaCountry(country) {
 app.get("/api/equities/mmf", async (req, res) => {
   const country = resolveAfricaCountry(req.query.country);
   const rows = country === "ALL" ? AFRICA_MMF_ROWS : AFRICA_MMF_ROWS.filter((row) => row.country === country);
-  res.json(rows);
+  res.json(rows.map((row) => ({
+    id: row.id,
+    fundName: row.fundName,
+    name: row.name,
+    country: row.country,
+    currency: row.currency,
+    provider: row.provider,
+    category: row.category,
+    yieldRange: null,
+    yield: null,
+    maturity: null,
+    liquidity: null,
+    aum: null,
+    returnYtdPct: null,
+    source: "Africa fund catalog",
+    unavailable: true,
+    stale: true,
+    stale_reason: "africa_mmf_live_provider_not_configured"
+  })));
 });
 
 app.get("/api/equities/mmf/:id", async (req, res) => {
   const id = String(req.params.id || "").toUpperCase();
   const detail = AFRICA_MMF_DETAIL[id] || null;
   if (!detail) return res.status(404).json({ error: "MMF not found" });
-  res.json(detail);
+  res.json({
+    fundId: detail.fundId,
+    fundName: detail.fundName,
+    country: detail.country,
+    category: detail.category,
+    currency: detail.currency,
+    regulator: detail.regulator,
+    benchmark: detail.benchmark,
+    aum: null,
+    nav: null,
+    yield_7d: null,
+    dealingFrequency: detail.dealingFrequency,
+    sourceSchema: detail.sourceSchema,
+    source: "Africa fund catalog",
+    unavailable: true,
+    stale: true,
+    stale_reason: "africa_mmf_live_provider_not_configured"
+  });
 });
 
 app.get("/api/equities/mmf/:id/yield-history", async (req, res) => {
   const id = String(req.params.id || "").toUpperCase();
   const base = AFRICA_MMF_DETAIL[id];
   if (!base) return res.status(404).json({ error: "MMF not found" });
-  const history = Array.from({ length: 12 }, (_, idx) => {
-    const daysAgo = (11 - idx) * 7;
-    return {
-      date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      yield_7d: Number((Number(base.yield_7d) + Math.sin(idx / 2.1) * 0.24).toFixed(2)),
-      nav: Number((Number(base.nav) + idx * 0.03).toFixed(4))
-    };
-  });
-  res.json(history);
+  res.json([]);
 });
 
 app.get("/api/equities/mmf/:id/liquidity", async (req, res) => {
   const id = String(req.params.id || "").toUpperCase();
   const base = AFRICA_MMF_DETAIL[id];
   if (!base) return res.status(404).json({ error: "MMF not found" });
-  const rows = Array.from({ length: 6 }, (_, idx) => ({
-    date: new Date(Date.now() - idx * 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    dla: `${Math.max(18, 29 - idx)}%`,
-    wla: `${Math.max(35, 48 - idx)}%`,
-    timeToLiquidate: `${Math.max(1, 3 - Math.floor(idx / 3))}d`
-  }));
-  res.json(rows);
+  res.json([]);
 });
 
 app.get("/api/equities/mmf/:id/composition", async (req, res) => {
   const id = String(req.params.id || "").toUpperCase();
   if (!AFRICA_MMF_DETAIL[id]) return res.status(404).json({ error: "MMF not found" });
-  res.json([
-    { bucket: "Treasury Bills", weightPct: 44.2 },
-    { bucket: "Repos / Cash", weightPct: 21.8 },
-    { bucket: "Commercial Paper", weightPct: 18.4 },
-    { bucket: "Bank Deposits", weightPct: 15.6 },
-  ]);
+  res.json([]);
 });
 
 app.get("/api/equities/reits", async (req, res) => {
   const country = resolveAfricaCountry(req.query.country);
   const rows = country === "ALL" ? AFRICA_REIT_ROWS : AFRICA_REIT_ROWS.filter((row) => row.country === country);
-  res.json(rows);
+  res.json(rows.map((row) => ({
+    symbol: row.symbol,
+    name: row.name,
+    country: row.country,
+    region: row.region,
+    propertyType: row.propertyType,
+    category: row.category,
+    dividendYield: null,
+    marketCap: null,
+    returnYtdPct: null,
+    source: "Africa REIT catalog",
+    unavailable: true,
+    stale: true,
+    stale_reason: "africa_reit_live_provider_not_configured"
+  })));
 });
 
 app.get("/api/equities/reits/compare", async (req, res) => {
@@ -10532,9 +10968,11 @@ app.get("/api/equities/reits/compare", async (req, res) => {
     .map((row) => ({
       id: row.symbol,
       country: row.country,
-      dividendYield: row.dividendYield,
-      marketCap: row.marketCap,
-      returnYtdPct: row.returnYtdPct
+      dividendYield: null,
+      marketCap: null,
+      returnYtdPct: null,
+      source: "Africa REIT catalog",
+      unavailable: true
     }));
   res.json(rows);
 });
@@ -10543,31 +10981,38 @@ app.get("/api/equities/reits/:symbol", async (req, res) => {
   const symbol = String(req.params.symbol || "").toUpperCase();
   const detail = AFRICA_REIT_DETAIL[symbol] || null;
   if (!detail) return res.status(404).json({ error: "REIT not found" });
-  res.json(detail);
+  res.json({
+    symbol: detail.symbol,
+    name: detail.name,
+    country: detail.country,
+    category: detail.category,
+    propertyType: detail.propertyType,
+    region: detail.region,
+    price: null,
+    marketCap: null,
+    dividendYield: null,
+    ffo: null,
+    affo: null,
+    payoutRatio: null,
+    occupancy: null,
+    source: "Africa REIT catalog",
+    unavailable: true,
+    stale: true,
+    stale_reason: "africa_reit_live_provider_not_configured"
+  });
 });
 
 app.get("/api/equities/reits/:symbol/exposure", async (req, res) => {
   const symbol = String(req.params.symbol || "").toUpperCase();
   if (!AFRICA_REIT_DETAIL[symbol]) return res.status(404).json({ error: "REIT not found" });
-  res.json([
-    { segment: "Retail", weightPct: 36.2 },
-    { segment: "Office", weightPct: 28.4 },
-    { segment: "Industrial", weightPct: 19.1 },
-    { segment: "Residential / Other", weightPct: 16.3 },
-  ]);
+  res.json([]);
 });
 
 app.get("/api/equities/reits/:symbol/income", async (req, res) => {
   const symbol = String(req.params.symbol || "").toUpperCase();
   const detail = AFRICA_REIT_DETAIL[symbol];
   if (!detail) return res.status(404).json({ error: "REIT not found" });
-  const rows = ["2025Q1", "2025Q2", "2025Q3", "2025Q4"].map((period, idx) => ({
-    period,
-    dividend: Number((0.19 + idx * 0.01).toFixed(2)),
-    payoutRatio: Number((detail.payoutRatio + Math.sin(idx) * 1.4).toFixed(2)),
-    ffo: Number((detail.ffo * (0.22 + idx * 0.01)).toFixed(0))
-  }));
-  res.json(rows);
+  res.json([]);
 });
 app.get("/api/equities/stocks", async (req, res) => {
   try {
@@ -11019,6 +11464,192 @@ function buildEquitiesEarningsRows(finvizQuotes) {
   }).filter(Boolean);
 }
 
+function classifyFinvizRevisionTone(text) {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return { score: 0, severity: "Med" };
+  if (/(downgrade|underperform|underweight|sell|reduce|cut|negative)/i.test(normalized)) {
+    return { score: -1, severity: "High" };
+  }
+  if (/(upgrade|outperform|overweight|buy|raise|positive|strong buy)/i.test(normalized)) {
+    return { score: 1, severity: "Med" };
+  }
+  return { score: 0, severity: "Low" };
+}
+
+function buildFinvizRevisionRows(finvizQuotes, symbols = []) {
+  return [...new Set(symbols.map(normalizeFinvizTicker).filter(Boolean))]
+    .flatMap((symbol) => {
+      const quote = finvizQuotes.get(symbol);
+      const ratings = Array.isArray(quote?.ratings) ? quote.ratings : [];
+      return ratings.slice(0, 2).map((rating, idx) => {
+        const combinedText = [rating?.action, rating?.rating].filter(Boolean).join(" · ");
+        const tone = classifyFinvizRevisionTone(combinedText);
+        return {
+          id: `finviz-rev-${symbol}-${idx}`,
+          ticker: symbol,
+          change: combinedText || "Analyst update",
+          broker: rating?.analyst || "Finviz analyst feed",
+          time: rating?.date || "—",
+          severity: tone.severity,
+          score: tone.score,
+          target: rating?.price_target || null,
+          source: "Finviz ratings feed",
+        };
+      });
+    })
+    .filter((row) => row.change && row.change !== "Analyst update")
+    .sort((a, b) => (Number(a.score) === Number(b.score) ? String(b.time).localeCompare(String(a.time)) : Number(a.score) - Number(b.score)))
+    .slice(0, 8);
+}
+
+function buildFinvizInsiderRows(finvizQuotes, symbols = []) {
+  const insiderSignals = [...new Set(symbols.map(normalizeFinvizTicker).filter(Boolean))]
+    .flatMap((symbol) => {
+      const quote = finvizQuotes.get(symbol);
+      const insiderRows = Array.isArray(quote?.insider) ? quote.insider : [];
+      const newsRows = Array.isArray(quote?.news) ? quote.news : [];
+      const insiderEvents = insiderRows.slice(0, 2).map((row, idx) => {
+        const transaction = String(row?.transaction || "").trim() || "Insider activity";
+        const severity = /(sale|dispose|sell)/i.test(transaction) ? "High" : /(buy|purchase)/i.test(transaction) ? "Low" : "Med";
+        return {
+          id: `finviz-insider-${symbol}-${idx}`,
+          ticker: symbol,
+          type: transaction,
+          details: [row?.owner, row?.relationship].filter(Boolean).join(" · ") || "Finviz insider feed",
+          date: row?.date || "—",
+          severity,
+          source: "Finviz insider feed",
+        };
+      });
+      const buybackEvents = newsRows
+        .filter((row) => /(buyback|repurchase|share repurchase|authorization)/i.test(`${row?.headline || ""}`))
+        .slice(0, 1)
+        .map((row, idx) => ({
+          id: `finviz-buyback-${symbol}-${idx}`,
+          ticker: symbol,
+          type: "Buyback",
+          details: row?.headline || "Buyback signal",
+          date: row?.timestamp || "—",
+          severity: "Med",
+          source: "Finviz news feed",
+        }));
+      return insiderEvents.concat(buybackEvents);
+    });
+
+  return insiderSignals
+    .slice(0, 8);
+}
+
+function buildFinvizMoverRows(analyticsPayload, finvizQuotes, styleFactors = []) {
+  const screenerRows = Array.isArray(analyticsPayload?.stockScreener) ? analyticsPayload.stockScreener : [];
+  const leaderFactor = [...styleFactors]
+    .filter((row) => Number.isFinite(Number(row?.daily)))
+    .sort((a, b) => Number(b?.daily) - Number(a?.daily))[0];
+
+  return screenerRows
+    .map((row) => {
+      const symbol = normalizeFinvizTicker(row?.symbol);
+      const quote = finvizQuotes.get(symbol);
+      const summary = quote?.summary || {};
+      const changePct = roundMaybe(
+        parseFinvizPercent(summary.Change) ??
+        row?.changePct
+      );
+      return {
+        symbol,
+        company: row?.name || quote?.profileName || symbol,
+        sector: quote?.header_meta?.sector || row?.sector || "—",
+        factors: [leaderFactor?.factor, quote?.header_meta?.industry].filter(Boolean).slice(0, 2).join(", ") || "Finviz mover",
+        move: changePct ?? 0,
+        marketCap: formatMarketCapFromRaw(parseFinvizScaledNumber(summary["Market Cap"]) ?? row?.marketCap),
+        marketCapRaw: parseFinvizScaledNumber(summary["Market Cap"]) ?? row?.marketCap ?? null,
+        source: "Finviz screener",
+      };
+    })
+    .filter((row) => row.symbol && Number.isFinite(Number(row.move)))
+    .sort((a, b) => Math.abs(Number(b.move)) - Math.abs(Number(a.move)))
+    .slice(0, 8);
+}
+
+function formatMarketCapFromRaw(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "—";
+  if (numeric >= 1e12) return `${(numeric / 1e12).toFixed(2)}T`;
+  if (numeric >= 1e9) return `${(numeric / 1e9).toFixed(1)}B`;
+  if (numeric >= 1e6) return `${(numeric / 1e6).toFixed(1)}M`;
+  return `${numeric.toFixed(0)}`;
+}
+
+function buildFinvizEarningsRiskRows(finvizQuotes) {
+  return EQUITY_FINVIZ_EARNINGS_PROXIES.map((item, idx) => {
+    const quote = finvizQuotes.get(item.symbol);
+    const summary = quote?.summary || {};
+    const earnings = String(summary.earnings || summary.Earnings || "").trim();
+    const [weeklyVol, monthlyVol] = parseFinvizPair(summary.Volatility);
+    const atr = parseFinvizScaledNumber(summary["ATR (14)"]);
+    const price = parseFinvizScaledNumber(summary.Price);
+    const impliedMovePct = Number.isFinite(monthlyVol)
+      ? monthlyVol
+      : Number.isFinite(atr) && Number.isFinite(price) && price > 0
+      ? (atr / price) * 100
+      : null;
+    return {
+      id: `finviz-risk-${idx}`,
+      ticker: item.symbol,
+      company: item.company,
+      date: earnings || "Next report",
+      eps: summary["EPS next Q"] || summary["EPS next Y"] || summary["EPS this Y"] || "—",
+      expectedMovePct: roundMaybe(impliedMovePct),
+      move: roundMaybe(impliedMovePct),
+      source: "Finviz quote snapshot",
+    };
+  }).filter((row) => row.date || row.expectedMovePct != null).slice(0, 8);
+}
+
+function buildFinvizFactorLeader(styleFactors = []) {
+  const leader = [...styleFactors]
+    .filter((row) => Number.isFinite(Number(row?.daily)) || Number.isFinite(Number(row?.ytd)) || Number.isFinite(Number(row?.yr1)))
+    .sort((a, b) => {
+      const aScore = (Number(a?.daily) || 0) * 0.5 + (Number(a?.ytd) || 0) * 0.3 + (Number(a?.yr1) || 0) * 0.2;
+      const bScore = (Number(b?.daily) || 0) * 0.5 + (Number(b?.ytd) || 0) * 0.3 + (Number(b?.yr1) || 0) * 0.2;
+      return bScore - aScore;
+    })[0];
+  if (!leader) return null;
+  return {
+    ...leader,
+    score: roundMaybe((Number(leader?.daily) || 0) * 0.5 + (Number(leader?.ytd) || 0) * 0.3 + (Number(leader?.yr1) || 0) * 0.2),
+  };
+}
+
+function buildFinvizDeskPayload({ analyticsPayload, finvizQuotes, styleFactors = [] }) {
+  const trackedSymbols = [
+    ...(Array.isArray(analyticsPayload?.stockScreener) ? analyticsPayload.stockScreener.map((row) => row?.symbol) : []),
+    ...EQUITY_FINVIZ_EARNINGS_PROXIES.map((item) => item.symbol),
+  ];
+  const revisionAlertsRows = buildFinvizRevisionRows(finvizQuotes, trackedSymbols);
+  const insiderRows = buildFinvizInsiderRows(finvizQuotes, trackedSymbols);
+  const moversRows = buildFinvizMoverRows(analyticsPayload, finvizQuotes, styleFactors);
+  const earningsRiskRows = buildFinvizEarningsRiskRows(finvizQuotes);
+  const positiveRevisions = revisionAlertsRows.filter((row) => Number(row.score) > 0).length;
+  const negativeRevisions = revisionAlertsRows.filter((row) => Number(row.score) < 0).length;
+  const revisionBreadthPct = revisionAlertsRows.length
+    ? Math.round((positiveRevisions / revisionAlertsRows.length) * 100)
+    : 0;
+
+  return {
+    factorLeader: buildFinvizFactorLeader(styleFactors),
+    revisionAlertsRows,
+    insiderRows,
+    moversRows,
+    earningsRiskRows,
+    revisionSummary: {
+      positive: positiveRevisions,
+      negative: negativeRevisions,
+      breadthPct: revisionBreadthPct,
+    },
+  };
+}
+
 function buildMacroFxRows(finvizQuotes) {
   return MACRO_FINVIZ_FX_PROXIES.map((item) => {
     const quote = finvizQuotes.get(item.symbol);
@@ -11133,33 +11764,14 @@ function buildFallbackOptionsPayload(reason = "options_provider_fallback", finvi
     stale: true,
     isFallback: true,
     stale_reason: reason,
-    source: finvizVolumeRows.length ? "Fallback options tape + Finviz equity-option proxies" : "Fallback options tape",
-    totalOptionsOpenInterestUsd: 4500000000,
-    optionsVolumeByAsset: [
-      { asset: "BTC", exchange: "Deribit", volumeUsd: 1200000000, isFallback: true },
-      { asset: "ETH", exchange: "Deribit", volumeUsd: 600000000, isFallback: true },
-      ...finvizVolumeRows
-    ],
-    optionsMaxPain: [
-      { asset: "BTC", expiry: "Next Friday", maxPain: 65000, exchange: "Deribit", isFallback: true },
-      { asset: "ETH", expiry: "Next Friday", maxPain: 3500, exchange: "Deribit", isFallback: true },
-      ...finvizMaxPainRows
-    ],
-    volumeByExchangeRoute: [
-      { exchange: "Deribit", route: "Direct", volume: 1800000000, volumeUsd: 1800000000, isFallback: true },
-      { exchange: "Binance", route: "Direct", volume: 450000000, volumeUsd: 450000000, isFallback: true },
-      ...finvizRouteRows
-    ],
-    greeks: [
-      { instrument: "BTC fallback ATM call", asset: "BTC", exchange: "Deribit", delta: 0.45, gamma: 0.02, vega: 10.5, theta: -1.2, iv: 62, isFallback: true },
-      { instrument: "ETH fallback ATM call", asset: "ETH", exchange: "Deribit", delta: 0.43, gamma: 0.03, vega: 7.4, theta: -0.8, iv: 58, isFallback: true },
-      ...finvizGreeksRows
-    ],
-    oiByStrike: [
-      { asset: "BTC", exchange: "Deribit", expiry: "Next Friday", strike: 65000, type: "C", oi: 12500, isFallback: true },
-      { asset: "ETH", exchange: "Deribit", expiry: "Next Friday", strike: 3500, type: "C", oi: 18800, isFallback: true },
-      ...finvizOiRows
-    ]
+    unavailable: !finvizVolumeRows.length && !finvizMaxPainRows.length && !finvizRouteRows.length && !finvizGreeksRows.length && !finvizOiRows.length,
+    source: finvizVolumeRows.length ? "Finviz equity-option proxies" : "Options providers unavailable",
+    totalOptionsOpenInterestUsd: null,
+    optionsVolumeByAsset: finvizVolumeRows,
+    optionsMaxPain: finvizMaxPainRows,
+    volumeByExchangeRoute: finvizRouteRows,
+    greeks: finvizGreeksRows,
+    oiByStrike: finvizOiRows
   };
 }
 
@@ -11176,9 +11788,11 @@ async function buildEquitiesAnalyticsPayload() {
     console.warn("[Analytics] Python equities fetch failed:", err?.message || err);
   }
 
-  const [macroData, riskIndicators] = await Promise.all([
+  const [macroData, riskIndicators, fredStatus, blsStatus] = await Promise.all([
     fetchAnalyticsMacroRows("USA").catch(() => []),
-    fetchAnalyticsRiskIndicators().catch(() => [])
+    fetchAnalyticsRiskIndicators().catch(() => []),
+    fetchFredMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable")),
+    fetchBlsMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("BLS", Boolean(BLS_API_KEY), "unavailable", error?.message || "BLS unavailable"))
   ]);
 
   const finvizSymbols = [
@@ -11188,6 +11802,7 @@ async function buildEquitiesAnalyticsPayload() {
     ...EQUITY_FINVIZ_FLOW_PROXIES.map((item) => item.symbol),
     ...EQUITY_FINVIZ_EARNINGS_PROXIES.map((item) => item.symbol),
     ...MACRO_FINVIZ_FX_PROXIES.map((item) => item.symbol),
+    ...(Array.isArray(analyticsPayload?.stockScreener) ? analyticsPayload.stockScreener.map((row) => row?.symbol) : []),
   ];
   const finvizQuotes = await fetchFinvizQuotes(finvizSymbols).catch((error) => {
     console.warn("[Analytics] Finviz enrichment skipped:", error?.message || error);
@@ -11201,6 +11816,7 @@ async function buildEquitiesAnalyticsPayload() {
   const marketBreadth = buildEquitiesBreadth(finvizQuotes);
   const fxRates = buildMacroFxRows(finvizQuotes);
   const forexMovers = buildForexMoverRows(fxRates);
+  const finvizDesk = buildFinvizDeskPayload({ analyticsPayload, finvizQuotes, styleFactors });
 
   return {
     updatedAt: analyticsPayload?.updatedAt || new Date().toISOString(),
@@ -11227,7 +11843,13 @@ async function buildEquitiesAnalyticsPayload() {
     corporateActions: [],
     reitData: REIT_DATA,
     mmfYields: MMF_YIELDS,
-    fundsList: FUNDS_LIST
+    fundsList: FUNDS_LIST,
+    finvizDesk,
+    providers: buildDataProviderStatus({
+      fred: fredStatus,
+      bls: blsStatus,
+      massive: getMassiveStatus()
+    }),
   };
 }
 
@@ -11322,6 +11944,11 @@ const wss = new WebSocket.Server({ server });
 
 let subscribers = new Map();
 // key: socket -> { kind, currency, expiry, symbols, quoteType }
+let massiveStocksSocket = null;
+let massiveStocksConnecting = false;
+const massiveStocksSubscribedSymbols = new Set();
+const massivePriceCache = new Map();
+let massiveLastStatus = buildProviderStatus("Massive", Boolean(MASSIVE_API_KEY), MASSIVE_API_KEY ? "configured" : "missing_key", MASSIVE_API_KEY ? "WebSocket key configured" : "API key not configured");
 
 function sendWsJson(ws, payload) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -11345,9 +11972,118 @@ async function fetchLivePriceSnapshot({ quoteType = "tradfi", symbols = [] } = {
   const safeSymbols = sanitizePriceSymbols(symbols);
   if (!safeSymbols.length) return {};
   const normalizedType = String(quoteType || "tradfi").toLowerCase() === "crypto" ? "crypto" : "tradfi";
-  return normalizedType === "crypto"
-    ? fetchCryptoQuotesBySymbols(safeSymbols)
-    : fetchYFinancePrices(safeSymbols);
+  if (normalizedType === "crypto") return fetchCryptoQuotesBySymbols(safeSymbols);
+  const cachedMassive = {};
+  const missingSymbols = [];
+  const now = Date.now();
+  safeSymbols.forEach((symbol) => {
+    const quote = massivePriceCache.get(symbol);
+    if (quote && now - Number(quote.cachedAt || 0) < 90_000) {
+      cachedMassive[symbol] = {
+        price: quote.price,
+        priceChangePercent: quote.priceChangePercent ?? null,
+        updatedAt: quote.updatedAt,
+        source: "Massive WebSocket"
+      };
+    } else {
+      missingSymbols.push(symbol);
+    }
+  });
+  const fallbackPrices = missingSymbols.length ? await fetchYFinancePrices(missingSymbols) : {};
+  return { ...fallbackPrices, ...cachedMassive };
+}
+
+function normalizeMassiveRows(message) {
+  if (!message) return [];
+  const parsed = typeof message === "string" ? JSON.parse(message) : message;
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function connectMassiveStocksSocket() {
+  if (!MASSIVE_API_KEY) return null;
+  if (massiveStocksSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(massiveStocksSocket.readyState)) return massiveStocksSocket;
+  if (massiveStocksConnecting) return massiveStocksSocket;
+  massiveStocksConnecting = true;
+  const url = process.env.MASSIVE_WS_DELAYED === "true" ? MASSIVE_WS_DELAYED_STOCKS_URL : MASSIVE_WS_STOCKS_URL;
+  massiveStocksSocket = new WebSocket(url);
+  massiveLastStatus = buildProviderStatus("Massive", true, "connecting", "Opening stock WebSocket");
+
+  massiveStocksSocket.on("open", () => {
+    massiveStocksConnecting = false;
+    massiveLastStatus = buildProviderStatus("Massive", true, "connected", "Stock WebSocket connected");
+    sendWsJsonToMassive({ action: "auth", params: MASSIVE_API_KEY });
+    if (massiveStocksSubscribedSymbols.size) {
+      sendWsJsonToMassive({ action: "subscribe", params: [...massiveStocksSubscribedSymbols].map((symbol) => `AM.${symbol}`).join(",") });
+    }
+  });
+
+  massiveStocksSocket.on("message", (raw) => {
+    try {
+      const rows = normalizeMassiveRows(raw.toString());
+      const updates = {};
+      rows.forEach((row) => {
+        const eventType = String(row?.ev || "").toUpperCase();
+        const symbol = String(row?.sym || row?.symbol || "").toUpperCase();
+        const price = toProviderNumber(row?.c ?? row?.p ?? row?.price);
+        if (!symbol || price === null || !["AM", "A", "T", "Q"].includes(eventType)) return;
+        const updatedAt = new Date(Number(row?.e || row?.s || Date.now())).toISOString();
+        const opening = toProviderNumber(row?.op ?? row?.o);
+        const priceChangePercent = opening ? Number((((price - opening) / Math.abs(opening)) * 100).toFixed(2)) : null;
+        const quote = { price, priceChangePercent, updatedAt, source: "Massive WebSocket", cachedAt: Date.now() };
+        massivePriceCache.set(symbol, quote);
+        updates[symbol] = quote;
+      });
+      if (Object.keys(updates).length) {
+        subscribers.forEach((subscription, ws) => {
+          if (subscription.kind !== "prices" || subscription.quoteType === "crypto") return;
+          const symbols = sanitizePriceSymbols(subscription.symbols || []);
+          const scoped = Object.fromEntries(Object.entries(updates).filter(([symbol]) => symbols.includes(symbol)));
+          if (Object.keys(scoped).length) {
+            sendWsJson(ws, {
+              type: "price_update",
+              quoteType: "tradfi",
+              symbols: Object.keys(scoped),
+              prices: scoped,
+              provider: "Massive",
+              updatedAt: new Date().toISOString()
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.warn("[Massive] WebSocket message ignored:", error?.message || error);
+    }
+  });
+
+  massiveStocksSocket.on("close", () => {
+    massiveStocksConnecting = false;
+    massiveLastStatus = buildProviderStatus("Massive", true, "degraded", "Stock WebSocket closed");
+    massiveStocksSocket = null;
+  });
+  massiveStocksSocket.on("error", (error) => {
+    massiveStocksConnecting = false;
+    massiveLastStatus = buildProviderStatus("Massive", true, "degraded", error?.message || "Stock WebSocket error");
+  });
+  return massiveStocksSocket;
+}
+
+function sendWsJsonToMassive(payload) {
+  if (!massiveStocksSocket || massiveStocksSocket.readyState !== WebSocket.OPEN) return;
+  try {
+    massiveStocksSocket.send(JSON.stringify(payload));
+  } catch (error) {
+    massiveLastStatus = buildProviderStatus("Massive", true, "degraded", error?.message || "Massive send failed");
+  }
+}
+
+function subscribeMassiveStocks(symbols = []) {
+  if (!MASSIVE_API_KEY) return;
+  const nextSymbols = sanitizePriceSymbols(symbols).filter((symbol) => symbol && !massiveStocksSubscribedSymbols.has(symbol));
+  nextSymbols.forEach((symbol) => massiveStocksSubscribedSymbols.add(symbol));
+  const socket = connectMassiveStocksSocket();
+  if (socket?.readyState === WebSocket.OPEN && nextSymbols.length) {
+    sendWsJsonToMassive({ action: "subscribe", params: nextSymbols.map((symbol) => `AM.${symbol}`).join(",") });
+  }
 }
 
 async function pushPriceSnapshot(ws, subscription) {
@@ -11425,6 +12161,9 @@ wss.on("connection", (ws) => {
           symbols: sanitizePriceSymbols(data.symbols || data.symbol || [])
         };
         subscribers.set(ws, subscription);
+        if (subscription.quoteType === "tradfi") {
+          subscribeMassiveStocks(subscription.symbols);
+        }
         sendWsJson(ws, { type: "subscribed", channel: "prices", ...subscription });
         pushPriceSnapshot(ws, subscription);
         return;
@@ -11545,6 +12284,10 @@ async function stopServer() {
   clearInterval(wsHeartbeatTimer);
   clearInterval(wsPushTimer);
   try {
+    if (massiveStocksSocket) {
+      try { massiveStocksSocket.close(); } catch {}
+      massiveStocksSocket = null;
+    }
     wss.clients.forEach((ws) => {
       try { ws.terminate(); } catch {}
     });
