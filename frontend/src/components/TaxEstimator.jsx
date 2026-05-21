@@ -21,6 +21,14 @@ function getTaxSources() {
   return Array.isArray(getTaxConfig().sources) ? getTaxConfig().sources : [];
 }
 
+function readStoredAccountantMode() {
+  try {
+    return JSON.parse(localStorage.getItem("zenin_tax_accountant_mode") || "false") === true;
+  } catch {
+    return false;
+  }
+}
+
 function getDefaultIncomeBreakdown() {
   return getTaxConfig().defaultIncomeBreakdown || {
     salary: 0,
@@ -59,7 +67,7 @@ function getDefaultAdvancedState() {
 function getDefaultScenarioState() {
   return {
     countryA: "USA",
-    countryB: "UAE",
+    countryB: "",
     shiftDays: 365,
   };
 }
@@ -471,35 +479,7 @@ function getDemoGuestState() {
       ...getDefaultAdvancedState(),
       notes: "Guest workstation seeded from Zenin reference board for demo review.",
     },
-    comparisonScenarios: [
-      {
-        id: "guest-harvest",
-        country: "USA",
-        shiftDays: 0,
-        label: "Tax Loss Harvest",
-        description: "Realize available losses to offset current gains",
-        notes: "Loss offsets sourced from underwater positions",
-        strategy: "harvest",
-      },
-      {
-        id: "guest-defer",
-        country: "USA",
-        shiftDays: 365,
-        label: "Defer Long Term",
-        description: "Push long-term realization into the next filing year",
-        notes: "Long-term gains held out of the current base case",
-        strategy: "defer-long-term",
-      },
-      {
-        id: "guest-realize",
-        country: "USA",
-        shiftDays: 0,
-        label: "Realize Losses",
-        description: "Maximize documented loss realization in the current FY",
-        notes: "Applies a more aggressive loss offset than the harvest case",
-        strategy: "realize-losses",
-      },
-    ],
+    comparisonScenarios: [],
   };
 }
 
@@ -547,6 +527,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const [formNoticeTone, setFormNoticeTone] = useState("warning");
   const [showRuleDetails, setShowRuleDetails] = useState(false);
   const [showUtilities, setShowUtilities] = useState(false);
+  const [accountantMode, setAccountantMode] = useState(() => readStoredAccountantMode());
 
   useEffect(() => {
     try {
@@ -558,6 +539,19 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
       setSavedEstimates([]);
       setAuditTrail([]);
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncAccountantMode = () => {
+      setAccountantMode(readStoredAccountantMode());
+    };
+    window.addEventListener("storage", syncAccountantMode);
+    window.addEventListener("zenin:tax-accountant-mode", syncAccountantMode);
+    return () => {
+      window.removeEventListener("storage", syncAccountantMode);
+      window.removeEventListener("zenin:tax-accountant-mode", syncAccountantMode);
+    };
   }, []);
 
   useEffect(() => {
@@ -791,7 +785,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const scenarioComparison = useMemo(() => {
     const { adjustedGains } = buildAdjustedGains(effectiveGains, advanced);
     const countryA = taxRules[scenario.countryA] ? scenario.countryA : "USA";
-    const countryB = taxRules[scenario.countryB] ? scenario.countryB : "UAE";
+    const countryB = taxRules[scenario.countryB] ? scenario.countryB : "";
     const shiftDays = Number(scenario.shiftDays || 0);
     const shiftedSaleDate = advanced.saleDate
       ? new Date(new Date(advanced.saleDate).getTime() + shiftDays * 24 * 60 * 60 * 1000)
@@ -800,7 +794,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
       : "";
     const shiftedGains = buildAdjustedGains(effectiveGains, { ...advanced, saleDate: shiftedSaleDate }).adjustedGains;
     const nowA = calcLiability(countryA, adjustedGains, { ordinaryIncomeTotal }).liability;
-    const nowB = calcLiability(countryB, adjustedGains, { ordinaryIncomeTotal }).liability;
+    const nowB = countryB ? calcLiability(countryB, adjustedGains, { ordinaryIncomeTotal }).liability : null;
     const shiftedA = calcLiability(countryA, shiftedGains, { ordinaryIncomeTotal }).liability;
     return {
       countryA,
@@ -866,23 +860,25 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
         notes: taxRules[scenarioComparison.countryA]?.logic || "Base case",
         updated: taxRulesLastUpdated || "Current rules",
       },
-      {
-        id: `scenario-${scenarioComparison.countryB}`,
-        country: scenarioComparison.countryB,
-        scenario: `${countryFlag(scenarioComparison.countryB)} ${taxRules[scenarioComparison.countryB]?.name || scenarioComparison.countryB}`,
-        description: "Current comparison jurisdiction",
-        taxDue: scenarioComparison.nowB,
-        effectiveRate:
-          summaryPreview.taxableGain > 0
-            ? (scenarioComparison.nowB / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100
-            : 0,
-        netAfterTax: Math.max(0, summaryPreview.grossTotal - scenarioComparison.nowB),
-        delta: scenarioComparison.nowB - scenarioComparison.nowA,
-        deltaPercent:
-          scenarioComparison.nowA > 0 ? ((scenarioComparison.nowB - scenarioComparison.nowA) / scenarioComparison.nowA) * 100 : 0,
-        notes: taxRules[scenarioComparison.countryB]?.logic || "Comparison",
-        updated: taxRulesLastUpdated || "Current rules",
-      },
+      ...(scenarioComparison.countryB
+        ? [{
+            id: `scenario-${scenarioComparison.countryB}`,
+            country: scenarioComparison.countryB,
+            scenario: `${countryFlag(scenarioComparison.countryB)} ${taxRules[scenarioComparison.countryB]?.name || scenarioComparison.countryB}`,
+            description: "Current comparison jurisdiction",
+            taxDue: Number(scenarioComparison.nowB || 0),
+            effectiveRate:
+              summaryPreview.taxableGain > 0 && Number.isFinite(Number(scenarioComparison.nowB))
+                ? (Number(scenarioComparison.nowB) / (summaryPreview.taxableGain + ordinaryIncomeTotal)) * 100
+                : 0,
+            netAfterTax: Math.max(0, summaryPreview.grossTotal - Number(scenarioComparison.nowB || 0)),
+            delta: Number(scenarioComparison.nowB || 0) - scenarioComparison.nowA,
+            deltaPercent:
+              scenarioComparison.nowA > 0 ? (((Number(scenarioComparison.nowB || 0) - scenarioComparison.nowA) / scenarioComparison.nowA) * 100) : 0,
+            notes: taxRules[scenarioComparison.countryB]?.logic || "Comparison",
+            updated: taxRulesLastUpdated || "Current rules",
+          }]
+        : []),
       ...comparisonScenarioRows.map((item) => ({
         id: item.id,
         country: item.country,
@@ -939,6 +935,32 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   }, [effectiveGains, ordinaryIncomeTotal, results, taxRules]);
 
   const canExportResults = results.length > 0;
+  const accountantCopy = useMemo(() => ({
+    eyebrow: accountantMode ? "Accountant Review" : "Tax Estimator",
+    title: accountantMode ? "Accountant Review Workbench" : "Global Tax Estimator",
+    subtitle: accountantMode
+      ? "Audit-ready ledger, filing assumptions, and jurisdiction outputs prepared for review and handoff."
+      : "Forensic Ledger · Capital Gains Analysis & Liability Estimation",
+    syncLabel: accountantMode ? "Review mode" : "Sync State",
+    syncValue: accountantMode ? "Accountant mode · Audit posture enabled" : `Synced · ${formatSavedTimestamp(new Date().toISOString())}`,
+    exportLabel: accountantMode ? "Export review CSV" : "Export",
+    saveLabel: accountantMode ? "Save review pack" : "Save Scenario",
+    jurisdictionTitle: accountantMode ? "Filing Jurisdictions" : "Jurisdiction Ledger",
+    ledgerTitle: accountantMode ? "Forensic Capital Gains Ledger" : "Capital Gains Input Ledger",
+    ledgerSubtitle: accountantMode ? "Audit-ready amounts in USD" : "All amounts in USD",
+    summaryTitle: accountantMode ? "Accountant Review Summary" : "Decision Summary",
+    scenarioTitle: accountantMode ? "Filing Scenario Comparison" : "Scenario Comparison",
+    utilitiesTitle: accountantMode ? "Advanced Filing Context" : "Advanced Context",
+    utilitiesSubtitle: accountantMode
+      ? "Capture basis method, residency, credits, import evidence, and notes for the accountant handoff pack."
+      : "Capture basis method, dates, residency, credits, and import notes without interrupting the main ledger.",
+    resultsTitle: accountantMode ? "Jurisdiction Output Pack" : "Calculated Liabilities",
+    resultsSubtitle: accountantMode
+      ? `${results.length ? `${results.length} review output${results.length === 1 ? "" : "s"}` : "Run a calculation to prepare the accountant review outputs."}`
+      : `${results.length ? `${results.length} jurisdiction output${results.length === 1 ? "" : "s"}` : "Run a calculation to populate jurisdiction outputs."}`,
+    footerTitle: accountantMode ? "Source register & filing notes" : "Compliance & sources",
+    primaryAction: accountantMode ? "Recalculate review package" : "Calculate estimated liabilities",
+  }), [accountantMode, results.length]);
 
   const handleToggleJurisdiction = (key) => {
     setJurisdictions((current) =>
@@ -1109,6 +1131,15 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const handleExportCsv = () => {
     if (!results.length) return;
     let csv = "data:text/csv;charset=utf-8,";
+    if (accountantMode) {
+      csv += `Mode:,Accountant review\n`;
+      csv += `Tax year:,${taxYear}\n`;
+      csv += `Jurisdictions:,${jurisdictions.join(" | ")}\n`;
+      csv += `Prepared at:,${new Date().toISOString()}\n`;
+      csv += `Rules freshness:,${taxRulesLastUpdated || "Current release"}\n`;
+      csv += `Source:,${taxSources.map((source) => source.label).join(" | ") || "Runtime config"}\n`;
+      csv += `Notes:,${String(advanced.notes || "").replace(/\n/g, " ")}\n\n`;
+    }
     results.forEach((row) => {
       csv += `Jurisdiction:,${row.jurisdiction}\nCurrency:,${row.currency}\nTotal Liability:,${row.liability}\nTaxable Gain:,${row.taxableGain}\nOrdinary Income:,${row.ordinaryIncomeTotal || 0}\nEffective Rate:,${row.effectiveRate}\n\n`;
       Object.entries(row.details).forEach(([key, value]) => {
@@ -1118,10 +1149,12 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
     });
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", `tax_estimate_${Date.now()}.csv`);
+    link.setAttribute("download", `${accountantMode ? "accountant_review" : "tax_estimate"}_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setFormNotice(accountantMode ? "Accountant review CSV exported." : "Scenario export generated.");
+    setFormNoticeTone("success");
   };
 
   const handleReset = () => {
@@ -1157,7 +1190,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const handleAddScenario = () => {
     const usedCountries = new Set([
       scenario.countryA,
-      scenario.countryB,
+      ...(scenario.countryB ? [scenario.countryB] : []),
       ...comparisonScenarios.map((item) => item.country),
     ]);
     const nextCountry = Object.keys(taxRules).find((key) => !usedCountries.has(key)) || "Singapore";
@@ -1182,32 +1215,32 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
   const summaryModel = useMemo(
     () => [
       {
-        label: "Estimated liability (USD)",
+        label: accountantMode ? "Estimated filing liability (USD)" : "Estimated liability (USD)",
         value: formatMoney(summaryPreview.estimatedTax, advanced.currency || "USD"),
         tone: "negative",
       },
       {
-        label: "Effective rate",
+        label: accountantMode ? "Blended effective rate" : "Effective rate",
         value: `${summaryPreview.effectiveRate.toFixed(2)}%`,
         tone: "positive",
       },
       {
-        label: "Taxable gain",
+        label: accountantMode ? "Taxable gain ledger" : "Taxable gain",
         value: formatMoney(summaryPreview.taxableGain, advanced.currency || "USD"),
         tone: "warning",
       },
       {
-        label: "Net after tax",
+        label: accountantMode ? "Client net after tax" : "Net after tax",
         value: formatMoney(netAfterTax, advanced.currency || "USD"),
         tone: "positive",
       },
       {
-        label: "Vs. base case",
+        label: accountantMode ? "Vs. zero-tax regime" : "Vs. base case",
         value: `${taxSavingsVsUAE <= 0 ? "" : "+"}${formatMoney(taxSavingsVsUAE, advanced.currency || "USD")}`,
         tone: taxSavingsVsUAE <= 0 ? "negative" : "positive",
       },
     ],
-    [advanced.currency, netAfterTax, summaryPreview.effectiveRate, summaryPreview.estimatedTax, summaryPreview.taxableGain, taxSavingsVsUAE]
+    [accountantMode, advanced.currency, netAfterTax, summaryPreview.effectiveRate, summaryPreview.estimatedTax, summaryPreview.taxableGain, taxSavingsVsUAE]
   );
   const utilitiesPanelId = "tax-workbench-utilities";
   const insightsPanelId = "tax-workbench-insights-body";
@@ -1221,10 +1254,16 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
       ? `${inputWarnings.length} review item${inputWarnings.length === 1 ? "" : "s"}`
       : "Ready to calculate";
   const reviewStateCopy = hasBlockingIssues
-    ? "Open advanced context and correct the highlighted fields before calculating."
+    ? accountantMode
+      ? "Open Advanced Filing Context and correct the highlighted fields before exporting or sharing the review pack."
+      : "Open advanced context and correct the highlighted fields before calculating."
     : inputWarnings.length
-      ? "Inputs are usable, but add the missing context before sharing or exporting."
-      : "Inputs are consistent and the current filing view is ready for calculation.";
+      ? accountantMode
+        ? "Inputs are reviewable, but add the missing filing context before handing this off to an accountant."
+        : "Inputs are usable, but add the missing context before sharing or exporting."
+      : accountantMode
+        ? "Inputs are consistent and the accountant-facing review pack is ready."
+        : "Inputs are consistent and the current filing view is ready for calculation.";
 
   return (
     <div className="tax-workbench">
@@ -1243,14 +1282,14 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
         <header className="tax-workbench-command-header">
           <div className="tax-workbench-title-block">
-            <span>Tax Estimator</span>
-            <h2>Global Tax Estimator</h2>
-            <p>Forensic Ledger · Capital Gains Analysis & Liability Estimation</p>
+            <span>{accountantCopy.eyebrow}</span>
+            <h2>{accountantCopy.title}</h2>
+            <p>{accountantCopy.subtitle}</p>
           </div>
           <div className="tax-workbench-command-actions">
             <div className="tax-workbench-sync-state">
-              <span>Sync State</span>
-              <strong>Synced · {formatSavedTimestamp(new Date().toISOString())}</strong>
+              <span>{accountantCopy.syncLabel}</span>
+              <strong>{accountantCopy.syncValue}</strong>
             </div>
             <label className="tax-workbench-scenario-select">
               <span>Saved Scenarios</span>
@@ -1268,18 +1307,31 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
               </select>
             </label>
             <button type="button" className="tax-workbench-btn" onClick={handleExportCsv}>
-              Export
+              {accountantCopy.exportLabel}
             </button>
             <button type="button" className="tax-workbench-btn tax-workbench-btn-accent" onClick={handleSave}>
-              Save Scenario
+              {accountantCopy.saveLabel}
             </button>
           </div>
         </header>
 
+        {accountantMode ? (
+          <section className="tax-workbench-accountant-banner" aria-label="Accountant mode status">
+            <div>
+              <strong>Accountant Mode is active</strong>
+              <span>Exports, labels, and review guidance are now framed for audit handoff and filing review.</span>
+            </div>
+            <div className="tax-workbench-accountant-banner-meta">
+              <span>Audit trail entries</span>
+              <strong>{auditTrail.length}</strong>
+            </div>
+          </section>
+        ) : null}
+
         <div className="tax-workbench-primary-grid">
           <section className="tax-workbench-panel tax-workbench-jurisdictions">
             <DensePanelHeader
-              title="Jurisdiction Ledger"
+              title={accountantCopy.jurisdictionTitle}
               meta={`Tax year ${taxYear === "2026" ? "2024/25" : taxYear}`}
             />
 
@@ -1389,8 +1441,8 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
           <section className="tax-workbench-panel tax-workbench-ledger">
             <DensePanelHeader
-              title="Capital Gains Input Ledger"
-              subtitle="All amounts in USD"
+              title={accountantCopy.ledgerTitle}
+              subtitle={accountantCopy.ledgerSubtitle}
               actions={
                 <InlineControlGroup>
                   <button
@@ -1574,7 +1626,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
           <aside className="tax-workbench-panel tax-workbench-summary">
             <DensePanelHeader
-              title="Decision Summary"
+              title={accountantCopy.summaryTitle}
               subtitle={`${countryFlag(jurisdictions[0] || "USA")} ${summaryPreview.jurisdiction}`}
             />
 
@@ -1621,7 +1673,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
             </div>
 
             <button type="submit" className="tax-workbench-primary-btn" aria-describedby={validationSummaryId}>
-              Calculate estimated liabilities
+              {accountantCopy.primaryAction}
             </button>
 
             <button
@@ -1655,7 +1707,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
         <section className="tax-workbench-panel tax-workbench-scenarios">
           <DensePanelHeader
-            title="Scenario Comparison"
+            title={accountantCopy.scenarioTitle}
             subtitle=""
             actions={
               <InlineControlGroup>
@@ -1717,8 +1769,8 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
         <div id={utilitiesPanelId} className="tax-workbench-secondary-grid">
           <section className="tax-workbench-panel tax-workbench-context">
             <DensePanelHeader
-              title="Advanced Context"
-              subtitle="Capture basis method, dates, residency, credits, and import notes without interrupting the main ledger."
+              title={accountantCopy.utilitiesTitle}
+              subtitle={accountantCopy.utilitiesSubtitle}
               actions={
                 <button type="button" className="tax-workbench-link-btn" onClick={handleReset}>
                   Reset inputs
@@ -1984,8 +2036,8 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
           <section className="tax-workbench-panel tax-workbench-results">
             <DensePanelHeader
-              title="Calculated Liabilities"
-              subtitle={results.length ? `${results.length} jurisdiction output${results.length === 1 ? "" : "s"}` : "Run a calculation to populate jurisdiction outputs."}
+              title={accountantCopy.resultsTitle}
+              subtitle={accountantCopy.resultsSubtitle}
             />
 
             {results.length ? (
@@ -2062,7 +2114,7 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
         ) : null}
 
         <details className="tax-workbench-panel tax-workbench-footer">
-          <summary>Compliance & sources</summary>
+          <summary>{accountantCopy.footerTitle}</summary>
           <div className="tax-workbench-footer-body">
             <p>
               This estimator is informational only and does not replace tax advice. Validate rates, treaty treatment, entity structure, and filing rules with a qualified advisor.
@@ -2085,8 +2137,8 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
       <RightRailDrawer
         open={showSavedScenarios}
         onClose={() => setShowSavedScenarios(false)}
-        title="Saved Tax Scenarios"
-        subtitle="Reusable estimate states with jurisdiction, context, and stored outputs."
+        title={accountantMode ? "Saved Review Packs" : "Saved Tax Scenarios"}
+        subtitle={accountantMode ? "Reusable accountant-facing estimate states with jurisdiction context, notes, and stored outputs." : "Reusable estimate states with jurisdiction, context, and stored outputs."}
       >
         <div className="tax-workbench-saved-list">
           {savedEstimates.length ? (

@@ -118,7 +118,7 @@ const pricesQuerySchema = z.object({
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(100),
-  type: z.enum(["tradfi", "crypto", "indicator", "indicators"]).optional().default("tradfi"),
+  type: z.enum(["tradfi", "crypto", "indicator", "indicators", "commodity", "commodities"]).optional().default("tradfi"),
 });
 
 const emailRequestSchema = z.object({
@@ -225,6 +225,12 @@ const cryptoOptionsSchema = z.object({
   expiry: z.union([z.string(), z.number()]).optional().nullable(),
 });
 
+const equityOptionsQuerySchema = z.object({
+  underlying: z.string().min(1).max(15).toUpperCase().trim().optional().default("SPY"),
+  expiry: z.string().max(20).trim().optional().nullable(),
+  limit: z.coerce.number().int().positive().max(500).optional().default(160),
+});
+
 const supportedExchangeIds = [
   "binance",
   "bybit",
@@ -317,5 +323,6 @@ module.exports = {
   twoFactorEnableSchema,
   passkeyRegisterSchema,
   cryptoOptionsSchema,
+  equityOptionsQuerySchema,
   exchangeKeySchema,
 };

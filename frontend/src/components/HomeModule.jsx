@@ -5,6 +5,7 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { zeninFetchJson } from "../utils/zeninFetch";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
@@ -80,7 +81,9 @@ export function HomeModule({
   onViewAllPositions,
   onViewFullMetrics,
   onOpenWatchlist,
-  onOpenAnalytics
+  onOpenAnalytics,
+  openMarketContextOnMount = false,
+  onMarketContextOpened
 }) {
   const moversHorizons = getAppRuntimeConfig()?.ui?.moversHorizons || {
     daily: { label: "Daily", interval: "1D" },
@@ -128,6 +131,11 @@ export function HomeModule({
   const [homeEquitiesSnapshot, setHomeEquitiesSnapshot] = useState(null);
   const [eventsData, setEventsData] = useState([]);
   const [marketDataLoading, setMarketDataLoading] = useState(false);
+  const [marketContextHealth, setMarketContextHealth] = useState({
+    status: "idle",
+    staleSources: [],
+    unavailableSources: [],
+  });
   const [showSavedItemsDrawer, setShowSavedItemsDrawer] = useState(false);
   const [showSignalArchiveDrawer, setShowSignalArchiveDrawer] = useState(false);
   const [pendingDismissCard, setPendingDismissCard] = useState(null);
@@ -392,21 +400,19 @@ export function HomeModule({
     let cancelled = false;
     const hydrateTodayView = async () => {
       try {
-        const [macroRes, earningsRes] = await Promise.all([
-          fetch(`${BACKEND_URL}/macro-indicators?country=USA`),
-          fetch(`${BACKEND_URL}/earnings-calendar`)
+        const [macroPayload, earningsPayload] = await Promise.allSettled([
+          zeninFetchJson("/macro-indicators?country=USA"),
+          zeninFetchJson("/earnings-calendar")
         ]);
-
-        let macroPayload = null;
-        let earningsPayload = null;
-        if (macroRes.ok) macroPayload = await macroRes.json();
-        if (earningsRes.ok) earningsPayload = await earningsRes.json();
         if (cancelled) return;
 
-        const macroRows = Array.isArray(macroPayload?.indicators)
-          ? macroPayload.indicators
-          : Array.isArray(macroPayload?.data)
-          ? macroPayload.data
+        const macroValue = macroPayload.status === "fulfilled" ? macroPayload.value : null;
+        const earningsValue = earningsPayload.status === "fulfilled" ? earningsPayload.value : null;
+
+        const macroRows = Array.isArray(macroValue?.indicators)
+          ? macroValue.indicators
+          : Array.isArray(macroValue?.data)
+          ? macroValue.data
           : [];
         const vixRow = macroRows.find((row) => String(row?.name || row?.indicator || "").toLowerCase().includes("vix"));
         const rateRow = macroRows.find((row) => String(row?.name || row?.indicator || "").toLowerCase().includes("interest"));
@@ -416,12 +422,12 @@ export function HomeModule({
           ? vixValue > 25 ? "Risk Off" : vixValue < 15 ? "Risk On" : "Balanced"
           : "Neutral";
 
-        const earningsRows = Array.isArray(earningsPayload?.events)
-          ? earningsPayload.events
-          : Array.isArray(earningsPayload?.rows)
-          ? earningsPayload.rows
-          : Array.isArray(earningsPayload)
-          ? earningsPayload
+        const earningsRows = Array.isArray(earningsValue?.events)
+          ? earningsValue.events
+          : Array.isArray(earningsValue?.rows)
+          ? earningsValue.rows
+          : Array.isArray(earningsValue)
+          ? earningsValue
           : [];
         setEventRows(earningsRows.slice(0, 8));
         setTodayView({
@@ -732,28 +738,64 @@ export function HomeModule({
       setMarketDataLoading(true);
       
       try {
-        const [macroRes, eventsRes, equitiesRes] = await Promise.all([
-          fetch(`${BACKEND_URL}/macro-indicators?country=USA`),
-          fetch(`${BACKEND_URL}/economic-calendar`),
-          fetch(`${BACKEND_URL}/analytics/equities`)
+        const [macroRes, eventsRes, equitiesRes] = await Promise.allSettled([
+          zeninFetchJson("/macro-indicators?country=USA"),
+          zeninFetchJson("/economic-calendar"),
+          zeninFetchJson("/analytics/equities")
         ]);
-        
-        if (macroRes.ok) {
-          const data = await macroRes.json();
-          if (data.metrics) setMacroData(data.metrics);
-        }
-        
-        if (eventsRes.ok) {
-          const data = await eventsRes.json();
-          if (data.events) setEventsData(data.events);
+
+        const staleSources = [];
+        const unavailableSources = [];
+
+        if (macroRes.status === "fulfilled") {
+          const data = macroRes.value;
+          setMacroData(Array.isArray(data?.metrics) ? data.metrics : []);
+          if (data?.stale) staleSources.push("macro");
+          if (data?.unavailable) unavailableSources.push("macro");
+        } else {
+          setMacroData([]);
+          unavailableSources.push("macro");
         }
 
-        if (equitiesRes.ok) {
-          const data = await equitiesRes.json();
-          setHomeEquitiesSnapshot(data);
+        if (eventsRes.status === "fulfilled") {
+          const data = eventsRes.value;
+          setEventsData(Array.isArray(data?.events) ? data.events : []);
+          if (data?.stale) staleSources.push("calendar");
+          if (data?.unavailable) unavailableSources.push("calendar");
+        } else {
+          setEventsData([]);
+          unavailableSources.push("calendar");
         }
+
+        if (equitiesRes.status === "fulfilled") {
+          const data = equitiesRes.value;
+          setHomeEquitiesSnapshot(data);
+          if (data?.stale) staleSources.push("equities");
+          if (data?.unavailable) unavailableSources.push("equities");
+        } else {
+          setHomeEquitiesSnapshot(null);
+          unavailableSources.push("equities");
+        }
+
+        setMarketContextHealth({
+          status: unavailableSources.length
+            ? "degraded"
+            : staleSources.length
+            ? "stale"
+            : "live",
+          staleSources,
+          unavailableSources,
+        });
       } catch (err) {
         console.error("Market Context: Fetch failed", err);
+        setMacroData([]);
+        setEventsData([]);
+        setHomeEquitiesSnapshot(null);
+        setMarketContextHealth({
+          status: "offline",
+          staleSources: [],
+          unavailableSources: ["macro", "calendar", "equities"],
+        });
       } finally {
         setMarketDataLoading(false);
       }
@@ -761,6 +803,12 @@ export function HomeModule({
     
     fetchData();
   }, [marketDetailOpen, marketRefreshNonce]);
+
+  useEffect(() => {
+    if (!openMarketContextOnMount) return;
+    setMarketDetailOpen(true);
+    onMarketContextOpened?.();
+  }, [openMarketContextOnMount, onMarketContextOpened]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1290,49 +1338,6 @@ export function HomeModule({
       .slice(0, 6);
   }, [activeOptionsTrades, moversWithChange, multiChainCache, portfolio, spotPrices, totalAccountEquity]);
 
-  const marketSignals = useMemo(() => {
-    const strongestGainer = marketDetailGainers[0] || gainers[0];
-    const strongestLoser = marketDetailLosers[0] || losers[0];
-    const rows = [
-      strongestGainer ? {
-        title: `${strongestGainer.symbol} Momentum`,
-        text: `${strongestGainer.name || strongestGainer.symbol} is leading selected-market strength.`,
-        type: classifyMarketAsset(strongestGainer),
-        tone: "bullish",
-        age: "1h ago"
-      } : null,
-      activeOptionsTrades.length ? {
-        title: "Options Flow Spike",
-        text: `${activeOptionsTrades.length} active options positions are contributing to portfolio sensitivity.`,
-        type: "options",
-        tone: "bullish",
-        age: "2h ago"
-      } : null,
-      strongestLoser ? {
-        title: `${strongestLoser.symbol} Pressure Watch`,
-        text: `${strongestLoser.name || strongestLoser.symbol} is the weakest selected-market signal.`,
-        type: classifyMarketAsset(strongestLoser),
-        tone: "bearish",
-        age: "2h ago"
-      } : null,
-      {
-        title: "Gold Strength as Defensive Rotation",
-        text: "Gold remains a useful cross-asset risk appetite check.",
-        type: "commodities",
-        tone: "bullish",
-        age: "3h ago"
-      },
-      {
-        title: "Crude Oil Breakout Watch",
-        text: "Energy prices can affect inflation expectations and rate-sensitive assets.",
-        type: "commodities",
-        tone: "watch",
-        age: "4h ago"
-      }
-    ];
-    return rows.filter(Boolean).slice(0, 5);
-  }, [activeOptionsTrades.length, gainers, losers, marketDetailGainers, marketDetailLosers]);
-
   const macroContextRows = useMemo(() => {
     if (macroData.length > 0) {
       return macroData.map(m => {
@@ -1356,30 +1361,8 @@ export function HomeModule({
         };
       }).slice(0, 6);
     }
-
-    const vix = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : null;
-    const rates = Number.isFinite(Number(todayView.rates)) ? Number(todayView.rates) : null;
-    
-    const getMacroPrice = (symbols, keywords) => {
-      const asset = moversUniverse.find((a) => 
-        symbols.includes(String(a?.symbol || "").toUpperCase()) || 
-        keywords.some(k => String(a?.name || "").toLowerCase().includes(k))
-      );
-      return (asset && Number(asset.price) > 0) ? Number(asset.price) : null;
-    };
-
-    const goldPrice = getMacroPrice(["GC", "GLD", "XAUUSD=X"], ["gold spot", "gold futures"]);
-    const crudePrice = getMacroPrice(["CL", "WTI", "USO"], ["wti crude", "crude oil"]);
-    const formatOptionalMoney = (value) => Number.isFinite(Number(value)) ? formatMoney(value) : "—";
-    const formatOptionalFixed = (value, suffix = "") => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}${suffix}` : "—";
-
-    return [
-      { indicator: "Fed Funds Rate", value: formatOptionalFixed(rates, "%"), change: "—", tone: "neutral", series: [] },
-      { indicator: "VIX Index", value: formatOptionalFixed(vix), change: "—", tone: "neutral", series: [] },
-      { indicator: "Gold (Spot)", value: formatOptionalMoney(goldPrice), change: "—", tone: "neutral", series: [], color: "#f59e0b" },
-      { indicator: "WTI Crude", value: formatOptionalMoney(crudePrice), change: "—", tone: "neutral", series: [], color: "#ef4444" }
-    ];
-  }, [macroData, formatMoney, moversUniverse, todayView.rates, todayView.vix]);
+    return [];
+  }, [macroData]);
 
   const upcomingEvents = useMemo(() => {
     if (eventsData.length > 0) {
@@ -1397,21 +1380,67 @@ export function HomeModule({
         };
       });
     }
-
-    const source = Array.isArray(eventRows) && eventRows.length ? eventRows : [
-      { date: "May 14", title: "CPI (YoY)", time: "8:30 AM ET", impact: "High Impact" },
-      { date: "May 15", title: "Retail Sales (MoM)", time: "8:30 AM ET", impact: "Medium Impact" },
-      { date: "May 15", title: "FOMC Meeting Minutes", time: "2:00 PM ET", impact: "High Impact" },
-      { date: "May 17", title: "Building Permits (MoM)", time: "8:30 AM ET", impact: "Low Impact" },
-      { date: "May 17", title: "U. of Michigan Sentiment", time: "10:00 AM ET", impact: "Medium Impact" }
-    ];
-    return source.slice(0, 5).map((event, idx) => ({
-      date: event?.date || event?.reportDate || event?.start || `May ${14 + idx}`,
-      title: event?.title || event?.event || event?.symbol || "Market event",
-      time: event?.time || event?.period || "8:30 AM ET",
-      impact: event?.impact || (idx % 3 === 0 ? "High Impact" : idx % 3 === 1 ? "Medium Impact" : "Low Impact")
+    const earningsSource = Array.isArray(eventRows) ? eventRows : [];
+    return earningsSource.slice(0, 5).map((event) => ({
+      date: event?.date || event?.reportDate || event?.start || "Upcoming",
+      title: event?.title || event?.event || event?.symbol || "Earnings event",
+      time: event?.time || event?.period || "",
+      impact: event?.impact || "Watch",
+      country: event?.country || "Earnings"
     }));
-  }, [eventRows]);
+  }, [eventRows, eventsData]);
+
+  const optionsTheta = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).reduce(
+    (sum, trade) => sum + Number(trade?.theta || trade?.greeks?.theta || 0),
+    0
+  );
+
+  const marketSignals = useMemo(() => {
+    const strongestGainer = marketDetailGainers[0] || gainers[0];
+    const strongestLoser = marketDetailLosers[0] || losers[0];
+    const leadMacroMove = macroData
+      .filter((row) => Number.isFinite(Number(row?.changePercent)))
+      .sort((a, b) => Math.abs(Number(b?.changePercent || 0)) - Math.abs(Number(a?.changePercent || 0)))[0] || null;
+    const nextEvent = upcomingEvents[0] || null;
+    const rows = [
+      strongestGainer ? {
+        title: `${strongestGainer.symbol} Momentum`,
+        text: `${strongestGainer.name || strongestGainer.symbol} is leading selected-market strength.`,
+        type: classifyMarketAsset(strongestGainer),
+        tone: "bullish",
+        source: moversHorizons[moversHorizon]?.label || "Selected horizon"
+      } : null,
+      activeOptionsTrades.length ? {
+        title: "Options Flow Spike",
+        text: `${activeOptionsTrades.length} active options positions are contributing to portfolio sensitivity.`,
+        type: "options",
+        tone: optionsTheta >= 0 ? "bullish" : "watch",
+        source: `${activeOptionsTrades.length} live positions`
+      } : null,
+      strongestLoser ? {
+        title: `${strongestLoser.symbol} Pressure Watch`,
+        text: `${strongestLoser.name || strongestLoser.symbol} is the weakest selected-market signal.`,
+        type: classifyMarketAsset(strongestLoser),
+        tone: "bearish",
+        source: moversHorizons[moversHorizon]?.label || "Selected horizon"
+      } : null,
+      leadMacroMove ? {
+        title: leadMacroMove.label,
+        text: `${leadMacroMove.label} moved ${Number(leadMacroMove.changePercent || 0) >= 0 ? "higher" : "lower"} versus the previous reading.`,
+        type: "macro",
+        tone: Number(leadMacroMove.changePercent || 0) >= 0 ? "bullish" : "bearish",
+        source: "Macro indicators"
+      } : null,
+      nextEvent ? {
+        title: nextEvent.title,
+        text: `${nextEvent.impact} event scheduled for ${nextEvent.date}${nextEvent.time ? ` • ${nextEvent.time}` : ""}.`,
+        type: "macro",
+        tone: String(nextEvent.impact || "").toLowerCase().includes("high") ? "watch" : "bullish",
+        source: nextEvent.country || "Economic calendar"
+      } : null
+    ];
+    return rows.filter(Boolean).slice(0, 5);
+  }, [activeOptionsTrades.length, gainers, losers, macroData, marketDetailGainers, marketDetailLosers, moversHorizon, optionsTheta, upcomingEvents]);
 
   const stablecoinSymbols = new Set(["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"]);
   const isCashLikeAsset = (asset) => {
@@ -1551,10 +1580,6 @@ export function HomeModule({
   const cashWeightPct = totalAccountEquity > 0 ? (allocationBreakdown.cashValue / totalAccountEquity) * 100 : 0;
   const positionsCount = (Array.isArray(portfolio) ? portfolio.length : 0) + (Array.isArray(activeOptionsTrades) ? activeOptionsTrades.length : 0);
   const betaProxy = Math.max(0, Math.min(1.5, (100 - cashWeightPct) / 100));
-  const optionsTheta = (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).reduce(
-    (sum, trade) => sum + Number(trade?.theta || trade?.greeks?.theta || 0),
-    0
-  );
   const buyingPowerPct = totalAccountEquity > 0 ? (liveAvailableBalance / totalAccountEquity) * 100 : 0;
   const impliedVolDisplay = Number.isFinite(Number(todayView.vix))
     ? `${Number(todayView.vix).toFixed(1)}`
@@ -1585,6 +1610,18 @@ export function HomeModule({
     eventRows.length ||
     quickActions.length
   );
+  const marketContextPreviewRows = useMemo(() => {
+    const combined = [...marketDetailGainers, ...marketDetailLosers]
+      .sort((a, b) => Math.abs(Number(b?.__moverChange || 0)) - Math.abs(Number(a?.__moverChange || 0)));
+    const seen = new Set();
+    return combined.filter((row) => {
+      const key = String(row?.symbol || "").toUpperCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 4);
+  }, [marketDetailGainers, marketDetailLosers]);
+  const nextMarketEvent = upcomingEvents[0] || null;
 
   const attentionCards = [
     ...(missingFlowRows.length ? [{
@@ -1875,6 +1912,9 @@ export function HomeModule({
     : null;
   const vixValue = Number.isFinite(Number(todayView.vix)) ? Number(todayView.vix) : null;
   const riskOn = Number.isFinite(vixValue) && Number.isFinite(marketBreadthPct) && vixValue < 20 && marketBreadthPct >= 50;
+  const breadthScore = Number.isFinite(Number(marketBreadthPct)) ? Math.max(0, Math.min(100, Number(marketBreadthPct))) : 50;
+  const vixScore = Number.isFinite(Number(vixValue)) ? Math.max(0, Math.min(100, 100 - (Number(vixValue) * 3))) : 50;
+  const marketRegimeScore = Math.round((breadthScore * 0.55) + (vixScore * 0.45));
   const finvizDesk = homeEquitiesSnapshot?.finvizDesk || {};
   const finvizBreadth = homeEquitiesSnapshot?.marketBreadth || null;
   const finvizFactorLeader = finvizDesk?.factorLeader || null;
@@ -1942,6 +1982,22 @@ export function HomeModule({
     setHomeLastUpdatedAt(Date.now());
     setMarketRefreshNonce((value) => value + 1);
     setHomeToast("Market context refreshed.");
+  };
+
+  const marketContextStatusText = marketDataLoading
+    ? "Refreshing live feeds"
+    : marketContextHealth.status === "live"
+    ? "Live feeds connected"
+    : marketContextHealth.status === "stale"
+    ? `Using delayed ${marketContextHealth.staleSources.join(", ")} data`
+    : marketContextHealth.status === "degraded"
+    ? `Missing ${marketContextHealth.unavailableSources.join(", ")} feed${marketContextHealth.unavailableSources.length > 1 ? "s" : ""}`
+    : marketContextHealth.status === "offline"
+    ? "Backend feeds unavailable"
+    : "Waiting for live feeds";
+
+  const openMarketContextDetail = () => {
+    setMarketDetailOpen(true);
   };
 
   const savedItemsCount =
@@ -2027,10 +2083,19 @@ export function HomeModule({
       <div className="view-container market-context-page">
         {homeToast ? <div className="home-v3-toast" role="status">{homeToast}</div> : null}
         <header className="market-context-detail-header">
-          <div>
+          <div className="market-context-detail-copy">
             <button type="button" className="market-context-back" onClick={() => setMarketDetailOpen(false)}>Back to Overview</button>
-            <h2>Market Context</h2>
-            <p>Daily movers and broader signals affecting your portfolio.</p>
+            <div className="market-context-page-label">Home Intelligence</div>
+            <div className="market-context-title-row">
+              <h2>Market Context</h2>
+              <span className={`market-context-status ${marketContextHealth.status}`}>{marketContextStatusText}</span>
+            </div>
+            <p>Cross-asset context for the positions, watchlist names, and macro releases shaping today&apos;s book.</p>
+            <div className="market-context-snapshot">
+              <span>Scope: {marketScope === "all" ? "All assets" : marketScope}</span>
+              <span>Region: {marketRegion === "global" ? "Global" : marketRegion}</span>
+              <span>Updated {new Date(homeLastUpdatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+            </div>
           </div>
           <div className="market-context-toolbar" aria-label="Market context controls">
             <label>
@@ -2071,14 +2136,17 @@ export function HomeModule({
             <button type="button" className="market-context-refresh" onClick={refreshMarketDetail}>
               <span aria-hidden="true">↻</span>
               <strong>Refresh</strong>
-              <em>Updated just now</em>
+              <em>{marketContextStatusText}</em>
             </button>
           </div>
         </header>
 
         <section className="market-context-panel market-summary-panel">
           <div className="market-panel-head">
-            <h3>Market Summary</h3>
+            <div>
+              <h3>Market Summary</h3>
+              <p>Live desk snapshot pulled from equities breadth, flows, movers, and portfolio telemetry.</p>
+            </div>
           </div>
           <div className="market-summary-grid">
             {marketSummaryCards.map((card) => (
@@ -2087,8 +2155,8 @@ export function HomeModule({
             <div className="market-summary-card market-regime-card">
               <span>Market Regime</span>
               <div className={riskOn ? "market-regime-value positive" : "market-regime-value negative"}>{riskOn ? "Risk-On" : "Risk-Off"}</div>
-              <p>{riskOn ? "Improving risk appetite" : "Defensive risk appetite"}</p>
-              <MarketRegimeGauge value={riskOn ? 74 : 38} />
+              <p>{riskOn ? "Breadth and volatility favour risk participation." : "Volatility or breadth still argue for defensive positioning."}</p>
+              <MarketRegimeGauge value={marketRegimeScore} />
             </div>
           </div>
         </section>
@@ -2096,8 +2164,11 @@ export function HomeModule({
         <section className="market-context-main-grid">
           <div className="market-context-panel market-impact-panel">
             <div className="market-panel-head">
-              <h3>Portfolio Impact</h3>
-              <button type="button" onClick={() => onViewAllPositions?.()}>View full</button>
+              <div>
+                <h3>Portfolio Impact</h3>
+                <p>Holdings and option overlays ranked by live contribution to book movement.</p>
+              </div>
+              <button type="button" onClick={() => onViewAllPositions?.()}>View holdings</button>
             </div>
             <div className="market-impact-table">
               <div className="market-impact-row market-impact-header">
@@ -2135,8 +2206,11 @@ export function HomeModule({
 
           <div className="market-context-panel market-top-movers-panel">
             <div className="market-panel-head">
-              <h3>Top Movers</h3>
-              <button type="button" onClick={() => onOpenWatchlist?.()}>View all</button>
+              <div>
+                <h3>Top Movers</h3>
+                <p>Fastest moving names inside the selected desk scope.</p>
+              </div>
+              <button type="button" onClick={() => onOpenWatchlist?.()}>Open watchlist</button>
             </div>
             <div className="market-mover-tabs">
               {["equities", "crypto", "options", "commodities", "macro"].map((tab) => (
@@ -2153,54 +2227,63 @@ export function HomeModule({
         <section className="market-context-bottom-grid">
           <div className="market-context-panel">
             <div className="market-panel-head">
-              <div><h3>Market Signals</h3><p>AI-curated insights across markets</p></div>
-              <button type="button" onClick={() => onOpenAnalytics?.()}>View all signals</button>
+              <div><h3>Market Signals</h3><p>Signals assembled from live movers, macro releases, calendar events, and options exposure.</p></div>
+              <button type="button" onClick={() => onOpenAnalytics?.()}>Open analytics</button>
             </div>
             <div className="market-signal-list">
-              {marketSignals.map((signal) => (
+              {marketSignals.length ? marketSignals.map((signal) => (
                 <div key={signal.title} className="market-signal-row">
                   <MarketAssetLogo symbol={signal.title} type={signal.type} />
                   <div><strong>{signal.title}</strong><span>{signal.text}</span></div>
                   <MarketTypeBadge type={signal.type} />
                   <span className={`market-signal-tone ${signal.tone}`}>{signal.tone}</span>
-                  <em>{signal.age}</em>
+                  <em>{signal.source}</em>
                 </div>
-              ))}
+              )) : (
+                <div className="market-empty-row">No live cross-market signals are available for this scope yet.</div>
+              )}
             </div>
-            <div className="market-powered-by">Signals powered by <strong>Zenin AI</strong></div>
+            <div className="market-powered-by">Signals update from the same feeds driving movers, macro context, and event coverage.</div>
           </div>
 
           <div className="market-context-panel">
             <div className="market-panel-head">
-              <div><h3>Macro Context</h3><p>Key macroeconomic indicators</p></div>
-              <button type="button" onClick={() => onOpenAnalytics?.()}>View full calendar</button>
+              <div><h3>Macro Context</h3><p>Country-level macro indicators from the live backend feed.</p></div>
+              <button type="button" onClick={() => onOpenAnalytics?.()}>Open analytics</button>
             </div>
             <div className="market-macro-table">
-              {macroContextRows.map((row) => (
+              {macroContextRows.length ? macroContextRows.map((row) => (
                 <div key={row.indicator} className="market-macro-row">
                   <span>{row.indicator}</span>
                   <strong>{row.value}</strong>
                   <em className={row.tone}>{row.change}</em>
                   <MiniSparkline values={row.series} color={row.color || (row.tone === "negative" ? "#ef4444" : "#3b82f6")} />
                 </div>
-              ))}
+              )) : (
+                <div className="market-empty-row">Macro indicators are unavailable right now. Refresh once the backend feed is healthy.</div>
+              )}
             </div>
-            <p className="market-context-footnote">Change values represent 1D change.</p>
+            <p className="market-context-footnote">Change values reflect the backend&apos;s latest available previous-reading comparison.</p>
           </div>
 
           <div className="market-context-panel">
             <div className="market-panel-head">
-              <h3>Upcoming Events</h3>
-              <button type="button" onClick={() => onOpenAnalytics?.()}>View economic calendar</button>
+              <div>
+                <h3>Upcoming Events</h3>
+                <p>Economic calendar first, then earnings events when macro calendar rows are sparse.</p>
+              </div>
+              <button type="button" onClick={() => onOpenAnalytics?.()}>Open calendar</button>
             </div>
             <div className="market-event-list">
-              {upcomingEvents.map((event) => (
+              {upcomingEvents.length ? upcomingEvents.map((event) => (
                 <div key={`${event.date}-${event.title}`} className="market-event-row">
                   <span className="market-event-date">{String(event.date).slice(0, 8)}</span>
                   <div><strong>{event.title}</strong><span>{event.time}</span></div>
                   <em className={`market-event-impact ${String(event.impact).toLowerCase().split(" ")[0]}`}>{event.impact}</em>
                 </div>
-              ))}
+              )) : (
+                <div className="market-empty-row">No upcoming live events were returned by the backend feed.</div>
+              )}
             </div>
           </div>
         </section>
@@ -2470,6 +2553,102 @@ export function HomeModule({
         </div>
 
         <aside className="home-exec-secondary-col">
+          <section className="home-exec-panel home-exec-market-context-card">
+            <div className="home-exec-section-head">
+              <div className="home-exec-section-title-row">
+                <h2>Market Context</h2>
+                <p>Live macro, breadth, and mover signals affecting today&apos;s book.</p>
+              </div>
+              <div className="home-exec-market-context-actions">
+                <button type="button" className="home-exec-link" onClick={refreshMarketDetail}>Refresh</button>
+                <button type="button" className="home-exec-btn secondary small" onClick={openMarketContextDetail}>Open Full Page</button>
+              </div>
+            </div>
+            {marketContextAvailable ? (
+              <div className="home-exec-market-preview">
+                <div className="home-exec-market-preview-strip">
+                  <div className="home-exec-market-preview-chip">
+                    <span>Regime</span>
+                    <strong className={riskOn ? "positive" : "negative"}>{riskOn ? "Risk-On" : "Risk-Off"}</strong>
+                  </div>
+                  <div className="home-exec-market-preview-chip">
+                    <span>VIX</span>
+                    <strong>{Number.isFinite(vixValue) ? vixValue.toFixed(2) : "—"}</strong>
+                  </div>
+                  <div className="home-exec-market-preview-chip">
+                    <span>Breadth</span>
+                    <strong>{Number.isFinite(marketBreadthPct) ? `${marketBreadthPct}%` : "—"}</strong>
+                  </div>
+                  <div className="home-exec-market-preview-chip">
+                    <span>Next Event</span>
+                    <strong>{nextMarketEvent?.title || "No event feed"}</strong>
+                  </div>
+                </div>
+                <div className="home-exec-market-preview-grid">
+                  <div className="home-exec-market-preview-block">
+                    <div className="home-exec-market-preview-head">
+                      <strong>Top Movers</strong>
+                      <span>{moversHorizons[moversHorizon]?.label || "Daily"}</span>
+                    </div>
+                    <div className="home-exec-market-preview-list">
+                      {marketContextPreviewRows.length ? marketContextPreviewRows.map((row) => {
+                        const change = Number(row?.__moverChange || 0);
+                        return (
+                          <button
+                            type="button"
+                            key={`market-preview-${row.id || row.symbol}`}
+                            className="home-exec-market-preview-row"
+                            onClick={openMarketContextDetail}
+                          >
+                            <div className="home-exec-market-preview-symbol">
+                              <MarketAssetLogo symbol={row.symbol} type={row.__marketTab || row.type} />
+                              <div>
+                                <strong>{row.symbol}</strong>
+                                <span>{row.name || row.symbol}</span>
+                              </div>
+                            </div>
+                            <em className={change >= 0 ? "positive" : "negative"}>
+                              {change >= 0 ? "▲" : "▼"} {Math.abs(change).toFixed(2)}%
+                            </em>
+                          </button>
+                        );
+                      }) : (
+                        <div className="market-empty-row">No live movers yet.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="home-exec-market-preview-block">
+                    <div className="home-exec-market-preview-head">
+                      <strong>Macro Pulse</strong>
+                      <span>{upcomingEvents.length} events tracked</span>
+                    </div>
+                    <div className="home-exec-market-preview-macro">
+                      {marketSummaryCards.slice(0, 3).map((card) => (
+                        <div key={`preview-${card.label}`} className="home-exec-market-preview-macro-row">
+                          <span>{card.label}</span>
+                          <strong>{card.value}</strong>
+                        </div>
+                      ))}
+                      <div className="home-exec-market-preview-event">
+                        <span>{nextMarketEvent?.impact || "Watch"}</span>
+                        <strong>{nextMarketEvent?.title || "Macro feed updating"}</strong>
+                        <em>{nextMarketEvent?.date ? `${nextMarketEvent.date} · ${nextMarketEvent.time || "Scheduled"}` : "Upcoming catalyst"}</em>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <HomeEmptyState
+                title="Market context is warming up"
+                description="Add holdings or watchlist assets to populate live movers and macro signals."
+                cta="Open Market Context"
+                onAction={openMarketContextDetail}
+              />
+            )}
+          </section>
+
           <section className="home-exec-panel home-exec-holdings-panel">
             <div className="home-exec-section-head">
               <div className="home-exec-section-title-row">
@@ -2752,7 +2931,7 @@ function HomeSavedItemsDrawer({
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
-        className="home-v3-detail-drawer"
+        className="home-v3-detail-drawer saved-items-drawer"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -2763,12 +2942,12 @@ function HomeSavedItemsDrawer({
           <h2>Saved Items</h2>
           <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
         </div>
-        <div style={{ display: "grid", gap: 18 }}>
+        <div className="saved-items-drawer-content">
           {sections.map((section) => (
-            <section key={section.title} style={{ display: "grid", gap: 10 }}>
-              <div>
-                <strong style={{ display: "block", marginBottom: 4 }}>{section.title}</strong>
-                <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+            <section key={section.title} className="saved-items-section">
+              <div className="saved-items-section-head">
+                <strong>{section.title}</strong>
+                <span>
                   {section.rows.length ? `${section.rows.length} saved item${section.rows.length === 1 ? "" : "s"}` : section.empty}
                 </span>
               </div>
@@ -2891,23 +3070,12 @@ function HomeSignalDismissModal({ card, onClose, onConfirm }) {
 
 function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction, secondaryActionLabel, onSecondaryAction }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: 12,
-        alignItems: "center",
-        padding: "12px 14px",
-        borderRadius: 3,
-        border: "1px solid rgba(148, 163, 184, 0.14)",
-        background: "var(--color-surface-card)"
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <strong style={{ display: "block" }}>{title}</strong>
-        <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{subtitle}</span>
+    <div className="saved-items-row">
+      <div className="saved-items-row-copy">
+        <strong>{title}</strong>
+        <span>{subtitle}</span>
       </div>
-      <div style={{ display: "flex", gap: 8 }}>
+      <div className="saved-items-row-actions">
         {secondaryActionLabel ? (
           <button type="button" className="home-v3-btn secondary" onClick={onSecondaryAction}>
             {secondaryActionLabel}
@@ -2923,17 +3091,11 @@ function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction, secondaryAc
   );
 }
 
-function buildSparkValues(seed = 1, count = 24) {
-  let cursor = Math.max(1, Number(seed) || 1);
-  return Array.from({ length: count }, (_, idx) => {
-    cursor = (cursor * 9301 + 49297 + idx * 233) % 233280;
-    const wave = Math.sin((idx / Math.max(1, count - 1)) * Math.PI * 2) * 14;
-    return 48 + wave + (cursor / 233280) * 24;
-  });
-}
-
 function MiniSparkline({ values = [], color = "#38bdf8" }) {
-  const series = Array.isArray(values) && values.length ? values : buildSparkValues(8, 18);
+  const series = Array.isArray(values) ? values.filter((value) => Number.isFinite(Number(value))).map(Number) : [];
+  if (!series.length) {
+    return <div className="market-sparkline-empty" aria-hidden="true" />;
+  }
   const min = Math.min(...series);
   const max = Math.max(...series);
   const range = Math.max(1, max - min);
@@ -2949,15 +3111,16 @@ function MiniSparkline({ values = [], color = "#38bdf8" }) {
   );
 }
 
-function MarketSummaryCard({ label, value, change, tone, caption, color, seed }) {
+function MarketSummaryCard({ label, value, change, tone, caption }) {
   return (
     <div className="market-summary-card">
       <span>{label}</span>
       <div className="market-summary-value">
         <strong>{value}</strong>
-        <em className={tone}>{tone === "positive" ? "▲" : "▼"} {change}</em>
+        {change && change !== "—" ? (
+          <em className={tone}>{tone === "positive" ? "▲" : tone === "negative" ? "▼" : "•"} {change}</em>
+        ) : null}
       </div>
-      <MiniSparkline values={buildSparkValues(seed, 26)} color={color} />
       <p>{caption}</p>
     </div>
   );

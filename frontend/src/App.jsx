@@ -33,6 +33,7 @@ import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
+import { buildDevFullAccessUser, isDevFullAccessEnabled } from "./utils/devAccess";
 import { ensureZeninSessionFromSupabase, getSupabaseClient, isSupabaseConfigured, signOutEverywhere, subscribeToSupabaseAuth } from "./utils/supabaseAuth";
 import { updateAccountPlan } from "./utils/accountPlan";
 import {
@@ -256,6 +257,7 @@ function getConnectionStatusCopy(account) {
 
 function isGuestAccessRequested() {
   if (typeof window === "undefined") return false;
+  if (isDevFullAccessEnabled()) return true;
   const params = new URLSearchParams(window.location.search);
   return GUEST_ACCESS_VALUES.has(String(params.get("guest") || "").trim().toLowerCase());
 }
@@ -353,11 +355,6 @@ const SIDEBAR_SECTION_META = {
     eyebrow: "Analytics",
     description: "Scan cross-market and macro context."
   },
-  Metrics: {
-    group: "Research",
-    eyebrow: "Metrics",
-    description: "Inspect full metrics and sourced datasets."
-  },
   Options: {
     group: "Research",
     eyebrow: "Options",
@@ -409,11 +406,27 @@ const searchFallbackAssets = (query, type) => {
         countryName: String(geo?.name || "").trim()
       }));
   }
+  if (normalizedType === "commodity" || normalizedType === "commodities") {
+    return getFallbackAssetsForCategory("commodities")
+      .filter((asset) =>
+        String(asset.symbol || "").toLowerCase().includes(normalizedQuery) ||
+        String(asset.name || "").toLowerCase().includes(normalizedQuery)
+      )
+      .slice(0, 8)
+      .map((asset) => ({
+        ...asset,
+        type: "commodity",
+        category: "commodities",
+        marketType: "commodity",
+      }));
+  }
   const category = normalizedType === "crypto"
     ? "crypto"
     : normalizedType === "indicator" || normalizedType === "indicators"
       ? "indicators"
-      : "stocks";
+      : normalizedType === "commodity" || normalizedType === "commodities"
+        ? "commodities"
+        : "stocks";
   return getFallbackAssetsForCategory(category)
     .filter((asset) =>
       String(asset.symbol || "").toLowerCase().includes(normalizedQuery) ||
@@ -696,6 +709,7 @@ function App() {
   const [companyRouteAsset, setCompanyRouteAsset] = useState(null);
   const [tradeToast, setTradeToast] = useState(null);
   const searchSectionRef = useRef(null);
+  const searchTypeSelectRef = useRef(null);
   const priceCacheRef = useRef(new Map());
   const portfolioRef = useRef([]);
   const searchRequestSeqRef = useRef(0);
@@ -966,6 +980,7 @@ function App() {
     const rawType = String(asset?.type || "").trim().toLowerCase();
     const rawCategory = String(asset?.category || "").trim().toLowerCase();
     if (rawType === "indicator" || rawCategory === "indicators") return "macro";
+    if (["commodity", "commodities", "metal", "metals"].includes(rawType) || rawCategory === "commodities") return "commodity";
     return rawType === "crypto" ? "spot" : "equity";
   };
   const inferWatchlistAssetKind = (asset) => {
@@ -2504,20 +2519,23 @@ const handleOptionTradeClosed = async (tradeId) => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Metrics", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
+  const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
   const [activeSection, setActiveSection] = useState(() => {
-    const saved = localStorage.getItem("zenin_active_section");
-    return sections.includes(saved) ? saved : "Home";
+    return sections.includes(savedSection) ? savedSection : "Home";
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
-  const allowGuestAccess = useMemo(() => isGuestAccessRequested(), []);
+  const devFullAccess = useMemo(() => isDevFullAccessEnabled(), []);
+  const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (devFullAccess) return "Local Full Access";
       if (!parsed) return getGuestWorkspaceLabel();
       if (isAdminUser(parsed)) return "Admin";
       return formatPlanLabel(parsed?.currentPlan, parsed?.currentBillingCycle);
@@ -2540,6 +2558,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (devFullAccess) return "desk";
       return normalizeCurrentPlan(parsed?.currentPlan);
     } catch {
       return "starter";
@@ -2549,6 +2568,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (devFullAccess) return true;
       return isAdminUser(parsed);
     } catch {
       return false;
@@ -2558,6 +2578,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (devFullAccess) return "dev-full-access";
       return parsed?.id != null ? String(parsed.id) : "";
     } catch {
       return "";
@@ -2567,12 +2588,13 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
+      if (devFullAccess) return "Local Full Access";
       return String(parsed?.displayName || "").trim();
     } catch {
       return "";
     }
   });
-  const [isGuestUser, setIsGuestUser] = useState(() => allowGuestAccess || !hasStoredAuthSession());
+  const [isGuestUser, setIsGuestUser] = useState(() => devFullAccess || allowGuestAccess || !hasStoredAuthSession());
 
   const [themeMode, setThemeMode] = useState(() => {
     try {
@@ -2682,7 +2704,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     [sections, currentPlan, isAdmin, isGuestUser]
   );
   const sidebarNavigationGroups = useMemo(() => {
-    const hiddenRailSections = new Set(isSidebarCollapsed ? ["Metrics", "Predictions"] : ["Metrics"]);
+    const hiddenRailSections = new Set(devFullAccess ? [] : isSidebarCollapsed ? ["Predictions"] : []);
     const visibleSections = accessibleSections.filter((section) => !hiddenRailSections.has(section));
     return SIDEBAR_GROUP_ORDER.map((group) => ({
       label: group,
@@ -2695,7 +2717,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         }
       })).filter((entry) => entry.meta.group === group)
     })).filter((group) => group.items.length > 0);
-  }, [accessibleSections, isSidebarCollapsed]);
+  }, [accessibleSections, devFullAccess, isSidebarCollapsed]);
   const handleLogout = useCallback(async () => {
     const keysToRemove = [
       "zenin_auth_user",
@@ -2768,6 +2790,30 @@ const handleOptionTradeClosed = async (tradeId) => {
     let mounted = true;
 
     const hydrateRequiredAuth = async () => {
+      if (devFullAccess) {
+        const devUser = buildDevFullAccessUser();
+        localStorage.setItem("zenin_email", devUser.email);
+        localStorage.removeItem("zenin_auth_user");
+        localStorage.removeItem("zenin_auth_expires_at");
+        if (!mounted) return;
+        setUserEmail(devUser.email);
+        setIsAdmin(true);
+        setIsGuestUser(true);
+        setAuthUserId(String(devUser.id));
+        setAuthDisplayName(devUser.displayName);
+        setCurrentPlan("desk");
+        setCurrentBillingCycle("monthly");
+        setAccountPlanLabel("Local Full Access");
+        setProfileSecurity(profileSecurityFromUser(devUser, devUser.email));
+        setActiveWorkspace(null);
+        setWorkspaceMembers([]);
+        setWorkspaceInvites([]);
+        setWorkspaceActivity([]);
+        settingsSyncReadyRef.current = false;
+        setAccessCheckLoading(false);
+        return;
+      }
+
       try {
         let res = await zeninFetch("/auth/me");
         let data = await res.json().catch(() => ({}));
@@ -2854,7 +2900,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     return () => {
       mounted = false;
     };
-  }, [allowGuestAccess]);
+  }, [allowGuestAccess, devFullAccess]);
 
   useEffect(() => {
     if (accessCheckLoading) return undefined;
@@ -2903,6 +2949,12 @@ const handleOptionTradeClosed = async (tradeId) => {
       setActiveSection(accessibleSections[0]);
     }
   }, [accessibleSections, activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "Home" && homeSubview) {
+      setHomeSubview(null);
+    }
+  }, [activeSection, homeSubview]);
 
   useEffect(() => {
     if (!bootstrapData) return;
@@ -4561,6 +4613,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       onClick={() => {
                         if (!accessibleSections.includes(section)) return;
                         if (routeState.type === "company") navigateToAppRoute();
+                        if (section === "Home") setHomeSubview(null);
                         setActiveSection(section);
                       }}
                       title={section}
@@ -4700,60 +4753,64 @@ const handleOptionTradeClosed = async (tradeId) => {
             </Suspense>
           </div>
         ) : (
-          <GenericErrorBoundary>
+          <GenericErrorBoundary resetKey={`${routeState.type}:${routeState.type === "company" ? routeState.symbol || "company" : activeSection}`}>
             <Suspense fallback={moduleLoadingFallback}>
         {activeSection === "Home" && (
           <>
             {renderConnectNudge("home")}
-            <HomeModule
-              portfolio={portfolioWithEntry}
-              trades={trades}
-              assets={assets}
-              marketMovers={homeMarketMovers}
-              macroData={homeMacroData}
-              watchlistAssets={watchlistAssets}
-              activeOptionsTrades={activeOptionsTrades}
-              multiChainCache={multiChainCache}
-              spotPrices={spotPrices}
-              onSelectAsset={setSelectedAsset}
-              accountMetrics={accountMetrics}
-              calculatePortfolioValue={calculatePortfolioValue}
-              calculatePortfolioGain={calculatePortfolioGain}
-              balance={balance}
-              onViewAllPositions={() => {
-                if (routeState.type === "company") navigateToAppRoute();
-                setActiveSection("Portfolio");
-              }}
-              onViewFullMetrics={() => {
-                if (routeState.type === "company") navigateToAppRoute();
-                setActiveSection("Metrics");
-              }}
-              onOpenWatchlist={() => {
-                if (routeState.type === "company") navigateToAppRoute();
-                setActiveSection("Watchlist");
-              }}
-              onOpenAnalytics={() => {
-                if (routeState.type === "company") navigateToAppRoute();
-                setActiveSection("Analytics");
-              }}
-            />
+            {homeSubview === "metrics" ? (
+              <div className="view-container">
+                <FullMetricsPage
+                  onBack={() => setHomeSubview(null)}
+                  themeMode={themeMode}
+                  toggleTheme={toggleTheme}
+                  portfolio={portfolioWithEntry}
+                  trades={trades}
+                  activeOptionsTrades={activeOptionsTrades}
+                  accountMetrics={accountMetrics}
+                  assets={assets}
+                  spotPrices={spotPrices}
+                  multiChainCache={multiChainCache}
+                />
+              </div>
+            ) : (
+              <HomeModule
+                portfolio={portfolioWithEntry}
+                trades={trades}
+                assets={assets}
+                marketMovers={homeMarketMovers}
+                macroData={homeMacroData}
+                watchlistAssets={watchlistAssets}
+                activeOptionsTrades={activeOptionsTrades}
+                multiChainCache={multiChainCache}
+                spotPrices={spotPrices}
+                onSelectAsset={setSelectedAsset}
+                accountMetrics={accountMetrics}
+                calculatePortfolioValue={calculatePortfolioValue}
+                calculatePortfolioGain={calculatePortfolioGain}
+                balance={balance}
+                openMarketContextOnMount={homeSubview === "market-context"}
+                onMarketContextOpened={() => setHomeSubview(null)}
+                onViewAllPositions={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Portfolio");
+                }}
+                onViewFullMetrics={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Home");
+                  setHomeSubview("metrics");
+                }}
+                onOpenWatchlist={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Watchlist");
+                }}
+                onOpenAnalytics={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Analytics");
+                }}
+              />
+            )}
           </>
-        )}
-        {activeSection === "Metrics" && (
-          <div className="view-container">
-            <FullMetricsPage 
-              onBack={() => setActiveSection("Home")} 
-              themeMode={themeMode} 
-              toggleTheme={toggleTheme} 
-              portfolio={portfolioWithEntry}
-              trades={trades}
-              activeOptionsTrades={activeOptionsTrades}
-              accountMetrics={accountMetrics}
-              assets={assets}
-              spotPrices={spotPrices}
-              multiChainCache={multiChainCache}
-            />
-          </div>
         )}
 
         {activeSection === "Watchlist" && (
@@ -4832,6 +4889,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                       ? `Search ${
                         searchType === "tradfi"
                           ? "stocks"
+                          : searchType === "commodity"
+                            ? "commodities"
                           : searchType === "indicator"
                             ? "for Country"
                             : "crypto"
@@ -4840,27 +4899,44 @@ const handleOptionTradeClosed = async (tradeId) => {
                   }
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
+                  aria-label="Search assets"
                 />
-                <div className="search-type-buttons">
-                  <button
-                    className={`search-type-button ${searchType === "tradfi" ? "active" : ""}`}
-                    onClick={() => setSearchType("tradfi")}
-                  >
-                    Stocks
-                  </button>
-                  <button
-                    className={`search-type-button ${searchType === "crypto" ? "active" : ""}`}
-                    onClick={() => setSearchType("crypto")}
-                  >
-                    Crypto
-                  </button>
-                  <button
-                    className={`search-type-button ${searchType === "indicator" ? "active" : ""}`}
-                    onClick={() => setSearchType("indicator")}
-                  >
-                    Indicator
-                  </button>
-                </div>
+                <label className="search-type-select-wrap">
+                  <span>Search in</span>
+                  <div className="search-type-select-shell">
+                    <select
+                      ref={searchTypeSelectRef}
+                      className="search-type-select"
+                      value={searchType}
+                      onChange={(event) => setSearchType(event.target.value)}
+                      aria-label="Choose asset class to search"
+                    >
+                      <option value="tradfi">Stocks</option>
+                      <option value="crypto">Crypto</option>
+                      <option value="indicator">Indicator</option>
+                      <option value="commodity">Commodities</option>
+                    </select>
+                    <span className="search-type-select-caret" aria-hidden="true">▾</span>
+                  </div>
+                </label>
+              </div>
+              <div className="search-context-hint" aria-live="polite">
+                Searching in{" "}
+                <button
+                  type="button"
+                  className="search-context-hint-button"
+                  onClick={() => searchTypeSelectRef.current?.focus()}
+                  aria-label="Focus asset class dropdown"
+                >
+                  {searchType === "tradfi"
+                    ? "Stocks"
+                    : searchType === "crypto"
+                      ? "Crypto"
+                      : searchType === "indicator"
+                        ? "Indicator"
+                        : "Commodities"}{" "}
+                  ▾
+                </button>
               </div>
               {searchTerm && (
                 <div className="search-results">
@@ -4976,7 +5052,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                   if (routeState.type === "company") navigateToAppRoute();
                   setActiveSection("Journal");
                 }}
+                onOpenMarketContext={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Home");
+                  setHomeSubview("market-context");
+                }}
                 onOpenConnections={() => openConnectWindow("manual")}
+                connectedAccounts={connectedAccounts}
                 hasDeskFeatureAccess={hasDeskFeatureAccess}
                 onOpenPlans={() => {
                   setIsSettingsOpen(true);

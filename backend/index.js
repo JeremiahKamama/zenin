@@ -51,6 +51,7 @@ const {
   searchQuerySchema,
   pricesQuerySchema,
   cryptoOptionsSchema,
+  equityOptionsQuerySchema,
   tradeLogSchema,
   watchlistBulkSchema,
 } = require("./validation");
@@ -150,8 +151,11 @@ const FRED_API_KEY = cleanApiKey(process.env.FRED_API_KEY || "");
 const EIA_API_KEY = cleanApiKey(process.env.EIA_API_KEY || "");
 const BLS_API_KEY = cleanApiKey(process.env.BLS_API_KEY || process.env.BLS_REGISTRATION_KEY || "");
 const MASSIVE_API_KEY = cleanApiKey(process.env.MASSIVE_API_KEY || process.env.POLYGON_API_KEY || "");
+const MASSIVE_REST_BASE_URL = String(process.env.MASSIVE_REST_BASE_URL || "https://api.massive.com").trim().replace(/\/+$/, "");
 const MASSIVE_WS_STOCKS_URL = String(process.env.MASSIVE_WS_STOCKS_URL || "wss://socket.massive.com/stocks").trim();
 const MASSIVE_WS_DELAYED_STOCKS_URL = String(process.env.MASSIVE_WS_DELAYED_STOCKS_URL || "wss://delayed.massive.com/stocks").trim();
+const MASSIVE_WS_OPTIONS_URL = String(process.env.MASSIVE_WS_OPTIONS_URL || "wss://socket.massive.com/options").trim();
+const MASSIVE_WS_DELAYED_OPTIONS_URL = String(process.env.MASSIVE_WS_DELAYED_OPTIONS_URL || "wss://delayed.massive.com/options").trim();
 
 const providerMemoryCache = new Map();
 const PROVIDER_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -323,6 +327,9 @@ function sanitizeMacroMetrics(metrics = []) {
       change: Number.isFinite(Number(row.change)) ? Number(row.change) : null,
       changePercent: Number.isFinite(Number(row.changePercent)) ? Number(row.changePercent) : null,
       asOf: row.asOf || null,
+      previousAsOf: row.previousAsOf || null,
+      currentAsOf: row.currentAsOf || row.asOf || null,
+      expectationAsOf: row.expectationAsOf || row.asOf || null,
       series: Array.isArray(row.series) ? row.series : []
     };
   });
@@ -897,6 +904,14 @@ const expensiveReadLimiter = rateLimit({
   message: { error: "Too many market-data requests. Please slow down." }
 });
 
+const optionsChainLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 360,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many options-chain requests. Please slow down." }
+});
+
 
 app.use(express.json({ limit: "100kb" }));
 app.use([
@@ -905,10 +920,10 @@ app.use([
   "/api/watchlist",
   "/api/finviz",
   "/api/company-profile",
-  "/api/options/crypto",
   "/api/analytics/equities",
   "/api/app/bootstrap"
 ], expensiveReadLimiter);
+app.use("/api/options/crypto", optionsChainLimiter);
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
@@ -2001,6 +2016,7 @@ const ROUTE_CACHE_TTLS_MS = {
   finviz: 15 * 60 * 1000,
   "company-profile": 15 * 60 * 1000,
   "options-chain": 45 * 1000,
+  "options-equity": 30 * 1000,
   "analytics-equities": 2 * 60 * 1000
 };
 
@@ -6236,6 +6252,22 @@ app.get("/api/search", validate(searchQuerySchema, "query"), async (req, res) =>
     if (normalizedType === "crypto") {
       const hyperResults = await fetchHyperliquidSearchResults(q);
       results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
+    } else if (normalizedType === "commodity" || normalizedType === "commodities") {
+      results = COMMODITY_UNIVERSE
+        .filter((row) => `${row.symbol} ${row.name} ${row.group} ${row.region}`.toLowerCase().includes(String(q || "").toLowerCase()))
+        .slice(0, 12)
+        .map((row) => ({
+          symbol: row.symbol,
+          name: row.name,
+          type: "commodity",
+          category: "commodities",
+          marketType: "commodity",
+          market: "Commodity",
+          group: row.group,
+          region: row.region,
+          currency: "USD",
+          source: "Commodity catalog"
+        }));
     } else if (normalizedType === "indicator" || normalizedType === "indicators") {
       results = searchForexFactoryCountries(q, 20);
     } else {
@@ -7591,6 +7623,9 @@ function buildMacroMetric(payload, config) {
     current,
     expectation,
     asOf: points[0]?.date || null,
+    previousAsOf: points[1]?.date || null,
+    currentAsOf: points[0]?.date || null,
+    expectationAsOf: points[0]?.date || null,
     series: points
       .slice()
       .reverse()
@@ -8886,18 +8921,455 @@ async function safePost(url, body, retries = 1) {
   throw lastError || new Error("All options-provider endpoints failed");
 }
 
+const DEFAULT_EQUITY_OPTIONS_UNDERLYINGS = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"];
+
+function buildMassiveRestUrl(pathname, params = {}) {
+  const normalizedPath = String(pathname || "").startsWith("/") ? String(pathname || "") : `/${String(pathname || "")}`;
+  const url = new URL(`${MASSIVE_REST_BASE_URL}${normalizedPath}`);
+  if (MASSIVE_API_KEY) {
+    url.searchParams.set("apiKey", MASSIVE_API_KEY);
+  }
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value == null || value === "") return;
+    url.searchParams.set(key, String(value));
+  });
+  return url.toString();
+}
+
+async function fetchMassiveRestJson(pathname, params = {}) {
+  if (!MASSIVE_API_KEY) throw new Error("massive_api_key_missing");
+  return fetchJsonWithTimeout(buildMassiveRestUrl(pathname, params));
+}
+
+function normalizeMassiveOptionDate(value) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeMassiveTimestamp(value) {
+  if (value == null || value === "") return null;
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const millis = numeric > 1e12 ? numeric : Math.round(numeric / 1e6);
+  const parsed = new Date(millis);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+async function fetchMassiveExchangeMap() {
+  try {
+    const payload = await cachedProviderFetch("massive:reference:exchanges", () => fetchMassiveRestJson("/v3/reference/exchanges"), 6 * 60 * 60 * 1000);
+    const rows = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : [];
+    return rows.reduce((acc, row) => {
+      const id = Number(row?.id ?? row?.exchange_id ?? row?.mic_id);
+      if (!Number.isFinite(id)) return acc;
+      acc[id] = String(row?.acronym || row?.mic || row?.name || row?.type || `Exchange ${id}`).trim();
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function readMassiveOptionRows(payload) {
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.chain)) return payload.chain;
+  if (Array.isArray(payload?.contracts)) return payload.contracts;
+  if (Array.isArray(payload?.snapshots)) return payload.snapshots;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function normalizeMassiveOptionSnapshot(row = {}, exchangeMap = {}) {
+  const details = row?.details || row?.contract || row?.option || {};
+  const lastQuote = row?.last_quote || row?.lastQuote || row?.quote || {};
+  const lastTrade = row?.last_trade || row?.lastTrade || row?.trade || {};
+  const day = row?.day || row?.session || row?.aggregate || {};
+  const greeks = row?.greeks || {};
+  const underlyingAsset = row?.underlying_asset || row?.underlyingAsset || row?.underlying || {};
+  const contractTicker = String(
+    details?.ticker ||
+    details?.symbol ||
+    row?.ticker ||
+    row?.symbol ||
+    ""
+  ).trim().toUpperCase();
+  const optionType = normalizeOptionType(
+    details?.contract_type ||
+    details?.option_type ||
+    row?.contract_type ||
+    row?.option_type,
+    contractTicker
+  );
+  const strike = firstFiniteNumber(
+    details?.strike_price,
+    details?.strike,
+    row?.strike_price,
+    row?.strike
+  );
+  const expiry = normalizeMassiveOptionDate(
+    details?.expiration_date ||
+    details?.expiry ||
+    row?.expiration_date ||
+    row?.expiry
+  );
+  const bid = firstFiniteNumber(lastQuote?.bid_price, lastQuote?.bid, row?.bid_price, row?.bid);
+  const ask = firstFiniteNumber(lastQuote?.ask_price, lastQuote?.ask, row?.ask_price, row?.ask);
+  const bidSize = firstFiniteNumber(lastQuote?.bid_size, lastQuote?.bs, row?.bid_size);
+  const askSize = firstFiniteNumber(lastQuote?.ask_size, lastQuote?.as, row?.ask_size);
+  const lastTradePrice = firstFiniteNumber(lastTrade?.price, lastTrade?.p, row?.last_price, row?.last_trade_price);
+  const lastTradeSize = firstFiniteNumber(lastTrade?.size, lastTrade?.s, row?.last_trade_size);
+  const volume = firstFiniteNumber(day?.volume, row?.volume, row?.day_volume) ?? 0;
+  const openInterest = firstFiniteNumber(row?.open_interest, row?.openInterest, row?.oi) ?? 0;
+  const impliedVolatility = firstFiniteNumber(row?.implied_volatility, row?.impliedVolatility, row?.iv, greeks?.iv);
+  const delta = firstFiniteNumber(greeks?.delta, row?.delta);
+  const gamma = firstFiniteNumber(greeks?.gamma, row?.gamma);
+  const theta = firstFiniteNumber(greeks?.theta, row?.theta);
+  const vega = firstFiniteNumber(greeks?.vega, row?.vega);
+  const underlyingPrice = firstFiniteNumber(underlyingAsset?.price, row?.underlying_price, row?.underlyingPrice);
+  const breakEven = firstFiniteNumber(row?.break_even_price, row?.breakEvenPrice, row?.break_even);
+  const bidExchangeId = firstFiniteNumber(lastQuote?.bid_exchange, lastQuote?.bx);
+  const askExchangeId = firstFiniteNumber(lastQuote?.ask_exchange, lastQuote?.ax);
+  const tradeExchangeId = firstFiniteNumber(lastTrade?.exchange, lastTrade?.x);
+  const updatedAt = normalizeMassiveTimestamp(
+    lastQuote?.sip_timestamp ||
+    lastQuote?.last_updated ||
+    lastTrade?.sip_timestamp ||
+    lastTrade?.participant_timestamp ||
+    row?.fmv_last_updated ||
+    row?.updated_at
+  );
+  const mid = bid != null && ask != null ? Number(((bid + ask) / 2).toFixed(4)) : firstFiniteNumber(row?.fmv, row?.mark, lastTradePrice);
+  const spread = bid != null && ask != null ? Number((ask - bid).toFixed(4)) : null;
+  const venueLabel = exchangeMap[Number(bidExchangeId || askExchangeId || tradeExchangeId)] || null;
+  return {
+    contractTicker,
+    optionType,
+    strike,
+    expiry,
+    bid,
+    ask,
+    bidSize,
+    askSize,
+    mid,
+    spread,
+    lastTradePrice,
+    lastTradeSize,
+    lastTradeAt: normalizeMassiveTimestamp(lastTrade?.sip_timestamp || lastTrade?.participant_timestamp || lastTrade?.trf_timestamp),
+    volume,
+    openInterest,
+    impliedVolatility,
+    delta,
+    gamma,
+    theta,
+    vega,
+    underlyingPrice,
+    breakEven,
+    bidExchangeId,
+    askExchangeId,
+    tradeExchangeId,
+    venueLabel,
+    updatedAt
+  };
+}
+
+function buildMassiveEquityOptionsPayload(underlying, rows = [], activeExpiry = null) {
+  const safeRows = Array.isArray(rows) ? rows.filter((row) => row?.optionType && Number.isFinite(Number(row?.strike))) : [];
+  const expiries = [...new Set(safeRows.map((row) => row.expiry).filter(Boolean))].sort();
+  const resolvedExpiry = activeExpiry && expiries.includes(activeExpiry) ? activeExpiry : (expiries[0] || null);
+  const filtered = resolvedExpiry ? safeRows.filter((row) => row.expiry === resolvedExpiry) : safeRows;
+  const spotPrice = firstFiniteNumber(...filtered.map((row) => row.underlyingPrice), ...safeRows.map((row) => row.underlyingPrice)) ?? 0;
+  const strikeMap = new Map();
+  filtered.forEach((row) => {
+    const key = `${row.expiry}:${row.strike}`;
+    if (!strikeMap.has(key)) strikeMap.set(key, { expiry: row.expiry, strike: row.strike, call: {}, put: {} });
+    const bucket = strikeMap.get(key);
+    if (row.optionType === "call") bucket.call = row;
+    if (row.optionType === "put") bucket.put = row;
+  });
+  const chain = [...strikeMap.values()].sort((a, b) => Number(a.strike) - Number(b.strike));
+  const callRows = filtered.filter((row) => row.optionType === "call");
+  const putRows = filtered.filter((row) => row.optionType === "put");
+  const totalCallOi = callRows.reduce((sum, row) => sum + Number(row.openInterest || 0), 0);
+  const totalPutOi = putRows.reduce((sum, row) => sum + Number(row.openInterest || 0), 0);
+  const totalCallVolume = callRows.reduce((sum, row) => sum + Number(row.volume || 0), 0);
+  const totalPutVolume = putRows.reduce((sum, row) => sum + Number(row.volume || 0), 0);
+  const nearestChainRow = spotPrice > 0 && chain.length
+    ? chain.reduce((best, row) => {
+        if (!best) return row;
+        return Math.abs(Number(row.strike || 0) - spotPrice) < Math.abs(Number(best.strike || 0) - spotPrice) ? row : best;
+      }, null)
+    : null;
+  const atmIv = nearestChainRow
+    ? firstFiniteNumber(
+        nearestChainRow?.call?.impliedVolatility != null && nearestChainRow?.put?.impliedVolatility != null
+          ? (Number(nearestChainRow.call.impliedVolatility) + Number(nearestChainRow.put.impliedVolatility)) / 2
+          : null,
+        nearestChainRow?.call?.impliedVolatility,
+        nearestChainRow?.put?.impliedVolatility
+      )
+    : null;
+  const atmStraddleMid = nearestChainRow
+    ? Number(((Number(nearestChainRow?.call?.mid || 0) || 0) + (Number(nearestChainRow?.put?.mid || 0) || 0)).toFixed(4))
+    : 0;
+  const impliedMovePct = spotPrice > 0 && atmStraddleMid > 0 ? Number(((atmStraddleMid / spotPrice) * 100).toFixed(2)) : null;
+  const strikeCrowding = chain
+    .map((row) => ({
+      strike: Number(row.strike || 0),
+      totalOi: Number(row?.call?.openInterest || 0) + Number(row?.put?.openInterest || 0),
+      totalVolume: Number(row?.call?.volume || 0) + Number(row?.put?.volume || 0),
+      callOi: Number(row?.call?.openInterest || 0),
+      putOi: Number(row?.put?.openInterest || 0),
+    }))
+    .filter((row) => row.totalOi > 0 || row.totalVolume > 0)
+    .sort((a, b) => b.totalOi - a.totalOi || b.totalVolume - a.totalVolume)
+    .slice(0, 8);
+  const termStructure = expiries.map((expiry) => {
+    const expiryRows = safeRows.filter((row) => row.expiry === expiry);
+    const ivValues = expiryRows.map((row) => Number(row.impliedVolatility)).filter(Number.isFinite);
+    const avgIv = ivValues.length ? ivValues.reduce((sum, value) => sum + value, 0) / ivValues.length : null;
+    return {
+      expiry,
+      avgIv,
+      totalOi: expiryRows.reduce((sum, row) => sum + Number(row.openInterest || 0), 0),
+      totalVolume: expiryRows.reduce((sum, row) => sum + Number(row.volume || 0), 0),
+      contracts: expiryRows.length
+    };
+  });
+  const venueMap = new Map();
+  filtered.forEach((row) => {
+    const venue = row.venueLabel || "Composite";
+    if (!venueMap.has(venue)) venueMap.set(venue, { venue, contracts: 0, volume: 0, openInterest: 0 });
+    const bucket = venueMap.get(venue);
+    bucket.contracts += 1;
+    bucket.volume += Number(row.volume || 0);
+    bucket.openInterest += Number(row.openInterest || 0);
+  });
+  const venueSummary = [...venueMap.values()].sort((a, b) => b.volume - a.volume || b.openInterest - a.openInterest).slice(0, 6);
+  const topContracts = filtered
+    .map((row) => ({
+      contractTicker: row.contractTicker,
+      expiry: row.expiry,
+      strike: row.strike,
+      optionType: row.optionType,
+      volume: Number(row.volume || 0),
+      openInterest: Number(row.openInterest || 0),
+      impliedVolatility: row.impliedVolatility,
+      mid: row.mid,
+      spread: row.spread,
+      venue: row.venueLabel || "Composite"
+    }))
+    .sort((a, b) => b.volume - a.volume || b.openInterest - a.openInterest)
+    .slice(0, 10);
+  const unusualActivity = filtered
+    .map((row) => {
+      const sizeScore = Number(row.volume || 0) * Math.max(1, Number(row.lastTradeSize || 1));
+      return {
+        contractTicker: row.contractTicker,
+        strike: row.strike,
+        expiry: row.expiry,
+        optionType: row.optionType,
+        venue: row.venueLabel || "Composite",
+        lastTradePrice: row.lastTradePrice,
+        lastTradeSize: row.lastTradeSize,
+        volume: row.volume,
+        openInterest: row.openInterest,
+        score: sizeScore,
+        lastTradeAt: row.lastTradeAt
+      };
+    })
+    .filter((row) => row.volume > 0 || row.lastTradeSize > 0)
+    .sort((a, b) => b.score - a.score || b.volume - a.volume)
+    .slice(0, 8);
+  return {
+    underlying,
+    source: "Massive REST snapshot",
+    expiries,
+    activeExpiry: resolvedExpiry,
+    chain,
+    summary: {
+      spotPrice,
+      totalCallOi,
+      totalPutOi,
+      putCallOiRatio: totalCallOi > 0 ? Number((totalPutOi / totalCallOi).toFixed(2)) : null,
+      totalCallVolume,
+      totalPutVolume,
+      putCallVolumeRatio: totalCallVolume > 0 ? Number((totalPutVolume / totalCallVolume).toFixed(2)) : null,
+      atmIv,
+      atmStraddleMid,
+      impliedMovePct,
+      contracts: filtered.length
+    },
+    strikeCrowding,
+    termStructure,
+    venueSummary,
+    topContracts,
+    unusualActivity,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 // Lyra (Derive) Crypto Options Integration
 // ---------------------------------------------------------------------------
 // ✅ STABLE Derive Options Chain Endpoint (FIXED)
 // ---------------------------------------------------------------------------
+app.get("/api/options/equity", validate(equityOptionsQuerySchema, "query"), async (req, res) => {
+  const { underlying = "SPY", expiry = null, limit = 160 } = req.query;
+  const normalizedUnderlying = String(underlying || "SPY").trim().toUpperCase();
+  const normalizedExpiry = normalizeMassiveOptionDate(expiry);
+  const snapshotParams = {
+    underlying: normalizedUnderlying,
+    expiry: normalizedExpiry || "latest",
+    limit: Number(limit || 160)
+  };
+  const cached = await readServiceSnapshot("options-equity", snapshotParams);
+  const fresh = await readFreshSnapshot("options-equity", snapshotParams, ROUTE_CACHE_TTLS_MS["options-equity"]);
+  if (fresh) {
+    return res.json(fresh);
+  }
+
+  if (!MASSIVE_API_KEY) {
+    const unavailable = {
+      underlying: normalizedUnderlying,
+      source: "Massive REST snapshot",
+      stale: true,
+      unavailable: true,
+      expiries: [],
+      activeExpiry: normalizedExpiry || null,
+      chain: [],
+      summary: {
+        spotPrice: 0,
+        totalCallOi: 0,
+        totalPutOi: 0,
+        putCallOiRatio: null,
+        totalCallVolume: 0,
+        totalPutVolume: 0,
+        putCallVolumeRatio: null,
+        atmIv: null,
+        atmStraddleMid: 0,
+        impliedMovePct: null,
+        contracts: 0
+      },
+      strikeCrowding: [],
+      termStructure: [],
+      venueSummary: [],
+      topContracts: [],
+      unusualActivity: [],
+      supportedUnderlyings: DEFAULT_EQUITY_OPTIONS_UNDERLYINGS,
+      stale_reason: "massive_api_key_missing",
+      updatedAt: new Date().toISOString()
+    };
+    return res.json(unavailable);
+  }
+
+  try {
+    const [snapshotPayload, contractsPayload, exchangeMap] = await Promise.all([
+      fetchMassiveRestJson(`/v3/snapshot/options/${encodeURIComponent(normalizedUnderlying)}`),
+      fetchMassiveRestJson("/v3/reference/options/contracts", {
+        underlying_ticker: normalizedUnderlying,
+        expired: "false",
+        limit: "1000"
+      }).catch(() => null),
+      fetchMassiveExchangeMap()
+    ]);
+    const rawRows = readMassiveOptionRows(snapshotPayload)
+      .map((row) => normalizeMassiveOptionSnapshot(row, exchangeMap))
+      .filter((row) => row.contractTicker && row.optionType && Number.isFinite(Number(row.strike)));
+
+    let payload = buildMassiveEquityOptionsPayload(normalizedUnderlying, rawRows, normalizedExpiry || null);
+    if ((!payload.expiries || payload.expiries.length === 0) && Array.isArray(contractsPayload?.results)) {
+      payload.expiries = [...new Set(contractsPayload.results.map((row) => normalizeMassiveOptionDate(row?.expiration_date || row?.expiry)).filter(Boolean))].sort();
+      payload.activeExpiry = normalizedExpiry || payload.expiries[0] || null;
+    }
+    payload.supportedUnderlyings = DEFAULT_EQUITY_OPTIONS_UNDERLYINGS;
+    payload.updatedAt = new Date().toISOString();
+    payload.stale = false;
+    payload.unavailable = false;
+    if (Number(limit) > 0 && Array.isArray(payload.chain) && payload.chain.length > Number(limit)) {
+      const targetSpot = Number(payload?.summary?.spotPrice || 0);
+      const nearestIndex = targetSpot > 0
+        ? payload.chain.reduce((bestIdx, row, idx, rows) => (
+            Math.abs(Number(row?.strike || 0) - targetSpot) < Math.abs(Number(rows[bestIdx]?.strike || 0) - targetSpot)
+              ? idx
+              : bestIdx
+          ), 0)
+        : Math.floor(payload.chain.length / 2);
+      const halfWindow = Math.floor(Number(limit) / 2);
+      const start = Math.max(0, nearestIndex - halfWindow);
+      const end = Math.min(payload.chain.length, start + Number(limit));
+      payload.chain = payload.chain.slice(Math.max(0, end - Number(limit)), end);
+    }
+    await writeServiceSnapshot("options-equity", snapshotParams, payload);
+    return res.json(payload);
+  } catch (error) {
+    console.warn("[Options] Massive equity options snapshot fallback:", error?.message || error);
+    if (cached?.payload) {
+      return res.json(applyStaleMeta(cached.payload, cached, error?.message || "massive_equity_options_failed"));
+    }
+    return res.json({
+      underlying: normalizedUnderlying,
+      source: "Massive REST snapshot",
+      stale: true,
+      unavailable: true,
+      expiries: [],
+      activeExpiry: normalizedExpiry || null,
+      chain: [],
+      summary: {
+        spotPrice: 0,
+        totalCallOi: 0,
+        totalPutOi: 0,
+        putCallOiRatio: null,
+        totalCallVolume: 0,
+        totalPutVolume: 0,
+        putCallVolumeRatio: null,
+        atmIv: null,
+        atmStraddleMid: 0,
+        impliedMovePct: null,
+        contracts: 0
+      },
+      strikeCrowding: [],
+      termStructure: [],
+      venueSummary: [],
+      topContracts: [],
+      unusualActivity: [],
+      supportedUnderlyings: DEFAULT_EQUITY_OPTIONS_UNDERLYINGS,
+      stale_reason: error?.message || "massive_equity_options_failed",
+      updatedAt: new Date().toISOString()
+    });
+  }
+});
+
 app.post("/api/options/crypto", validate(cryptoOptionsSchema), async (req, res) => {
   const { currency = "BTC", expiry } = req.body;
   const normalizedCurrency = String(currency || "BTC").toUpperCase();
+  const supportedOptionsAssets = Array.isArray(buildAppRuntimeConfig()?.options?.supportedAssets)
+    ? buildAppRuntimeConfig().options.supportedAssets.map((asset) => String(asset || "").trim().toUpperCase()).filter(Boolean)
+    : ["BTC", "ETH", "SOL", "HYPE"];
   const marketStructure = normalizedCurrency === "HYPE" ? "rfq" : "orderbook";
   const marketStructureLabel = marketStructure === "rfq" ? "RFQ" : "Orderbook";
   const marketStructureNote = marketStructure === "rfq"
     ? "HYPE on Derive can be quoted through RFQ, so full strike ladders may appear sparse or be unavailable in snapshots."
     : null;
+  if (!supportedOptionsAssets.includes(normalizedCurrency)) {
+    return res.json({
+      chain: [],
+      expiries: [],
+      unsupported: true,
+      unavailable: true,
+      supported_assets: supportedOptionsAssets,
+      source: "Derive",
+      stale_reason: `${normalizedCurrency} is not enabled for the live options ladder in this workspace.`,
+      market_metrics: { iv: 0, p_c_ratio: 0 },
+      market_structure: marketStructure,
+      market_structure_label: marketStructureLabel,
+      market_structure_note: marketStructureNote
+    });
+  }
   const cacheKey = `${normalizedCurrency}:${expiry == null ? "latest" : String(expiry)}`;
   const snapshotParams = {
     currency: normalizedCurrency,
@@ -11943,11 +12415,17 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 let subscribers = new Map();
-// key: socket -> { kind, currency, expiry, symbols, quoteType }
+// key: socket -> { kind, currency, expiry, symbols, quoteType, contracts }
 let massiveStocksSocket = null;
 let massiveStocksConnecting = false;
 const massiveStocksSubscribedSymbols = new Set();
 const massivePriceCache = new Map();
+let massiveOptionsSocket = null;
+let massiveOptionsConnecting = false;
+const massiveOptionsSubscribedContracts = new Set();
+const massiveOptionQuoteCache = new Map();
+const massiveOptionTradeCache = new Map();
+let massiveExchangeLookup = {};
 let massiveLastStatus = buildProviderStatus("Massive", Boolean(MASSIVE_API_KEY), MASSIVE_API_KEY ? "configured" : "missing_key", MASSIVE_API_KEY ? "WebSocket key configured" : "API key not configured");
 
 function sendWsJson(ws, payload) {
@@ -11966,6 +12444,37 @@ function sanitizePriceSymbols(symbols = []) {
       .map((symbol) => sanitizeSymbol(String(symbol || "").trim().toUpperCase()))
       .filter(Boolean)
   )].slice(0, 80);
+}
+
+function sanitizeOptionContractTicker(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function sanitizeOptionContracts(contracts = []) {
+  return [...new Set(
+    (Array.isArray(contracts) ? contracts : [])
+      .flatMap((value) => String(value || "").split(","))
+      .map((ticker) => sanitizeOptionContractTicker(ticker))
+      .filter(Boolean)
+  )].slice(0, 320);
+}
+
+function lookupMassiveExchangeLabel(...ids) {
+  const matchedId = ids
+    .map((value) => Number(value))
+    .find((value) => Number.isFinite(value) && massiveExchangeLookup[value]);
+  return matchedId ? massiveExchangeLookup[matchedId] : null;
+}
+
+async function warmMassiveExchangeLookup() {
+  try {
+    const nextLookup = await fetchMassiveExchangeMap();
+    if (nextLookup && typeof nextLookup === "object" && Object.keys(nextLookup).length) {
+      massiveExchangeLookup = nextLookup;
+    }
+  } catch {
+    // best-effort warm-up only
+  }
 }
 
 async function fetchLivePriceSnapshot({ quoteType = "tradfi", symbols = [] } = {}) {
@@ -12067,6 +12576,153 @@ function connectMassiveStocksSocket() {
   return massiveStocksSocket;
 }
 
+function normalizeMassiveOptionQuoteRow(row = {}) {
+  const contractTicker = sanitizeOptionContractTicker(row?.sym || row?.symbol || row?.ticker);
+  if (!contractTicker) return null;
+  const bid = firstFiniteNumber(row?.bp, row?.bid_price, row?.bid);
+  const ask = firstFiniteNumber(row?.ap, row?.ask_price, row?.ask);
+  const bidSize = firstFiniteNumber(row?.bs, row?.bid_size, row?.bidSize);
+  const askSize = firstFiniteNumber(row?.as, row?.ask_size, row?.askSize);
+  const bidExchangeId = firstFiniteNumber(row?.bx, row?.bid_exchange, row?.bidExchangeId);
+  const askExchangeId = firstFiniteNumber(row?.ax, row?.ask_exchange, row?.askExchangeId);
+  const updatedAt = normalizeMassiveTimestamp(
+    row?.t || row?.sip_timestamp || row?.timestamp || row?.e || row?.updated_at
+  );
+  const mid = bid != null && ask != null ? Number(((bid + ask) / 2).toFixed(4)) : null;
+  const spread = bid != null && ask != null ? Number((ask - bid).toFixed(4)) : null;
+  return {
+    contractTicker,
+    bid,
+    ask,
+    bidSize,
+    askSize,
+    bidExchangeId,
+    askExchangeId,
+    mid,
+    spread,
+    venueLabel: lookupMassiveExchangeLabel(bidExchangeId, askExchangeId),
+    updatedAt
+  };
+}
+
+function normalizeMassiveOptionTradeRow(row = {}) {
+  const contractTicker = sanitizeOptionContractTicker(row?.sym || row?.symbol || row?.ticker);
+  if (!contractTicker) return null;
+  const lastTradePrice = firstFiniteNumber(row?.p, row?.price, row?.last_trade_price);
+  const lastTradeSize = firstFiniteNumber(row?.s, row?.size, row?.last_trade_size);
+  const tradeExchangeId = firstFiniteNumber(row?.x, row?.exchange, row?.exchange_id);
+  const updatedAt = normalizeMassiveTimestamp(
+    row?.t || row?.sip_timestamp || row?.participant_timestamp || row?.timestamp || row?.e || row?.updated_at
+  );
+  return {
+    contractTicker,
+    lastTradePrice,
+    lastTradeSize,
+    tradeExchangeId,
+    conditions: Array.isArray(row?.c) ? row.c : Array.isArray(row?.conditions) ? row.conditions : [],
+    venueLabel: lookupMassiveExchangeLabel(tradeExchangeId),
+    updatedAt,
+    lastTradeAt: updatedAt
+  };
+}
+
+function sendWsJsonToMassiveOptions(payload) {
+  if (!massiveOptionsSocket || massiveOptionsSocket.readyState !== WebSocket.OPEN) return;
+  try {
+    massiveOptionsSocket.send(JSON.stringify(payload));
+  } catch (error) {
+    massiveLastStatus = buildProviderStatus("Massive", true, "degraded", error?.message || "Massive options send failed");
+  }
+}
+
+function connectMassiveOptionsSocket() {
+  if (!MASSIVE_API_KEY) return null;
+  if (massiveOptionsSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(massiveOptionsSocket.readyState)) return massiveOptionsSocket;
+  if (massiveOptionsConnecting) return massiveOptionsSocket;
+  massiveOptionsConnecting = true;
+  const url = process.env.MASSIVE_WS_DELAYED === "true" ? MASSIVE_WS_DELAYED_OPTIONS_URL : MASSIVE_WS_OPTIONS_URL;
+  massiveOptionsSocket = new WebSocket(url);
+
+  massiveOptionsSocket.on("open", () => {
+    massiveOptionsConnecting = false;
+    massiveLastStatus = buildProviderStatus("Massive", true, "connected", "Options WebSocket connected");
+    sendWsJsonToMassiveOptions({ action: "auth", params: MASSIVE_API_KEY });
+    warmMassiveExchangeLookup();
+    if (massiveOptionsSubscribedContracts.size) {
+      const params = [...massiveOptionsSubscribedContracts].flatMap((ticker) => [`Q.${ticker}`, `T.${ticker}`]).join(",");
+      sendWsJsonToMassiveOptions({ action: "subscribe", params });
+    }
+  });
+
+  massiveOptionsSocket.on("message", (raw) => {
+    try {
+      const rows = normalizeMassiveRows(raw.toString());
+      const quoteUpdates = {};
+      const tradeUpdates = {};
+      rows.forEach((row) => {
+        const eventType = String(row?.ev || row?.event || "").toUpperCase();
+        if (eventType === "Q") {
+          const normalized = normalizeMassiveOptionQuoteRow(row);
+          if (!normalized?.contractTicker) return;
+          massiveOptionQuoteCache.set(normalized.contractTicker, {
+            ...massiveOptionQuoteCache.get(normalized.contractTicker),
+            ...normalized,
+            cachedAt: Date.now()
+          });
+          quoteUpdates[normalized.contractTicker] = normalized;
+          return;
+        }
+        if (eventType === "T") {
+          const normalized = normalizeMassiveOptionTradeRow(row);
+          if (!normalized?.contractTicker) return;
+          massiveOptionTradeCache.set(normalized.contractTicker, {
+            ...massiveOptionTradeCache.get(normalized.contractTicker),
+            ...normalized,
+            cachedAt: Date.now()
+          });
+          tradeUpdates[normalized.contractTicker] = normalized;
+        }
+      });
+
+      if (!Object.keys(quoteUpdates).length && !Object.keys(tradeUpdates).length) return;
+
+      subscribers.forEach((subscription, ws) => {
+        if (subscription.kind !== "equity-options") return;
+        const scopedQuotes = {};
+        const scopedTrades = {};
+        Object.entries(quoteUpdates).forEach(([ticker, row]) => {
+          if (subscription.contractLookup?.has(ticker)) scopedQuotes[ticker] = row;
+        });
+        Object.entries(tradeUpdates).forEach(([ticker, row]) => {
+          if (subscription.contractLookup?.has(ticker)) scopedTrades[ticker] = row;
+        });
+        if (!Object.keys(scopedQuotes).length && !Object.keys(scopedTrades).length) return;
+        sendWsJson(ws, {
+          type: "equity_options_update",
+          underlying: subscription.underlying,
+          expiry: subscription.expiry || null,
+          quotes: scopedQuotes,
+          trades: scopedTrades,
+          updatedAt: new Date().toISOString()
+        });
+      });
+    } catch (error) {
+      console.warn("[Massive Options] WebSocket message ignored:", error?.message || error);
+    }
+  });
+
+  massiveOptionsSocket.on("close", () => {
+    massiveOptionsConnecting = false;
+    massiveOptionsSocket = null;
+  });
+
+  massiveOptionsSocket.on("error", () => {
+    massiveOptionsConnecting = false;
+  });
+
+  return massiveOptionsSocket;
+}
+
 function sendWsJsonToMassive(payload) {
   if (!massiveStocksSocket || massiveStocksSocket.readyState !== WebSocket.OPEN) return;
   try {
@@ -12083,6 +12739,17 @@ function subscribeMassiveStocks(symbols = []) {
   const socket = connectMassiveStocksSocket();
   if (socket?.readyState === WebSocket.OPEN && nextSymbols.length) {
     sendWsJsonToMassive({ action: "subscribe", params: nextSymbols.map((symbol) => `AM.${symbol}`).join(",") });
+  }
+}
+
+function subscribeMassiveOptionContracts(contracts = []) {
+  if (!MASSIVE_API_KEY) return;
+  const nextContracts = sanitizeOptionContracts(contracts).filter((ticker) => ticker && !massiveOptionsSubscribedContracts.has(ticker));
+  nextContracts.forEach((ticker) => massiveOptionsSubscribedContracts.add(ticker));
+  const socket = connectMassiveOptionsSocket();
+  if (socket?.readyState === WebSocket.OPEN && nextContracts.length) {
+    const params = nextContracts.flatMap((ticker) => [`Q.${ticker}`, `T.${ticker}`]).join(",");
+    sendWsJsonToMassiveOptions({ action: "subscribe", params });
   }
 }
 
@@ -12137,6 +12804,34 @@ async function pushGreeksSnapshot(ws, subscription) {
   }
 }
 
+async function pushEquityOptionsSnapshot(ws, subscription) {
+  const contracts = sanitizeOptionContracts(subscription?.contracts || []);
+  if (!contracts.length) {
+    sendWsJson(ws, {
+      type: "equity_options_error",
+      message: "No option contracts subscribed",
+      updatedAt: new Date().toISOString()
+    });
+    return;
+  }
+  const quotes = {};
+  const trades = {};
+  contracts.forEach((ticker) => {
+    const quote = massiveOptionQuoteCache.get(ticker);
+    const trade = massiveOptionTradeCache.get(ticker);
+    if (quote) quotes[ticker] = quote;
+    if (trade) trades[ticker] = trade;
+  });
+  sendWsJson(ws, {
+    type: "equity_options_update",
+    underlying: subscription.underlying,
+    expiry: subscription.expiry || null,
+    quotes,
+    trades,
+    updatedAt: new Date().toISOString()
+  });
+}
+
 wss.on("connection", (ws) => {
   console.log("WS client connected");
   ws.isAlive = true;
@@ -12166,6 +12861,36 @@ wss.on("connection", (ws) => {
         }
         sendWsJson(ws, { type: "subscribed", channel: "prices", ...subscription });
         pushPriceSnapshot(ws, subscription);
+        return;
+      }
+
+      if (data.type === "subscribeEquityOptions") {
+        const contracts = sanitizeOptionContracts(data.contracts || []);
+        const subscription = {
+          kind: "equity-options",
+          underlying: sanitizeSymbol(String(data.underlying || "").trim().toUpperCase()) || "SPY",
+          expiry: normalizeMassiveOptionDate(data.expiry) || null,
+          contracts,
+          contractLookup: new Set(contracts)
+        };
+        subscribers.set(ws, subscription);
+        if (!MASSIVE_API_KEY) {
+          sendWsJson(ws, {
+            type: "equity_options_error",
+            message: "Massive API key not configured",
+            updatedAt: new Date().toISOString()
+          });
+          return;
+        }
+        subscribeMassiveOptionContracts(subscription.contracts);
+        sendWsJson(ws, {
+          type: "subscribed",
+          channel: "equity_options",
+          underlying: subscription.underlying,
+          expiry: subscription.expiry,
+          contractCount: subscription.contracts.length
+        });
+        pushEquityOptionsSnapshot(ws, subscription);
         return;
       }
 
@@ -12225,6 +12950,8 @@ const wsPushTimer = setInterval(() => {
       pushPriceSnapshot(ws, subscription);
     } else if (subscription.kind === "greeks") {
       pushGreeksSnapshot(ws, subscription);
+    } else if (subscription.kind === "equity-options") {
+      pushEquityOptionsSnapshot(ws, subscription);
     }
   });
 }, WS_PRICE_PUSH_INTERVAL_MS);
@@ -12287,6 +13014,10 @@ async function stopServer() {
     if (massiveStocksSocket) {
       try { massiveStocksSocket.close(); } catch {}
       massiveStocksSocket = null;
+    }
+    if (massiveOptionsSocket) {
+      try { massiveOptionsSocket.close(); } catch {}
+      massiveOptionsSocket = null;
     }
     wss.clients.forEach((ws) => {
       try { ws.terminate(); } catch {}
@@ -12767,6 +13498,9 @@ function buildDeterministicMacroMetrics(scope = "GLOBAL") {
         change: Number((value - previous).toFixed(2)),
         changePercent: previous ? Number((((value - previous) / Math.abs(previous)) * 100).toFixed(2)) : null,
         asOf: new Date().toISOString().slice(0, 10),
+        previousAsOf: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        currentAsOf: new Date().toISOString().slice(0, 10),
+        expectationAsOf: new Date().toISOString().slice(0, 10),
         series: Array.from({ length: 12 }, (_, idx) => ({
           date: new Date(Date.now() - (11 - idx) * 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
           value: Number((previous + (idx / 11) * (value - previous)).toFixed(2))

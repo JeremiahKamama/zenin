@@ -1,5 +1,16 @@
 import React from 'react';
 
+function resetLazyImportRecoveryState() {
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  try {
+    Object.keys(window.sessionStorage).forEach((key) => {
+      if (key.startsWith("zenin_lazy_retry_")) {
+        window.sessionStorage.removeItem(key);
+      }
+    });
+  } catch {}
+}
+
 export class GenericErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -13,6 +24,12 @@ export class GenericErrorBoundary extends React.Component {
   componentDidCatch(error, errorInfo) {
     console.error("ErrorBoundary caught an error:", error, errorInfo);
     this.setState({ errorInfo });
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false, error: null, errorInfo: null });
+    }
   }
 
   render() {
@@ -44,7 +61,10 @@ export class GenericErrorBoundary extends React.Component {
             {this.state.error?.toString()}
           </div>
           <button 
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              resetLazyImportRecoveryState();
+              window.location.reload();
+            }}
             style={{
               marginTop: '1rem',
               padding: '0.5rem 1rem',

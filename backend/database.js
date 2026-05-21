@@ -21,7 +21,11 @@ function isRenderEnvironment(connectionString) {
 
 function isSupabaseEnvironment(connectionString) {
   if (String(process.env.SUPABASE_URL || "").trim()) return true;
-  return /supabase\.(co|in)|supabase\.red/i.test(String(connectionString || ""));
+  return /supabase\.(co|com|in)|pooler\.supabase\.com|supabase\.red/i.test(String(connectionString || ""));
+}
+
+function isSupabasePoolerConnection(connectionString) {
+  return /pooler\.supabase\.com/i.test(String(connectionString || ""));
 }
 
 function resolveRejectUnauthorized(connectionString) {
@@ -32,6 +36,14 @@ function resolveRejectUnauthorized(connectionString) {
 
   // "no-verify" is an explicit request to skip CA/hostname verification.
   if (String(process.env.PGSSLMODE || "").toLowerCase() === "no-verify") {
+    return false;
+  }
+
+  // Supabase's transaction/session pooler commonly presents a cert chain that
+  // fails strict verification in some Node/container environments. Default to
+  // relaxed verification for the pooler unless the operator explicitly opts in
+  // to strict verification above.
+  if (isSupabasePoolerConnection(connectionString)) {
     return false;
   }
 

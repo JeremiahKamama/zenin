@@ -80,12 +80,14 @@ export function SharedWatchlistWorkspacePanel({
   assets = [],
   title = "Shared Desk Watchlists"
 }) {
+  const defaultCommentTags = ["Catalyst", "Risk", "Sizing", "Follow-up", "Earnings"];
   const [sharedViews, setSharedViews] = useState(() => readLocalJson("zenin_workspace_shared_watchlists", []));
   const [deskComments, setDeskComments] = useState(() => readLocalJson("zenin_workspace_watchlist_comments", []));
   const [reportHighlights, setReportHighlights] = useState(() => readLocalJson("zenin_workspace_report_highlights", []));
   const [commentSymbol, setCommentSymbol] = useState(() => normalizeSymbol(assets[0]?.symbol));
   const [commentText, setCommentText] = useState("");
   const [commentTag, setCommentTag] = useState("Catalyst");
+  const [customCommentTag, setCustomCommentTag] = useState("");
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -116,6 +118,12 @@ export function SharedWatchlistWorkspacePanel({
   }, [assets, commentSymbol]);
 
   const visibleAssets = Array.isArray(assets) ? assets.slice(0, 8) : [];
+  const availableCommentTags = useMemo(() => {
+    const customTags = deskComments
+      .map((item) => stripText(item?.tag))
+      .filter(Boolean);
+    return [...new Set([...defaultCommentTags, ...customTags])];
+  }, [deskComments]);
 
   const saveSharedView = async () => {
     const record = {
@@ -139,14 +147,19 @@ export function SharedWatchlistWorkspacePanel({
   };
 
   const addComment = async () => {
+    const resolvedTag = commentTag === "__custom__" ? stripText(customCommentTag) : stripText(commentTag);
     if (!commentSymbol || !commentText.trim()) {
       setNotice("Choose a symbol and enter a note first.");
+      return;
+    }
+    if (!resolvedTag) {
+      setNotice("Add a tag before saving the desk note.");
       return;
     }
     const record = {
       id: `desk-comment-${Date.now()}`,
       symbol: commentSymbol,
-      tag: commentTag,
+      tag: resolvedTag,
       text: commentText.trim(),
       createdAt: new Date().toISOString(),
       visibility: hasWorkspaceSession() ? "Workspace" : "Local"
@@ -154,6 +167,10 @@ export function SharedWatchlistWorkspacePanel({
     const next = [record, ...deskComments].slice(0, 40);
     setDeskComments(next);
     setCommentText("");
+    if (commentTag === "__custom__") {
+      setCommentTag(resolvedTag);
+      setCustomCommentTag("");
+    }
     writeLocalJson("zenin_workspace_watchlist_comments", next);
     try {
       await saveWorkspaceCollection("workspace:watchlists:comments", next, 40);
@@ -231,12 +248,24 @@ export function SharedWatchlistWorkspacePanel({
             <label>
               <span>Tag</span>
               <select value={commentTag} onChange={(event) => setCommentTag(event.target.value)}>
-                {["Catalyst", "Risk", "Sizing", "Follow-up", "Earnings"].map((tag) => (
+                {availableCommentTags.map((tag) => (
                   <option key={tag} value={tag}>{tag}</option>
                 ))}
+                <option value="__custom__">Custom tag</option>
               </select>
             </label>
           </div>
+          {commentTag === "__custom__" ? (
+            <label className="institutional-field">
+              <span>Custom tag</span>
+              <input
+                type="text"
+                value={customCommentTag}
+                onChange={(event) => setCustomCommentTag(event.target.value)}
+                placeholder="Add your own desk tag"
+              />
+            </label>
+          ) : null}
           <label className="institutional-field">
             <span>Desk note</span>
             <textarea value={commentText} onChange={(event) => setCommentText(event.target.value)} placeholder="Capture the why behind the watchlist change, catalyst, or risk note." rows={3} />
@@ -853,7 +882,7 @@ export function ResearchWorkspacePanel({ scope = "equities", title = "Research W
           <div className="institutional-list compact">
             {signals.slice(0, 4).map((item, index) => (
               <div key={`${item}-${index}`} className="institutional-list-row">
-                <div><strong>Signal {index + 1}</strong><span>{item}</span></div>
+                <div className="institutional-signal-copy"><strong>Signal {index + 1}</strong><span>{item}</span></div>
               </div>
             ))}
           </div>
@@ -938,7 +967,22 @@ export function TaxCompliancePanel({
         subtitle="Wash sale checks, accountant handoff, and audit evidence for institutional tax review."
         actions={
           <InlineControlGroup>
-            <button type="button" className="analytics-btn" onClick={() => { setAccountantMode((value) => !value); writeLocalJson("zenin_tax_accountant_mode", !accountantMode); }}>
+            <button
+              type="button"
+              className="analytics-btn"
+              onClick={() => {
+                const nextValue = !accountantMode;
+                setAccountantMode(nextValue);
+                writeLocalJson("zenin_tax_accountant_mode", nextValue);
+                if (typeof window !== "undefined") {
+                  window.dispatchEvent(
+                    new CustomEvent("zenin:tax-accountant-mode", {
+                      detail: { enabled: nextValue },
+                    })
+                  );
+                }
+              }}
+            >
               {accountantMode ? "Disable accountant mode" : "Enable accountant mode"}
             </button>
             <button type="button" className="analytics-btn" onClick={() => { void appendAuditEvent("scenario_reviewed"); }}>

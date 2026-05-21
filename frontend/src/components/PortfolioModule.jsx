@@ -104,7 +104,9 @@ export function PortfolioModule({
   onSelectAsset,
   onOpenPredictions,
   onOpenJournal,
+  onOpenMarketContext,
   onOpenConnections,
+  connectedAccounts = [],
   hasDeskFeatureAccess = false,
   onOpenPlans
 }){
@@ -133,6 +135,7 @@ export function PortfolioModule({
   const [activePortfolioTab, setActivePortfolioTab] = useState("holdings");
   const [showPredictionGuide, setShowPredictionGuide] = useState(false);
   const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
+  const [showConnectionsModal, setShowConnectionsModal] = useState(false);
   const isSyncing = false;
   const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
   const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
@@ -142,8 +145,19 @@ export function PortfolioModule({
   const [savedPortfolioHistory, setSavedPortfolioHistory] = useState(() => readStoredJson(PORTFOLIO_REBALANCE_HISTORY_KEY, []));
   const [savedPortfolioExports, setSavedPortfolioExports] = useState(() => readStoredJson(PORTFOLIO_EXPORTS_KEY, []));
   const prefsHydratedRef = useRef(false);
+  const analysisSectionRef = useRef(null);
   const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
+  const openPortfolioTab = (tabId) => {
+    setActivePortfolioTab(tabId);
+    requestAnimationFrame(() => {
+      analysisSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
   const handleOpenConnections = () => {
+    if (Array.isArray(connectedAccounts) && connectedAccounts.length) {
+      setShowConnectionsModal(true);
+      return;
+    }
     if (typeof onOpenConnections === "function") {
       onOpenConnections();
     }
@@ -1832,11 +1846,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
         metric: lossHarvestSnapshot.count ? `${lossHarvestSnapshot.count} positions` : "No immediate harvest",
         detail: lossHarvestSnapshot.count
           ? `Estimated tax offset ${formatMoney(lossHarvestSnapshot.estimatedSavings)} from unrealized losses.`
-          : "Loss-harvest candidates appear here when the book is in drawdown.",
+          : "Loss-harvest ideas appear here in drawdowns.",
         action: "Review Tax Impact",
         tone: lossHarvestSnapshot.count ? "risk" : "neutral",
         onClick: () => {
-          setActivePortfolioTab("holdings");
+          openPortfolioTab("holdings");
           if (lossHarvestSnapshot.top) {
             const row = lossHarvestSnapshot.top;
             const raw = row.row || {};
@@ -2911,6 +2925,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
             <option value="options">Options</option>
             <option value="commodities">Commodities</option>
           </select>
+          {typeof onOpenMarketContext === "function" ? (
+            <button type="button" className="portfolio-v2-link" onClick={onOpenMarketContext}>Market Context</button>
+          ) : null}
           <button type="button" className="portfolio-v2-link" onClick={handleOpenConnections}>Connections</button>
           <button
             type="button"
@@ -2955,7 +2972,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       <section className="portfolio-command-attention">
         <div className="portfolio-command-section-head">
           <span>What Needs Attention</span>
-          <button type="button" className="portfolio-v2-link" onClick={() => setActivePortfolioTab("exposure")}>View All</button>
+          <button type="button" className="portfolio-v2-link" onClick={() => openPortfolioTab("exposure")}>View All</button>
         </div>
         <div className="portfolio-command-attention-grid">
           {attentionCards.map((card) => (
@@ -3004,7 +3021,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
             </div>
             <div className="portfolio-command-drift-visual">
-              <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={250} />
+              <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={214} />
               <div className="portfolio-command-drift-legend">
                 <span><i className="risk" />Overweight</span>
                 <span><i className="info" />Underweight</span>
@@ -3084,7 +3101,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         </div>
       </section>
 
-      <section className="portfolio-command-analysis">
+      <section className="portfolio-command-analysis" ref={analysisSectionRef}>
         <div className="portfolio-command-tabs">
           {[
             { id: "holdings", label: "Holdings" },
@@ -3097,7 +3114,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               key={tab.id}
               type="button"
               className={`portfolio-command-tab ${activePortfolioTab === tab.id ? "active" : ""}`}
-              onClick={() => setActivePortfolioTab(tab.id)}
+              onClick={() => openPortfolioTab(tab.id)}
             >
               {tab.label}
               {tab.beta ? <small>Beta</small> : null}
@@ -3326,6 +3343,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
         onApplyView={applySavedPortfolioView}
         onReviewItem={reviewSavedPortfolioItem}
       />
+      <PortfolioConnectionsModal
+        open={showConnectionsModal}
+        onClose={() => setShowConnectionsModal(false)}
+        accounts={connectedAccounts}
+        onAddConnection={onOpenConnections}
+      />
     </div>
   );
 }
@@ -3419,7 +3442,7 @@ function PortfolioSavedWorkspaceDrawer({
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
-        className="home-v3-detail-drawer"
+        className="home-v3-detail-drawer saved-items-drawer"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -3430,12 +3453,12 @@ function PortfolioSavedWorkspaceDrawer({
           <h2>Saved Items</h2>
           <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
         </div>
-        <div style={{ display: "grid", gap: 18 }}>
+        <div className="saved-items-drawer-content">
           {sections.map((section) => (
-            <section key={section.title} style={{ display: "grid", gap: 10 }}>
-              <div>
-                <strong style={{ display: "block", marginBottom: 4 }}>{section.title}</strong>
-                <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+            <section key={section.title} className="saved-items-section">
+              <div className="saved-items-section-head">
+                <strong>{section.title}</strong>
+                <span>
                   {section.rows.length ? `${section.rows.length} saved item${section.rows.length === 1 ? "" : "s"}` : section.empty}
                 </span>
               </div>
@@ -3450,27 +3473,72 @@ function PortfolioSavedWorkspaceDrawer({
 
 function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: 12,
-        alignItems: "center",
-        padding: "12px 14px",
-        borderRadius: 3,
-        border: "1px solid rgba(148, 163, 184, 0.14)",
-        background: "var(--color-surface-card)"
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <strong style={{ display: "block" }}>{title}</strong>
-        <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{subtitle}</span>
+    <div className="saved-items-row">
+      <div className="saved-items-row-copy">
+        <strong>{title}</strong>
+        <span>{subtitle}</span>
       </div>
       {actionLabel ? (
         <button type="button" className="portfolio-v2-link" onClick={onAction}>
           {actionLabel}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnection }) {
+  if (!open) return null;
+
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside
+        className="home-v3-detail-drawer saved-items-drawer portfolio-connections-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Connected exchanges"
+        style={{ maxWidth: 760 }}
+      >
+        <div className="home-v3-drawer-head">
+          <div className="saved-items-section-head">
+            <strong>Connected Exchanges</strong>
+            <span>{accounts.length ? `${accounts.length} connected venue${accounts.length === 1 ? "" : "s"}` : "No connected venues yet."}</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div className="saved-items-drawer-content">
+          {accounts.length ? (
+            <section className="saved-items-section">
+              {accounts.map((account) => (
+                <div key={account.id || `${account.exchange}-${account.username}`} className="saved-items-row connection-row">
+                  <div className="saved-items-row-copy">
+                    <strong>{account.provider || account.exchange || "Connected venue"}</strong>
+                    <span>{account.username || "Workspace source"} · {String(account.venueType || "cex").toUpperCase()}</span>
+                  </div>
+                  <div className="saved-items-row-meta">
+                    <em>{account.canTrade ? "Trading-enabled" : "Read-only"}</em>
+                    <span>{account.lastSyncAt ? `Synced ${formatSavedTimestamp(account.lastSyncAt)}` : "Sync pending"}</span>
+                  </div>
+                </div>
+              ))}
+            </section>
+          ) : (
+            <section className="saved-items-section">
+              <div className="saved-items-empty">
+                <strong>No exchanges connected</strong>
+                <span>Connect a venue to unlock portfolio sync, execution context, and shared desk monitoring.</span>
+              </div>
+            </section>
+          )}
+          <div className="saved-items-drawer-actions">
+            <button type="button" className="portfolio-v2-link" onClick={onClose}>Close</button>
+            <button type="button" className="portfolio-command-primary-cta subtle" onClick={() => { onClose(); onAddConnection?.(); }}>
+              Add Connection
+            </button>
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }

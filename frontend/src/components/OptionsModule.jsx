@@ -6,11 +6,15 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { zeninFetchJson } from "../utils/zeninFetch";
+import { canUseWebSocket, resolveZeninWsUrl } from "../utils/livePriceStream";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { GuidedEmptyState } from "./CompactWorkspaceUI";
+import { EquityOptionsDesk } from "./EquityOptionsDesk";
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
 const OPTIONS_SAVED_VIEWS_KEY = "zenin_options_saved_views";
+const OPTIONS_MARKET_MODE_KEY = "zenin_options_market_mode_v1";
+const EQUITY_OPTIONS_DEFAULT_UNDERLYINGS = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"];
 
 function readStoredOptionViews() {
   try {
@@ -31,6 +35,121 @@ function formatSavedTimestamp(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function readStoredOptionsMarketMode() {
+  try {
+    const stored = String(localStorage.getItem(OPTIONS_MARKET_MODE_KEY) || "").trim().toLowerCase();
+    return stored === "equity" ? "equity" : "crypto";
+  } catch {
+    return "crypto";
+  }
+}
+
+function toFiniteNumber(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function mergeEquityOptionsContractWithLive(contract = {}, liveQuote = null, liveTrade = null) {
+  const next = { ...contract };
+  if (liveQuote) {
+    const bid = toFiniteNumber(liveQuote.bid, contract.bid);
+    const ask = toFiniteNumber(liveQuote.ask, contract.ask);
+    next.bid = bid;
+    next.ask = ask;
+    next.bidSize = toFiniteNumber(liveQuote.bidSize, contract.bidSize);
+    next.askSize = toFiniteNumber(liveQuote.askSize, contract.askSize);
+    next.bidExchangeId = toFiniteNumber(liveQuote.bidExchangeId, contract.bidExchangeId);
+    next.askExchangeId = toFiniteNumber(liveQuote.askExchangeId, contract.askExchangeId);
+    next.mid = bid != null && ask != null ? Number(((bid + ask) / 2).toFixed(4)) : toFiniteNumber(liveQuote.mid, contract.mid);
+    next.spread = bid != null && ask != null ? Number((ask - bid).toFixed(4)) : toFiniteNumber(liveQuote.spread, contract.spread);
+    next.venueLabel = liveQuote.venueLabel || contract.venueLabel || null;
+    next.updatedAt = liveQuote.updatedAt || contract.updatedAt || null;
+  }
+  if (liveTrade) {
+    next.lastTradePrice = toFiniteNumber(liveTrade.lastTradePrice, contract.lastTradePrice);
+    next.lastTradeSize = toFiniteNumber(liveTrade.lastTradeSize, contract.lastTradeSize);
+    next.tradeExchangeId = toFiniteNumber(liveTrade.tradeExchangeId, contract.tradeExchangeId);
+    next.lastTradeAt = liveTrade.lastTradeAt || contract.lastTradeAt || null;
+    next.updatedAt = liveTrade.updatedAt || next.updatedAt || contract.updatedAt || null;
+    if (!Number.isFinite(Number(next.mid)) && Number.isFinite(Number(next.lastTradePrice))) {
+      next.mid = Number(next.lastTradePrice);
+    }
+    if (liveTrade.venueLabel) {
+      next.venueLabel = liveTrade.venueLabel;
+    }
+  }
+  return next;
+}
+
+function mergeEquityOptionsChainWithLiveUpdate(prevData, payload = {}) {
+  if (!prevData || !Array.isArray(prevData.chain) || !prevData.chain.length) return prevData;
+  const quotes = payload?.quotes && typeof payload.quotes === "object" ? payload.quotes : {};
+  const trades = payload?.trades && typeof payload.trades === "object" ? payload.trades : {};
+  let changed = false;
+  const nextChain = prevData.chain.map((row) => {
+    let nextRow = row;
+    const callTicker = row?.call?.contractTicker;
+    const putTicker = row?.put?.contractTicker;
+    if (callTicker && (quotes[callTicker] || trades[callTicker])) {
+      nextRow = nextRow === row ? { ...row } : nextRow;
+      nextRow.call = mergeEquityOptionsContractWithLive(row.call, quotes[callTicker], trades[callTicker]);
+      changed = true;
+    }
+    if (putTicker && (quotes[putTicker] || trades[putTicker])) {
+      nextRow = nextRow === row ? { ...row } : nextRow;
+      nextRow.put = mergeEquityOptionsContractWithLive(row.put, quotes[putTicker], trades[putTicker]);
+      changed = true;
+    }
+    return nextRow;
+  });
+  if (!changed) return prevData;
+  return {
+    ...prevData,
+    chain: nextChain,
+    updatedAt: payload?.updatedAt || prevData.updatedAt
+  };
+}
+
+function buildEquityOptionsLiveTapeEntries(payload = {}) {
+  const quoteRows = Object.values(payload?.quotes || {}).map((row) => ({
+    id: `quote:${row.contractTicker}:${row.updatedAt}:${row.bid ?? "na"}:${row.ask ?? "na"}`,
+    kind: "quote",
+    contractTicker: row.contractTicker,
+    venue: row.venueLabel || "Composite",
+    updatedAt: row.updatedAt,
+    summary: [row.bid != null ? `Bid $${Number(row.bid).toFixed(2)}` : null, row.ask != null ? `Ask $${Number(row.ask).toFixed(2)}` : null]
+      .filter(Boolean)
+      .join(" · ")
+  }));
+  const tradeRows = Object.values(payload?.trades || {}).map((row) => ({
+    id: `trade:${row.contractTicker}:${row.lastTradeAt || row.updatedAt}:${row.lastTradePrice ?? "na"}:${row.lastTradeSize ?? "na"}`,
+    kind: "trade",
+    contractTicker: row.contractTicker,
+    venue: row.venueLabel || "Composite",
+    updatedAt: row.lastTradeAt || row.updatedAt,
+    summary: [row.lastTradePrice != null ? `$${Number(row.lastTradePrice).toFixed(2)}` : null, row.lastTradeSize != null ? `x ${Number(row.lastTradeSize).toLocaleString()}` : null]
+      .filter(Boolean)
+      .join(" ")
+  }));
+  return [...tradeRows, ...quoteRows]
+    .filter((row) => row.contractTicker && row.updatedAt)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+function mergeEquityOptionsLiveTape(previousRows = [], nextRows = []) {
+  const merged = new Map();
+  [...nextRows, ...previousRows].forEach((row) => {
+    if (!row?.id || merged.has(row.id)) return;
+    merged.set(row.id, row);
+  });
+  return [...merged.values()]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 18);
 }
 
 const StrategySimulatorCard = ({
@@ -125,13 +244,26 @@ export const OptionsModule = ({
   const supportedAssets = Array.isArray(getAppRuntimeConfig()?.options?.supportedAssets)
     ? getAppRuntimeConfig().options.supportedAssets
     : ["BTC", "ETH", "SOL", "HYPE"];
+  const equityUnderlyings = Array.isArray(getAppRuntimeConfig()?.options?.equitySupportedAssets)
+    ? getAppRuntimeConfig().options.equitySupportedAssets
+    : EQUITY_OPTIONS_DEFAULT_UNDERLYINGS;
   const rfqAssets = new Set(
     Array.isArray(getAppRuntimeConfig()?.options?.rfqAssets)
       ? getAppRuntimeConfig().options.rfqAssets.map((asset) => String(asset || "").trim().toUpperCase())
       : ["HYPE"]
   );
   const activeTradesRef = useRef(null);
+  const [optionsMarketMode, setOptionsMarketMode] = useState(() => readStoredOptionsMarketMode());
   const [activeAsset, setActiveAsset] = useState("BTC");
+  const [equityUnderlying, setEquityUnderlying] = useState(equityUnderlyings[0] || "SPY");
+  const [equityExpiry, setEquityExpiry] = useState(null);
+  const [equityOptionsData, setEquityOptionsData] = useState(null);
+  const [equityOptionsLoading, setEquityOptionsLoading] = useState(false);
+  const [equityOptionsError, setEquityOptionsError] = useState("");
+  const [equityOptionsNotice, setEquityOptionsNotice] = useState("");
+  const [equityOptionsLiveTape, setEquityOptionsLiveTape] = useState([]);
+  const [equityOptionsLiveConnected, setEquityOptionsLiveConnected] = useState(false);
+  const [equityOptionsLiveUpdatedAt, setEquityOptionsLiveUpdatedAt] = useState("");
   const [availableExpiries, setAvailableExpiries] = useState([]);
   const [spotPrices, setSpotPrices] = useState(externalSpotPrices);
   const [spotSources, setSpotSources] = useState({});
@@ -164,6 +296,7 @@ export const OptionsModule = ({
   const [showSavedItemsDrawer, setShowSavedItemsDrawer] = useState(false);
   const [savedOptionViews, setSavedOptionViews] = useState(() => readStoredOptionViews());
   const [termIvByExpiry, setTermIvByExpiry] = useState({});
+  const equityOptionsSocketRef = useRef(null);
   const supplementalFetchStateRef = useRef({
     chainInFlight: new Set(),
     spotInFlight: new Set(),
@@ -361,7 +494,19 @@ const handleStrategyChosen = async (tradePayload) => {
 // handleConfirmStrategyTrade removed as it is now handled inline by handleStrategyChosen
 
 useEffect(() => {
-  setAllAssets(supportedAssets);
+  const normalizedAssets = Array.from(
+    new Set(
+      (Array.isArray(supportedAssets) ? supportedAssets : ["BTC", "ETH", "SOL", "HYPE"])
+        .map((asset) => String(asset || "").trim().toUpperCase())
+        .filter(Boolean)
+    )
+  );
+  setAllAssets(normalizedAssets);
+  setActiveAsset((current) => {
+    const normalizedCurrent = String(current || "").trim().toUpperCase();
+    if (normalizedAssets.includes(normalizedCurrent)) return normalizedCurrent;
+    return normalizedAssets[0] || "BTC";
+  });
 }, [supportedAssets]);
 
 useEffect(() => {
@@ -555,14 +700,18 @@ useEffect(() => {
       if (latestRequestKey !== requestKey) return;
 
       if (data && data.chain) {
+        const responseExpiries = Array.isArray(data.expiries) ? data.expiries : [];
+        const nextNearestExpiry = pickNearestExpiry(responseExpiries);
         setMarketStructure(data?.market_structure || inferredMarketStructure);
         setMarketStructureLabel(data?.market_structure_label || inferredMarketStructureLabel);
         setMarketStructureNote(data?.market_structure_note || inferredMarketStructureNote);
-        setAvailableExpiries(Array.isArray(data.expiries) ? data.expiries : []);
+        setAvailableExpiries(responseExpiries);
 
         if (!activeExpiry) {
-          const nextExpiry = pickNearestExpiry(data.expiries || [data.expiry].filter(Boolean));
+          const nextExpiry = pickNearestExpiry(responseExpiries || [data.expiry].filter(Boolean));
           if (nextExpiry != null) setActiveExpiry(nextExpiry); // default nearest available expiry
+        } else if (responseExpiries.length > 0 && !responseExpiries.includes(activeExpiry) && nextNearestExpiry != null) {
+          setActiveExpiry(nextNearestExpiry);
         }
 
         setChain(data.chain);
@@ -602,9 +751,28 @@ useEffect(() => {
         setOptionsStale(Boolean(data?.stale || data?.unavailable));
         setOptionsNotice(Boolean(data?.stale || data?.unavailable) ? getSnapshotFallbackMessage(data) : "");
         writeResilientCache("options-chain", cacheParams, data);
-        if (data.stale) {
+        if (!Array.isArray(data.chain) || data.chain.length === 0) {
+          const noListedExpiries = responseExpiries.length === 0;
+          const expiryAdjusted = Boolean(activeExpiry && responseExpiries.length > 0 && !responseExpiries.includes(activeExpiry));
+          const supportedUniverse = Array.isArray(data?.supported_assets) && data.supported_assets.length
+            ? data.supported_assets.join(", ")
+            : allAssets.join(", ");
+          setOptionsError(
+            data?.unsupported
+              ? `${activeAsset} is not enabled for the live options ladder here. Supported live underlyings: ${supportedUniverse}.`
+              : activeUsesRfq
+              ? `${activeAsset} is currently being quoted through ${marketStructureLabel} on Derive, so only partial ladder references may be available right now.`
+              : noListedExpiries
+                ? `Derive returned no live ${activeAsset} option ladder right now. Try another supported underlying or refresh once the venue republishes strikes.`
+                : expiryAdjusted
+                  ? `The selected expiry no longer had live rows. Zenin moved you to the nearest available ${activeAsset} expiry.`
+                  : `No ${activeAsset} chain rows were returned for the selected expiry yet. Try another expiry or refresh the snapshot.`
+          );
+          setOptionsStale(Boolean(data?.stale || data?.unavailable || noListedExpiries));
+        } else if (data.stale) {
           setOptionsError(`Using cached options data (${data.stale_age_seconds || 0}s old).`);
         } else {
+          setOptionsError("");
           if (showToast && lastSyncToastRef.current !== requestKey) {
             showToast(`${activeAsset} options chain synchronized.`, "success");
             lastSyncToastRef.current = requestKey;
@@ -661,7 +829,153 @@ useEffect(() => {
     clearInterval(interval);
   };
 
-}, [activeAsset, activeExpiry, chainRefreshTick]);
+}, [activeAsset, activeExpiry, allAssets, chainRefreshTick]);
+
+useEffect(() => {
+  try {
+    localStorage.setItem(OPTIONS_MARKET_MODE_KEY, optionsMarketMode);
+  } catch {
+    // ignore local persistence issues
+  }
+}, [optionsMarketMode]);
+
+useEffect(() => {
+  if (optionsMarketMode !== "equity") return undefined;
+  let isMounted = true;
+  const cacheParams = {
+    underlying: equityUnderlying,
+    expiry: equityExpiry || "nearest"
+  };
+
+  const fetchEquityOptions = async () => {
+    const cached = readResilientCache("options-equity-chain", cacheParams);
+    if (isMounted && cached?.payload) {
+      setEquityOptionsData(cached.payload);
+      setEquityOptionsError("");
+      setEquityOptionsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
+    }
+    setEquityOptionsLoading(true);
+    try {
+      const params = new URLSearchParams({ underlying: equityUnderlying });
+      if (equityExpiry) params.set("expiry", equityExpiry);
+      const payload = await zeninFetchJson(`/options/equity?${params.toString()}`);
+      if (!isMounted) return;
+      setEquityOptionsData(payload);
+      setEquityOptionsError("");
+      setEquityOptionsNotice(Boolean(payload?.stale || payload?.unavailable) ? getSnapshotFallbackMessage(payload) : "");
+      writeResilientCache("options-equity-chain", cacheParams, payload);
+      if (!equityExpiry && payload?.activeExpiry) {
+        setEquityExpiry(payload.activeExpiry);
+      }
+    } catch (error) {
+      if (!isMounted) return;
+      setEquityOptionsError(error?.message || "Equity options snapshot is temporarily unavailable.");
+      setEquityOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
+    } finally {
+      if (isMounted) setEquityOptionsLoading(false);
+    }
+  };
+
+  fetchEquityOptions();
+  const interval = setInterval(fetchEquityOptions, OPTIONS_CHAIN_REFRESH_MS);
+  return () => {
+    isMounted = false;
+    clearInterval(interval);
+  };
+}, [optionsMarketMode, equityUnderlying, equityExpiry, chainRefreshTick]);
+
+const equityOptionsContracts = useMemo(() => {
+  if (optionsMarketMode !== "equity") return [];
+  const rows = Array.isArray(equityOptionsData?.chain) ? equityOptionsData.chain : [];
+  return [...new Set(
+    rows.flatMap((row) => [row?.call?.contractTicker, row?.put?.contractTicker]).filter(Boolean)
+  )].slice(0, 320);
+}, [optionsMarketMode, equityOptionsData]);
+
+const equityOptionsContractsKey = useMemo(
+  () => equityOptionsContracts.join("|"),
+  [equityOptionsContracts]
+);
+
+useEffect(() => {
+  setEquityOptionsLiveTape([]);
+  setEquityOptionsLiveUpdatedAt("");
+  setEquityOptionsLiveConnected(false);
+}, [optionsMarketMode, equityUnderlying, equityOptionsData?.activeExpiry]);
+
+useEffect(() => {
+  if (equityOptionsSocketRef.current) {
+    try {
+      equityOptionsSocketRef.current.close();
+    } catch {
+      // ignore close issues
+    }
+    equityOptionsSocketRef.current = null;
+  }
+  if (optionsMarketMode !== "equity" || !canUseWebSocket() || !equityOptionsContracts.length) {
+    setEquityOptionsLiveConnected(false);
+    return undefined;
+  }
+
+  const socket = new WebSocket(resolveZeninWsUrl("/live"));
+  equityOptionsSocketRef.current = socket;
+  const expectedUnderlying = String(equityUnderlying || "").trim().toUpperCase();
+  const expectedExpiry = equityOptionsData?.activeExpiry || equityExpiry || null;
+
+  socket.addEventListener("open", () => {
+    socket.send(JSON.stringify({
+      type: "subscribeEquityOptions",
+      underlying: expectedUnderlying,
+      expiry: expectedExpiry,
+      contracts: equityOptionsContracts
+    }));
+  });
+
+  socket.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload?.type === "subscribed" && payload?.channel === "equity_options") {
+        setEquityOptionsLiveConnected(true);
+        return;
+      }
+      if (payload?.type === "equity_options_error") {
+        setEquityOptionsLiveConnected(false);
+        return;
+      }
+      if (payload?.type !== "equity_options_update") return;
+      if (String(payload?.underlying || "").trim().toUpperCase() !== expectedUnderlying) return;
+      if ((payload?.expiry || null) !== expectedExpiry) return;
+      setEquityOptionsLiveConnected(true);
+      setEquityOptionsLiveUpdatedAt(payload?.updatedAt || "");
+      setEquityOptionsData((previous) => mergeEquityOptionsChainWithLiveUpdate(previous, payload));
+      const nextTapeRows = buildEquityOptionsLiveTapeEntries(payload);
+      if (nextTapeRows.length) {
+        setEquityOptionsLiveTape((previous) => mergeEquityOptionsLiveTape(previous, nextTapeRows));
+      }
+    } catch {
+      // ignore malformed websocket payloads
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    setEquityOptionsLiveConnected(false);
+  });
+
+  socket.addEventListener("error", () => {
+    setEquityOptionsLiveConnected(false);
+  });
+
+  return () => {
+    if (equityOptionsSocketRef.current === socket) {
+      equityOptionsSocketRef.current = null;
+    }
+    try {
+      socket.close();
+    } catch {
+      // ignore close issues
+    }
+  };
+}, [optionsMarketMode, equityUnderlying, equityExpiry, equityOptionsData?.activeExpiry, equityOptionsContractsKey]);
 
 useEffect(() => {
   let isMounted = true;
@@ -806,12 +1120,32 @@ useEffect(() => {
       })()
     : "Waiting for Derive whale options trades...";
   const activeUsesRfq = marketStructure === "rfq" || rfqAssets.has(String(activeAsset || "").trim().toUpperCase());
+  const activeSpot = Number(spotPrices?.[activeAsset] || 0);
+  const filteredChain = useMemo(() => {
+    if (!Array.isArray(chain) || chain.length === 0) return [];
+    if (!Number.isFinite(activeSpot) || activeSpot <= 0 || strikeWindow === "all") return chain;
+    const bandPct = strikeWindow === "tight" ? 0.1 : strikeWindow === "medium" ? 0.2 : 0.35;
+    return chain.filter((row) => {
+      const strike = Number(row?.strike || 0);
+      if (!Number.isFinite(strike) || strike <= 0) return false;
+      return Math.abs(strike - activeSpot) / activeSpot <= bandPct;
+    });
+  }, [chain, strikeWindow, activeSpot]);
   const chainInventoryLabel = activeUsesRfq
     ? (chain.length > 0 ? `${chain.length} Ladder Strikes Cached` : "RFQ market")
     : `${chain.length} Strikes Available`;
+  const chainHealthLabel = loading
+    ? "Syncing"
+    : optionsStale
+      ? "Snapshot"
+      : filteredChain.length > 0
+        ? "Live"
+        : activeUsesRfq
+          ? "RFQ"
+          : "Pending";
   const emptyChainText = activeUsesRfq
     ? `${activeAsset} is currently exposed through ${marketStructureLabel} on Derive, so a full chain snapshot may be partial or unavailable here.`
-    : `Waiting for options data for ${activeAsset}.`;
+    : `Waiting for ${activeAsset} option rows from Derive.`;
 
   const handleRefreshOptionsView = () => {
     setChainRefreshTick((tick) => tick + 1);
@@ -838,8 +1172,11 @@ useEffect(() => {
       const nextViews = [
         {
           id: `options-view-${Date.now()}`,
+          marketMode: optionsMarketMode,
           activeAsset,
           activeExpiry,
+          equityUnderlying,
+          equityExpiry,
           strikeWindow,
           whaleMinNotional,
           whaleSource,
@@ -858,7 +1195,20 @@ useEffect(() => {
 
   const applySavedOptionsView = (view) => {
     if (!view || typeof view !== "object") return;
-    setActiveAsset(String(view.activeAsset || activeAsset).trim().toUpperCase() || activeAsset);
+    const requestedMode = String(view.marketMode || "crypto").toLowerCase() === "equity" ? "equity" : "crypto";
+    setOptionsMarketMode(requestedMode);
+    if (requestedMode === "equity") {
+      const requestedUnderlying = String(view.equityUnderlying || equityUnderlying).trim().toUpperCase() || equityUnderlying;
+      const resolvedUnderlying = equityUnderlyings.includes(requestedUnderlying) ? requestedUnderlying : (equityUnderlyings[0] || equityUnderlying);
+      setEquityUnderlying(resolvedUnderlying);
+      setEquityExpiry(view.equityExpiry || null);
+      setShowSavedItemsDrawer(false);
+      if (showToast) showToast("Saved equity options view applied.", "success");
+      return;
+    }
+    const requestedAsset = String(view.activeAsset || activeAsset).trim().toUpperCase() || activeAsset;
+    const resolvedAsset = allAssets.includes(requestedAsset) ? requestedAsset : (allAssets[0] || activeAsset);
+    setActiveAsset(resolvedAsset);
     setActiveExpiry(view.activeExpiry || null);
     setStrikeWindow(view.strikeWindow || "all");
     setWhaleMinNotional(Number(view.whaleMinNotional) || 10000);
@@ -875,18 +1225,6 @@ useEffect(() => {
     }
     if (showToast) showToast("No active options trades saved yet.", "info");
   };
-
-  const activeSpot = Number(spotPrices?.[activeAsset] || 0);
-  const filteredChain = useMemo(() => {
-    if (!Array.isArray(chain) || chain.length === 0) return [];
-    if (!Number.isFinite(activeSpot) || activeSpot <= 0 || strikeWindow === "all") return chain;
-    const bandPct = strikeWindow === "tight" ? 0.1 : strikeWindow === "medium" ? 0.2 : 0.35;
-    return chain.filter((row) => {
-      const strike = Number(row?.strike || 0);
-      if (!Number.isFinite(strike) || strike <= 0) return false;
-      return Math.abs(strike - activeSpot) / activeSpot <= bandPct;
-    });
-  }, [chain, strikeWindow, activeSpot]);
 
   const atmStrike = useMemo(() => {
     if (!filteredChain.length || !activeSpot) return null;
@@ -1099,13 +1437,31 @@ useEffect(() => {
         <div>
           <div className="options-exec-eyebrow">Options</div>
           <h1>Options</h1>
-          <p>Whale Options Trades</p>
+          <p>{optionsMarketMode === "equity" ? "Listed Equity Options" : "Crypto Options Flow"}</p>
         </div>
         <span className="options-exec-live-badge">
           <span aria-hidden="true" />
-          Live
+          {optionsMarketMode === "equity"
+            ? (equityOptionsLoading ? "Syncing" : equityOptionsData?.unavailable ? "Offline" : equityOptionsLiveConnected ? "Live" : "Snapshot")
+            : "Live"}
         </span>
         <div className="options-exec-header-actions" aria-label="Options view actions">
+          <div className="options-exec-mode-toggle" role="tablist" aria-label="Options market mode">
+            <button
+              type="button"
+              className={optionsMarketMode === "crypto" ? "active" : ""}
+              onClick={() => setOptionsMarketMode("crypto")}
+            >
+              Crypto Options
+            </button>
+            <button
+              type="button"
+              className={optionsMarketMode === "equity" ? "active" : ""}
+              onClick={() => setOptionsMarketMode("equity")}
+            >
+              Equity Options
+            </button>
+          </div>
           <div className="options-exec-segmented-actions">
             <button type="button" className="active" onClick={handleJumpToSavedItems}>
               Saved Items
@@ -1120,6 +1476,27 @@ useEffect(() => {
         </div>
       </header>
 
+      {optionsMarketMode === "equity" ? (
+        <EquityOptionsDesk
+          underlying={equityUnderlying}
+          onUnderlyingChange={(value) => {
+            setEquityExpiry(null);
+            setEquityUnderlying(String(value || "").trim().toUpperCase());
+          }}
+          expiry={equityExpiry}
+          onExpiryChange={setEquityExpiry}
+          supportedUnderlyings={equityUnderlyings}
+          loading={equityOptionsLoading}
+          error={equityOptionsError}
+          notice={equityOptionsNotice}
+          data={equityOptionsData}
+          liveTape={equityOptionsLiveTape}
+          liveConnected={equityOptionsLiveConnected}
+          liveUpdatedAt={equityOptionsLiveUpdatedAt}
+          onRefresh={handleRefreshOptionsView}
+        />
+      ) : (
+      <>
       <div className="portfolio-analytics-row options-exec-metrics">
         <div className="metric-card glass options-exec-metric-card">
           <label>Implied Volatility <span className="live-pill">Live</span></label>
@@ -1371,7 +1748,7 @@ useEffect(() => {
       <div className="watchlist-panel glass options-exec-panel options-exec-chain-panel">
         <div className="section-header options-exec-panel-head">
           <div className="header-left">
-            <h2>{activeAsset} Option Chain <span className="live-pill">Live</span></h2>
+            <h2>{activeAsset} Option Chain <span className="live-pill">{chainHealthLabel}</span></h2>
             <div className="options-market-context">
               <div className="asset-count">{chainInventoryLabel}</div>
               <span className={`options-market-structure-pill ${activeUsesRfq ? "rfq" : "orderbook"}`}>
@@ -1419,7 +1796,7 @@ useEffect(() => {
         ) : null}
 
           {filteredChain.length === 0 && loading ? (
-            <div className="loading-state">{activeUsesRfq ? `Syncing ${activeAsset} RFQ references...` : `Syncing ${activeAsset} with Lyra Protocol...`}</div>
+            <div className="loading-state">{activeUsesRfq ? `Syncing ${activeAsset} RFQ references...` : `Syncing ${activeAsset} with Derive...`}</div>
           ) : filteredChain.length === 0 ? (
             <GuidedEmptyState
               eyebrow="Options workflow"
@@ -1626,6 +2003,8 @@ useEffect(() => {
         activeOptionsTrades={activeOptionsTrades || []}
         activeAsset={activeAsset}
       />
+      </>
+      )}
 
       <OptionsSavedItemsDrawer
         open={showSavedItemsDrawer}

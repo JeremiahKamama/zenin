@@ -16,8 +16,29 @@ const formatMacroValue = (value, key = "") => {
   return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
 };
 
+const formatMetricDate = (value) => {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  const day = String(parsed.getDate()).padStart(2, "0");
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}`;
+};
+
+const resolveMetricDates = (metric = {}, snapshot = {}) => {
+  const series = Array.isArray(metric?.series) ? metric.series : [];
+  const previousPoint = series.length > 1 ? series[series.length - 2] : null;
+  const currentPoint = series.length > 0 ? series[series.length - 1] : null;
+  return {
+    previous: metric?.previousAsOf || previousPoint?.date || null,
+    current: metric?.currentAsOf || metric?.asOf || currentPoint?.date || snapshot?.updatedAt || null,
+    expected: metric?.expectationAsOf || snapshot?.updatedAt || metric?.asOf || currentPoint?.date || null,
+  };
+};
+
 export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
   const metrics = Array.isArray(snapshot?.metrics) ? snapshot.metrics : [];
+  const firstDates = resolveMetricDates(metrics[0] || {}, snapshot);
 
   return (
     <div style={{ display: "grid", gap: "10px" }}>
@@ -26,29 +47,47 @@ export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
           <thead>
             <tr>
               <th style={{ textAlign: "left" }}>Indicator</th>
-              <th>Previous</th>
-              <th>Current</th>
-              <th>Expected</th>
+              <th><div className="indicator-metric-header"><span>Previous</span><small>{formatMetricDate(firstDates.previous)}</small></div></th>
+              <th><div className="indicator-metric-header"><span>Current</span><small>{formatMetricDate(firstDates.current)}</small></div></th>
+              <th><div className="indicator-metric-header"><span>Expected</span><small>{formatMetricDate(firstDates.expected)}</small></div></th>
             </tr>
           </thead>
           <tbody>
-            {metrics.map((metric) => (
-              <tr
-                key={metric.key}
-                className={onSelectMetric ? "indicator-metric-row clickable" : ""}
-                onClick={onSelectMetric ? () => onSelectMetric(metric) : undefined}
-              >
-                <td style={{ textAlign: "left", color: "#e2e8f0", fontWeight: 600 }}>
-                  <div className="indicator-metric-cell">
-                    <span>{metric.label}</span>
-                    {metric.unit ? <small>{metric.unit}</small> : null}
-                  </div>
-                </td>
-                <td className="greek">{formatMacroValue(metric.previous, metric.key)}</td>
-                <td style={{ color: "#e2e8f0" }}>{formatMacroValue(metric.current, metric.key)}</td>
-                <td style={{ color: "#38bdf8" }}>{formatMacroValue(metric.expectation, metric.key)}</td>
-              </tr>
-            ))}
+            {metrics.map((metric) => {
+              const metricDates = resolveMetricDates(metric, snapshot);
+              return (
+                <tr
+                  key={metric.key}
+                  className={onSelectMetric ? "indicator-metric-row clickable" : ""}
+                  onClick={onSelectMetric ? () => onSelectMetric(metric) : undefined}
+                >
+                  <td style={{ textAlign: "left", color: "#e2e8f0", fontWeight: 600 }}>
+                    <div className="indicator-metric-cell">
+                      <span>{metric.label}</span>
+                      {metric.unit ? <small>{metric.unit}</small> : null}
+                    </div>
+                  </td>
+                  <td className="greek">
+                    <div className="indicator-metric-value-cell">
+                      <span>{formatMacroValue(metric.previous, metric.key)}</span>
+                      <small>{formatMetricDate(metricDates.previous)}</small>
+                    </div>
+                  </td>
+                  <td style={{ color: "#e2e8f0" }}>
+                    <div className="indicator-metric-value-cell">
+                      <span>{formatMacroValue(metric.current, metric.key)}</span>
+                      <small>{formatMetricDate(metricDates.current)}</small>
+                    </div>
+                  </td>
+                  <td style={{ color: "#38bdf8" }}>
+                    <div className="indicator-metric-value-cell">
+                      <span>{formatMacroValue(metric.expectation, metric.key)}</span>
+                      <small>{formatMetricDate(metricDates.expected)}</small>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

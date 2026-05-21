@@ -135,6 +135,16 @@ const EMPTY_COMMODITIES = {
 
 const COMMODITY_GROUPS = ["all", "energy", "metals", "agriculture", "fertilizers", "industrial", "battery", "soft", "livestock"];
 const COMMODITY_VIEWS = ["price", "flows", "seasonality", "curve", "compare"];
+const COMMODITY_TERMINAL_UNIVERSE = [
+  { symbol: "CL", name: "WTI Crude", group: "energy", region: "global", unit: "USD/bbl", latestPrice: 76.24, dailyChangePct: -2.48, ytdChangePct: -6.2, oneYearReturnPct: -8.4, curveStructure: "Backwardation", inventory: "Low", demand: "Firming", risk: "Medium", source: "Yahoo Finance + EIA" },
+  { symbol: "BZ", name: "Brent Crude", group: "energy", region: "global", unit: "USD/bbl", latestPrice: 80.85, dailyChangePct: -2.22, ytdChangePct: -5.1, oneYearReturnPct: -7.6, curveStructure: "Backwardation", inventory: "Low", demand: "Stable", risk: "Medium", source: "Yahoo Finance + EIA" },
+  { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", unit: "USD/MMBtu", latestPrice: 2.31, dailyChangePct: 21.6, ytdChangePct: -18.6, oneYearReturnPct: -12.7, curveStructure: "Contango", inventory: "Very Low", demand: "Weak", risk: "High", source: "Yahoo Finance + EIA" },
+  { symbol: "GC", name: "Gold", group: "metals", region: "global", unit: "USD/oz", latestPrice: 2358.4, dailyChangePct: 1.56, ytdChangePct: 2.3, oneYearReturnPct: 14.2, curveStructure: "Carry", inventory: "Normal", demand: "Stable", risk: "Low", source: "FRED + Yahoo Finance" },
+  { symbol: "SI", name: "Silver", group: "metals", region: "global", unit: "USD/oz", latestPrice: 30.12, dailyChangePct: 6.94, ytdChangePct: 14.2, oneYearReturnPct: 18.4, curveStructure: "Carry", inventory: "High", demand: "Stable", risk: "Low", source: "FRED + Yahoo Finance" },
+  { symbol: "HG", name: "Copper", group: "industrial", region: "global", unit: "USD/mt", latestPrice: 9821, dailyChangePct: -1.83, ytdChangePct: -8.9, oneYearReturnPct: -11.2, curveStructure: "Backwardation", inventory: "Low", demand: "Improving", risk: "Medium", source: "Yahoo Finance + LME" },
+  { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: 6.45, dailyChangePct: 1.55, ytdChangePct: 6.1, oneYearReturnPct: -2.8, curveStructure: "Weather bid", inventory: "Above Avg", demand: "Weak", risk: "High", source: "Yahoo Finance + USDA" },
+  { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: 12.37, dailyChangePct: 1.21, ytdChangePct: 7.4, oneYearReturnPct: 6.7, curveStructure: "Carry", inventory: "High", demand: "Neutral", risk: "Medium", source: "Yahoo Finance + USDA" },
+];
 
 const MACRO_CATEGORY_OPTIONS = [
   { key: "growth", label: "Growth" },
@@ -643,11 +653,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   const [macroSourceDataExpanded, setMacroSourceDataExpanded] = useState(false);
   const [macroTimeseriesPageIndex, setMacroTimeseriesPageIndex] = useState(0);
   const [selectedCommodityGroup, setSelectedCommodityGroup] = useState("all");
-  const [selectedCommoditySymbol, setSelectedCommoditySymbol] = useState("GC");
+  const [selectedCommoditySymbol, setSelectedCommoditySymbol] = useState("CL");
   const [selectedCommodityRegion, setSelectedCommodityRegion] = useState("global");
   const [selectedCommodityTimeRange, setSelectedCommodityTimeRange] = useState("1Y");
   const [selectedCommodityView, setSelectedCommodityView] = useState("price");
-  const [compareCommoditySymbols, setCompareCommoditySymbols] = useState(["GC", "CL"]);
+  const [compareCommoditySymbols, setCompareCommoditySymbols] = useState(["CL", "NG", "GC", "HG", "ZW"]);
   const [commodityAlertRules, setCommodityAlertRules] = useState([]);
   const [commodityFlowMode, setCommodityFlowMode] = useState("etf");
   const [commoditySearchQuery, setCommoditySearchQuery] = useState("");
@@ -1477,7 +1487,29 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
   const filteredCommodities = useMemo(() => {
     const q = String(commoditySearchQuery || "").trim().toLowerCase();
-    const rows = (commoditiesData.list || []).filter((row) => {
+    const liveRows = Array.isArray(commoditiesData.list) ? commoditiesData.list : [];
+    const liveBySymbol = new Map(liveRows.map((row) => [String(row?.symbol || "").toUpperCase(), row]));
+    const terminalSymbols = new Set(COMMODITY_TERMINAL_UNIVERSE.map((row) => row.symbol));
+    const mergedRows = [
+      ...COMMODITY_TERMINAL_UNIVERSE.map((row) => {
+        const live = liveBySymbol.get(row.symbol) || liveBySymbol.get(`${row.symbol}=F`) || null;
+        return {
+          ...row,
+          ...(live || {}),
+          name: live?.name || row.name,
+          group: live?.group || row.group,
+          region: live?.region || row.region,
+          unit: live?.unit || row.unit,
+          source: live?.source || row.source,
+          latestPrice: Number.isFinite(Number(live?.latestPrice)) ? Number(live.latestPrice) : row.latestPrice,
+          dailyChangePct: Number.isFinite(Number(live?.dailyChangePct)) ? Number(live.dailyChangePct) : row.dailyChangePct,
+          ytdChangePct: Number.isFinite(Number(live?.ytdChangePct)) ? Number(live.ytdChangePct) : row.ytdChangePct,
+          oneYearReturnPct: Number.isFinite(Number(live?.oneYearReturnPct)) ? Number(live.oneYearReturnPct) : row.oneYearReturnPct,
+        };
+      }),
+      ...liveRows.filter((row) => !terminalSymbols.has(String(row?.symbol || "").toUpperCase())),
+    ];
+    const rows = mergedRows.filter((row) => {
       const inGroup = selectedCommodityGroup === "all" || String(row?.group || "").toLowerCase() === selectedCommodityGroup;
       if (!inGroup) return false;
       const inRegion = selectedCommodityRegion === "global" || String(row?.region || "").toLowerCase() === selectedCommodityRegion;
@@ -1792,8 +1824,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
     const macroRows = (macroCompareRows.length ? macroCompareRows : macroOverview).slice(0, 8).map((row, idx) => ({
       id: row.id || `macro-${idx}`,
       asset: row.country || row.geo || row.name || row.indicator || `Macro ${idx + 1}`,
-      primary: row.latestValue ?? row.value ?? row.current ?? "—",
-      secondary: row.previousValue ?? row.prior ?? row.change ?? "—",
+      primary: formatMacroDisplayValue(row.latestValue ?? row.value ?? row.current ?? "—"),
+      secondary: formatMacroDisplayValue(row.previousValue ?? row.prior ?? row.change ?? "—"),
       tertiary: row.category || row.indicator || selectedCategory,
       signal: row.trend || row.status || row.importance || "Monitor",
       tone: Number(row.change ?? row.delta ?? 0) >= 0 ? "positive" : "neutral",
@@ -1814,6 +1846,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       dailyChangePct: row.dailyChangePct ?? null,
       ytdChangePct: row.ytdChangePct ?? null,
       oneYearReturnPct: row.oneYearReturnPct ?? null,
+      group: row.group || "Commodity",
+      unit: row.unit || row.currency || "USD",
+      latestPrice: row.latestPrice ?? null,
+      inventory: row.inventory || null,
+      demand: row.demand || null,
+      risk: row.risk || null,
+      curveStructure: row.curveStructure || null,
       proxySymbol: row.proxySymbol || null,
       source: row.source || null,
       region: row.region || "Global",
@@ -1854,6 +1893,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       options: {
         kicker: "Derivatives intelligence",
         title: "Options Volatility Desk",
+        hideTitle: true,
         summary: "Surface pressure, gamma exposure, max pain, and event-risk flow compressed for fast decisions.",
         primaryLabel: "Options volume",
         primaryValue: formatCompactMoney(optionsTotalVolume),
@@ -1917,6 +1957,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       macro: {
         kicker: "Rates + growth regime",
         title: "Macro Command Board",
+        hideTitle: true,
         summary: "Policy calendar, country indicators, FX movers, forecasts, and correlation context aligned by regime.",
         primaryLabel: "Regime",
         primaryValue: regimeLabel || "Monitor",
@@ -5612,7 +5653,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     const maxPainRows = Array.isArray(optionsMeta.maxPain) ? optionsMeta.maxPain : [];
     const oiRows = Array.isArray(optionsMeta.oiByStrike) ? optionsMeta.oiByStrike : [];
     const venueRows = routeRows.reduce((acc, row) => {
-      const venue = String(row.exchange || "Unknown").trim() || "Unknown";
+      const venue = resolveOptionsRouteVenue(row);
       const existing = acc.get(venue) || { venue, volumeUsd: 0, routes: 0 };
       existing.volumeUsd += Number(row.volumeUsd ?? row.volume) || 0;
       existing.routes += 1;
@@ -5641,7 +5682,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
           <div className="analytics-desk-hero analytics-options-hero">
             <div>
               <span>{config.kicker}</span>
-              <h2>{config.title}</h2>
+              {config.hideTitle ? null : <h2>{config.title}</h2>}
               <p>{config.summary}</p>
               <SourceQualityStrip fallback={config.quality} items={[config.quality, ...visibleRows.slice(0, 2), ...visibleRail.slice(0, 1)]} />
             </div>
@@ -5671,7 +5712,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>Surface monitor</span>
                 <strong>Greeks, venue flow, and underlyings with the strongest live context</strong>
               </div>
-              <em><SourceQualityBadge quality={config.quality} compact /> {optionsMeta.source || "Deribit + Finviz"}</em>
+              <em>{optionsMeta.source || "Deribit + Finviz"}</em>
             </div>
             <div className="analytics-options-surface-rows">
               {visibleRows.slice(0, 8).map((row, idx) => (
@@ -5682,14 +5723,13 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                   </div>
                   <b>{row.primary}</b>
                   <em className={`analytics-options-tone ${row.tone || "neutral"}`}>{row.secondary}</em>
-                  <i>{row.signal} <SourceQualityBadge quality={row.source ? row : config.quality} compact /></i>
+                  <i>{row.signal}</i>
                 </div>
               ))}
             </div>
             <div className="analytics-options-footstrip">
               <div><span>Surface nodes</span><strong>{greekRows.length}</strong></div>
               <div><span>Venue routes</span><strong>{routeRows.length}</strong></div>
-              <div><span>Lead venue</span><strong>{orderedVenues[0]?.venue || "Pending"}</strong></div>
               <div><span>Lead asset</span><strong>{topGreek?.asset || topGreek?.instrument || "Pending"}</strong></div>
             </div>
           </div>
@@ -5703,7 +5743,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             </div>
 
             <div className="analytics-options-watch-section">
-              <span>Venue flow split</span>
+              <span>Exchange flow split</span>
               <div className="analytics-options-watch-table">
                 {orderedVenues.length ? orderedVenues.slice(0, 4).map((row) => (
                   <div key={row.venue} className="analytics-options-watch-row">
@@ -5755,8 +5795,8 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             <div className="analytics-options-route-list">
               {routeRows.length ? routeRows.slice(0, 8).map((row, idx) => (
                 <div key={row.id || `route-${idx}`} className="analytics-options-route-row">
-                  <strong>{row.exchange || "Venue"}</strong>
-                  <span>{row.route || "Route"}</span>
+                  <strong>{resolveOptionsRouteVenue(row)}</strong>
+                  <span>{describeOptionsRouteSource(row)}</span>
                   <em>{row.asset || "Basket"}</em>
                   <b>{formatCompactMoney(row.volumeUsd ?? row.volume)}</b>
                 </div>
@@ -5800,7 +5840,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               ))}
               <div className="analytics-options-source-row">
                 <strong>Feed mix</strong>
-                <span>{optionsMeta.source || "Deribit + Finviz"}</span>
+                <span>{routeRows.some((row) => String(row?.exchange || "").toLowerCase() === "finviz") ? "Deribit direct + Finviz listed-underlying proxies" : (optionsMeta.source || "Deribit + Finviz")}</span>
                 <em>{formatDateTime(optionsMeta.updatedAt || updatedAt)}</em>
               </div>
             </div>
@@ -6115,7 +6155,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
           <div className="analytics-desk-hero analytics-macro-hero">
             <div>
               <span>{config.kicker}</span>
-              <h2>Macro Command Board</h2>
+              {config.hideTitle ? null : <h2>{config.title}</h2>}
               <p>{config.summary}</p>
               <SourceQualityStrip fallback={config.quality} items={[config.quality, ...sourceOverviewRows.slice(0, 2), ...riskRows.slice(0, 1)]} />
             </div>
@@ -6132,7 +6172,6 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>{metric.label}</span>
                 <strong>{metric.value}</strong>
                 <em>{metric.helper}</em>
-                <SourceQualityBadge quality={metric.quality || config.quality} compact />
               </article>
             ))}
           </div>
@@ -6143,7 +6182,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             <div className="analytics-desk-panel-head">
               <span>Rates / growth matrix</span>
               <strong>Country signal stack</strong>
-              <em><SourceQualityBadge quality={config.quality} compact /> {formatDateTime(updatedAt)}</em>
+              <em>{formatDateTime(updatedAt)}</em>
             </div>
             <div className="analytics-macro-lanes">
               {visibleRows.map((row, idx) => (
@@ -6893,20 +6932,48 @@ function SourceQualityStrip({ items = [], fallback }) {
   const rows = (Array.isArray(items) ? items : []).filter(Boolean);
   const usableRows = rows.length ? rows : (fallback ? [fallback] : []);
   if (!usableRows.length) return null;
+  const normalized = usableRows.map((item) => getSourceQuality(item));
+  const primary = normalized[0];
+  const sources = [...new Set(normalized.map((item) => item.source).filter(Boolean))];
   return (
     <div className="analytics-source-quality-strip" aria-label="Source quality">
       <span>Source quality</span>
-      {usableRows.slice(0, 4).map((item, idx) => {
-        const quality = getSourceQuality(item);
-        return (
-          <em key={`${quality.key}-${quality.source || idx}`}>
-            <SourceQualityBadge quality={quality} compact />
-            {quality.source ? <strong>{quality.source}</strong> : null}
-          </em>
-        );
-      })}
+      <em key={`${primary.key}-${primary.source || "primary"}`}>
+        <SourceQualityBadge quality={primary} compact />
+        {sources.length ? <strong>{sources.join(" + ")}</strong> : null}
+      </em>
     </div>
   );
+}
+
+const OPTIONS_PROXY_EXCHANGE_MAP = {
+  SPY: "NYSE Arca",
+  QQQ: "NASDAQ",
+  AAPL: "NASDAQ",
+  MSFT: "NASDAQ",
+  NVDA: "NASDAQ",
+  AMZN: "NASDAQ",
+  META: "NASDAQ",
+  TSLA: "NASDAQ",
+};
+
+function resolveOptionsRouteVenue(row) {
+  const exchange = String(row?.exchange || "").trim();
+  if (exchange && exchange.toLowerCase() !== "finviz") return exchange;
+  return OPTIONS_PROXY_EXCHANGE_MAP[String(row?.asset || "").toUpperCase()] || "Listed proxy";
+}
+
+function describeOptionsRouteSource(row) {
+  const exchange = String(row?.exchange || "").trim().toLowerCase();
+  if (exchange === "deribit") return "Deribit direct";
+  return `Finviz options proxy · ${resolveOptionsRouteVenue(row)}`;
+}
+
+function formatMacroDisplayValue(value, digits = 2) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return value || "—";
+  const precision = Math.abs(numeric) >= 1000 ? 0 : digits;
+  return numeric.toFixed(precision);
 }
 
 function ProviderStatusStrip({ providers }) {

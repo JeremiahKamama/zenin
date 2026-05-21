@@ -475,13 +475,6 @@ useEffect(() => {
 
         {activeCategory !== "indicators" ? (
           <div className="watchlist-header-actions compact">
-            <span
-              className={`data-health-badge ${liveStatus === "connected" ? "ok" : liveStatus === "degraded" ? "hazard" : "loading"}`}
-              title={lastLivePriceAt ? `Last live price tick ${new Date(lastLivePriceAt).toLocaleTimeString()}` : "Live prices start when tracked assets are available"}
-            >
-              <span className={`status-icon ${liveStatus === "idle" ? "spinner" : ""}`}>{liveStatus === "connected" ? "✓" : liveStatus === "degraded" ? "⚠" : "⟳"}</span>
-              {liveStatus === "connected" ? "Live" : liveStatus === "degraded" ? "Polling" : "Connecting"}
-            </span>
             <InlineControlGroup className="watchlist-toolbar-toggle">
               <button
                 className={viewMode === "grid" ? "active" : ""}

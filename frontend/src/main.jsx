@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { getGuestWorkspacePath, storePostAuthRedirect } from "./utils/authRedirect";
+import { isDevFullAccessEnabled } from "./utils/devAccess";
 import { hasWorkspaceSession } from "./utils/workspacePersistence";
 import { hasSupabaseSessionHint } from "./utils/supabaseAuth";
 
@@ -22,7 +23,7 @@ function redirectUnauthenticatedAppEntry(entry) {
 
   const params = new URLSearchParams(window.location.search);
   const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
-  if (allowGuest || hasWorkspaceSession() || hasSupabaseSessionHint()) return false;
+  if (isDevFullAccessEnabled() || allowGuest || hasWorkspaceSession() || hasSupabaseSessionHint()) return false;
 
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   storePostAuthRedirect(target, "/app");
