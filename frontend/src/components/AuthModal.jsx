@@ -1,13 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getGuestWorkspacePath, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
-import {
-  ensureZeninSessionFromSupabase,
-  getSupabaseClient,
-  getSupabaseMfaState,
-  isSupabaseConfigured,
-  subscribeToSupabaseAuth
-} from "../utils/supabaseAuth";
+import { zeninFetchJson } from "../utils/zeninFetch";
+import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "../utils/supabaseAuth";
+import { startAuthentication } from "@simplewebauthn/browser";
 
 const ENABLE_APPLE_OAUTH = false;
 
@@ -54,8 +50,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
   };
 
   const shouldUseFullMfaScreen = async () => {
-    const state = await getSupabaseMfaState();
-    return state?.aal?.currentLevel === "aal1" && state?.aal?.nextLevel === "aal2";
+    // Server-driven MFA handled by signin endpoint
+    return false;
   };
 
   useEffect(() => {
@@ -69,20 +65,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
   if (!isOpen) return null;
 
   useEffect(() => {
-    if (!isOpen) return () => {};
-    const unsubscribe = subscribeToSupabaseAuth(async (event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        if (await shouldUseFullMfaScreen()) {
-          redirectToFullMfa();
-          return;
-        }
-        const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
-        if (exchanged?.user) {
-          redirectToApp();
-        }
-      }
-    });
-    return unsubscribe;
+    // No Supabase client subscription; rely on backend session after signin/signup flows.
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -101,26 +84,16 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
       if (!isValidEmail(signinForm.email)) throw new Error("Enter a valid email address.");
       if (!signinForm.password.trim()) throw new Error("Enter your password.");
-      const client = getSupabaseClient();
-      const { data, error: authError } = await client.auth.signInWithPassword({
-        email: signinForm.email.trim(),
-        password: signinForm.password
-      });
-      if (authError) throw authError;
-      if (!data.session?.access_token) {
-        throw new Error("Authentication did not return a valid session. Try again.");
-      }
-      if (await shouldUseFullMfaScreen()) {
+      const payload = { email: signinForm.email.trim(), password: signinForm.password, rememberMe: true };
+      const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload) });
+      if (data?.requiresMfa) {
         redirectToFullMfa();
         return;
       }
-      const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
-      if (!exchanged?.user) {
-        throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
-      }
+      const me = await zeninFetchJson("/api/auth/me");
+      if (!me?.authenticated || !me?.user) throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
       redirectToApp();
     } catch (err) {
       setError(err.message || "Failed to sign in");
@@ -134,33 +107,20 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
       if (!signupForm.fullName.trim()) throw new Error("Enter your full name.");
       if (!isValidEmail(signupForm.email)) throw new Error("Enter a valid email address.");
       if (!isStrongPassword(signupForm.password)) {
         throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
       }
-      const client = getSupabaseClient();
-      const { data, error: authError } = await client.auth.signUp({
-        email: signupForm.email.trim(),
-        password: signupForm.password,
-        options: {
-          emailRedirectTo: getRedirectUrl("/auth?mode=signup"),
-          data: {
-            display_name: signupForm.fullName.trim()
-          }
-        }
-      });
-      if (authError) throw authError;
-      if (data.session?.access_token) {
-        const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
-        if (exchanged?.user) {
-          redirectToApp();
-          return;
-        }
+      const data = await zeninFetchJson("/api/auth/signup", { method: "POST", body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.fullName.trim() }) });
+      if (data?.requiresVerification) {
+        setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
+        setMode("signin");
+        return;
       }
-      setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
-      setMode("signin");
+      const me = await zeninFetchJson("/api/auth/me");
+      if (!me?.authenticated || !me?.user) throw new Error("Signed up but Zenin could not start your workspace session.");
+      redirectToApp();
     } catch (err) {
       setError(err.message || "Failed to create account");
     } finally {
@@ -172,20 +132,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
-      const client = getSupabaseClient();
-      const { data, error: authError } = await client.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: getRedirectUrl("/auth?mode=signin")
-        }
-      });
-      if (authError) throw authError;
-      if (data?.url) {
-        window.location.assign(data.url);
-        return;
-      }
-      throw new Error("Google sign-in could not start. Try again.");
+      const returnTo = getRedirectUrl("/auth?mode=signin");
+      await import("../utils/backendOAuth").then(({ startOAuth }) => startOAuth(provider, { returnTo }));
     } catch (err) {
       setError(err.message || "OAuth failed");
     } finally {
@@ -198,13 +146,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setLoading(true);
     setError("");
     try {
-      if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
       if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
-      const client = getSupabaseClient();
-      const { error: authError } = await client.auth.resetPasswordForEmail(forgotForm.email.trim(), {
-        redirectTo: getRedirectUrl("/auth?mode=forgot&reset=1")
-      });
-      if (authError) throw authError;
+      await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }) });
       setMode("forgot_success");
     } catch (err) {
       setError(err.message || "Failed to send reset link");
@@ -302,6 +245,34 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
                 disabled={loading}
               >
                 <span style={{ fontSize: '1.2rem' }}>G</span> Google
+              </button>
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                onClick={async () => {
+                  setLoading(true);
+                  setError("");
+                  try {
+                    const opts = await startSupabasePasskeyAuthentication();
+                    const authResp = await startAuthentication(opts);
+                    const verify = await verifySupabasePasskeyAuthentication({ response: authResp, challengeId: opts.challengeId, rememberMe: true });
+                    if (verify?.success) {
+                      const me = await zeninFetchJson("/api/auth/me");
+                      if (!me?.authenticated || !me?.user) throw new Error("Signed in but session not established.");
+                      redirectToApp();
+                    } else {
+                      setError(verify?.error || "Passkey sign-in failed.");
+                    }
+                  } catch (err) {
+                    setError(err?.message || "Passkey sign-in failed");
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+              >
+                Passkey
               </button>
               {ENABLE_APPLE_OAUTH ? (
                 <button 

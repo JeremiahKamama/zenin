@@ -18,12 +18,8 @@ services:
         value: https://zenin-beta.vercel.app
       - key: DATABASE_URL
         sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_PUBLISHABLE_KEY
-        sync: false
-      - key: SUPABASE_DIRECT_URL
-        sync: false
+      # Supabase envs removed: authentication is now backend-managed. If you
+      # migrate from Supabase, set any required direct DB URLs in DATABASE_URL.
       - key: PGSSLMODE
         value: require
       - key: PGSSL_REJECT_UNAUTHORIZED
@@ -51,9 +47,9 @@ services:
     staticPublishPath: dist
     pullRequestPreviewsEnabled: false
     envVars:
-      - key: VITE_SUPABASE_URL
-        sync: false
-      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+      # Frontend no longer requires VITE_SUPABASE_* variables. Use `VITE_API_URL`
+      # to point the client at the backend API if needed during builds.
+      - key: VITE_API_URL
         sync: false
     routes:
       # Send all routes to index.html so React Router / client-side nav works

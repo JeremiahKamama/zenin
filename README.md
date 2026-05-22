@@ -4,33 +4,29 @@ Zenin is a multi-asset trading dashboard that combines portfolio management, opt
 
 This README reflects the current implementation in this repository.
 
-## Supabase runtime auth
+## Runtime auth (backend-managed)
 
-Zenin now uses Supabase for frontend authentication while keeping the existing Express API and PostgreSQL-backed application data model.
+VITE_API_URL=https://api.your-domain.example
+to backend auth endpoints (`/api/auth/*`) rather than a hosted Supabase Auth instance.
 
-Frontend env in `frontend/.env`:
+Frontend build env in `frontend/.env`:
 
 ```bash
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
+VITE_API_URL=https://api.your-domain.example
 ```
 
 Backend env in `backend/.env`:
 
 ```bash
 DATABASE_URL=postgresql://...runtime-or-pooler-url...
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
-SUPABASE_DIRECT_URL=postgresql://...direct-db-url...
 PGSSLMODE=require
 PGSSL_REJECT_UNAUTHORIZED=true
 ```
 
 Render deployment note:
 
-- Set `DATABASE_URL` to the Supabase runtime database URL.
-- Set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the backend service.
-- Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` on the frontend build.
+- Set `DATABASE_URL` on the backend service to your runtime Postgres URL.
+- Set `VITE_API_URL` on the frontend build to point at your deployed backend API.
 
 ## Entry flows
 
@@ -73,19 +69,17 @@ Render deployment note:
 - Earnings calendar cards for stock watchlist symbols (cached with long refresh cadence to avoid reload-time re-pulls)
 - Macro indicators + country indicator search powered by Forex Factory calendar data mapping
 
-### 4) Company Profile
-- Deep-dive fundamental research framework for stocks (Defense, Energy, AI, Robotics, Pharma, etc.)
+ `VITE_API_URL` (Backend API URL used by the frontend for auth and data requests)
 - Integrated **Finviz Market Intel**:
   - Analyst ratings & price targets
   - Insider trading activity
   - Real-time news feed & sentiment indicators
 - 10-year (40-quarter) historical earnings table with surprise tracking
-- Leadership background with automated Wikipedia research links
-- Intelligent session-based caching (refreshes once per calendar day)
+ `DATABASE_URL` (Postgres runtime connection string used by the backend)
 
 ### 5) Portfolio
 - Buy/sell via asset modal and persisted trade execution
-- Live holdings valuation and aggregate gain/loss metrics
+-- Set `DATABASE_URL` to the runtime Postgres connection string in Render.
 - Portfolio charts and performance snapshots
 - Per-position entry-price aware gain calculations
 - Mobile-safe rebalancing table layout with improved horizontal overflow behavior

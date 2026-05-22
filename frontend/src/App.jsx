@@ -24,6 +24,7 @@ import {
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { zeninFetch, zeninFetchJson } from "./utils/zeninFetch";
+import { startRegistration } from "@simplewebauthn/browser";
 import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection } from "./utils/workspacePersistence";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
@@ -4509,34 +4510,62 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const registerPasskey = async () => {
-    if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Passkey management is not available in this Supabase-backed settings screen yet. Use authenticator app MFA for account protection.");
+    if (isGuestUser) {
+      setProfileMessage("twofa", "info", "Sign in to manage passkeys for your account.");
       return;
     }
+
     const passkeyName = profileForms.passkeyName.trim();
     if (passkeyName.length < 2) {
       setProfileMessage("twofa", "error", "Passkey name must be at least 2 characters.");
       return;
     }
 
-    const newPasskey = {
-      id: Date.now(),
-      name: passkeyName,
-      provider: profileForms.passkeyProvider,
-      createdAt: new Date().toISOString()
-    };
-    setProfileSecurity((prev) => ({
-      ...prev,
-      twoFactorEnabled: true,
-      twoFactorMethod: "passkey",
-      twoFactorProvider: profileForms.passkeyProvider,
-      twoFactorTarget: passkeyName,
-      twoFactorEnabledAt: new Date().toISOString(),
-      passkeys: [newPasskey, ...(Array.isArray(prev.passkeys) ? prev.passkeys : [])],
-      backupCodes: prev.backupCodes.length ? prev.backupCodes : createBackupCodes()
-    }));
-    setProfileForms((prev) => ({ ...prev, passkeyName: "Primary Device" }));
-    setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
+    try {
+      setProfileMessage("twofa", "info", "Starting passkey registration...");
+      const options = await zeninFetchJson("/api/auth/passkeys/register/generate-options");
+
+      const attestationResponse = await startRegistration(options);
+
+      const verify = await zeninFetchJson("/api/auth/passkeys/register/verify", {
+        method: "POST",
+        body: JSON.stringify({ response: attestationResponse, name: passkeyName, provider: profileForms.passkeyProvider })
+      });
+
+      if (verify?.success) {
+        const updatedUser = verify.user || null;
+        if (updatedUser) {
+          setProfileSecurity((prev) => ({
+            ...prev,
+            twoFactorEnabled: Boolean(updatedUser.twoFactorEnabled),
+            twoFactorMethod: updatedUser.twoFactorMethod || "passkey",
+            twoFactorProvider: updatedUser.twoFactorProvider || profileForms.passkeyProvider,
+            twoFactorTarget: updatedUser.twoFactorTarget || passkeyName,
+            twoFactorEnabledAt: updatedUser.twoFactorEnabledAt || new Date().toISOString(),
+            passkeys: Array.isArray(updatedUser.passkeys) ? updatedUser.passkeys : prev.passkeys,
+            backupCodes: prev.backupCodes.length ? prev.backupCodes : (verify.backupCodes || prev.backupCodes)
+          }));
+        } else {
+          setProfileSecurity((prev) => ({
+            ...prev,
+            twoFactorEnabled: true,
+            twoFactorMethod: "passkey",
+            twoFactorProvider: profileForms.passkeyProvider,
+            twoFactorTarget: passkeyName,
+            twoFactorEnabledAt: new Date().toISOString(),
+            passkeys: [{ id: Date.now(), name: passkeyName, provider: profileForms.passkeyProvider, createdAt: new Date().toISOString() }, ...(Array.isArray(prev.passkeys) ? prev.passkeys : [])],
+            backupCodes: prev.backupCodes.length ? prev.backupCodes : (verify.backupCodes || createBackupCodes())
+          }));
+        }
+
+        setProfileForms((prev) => ({ ...prev, passkeyName: "Primary Device" }));
+        setProfileMessage("twofa", "success", `Passkey "${passkeyName}" registered.`);
+      } else {
+        throw new Error(verify?.error || "Passkey registration failed.");
+      }
+    } catch (error) {
+      setProfileMessage("twofa", "error", error?.message || "Could not register passkey.");
+    }
   };
 
   const regenerateBackupCodes = async () => {
