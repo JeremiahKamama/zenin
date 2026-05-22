@@ -6,8 +6,11 @@ import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect }
 import {
   ensureZeninSessionFromSupabase,
   getSupabaseClient,
+  getSupabaseMfaState,
+  getSupabaseSession,
   isSupabaseConfigured,
-  subscribeToSupabaseAuth
+  subscribeToSupabaseAuth,
+  verifySupabaseMfaCode
 } from "./utils/supabaseAuth";
 
 function getModeFromLocation() {
@@ -65,6 +68,7 @@ export default function AuthPage() {
   const [signupForm, setSignupForm] = useState({ email: "", password: "", displayName: "" });
   const [signinForm, setSigninForm] = useState({ email: "", password: "" });
   const [forgotForm, setForgotForm] = useState({ email: "", newPassword: "" });
+  const [mfaForm, setMfaForm] = useState({ code: "" });
   const [visiblePasswords, setVisiblePasswords] = useState({ signup: false, signin: false, reset: false });
   const [rememberMe, setRememberMe] = useState(true);
   const [recoveryReady, setRecoveryReady] = useState(isRecoveryLinkActive);
@@ -86,6 +90,26 @@ export default function AuthPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const shouldPromptForMfa = async () => {
+    if (!isSupabaseConfigured()) return false;
+    const state = await getSupabaseMfaState();
+    const needsMfa = state?.aal?.currentLevel === "aal1" && state?.aal?.nextLevel === "aal2";
+    if (!needsMfa) return false;
+    setMfaForm({ code: "" });
+    setMode("mfa");
+    setMessage("Enter the code from your authenticator app to finish signing in.");
+    return true;
+  };
+
+  const finishSignedInSession = async () => {
+    if (await shouldPromptForMfa()) return;
+    const exchanged = await ensureZeninSessionFromSupabase({ rememberMe });
+    if (!exchanged?.user) {
+      throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
+    }
+    redirectToApp();
   };
 
   const updateMode = (nextMode) => {
@@ -138,9 +162,12 @@ export default function AuthPage() {
         return;
       }
       if (event === "SIGNED_IN" && session) {
-        const exchanged = await ensureZeninSessionFromSupabase({ rememberMe });
-        if (exchanged?.user && !isRecoveryLinkActive()) {
-          redirectToApp();
+        if (!isRecoveryLinkActive()) {
+          try {
+            await finishSignedInSession();
+          } catch (eventError) {
+            setError(eventError?.message || "Zenin could not start your workspace session.");
+          }
         }
       }
     });
@@ -150,9 +177,12 @@ export default function AuthPage() {
   useEffect(() => {
     let mounted = true;
     if (!isSupabaseConfigured()) return () => {};
-    ensureZeninSessionFromSupabase({ rememberMe: true }).then((result) => {
-      if (mounted && result?.user && !isRecoveryLinkActive()) {
-        redirectToApp();
+    getSupabaseSession().then(async (session) => {
+      if (!mounted || !session || isRecoveryLinkActive()) return;
+      try {
+        await finishSignedInSession();
+      } catch (sessionError) {
+        if (mounted) setError(sessionError?.message || "Zenin could not start your workspace session.");
       }
     }).catch(() => {});
     return () => {
@@ -204,11 +234,15 @@ export default function AuthPage() {
     if (!data.session?.access_token) {
       throw new Error("Authentication did not return a valid session. Try again.");
     }
-    const exchanged = await ensureZeninSessionFromSupabase({ rememberMe });
-    if (!exchanged?.user) {
-      throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
-    }
-    redirectToApp();
+    await finishSignedInSession();
+  });
+
+  const onVerifyMfa = () => runAction(async () => {
+    if (!isSupabaseConfigured()) throw new Error("Authentication is not configured for this frontend.");
+    const code = String(mfaForm.code || "").trim();
+    if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit authenticator code.");
+    await verifySupabaseMfaCode(code);
+    await finishSignedInSession();
   });
 
   const onForgotRequest = () => runAction(async () => {
@@ -462,6 +496,33 @@ export default function AuthPage() {
               )}
 
               <p className="auth-v2-bottom-link">Back to <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>sign in</button></p>
+            </>
+          ) : null}
+
+          {mode === "mfa" ? (
+            <>
+              <h1>Verify it is you</h1>
+              <p className="auth-v2-subtitle">This account has authenticator app MFA enabled in Supabase.</p>
+
+              <label className="auth-v2-label" htmlFor="mfa-code">Authenticator code</label>
+              <input
+                id="mfa-code"
+                className="auth-v2-input"
+                type="text"
+                inputMode="numeric"
+                value={mfaForm.code}
+                onChange={(e) => setMfaForm({ code: e.target.value.replace(/\D/g, "").slice(0, 6) })}
+                placeholder="6-digit code"
+                autoComplete="one-time-code"
+              />
+
+              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading || !/^\d{6}$/.test(mfaForm.code)} onClick={onVerifyMfa}>
+                {loading ? "Verifying..." : "Verify and continue"}
+              </button>
+
+              <p className="auth-v2-bottom-link">
+                Need to use another account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Back to sign in</button>
+              </p>
             </>
           ) : null}
 

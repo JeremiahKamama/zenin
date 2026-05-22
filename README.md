@@ -35,13 +35,13 @@ Render deployment note:
 ## Entry flows
 
 - `GET /` shows the public homepage (marketing/overview).
-- `GET /app` opens the trading app.
+- `GET /app` opens the trading app only when an auth session is present.
 - `GET /auth` opens sign up, sign in, and Supabase-backed password recovery flows.
 - `Open App` from the homepage now performs a preflight check:
   - verifies whether a valid auth session exists (`/api/auth/me`)
   - syncs subscription tier (`starter`/`pro`/`desk`) and billing cycle (`monthly`/`yearly`)
   - redirects unauthenticated users to `GET /auth?mode=signin&next=/app`
-- Direct `/app` access still supports guest fallback during rollout.
+- Demo guest mode is explicit: use `GET /app?guest=1` to open the app without sign-in.
 
 ## What the web app can do
 
@@ -49,7 +49,7 @@ Render deployment note:
 - Public landing page at `/` with product overview and quick entry CTAs
 - Dedicated auth workspace at `/auth` for sign up, sign in, OAuth, and password recovery
 - Full app workspace at `/app` (including company deep-dive routes at `/app/company/:symbol`)
-- Current onboarding behavior: users can still enter `/app` directly while auth hard-enforcement is pending
+- Direct `/app` entry redirects unauthenticated users to `/auth`; demo guest entry remains available with `?guest=1`.
 - Responsive homepage mock dashboard now includes:
   - portfolio performance card + company profile summary card
   - top positions/top movers percentage-only preview rows
@@ -166,7 +166,7 @@ Render deployment note:
 - **Homepage Open App preflight shipped**: CTA now verifies prior login + account tier context before app entry.
 - **Pricing-tier account linkage shipped**: Plan selection writes user `currentPlan/currentBillingCycle` and persists account context after auth.
 - **Auth UX redesign shipped**: `/auth` now uses staged screens aligned to onboarding/sign-in/reset/passkey flow states.
-- **Guest fallback retained**: Direct `/app` remains available without hard sign-in while enforcement rollout continues.
+- **Guest demos are explicit**: Direct `/app` now requires auth; append `?guest=1` for demo workspaces.
 - **Integration test harness added**: Backend integration suite exists for auth lifecycle, password reset, and user-isolation scenarios.
 - **Homepage responsive refactor completed**: Snapshot cards and footer device preview were updated to prevent overlap and improve mobile behavior.
 - **Dark theme hardening completed**: Homepage/app surfaces (including sidebar) are now enforced to dark-theme styling.
@@ -185,7 +185,7 @@ Render deployment note:
 
 - **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
 - **Execution Connectivity**: Connected Accounts are read-only. Binance, Bybit, and Hyperliquid can sync portfolio data; other venues are stored as metadata until provider adapters are available. Live trade routing to external venues is not implemented.
-- **Auth enforcement mode**: Homepage `Open App` now validates session/tier first, but direct `/app` URL access still allows guest mode by design for current rollout.
+- **Auth enforcement mode**: Homepage `Open App` and direct `/app` entry validate session/tier first; guest demos are opt-in via `?guest=1`.
 - **OAuth provider setup**: Google/Apple/GitHub/Microsoft routes are scaffolded in backend; production OAuth client credentials/callback exchange are not yet configured.
 - **MFA management**: Password recovery uses Supabase email delivery; advanced MFA/passkey management is not yet exposed in the in-app Settings panel.
 - **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
@@ -295,6 +295,7 @@ curl -X POST "https://<your-backend>/api/admin/migrations/admin-workspace?force=
 
 ### Options
 - `POST /api/options/crypto`
+- `GET /api/options/equity`
 - `GET /api/options/whale-trades`
 - `GET /api/db/options-calculations`
 - `POST /api/db/options-calculations`

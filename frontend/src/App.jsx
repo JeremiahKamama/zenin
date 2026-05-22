@@ -15,6 +15,7 @@ import {
   OptionsIcon,
   PortfolioIcon,
   PredictionsIcon,
+  ResearchIcon,
   TaxIcon,
   ThemeDarkIcon,
   ThemeLightIcon,
@@ -34,7 +35,20 @@ import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPa
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
 import { buildDevFullAccessUser, isDevFullAccessEnabled } from "./utils/devAccess";
-import { ensureZeninSessionFromSupabase, getSupabaseClient, isSupabaseConfigured, signOutEverywhere, subscribeToSupabaseAuth } from "./utils/supabaseAuth";
+import {
+  ensureZeninSessionFromSupabase,
+  getSupabaseClient,
+  getSupabaseLinkedIdentities,
+  getSupabaseMfaState,
+  isSupabaseConfigured,
+  linkSupabaseOAuthIdentity,
+  signOutEverywhere,
+  startSupabaseTotpEnrollment,
+  subscribeToSupabaseAuth,
+  unenrollSupabaseMfaFactor,
+  unlinkSupabaseOAuthIdentity,
+  verifySupabaseTotpEnrollment
+} from "./utils/supabaseAuth";
 import { updateAccountPlan } from "./utils/accountPlan";
 import {
   formatRevenueCatError,
@@ -116,6 +130,10 @@ const AnalyticsModule = lazyWithReloadRetry(
   () => import("./components/AnalyticsModule").then((mod) => ({ default: mod.AnalyticsModule })),
   "zenin_lazy_retry_analytics"
 );
+const ResearchModule = lazyWithReloadRetry(
+  () => import("./components/ResearchModule").then((mod) => ({ default: mod.ResearchModule })),
+  "zenin_lazy_retry_research"
+);
 const PredictionMarketModule = lazyWithReloadRetry(
   () => import("./components/PredictionMarketModule").then((mod) => ({ default: mod.PredictionMarketModule })),
   "zenin_lazy_retry_predictions"
@@ -152,18 +170,6 @@ const Analytics = lazyWithReloadRetry(
   () => import("@vercel/analytics/react").then((mod) => ({ default: mod.Analytics })),
   "zenin_lazy_retry_analytics_beacon"
 );
-
-let webAuthnBrowserModulePromise = null;
-
-async function getStartRegistration() {
-  if (!webAuthnBrowserModulePromise) {
-    webAuthnBrowserModulePromise = import("@simplewebauthn/browser");
-  }
-  const mod = await webAuthnBrowserModulePromise;
-  return mod.startRegistration;
-}
-
-
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
@@ -349,6 +355,11 @@ const SIDEBAR_SECTION_META = {
     group: "Core",
     eyebrow: "Watchlist",
     description: "Follow assets, macro calendars, and catalysts."
+  },
+  Research: {
+    group: "Research",
+    eyebrow: "Research",
+    description: "Connect knowledge bases and ticker-link notes."
   },
   Analytics: {
     group: "Research",
@@ -582,6 +593,22 @@ function profileSecurityFromUser(user, fallbackEmail = "user@zenin.app") {
     backupCodes: Array.isArray(user?.backupCodes) ? user.backupCodes : [],
     passkeys: Array.isArray(user?.passkeys) ? user.passkeys : []
   };
+}
+
+function getTotpQrSrc(qrCode) {
+  const raw = String(qrCode || "").trim();
+  if (!raw) return "";
+  if (/^(data:image|https?:|otpauth:)/i.test(raw)) return raw;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(raw)}`;
+}
+
+function formatIdentityProvider(provider) {
+  const value = String(provider || "").trim();
+  if (!value) return "Identity";
+  if (value === "google") return "Google";
+  if (value === "apple") return "Apple";
+  if (value === "email") return "Email";
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 const mapOptionHoldingToTrade = (holding) => {
@@ -2519,7 +2546,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Portfolio", "Watchlist","Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const sections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
   const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
   const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
   const [activeSection, setActiveSection] = useState(() => {
@@ -3149,7 +3176,14 @@ const handleOptionTradeClosed = async (tradeId) => {
     passkeyName: "Primary Device",
     passkeyProvider: passkeyOptions[0] || "iCloud Keychain"
   });
-  const [totpSetup, setTotpSetup] = useState({ secret: null, qrCodeDataUrl: null, loading: false });
+  const [supabaseSecurity, setSupabaseSecurity] = useState({
+    loading: false,
+    mfaFactors: [],
+    verifiedTotpFactor: null,
+    aal: null,
+    identities: []
+  });
+  const [totpSetup, setTotpSetup] = useState({ factorId: "", secret: "", qrCodeDataUrl: "", loading: false });
   const [profileFeedback, setProfileFeedback] = useState({
     email: null,
     password: null,
@@ -3659,21 +3693,69 @@ const handleOptionTradeClosed = async (tradeId) => {
     [revenueCatState.offerings]
   );
 
-  const fetchTotpSetup = useCallback(async () => {
-    if (isGuestUser) return;
-    setTotpSetup(prev => ({ ...prev, loading: true }));
+  const setProfileMessage = (section, type, text) => {
+    setProfileFeedback((prev) => ({ ...prev, [section]: { type, text } }));
+  };
+
+  const refreshSupabaseSecurity = useCallback(async ({ quiet = false } = {}) => {
+    if (isGuestUser || !isSupabaseConfigured()) return;
+    if (!quiet) {
+      setSupabaseSecurity((prev) => ({ ...prev, loading: true }));
+    }
     try {
-      const res = await zeninFetch("/auth/2fa/generate");
-      const data = await res.json();
-      if (res.ok && data.secret) {
-        setTotpSetup({ secret: data.secret, qrCodeDataUrl: data.qrCodeDataUrl, loading: false });
-      } else {
-        setTotpSetup(prev => ({ ...prev, loading: false }));
+      const [mfaState, identities] = await Promise.all([
+        getSupabaseMfaState(),
+        getSupabaseLinkedIdentities()
+      ]);
+      setSupabaseSecurity({
+        loading: false,
+        mfaFactors: mfaState.factors,
+        verifiedTotpFactor: mfaState.verifiedTotpFactor,
+        aal: mfaState.aal,
+        identities
+      });
+      const verifiedFactor = mfaState.verifiedTotpFactor;
+      setProfileSecurity((prev) => ({
+        ...prev,
+        twoFactorEnabled: Boolean(verifiedFactor),
+        twoFactorMethod: verifiedFactor ? "authenticator" : null,
+        twoFactorProvider: verifiedFactor ? "Authenticator app" : null,
+        twoFactorTarget: verifiedFactor?.friendly_name || verifiedFactor?.factor_type || "",
+        twoFactorEnabledAt: verifiedFactor?.created_at || prev?.twoFactorEnabledAt || null,
+        passkeys: [],
+        backupCodes: []
+      }));
+    } catch (error) {
+      setSupabaseSecurity((prev) => ({ ...prev, loading: false }));
+      if (!quiet) {
+        setProfileMessage("twofa", "error", error?.message || "Could not load Supabase security settings.");
       }
-    } catch {
-      setTotpSetup(prev => ({ ...prev, loading: false }));
     }
   }, [isGuestUser]);
+
+  const fetchTotpSetup = useCallback(async () => {
+    if (isGuestUser) return;
+    setTotpSetup((prev) => ({ ...prev, loading: true }));
+    try {
+      const enrollment = await startSupabaseTotpEnrollment({ friendlyName: "Zenin authenticator" });
+      setTotpSetup({
+        factorId: enrollment.factorId,
+        secret: enrollment.secret,
+        qrCodeDataUrl: getTotpQrSrc(enrollment.qrCode),
+        loading: false
+      });
+      setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+      setProfileMessage("twofa", "info", "Scan the QR code, then enter the 6-digit code from your authenticator app.");
+    } catch (error) {
+      setTotpSetup((prev) => ({ ...prev, loading: false }));
+      setProfileMessage("twofa", "error", error?.message || "Could not start authenticator setup.");
+    }
+  }, [isGuestUser]);
+
+  useEffect(() => {
+    if (accessCheckLoading || isGuestUser) return;
+    void refreshSupabaseSecurity({ quiet: true });
+  }, [accessCheckLoading, isGuestUser, refreshSupabaseSecurity]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -4093,10 +4175,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     return `h${(hash >>> 0).toString(16)}`;
   };
 
-  const setProfileMessage = (section, type, text) => {
-    setProfileFeedback((prev) => ({ ...prev, [section]: { type, text } }));
-  };
-
   const verifyCurrentPassword = (password) => {
     const candidate = String(password || "").trim();
     if (candidate.length < 8) {
@@ -4346,7 +4424,24 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const enableTwoFactor = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Multi-factor authentication is now managed through Supabase. Zenin sign-in is unified, but in-app MFA enrollment is not exposed yet.");
+      const code = String(profileForms.twoFactorCode || "").trim();
+      if (!totpSetup.factorId) {
+        setProfileMessage("twofa", "error", "Generate and scan a Supabase authenticator QR code first.");
+        return;
+      }
+      if (!/^\d{6}$/.test(code)) {
+        setProfileMessage("twofa", "error", "Enter the 6-digit code from your authenticator app.");
+        return;
+      }
+      try {
+        await verifySupabaseTotpEnrollment({ factorId: totpSetup.factorId, code });
+        setTotpSetup({ factorId: "", secret: "", qrCodeDataUrl: "", loading: false });
+        setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+        await refreshSupabaseSecurity();
+        setProfileMessage("twofa", "success", "Authenticator app MFA is enabled for your Supabase account.");
+      } catch (error) {
+        setProfileMessage("twofa", "error", error?.message || "Could not verify the authenticator code.");
+      }
       return;
     }
     const method = String(profileForms.twoFactorMethod || "authenticator");
@@ -4415,7 +4510,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const registerPasskey = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Passkey enrollment is not exposed in Zenin settings yet. Use the unified Supabase sign-in surfaces while passkey management is being completed.");
+      setProfileMessage("twofa", "info", "Passkey management is not available in this Supabase-backed settings screen yet. Use authenticator app MFA for account protection.");
       return;
     }
     const passkeyName = profileForms.passkeyName.trim();
@@ -4446,7 +4541,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const regenerateBackupCodes = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Backup-code management is not exposed in Zenin settings yet.");
+      setProfileMessage("twofa", "info", "Supabase TOTP does not expose Zenin-managed backup codes here. Keep a recovery path through your email provider and password recovery.");
       return;
     }
     if (!profileSecurity.twoFactorEnabled) {
@@ -4463,7 +4558,18 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const disableTwoFactor = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "2FA disable is managed through Supabase until Zenin exposes the in-app controls.");
+      const factorId = supabaseSecurity.verifiedTotpFactor?.id;
+      if (!factorId) {
+        setProfileMessage("twofa", "error", "No verified authenticator factor is enabled for this account.");
+        return;
+      }
+      try {
+        await unenrollSupabaseMfaFactor(factorId);
+        await refreshSupabaseSecurity();
+        setProfileMessage("twofa", "info", "Authenticator app MFA was disabled for your Supabase account.");
+      } catch (error) {
+        setProfileMessage("twofa", "error", error?.message || "Could not disable authenticator MFA.");
+      }
       return;
     }
     setProfileSecurity((prev) => ({
@@ -4476,6 +4582,33 @@ const handleOptionTradeClosed = async (tradeId) => {
       backupCodes: []
     }));
     setProfileMessage("twofa", "info", "2FA disabled for this workspace profile.");
+  };
+
+  const linkOAuthIdentity = async (provider) => {
+    if (isGuestUser) return;
+    try {
+      const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/app` : undefined;
+      const data = await linkSupabaseOAuthIdentity(provider, { redirectTo });
+      if (data?.url && typeof window !== "undefined") {
+        window.location.href = data.url;
+        return;
+      }
+      await refreshSupabaseSecurity();
+      setProfileMessage("twofa", "success", `${formatIdentityProvider(provider)} sign-in is linked.`);
+    } catch (error) {
+      setProfileMessage("twofa", "error", error?.message || `Could not link ${formatIdentityProvider(provider)}.`);
+    }
+  };
+
+  const unlinkOAuthIdentity = async (identity) => {
+    if (isGuestUser || !identity) return;
+    try {
+      await unlinkSupabaseOAuthIdentity(identity);
+      await refreshSupabaseSecurity();
+      setProfileMessage("twofa", "info", `${formatIdentityProvider(identity.provider)} sign-in was unlinked.`);
+    } catch (error) {
+      setProfileMessage("twofa", "error", error?.message || `Could not unlink ${formatIdentityProvider(identity.provider)}.`);
+    }
   };
 
   const hasPendingEmail = Boolean(String(profileSecurity?.pendingEmail || "").trim());
@@ -4491,6 +4624,9 @@ const handleOptionTradeClosed = async (tradeId) => {
     String(profileForms?.confirmPassword || "").trim()
   );
   const canEnableTwoFactor = (() => {
+    if (!isGuestUser) {
+      return Boolean(totpSetup.factorId) && /^\d{6}$/.test(String(profileForms?.twoFactorCode || "").trim());
+    }
     const method = String(profileForms?.twoFactorMethod || "authenticator");
     if (method === "passkey") {
       return Boolean(String(profileForms?.passkeyName || "").trim());
@@ -4507,6 +4643,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     Home: HomeIcon,
     Portfolio: PortfolioIcon,
     Watchlist: WatchlistIcon,
+    Research: ResearchIcon,
     Analytics: AnalyticsIcon,
     Metrics: MetricsIcon,
     Options: OptionsIcon,
@@ -4808,6 +4945,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                   if (routeState.type === "company") navigateToAppRoute();
                   setActiveSection("Analytics");
                 }}
+                onOpenResearch={() => {
+                  if (routeState.type === "company") navigateToAppRoute();
+                  setActiveSection("Research");
+                }}
               />
             )}
           </>
@@ -5075,6 +5216,16 @@ const handleOptionTradeClosed = async (tradeId) => {
         </div>
       )}
 
+        {activeSection === "Research" && (
+          <div className="view-container">
+            <ResearchModule
+              portfolio={portfolioWithEntry}
+              watchlistAssets={watchlistAssets}
+              onOpenWatchlist={() => setActiveSection("Watchlist")}
+              onOpenPortfolio={() => setActiveSection("Portfolio")}
+            />
+          </div>
+        )}
 
         {activeSection === "Options" && (
           <OptionsModule
@@ -5595,16 +5746,133 @@ const handleOptionTradeClosed = async (tradeId) => {
                           ) : (
                             <div className="settings-account-managed-note">
                               <p className="settings-meta" style={{ marginTop: 0 }}>
-                                Zenin now uses Supabase as the source of truth for identity. In-app MFA, backup-code, and passkey enrollment controls are hidden until the Supabase-backed management route is available.
+                                Supabase is the source of truth for this signed-in account. Authenticator MFA and OAuth sign-in methods are managed here; passkey and backup-code management are intentionally not exposed until Zenin has a Supabase-backed implementation.
                               </p>
+
+                              <div className="settings-chip-row" style={{ marginTop: "12px" }}>
+                                <span className={`settings-chip ${supabaseSecurity.verifiedTotpFactor ? "success" : "muted"}`}>
+                                  {supabaseSecurity.verifiedTotpFactor ? "Authenticator MFA active" : "Authenticator MFA off"}
+                                </span>
+                                {supabaseSecurity.aal?.currentLevel ? (
+                                  <span className="settings-chip">Session {String(supabaseSecurity.aal.currentLevel).toUpperCase()}</span>
+                                ) : null}
+                              </div>
+
+                              {!supabaseSecurity.verifiedTotpFactor ? (
+                                <>
+                                  {!totpSetup.factorId ? (
+                                    <button
+                                      className="settings-secondary-btn"
+                                      style={{ marginTop: "14px" }}
+                                      onClick={fetchTotpSetup}
+                                      disabled={totpSetup.loading || supabaseSecurity.loading}
+                                    >
+                                      {totpSetup.loading ? "Generating..." : "Set Up Authenticator App"}
+                                    </button>
+                                  ) : null}
+
+                                  {totpSetup.qrCodeDataUrl && totpSetup.secret ? (
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "12px", margin: "16px 0" }}>
+                                      <div style={{ background: "#fff", padding: "12px", borderRadius: "3px", display: "inline-block" }}>
+                                        <img src={totpSetup.qrCodeDataUrl} alt="TOTP QR Code" width="160" height="160" style={{ display: "block" }} />
+                                      </div>
+                                      <div>
+                                        <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Secret Key</span>
+                                        <p style={{ fontFamily: "monospace", fontSize: "1.05rem", color: "var(--text)", margin: "4px 0 0 0", letterSpacing: "1px", wordBreak: "break-all" }}>{totpSetup.secret}</p>
+                                      </div>
+                                      <label className="settings-field" style={{ width: "100%" }}>
+                                        <span>Verification Code</span>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={profileForms.twoFactorCode}
+                                          onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                                          placeholder="6-digit code"
+                                          autoComplete="one-time-code"
+                                        />
+                                      </label>
+                                      <div className="settings-inline-actions">
+                                        <button
+                                          className="settings-primary-btn"
+                                          onClick={enableTwoFactor}
+                                          disabled={!canEnableTwoFactor}
+                                        >
+                                          Enable Authenticator MFA
+                                        </button>
+                                        <button
+                                          className="settings-secondary-btn"
+                                          onClick={() => {
+                                            setTotpSetup({ factorId: "", secret: "", qrCodeDataUrl: "", loading: false });
+                                            setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
+                                          }}
+                                        >
+                                          Cancel Setup
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <div className="settings-inline-actions" style={{ marginTop: "14px" }}>
+                                  <button
+                                    className="settings-secondary-btn"
+                                    onClick={disableTwoFactor}
+                                    disabled={supabaseSecurity.loading}
+                                  >
+                                    Disable Authenticator MFA
+                                  </button>
+                                  <button
+                                    className="settings-secondary-btn"
+                                    onClick={() => refreshSupabaseSecurity()}
+                                    disabled={supabaseSecurity.loading}
+                                  >
+                                    Refresh Security Status
+                                  </button>
+                                </div>
+                              )}
+
+                              <div style={{ marginTop: "18px" }}>
+                                <p className="settings-meta" style={{ marginBottom: "10px" }}>
+                                  Linked sign-in methods
+                                </p>
+                                <div className="settings-passkey-list">
+                                  {supabaseSecurity.identities.map((identity) => (
+                                    <div key={identity.id || `${identity.provider}-${identity.provider_id}`} className="settings-passkey-item">
+                                      <strong>{formatIdentityProvider(identity.provider)}</strong>
+                                      <span>{identity.email || identity.identity_data?.email || "Linked identity"}</span>
+                                      {identity.provider !== "email" && supabaseSecurity.identities.length > 1 ? (
+                                        <button className="settings-secondary-btn" onClick={() => unlinkOAuthIdentity(identity)}>
+                                          Unlink
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                  {!supabaseSecurity.identities.length ? (
+                                    <p className="settings-meta">No linked identities were returned by Supabase.</p>
+                                  ) : null}
+                                </div>
+                                <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                                  <button className="settings-secondary-btn" onClick={() => linkOAuthIdentity("google")}>
+                                    Link Google
+                                  </button>
+                                  <button className="settings-secondary-btn" onClick={() => refreshSupabaseSecurity()}>
+                                    Refresh
+                                  </button>
+                                </div>
+                              </div>
+
                               <div className="settings-inline-actions">
                                 <button
-                                  className="settings-primary-btn"
-                                  onClick={() => {
-                                    window.location.href = "/auth?mode=signin&next=/app";
-                                  }}
+                                  className="settings-secondary-btn"
+                                  onClick={registerPasskey}
                                 >
-                                  Open Account Access
+                                  Passkey Status
+                                </button>
+                                <button
+                                  className="settings-secondary-btn"
+                                  onClick={regenerateBackupCodes}
+                                >
+                                  Backup-Code Status
                                 </button>
                               </div>
                             </div>

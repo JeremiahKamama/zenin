@@ -77,9 +77,25 @@ export function EquityOptionsDesk({
   const venueSummary = Array.isArray(data?.venueSummary) ? data.venueSummary : [];
   const strikeCrowding = Array.isArray(data?.strikeCrowding) ? data.strikeCrowding : [];
   const termStructure = Array.isArray(data?.termStructure) ? data.termStructure : [];
-  const statusLabel = loading ? "Syncing" : data?.unavailable ? "Unavailable" : liveConnected ? "Live" : "Snapshot";
-  const statusClass = loading ? "loading" : data?.unavailable ? "unavailable" : liveConnected ? "live" : "snapshot";
+  const providerUnavailable = Boolean(data?.unavailable);
+  const showingStale = Boolean(data?.stale && !providerUnavailable);
+  const statusLabel = loading ? "Syncing" : providerUnavailable ? "Offline" : showingStale ? "Stale" : liveConnected ? "Live" : "Snapshot";
+  const statusClass = loading ? "loading" : providerUnavailable ? "unavailable" : showingStale ? "unavailable" : liveConnected ? "live" : "snapshot";
   const feedTimestamp = liveConnected && liveUpdatedAt ? liveUpdatedAt : data?.updatedAt;
+  const statusNotice = error || notice || data?.statusMessage || "";
+  const emptyTitle = providerUnavailable
+    ? `${underlying} equity options feed is offline`
+    : `${underlying} has no chain rows for ${data?.activeExpiry || expiry || "the selected expiry"}`;
+  const emptyDescription = statusNotice || "Refresh the snapshot or switch to another underlying to continue.";
+  const emptySteps = providerUnavailable
+    ? [
+        "Confirm the Massive backend key is configured and the provider is reachable.",
+        "Retry the snapshot or choose another supported underlying while the feed recovers.",
+      ]
+    : [
+        "Pick another expiry from the selector if one is available.",
+        "Retry the Massive snapshot if the market just reopened or the feed is catching up.",
+      ];
 
   return (
     <div className="options-equity-workbench">
@@ -103,7 +119,7 @@ export function EquityOptionsDesk({
             </label>
             <label className="options-equity-select">
               <span>Expiry</span>
-              <select value={expiry || ""} onChange={(event) => onExpiryChange(event.target.value || null)}>
+              <select value={expiry || ""} onChange={(event) => onExpiryChange(event.target.value || null)} disabled={!expiries.length && providerUnavailable}>
                 <option value="">Nearest</option>
                 {expiries.map((row) => (
                   <option key={row} value={row}>
@@ -147,15 +163,15 @@ export function EquityOptionsDesk({
           <article className="options-equity-summary-card">
             <span>Feed state</span>
             <strong className={`options-equity-status ${statusClass}`}>{statusLabel}</strong>
-            <em>{liveConnected ? "Selected expiry live stream" : "Snapshot-backed chain"}</em>
+            <em>{providerUnavailable ? "Provider unavailable" : showingStale ? "Saved snapshot" : liveConnected ? "Selected expiry live stream" : "Snapshot-backed chain"}</em>
             <em>{formatTimestamp(feedTimestamp)}</em>
           </article>
         </div>
       </section>
 
-      {error || notice ? (
+      {statusNotice ? (
         <div className="options-equity-notice">
-          {error ? error : notice}
+          {statusNotice}
         </div>
       ) : null}
 
@@ -221,12 +237,9 @@ export function EquityOptionsDesk({
           ) : (
             <GuidedEmptyState
               eyebrow="Listed options"
-              title={`No ${underlying} chain rows available yet`}
-              description={error || notice || "Refresh the snapshot or switch to another underlying to continue."}
-              steps={[
-                "Use a supported underlying with active listed options flow.",
-                "Retry the Massive snapshot if the market just reopened or the feed is catching up.",
-              ]}
+              title={emptyTitle}
+              description={emptyDescription}
+              steps={emptySteps}
               cta="Retry snapshot"
               onAction={onRefresh}
               tone="warning"
@@ -252,7 +265,7 @@ export function EquityOptionsDesk({
                   <b>{row.kind === "trade" ? "Trade" : "Quote"} · {row.summary || "Update"}</b>
                   <em>{row.venue} · {formatTimestamp(row.updatedAt)}</em>
                 </div>
-              )) : <div className="options-equity-rail-empty">Waiting for live quote or trade updates.</div>}
+              )) : <div className="options-equity-rail-empty">{providerUnavailable ? "Live options tape is paused until Massive reconnects." : "Waiting for live quote or trade updates."}</div>}
             </div>
           </div>
 

@@ -46,6 +46,21 @@ function readStoredOptionsMarketMode() {
   }
 }
 
+function getEquityOptionsNotice(payload, fallback = "") {
+  const message = getSnapshotFallbackMessage(payload, fallback);
+  if (message) return message;
+  if (payload?.expiryFallback && payload?.requestedExpiry && payload?.activeExpiry) {
+    return `${payload.requestedExpiry} is not available; showing ${payload.activeExpiry} instead.`;
+  }
+  if (payload?.unavailable) {
+    return "Equity options data is temporarily unavailable. Retry the snapshot or choose another supported underlying.";
+  }
+  if (payload?.stale) {
+    return "Showing the last saved equity options snapshot while the live feed recovers.";
+  }
+  return "";
+}
+
 function toFiniteNumber(...values) {
   for (const value of values) {
     const numeric = Number(value);
@@ -852,7 +867,10 @@ useEffect(() => {
     if (isMounted && cached?.payload) {
       setEquityOptionsData(cached.payload);
       setEquityOptionsError("");
-      setEquityOptionsNotice(Boolean(cached.payload?.stale || cached.payload?.unavailable) ? getSnapshotFallbackMessage(cached.payload) : "");
+      setEquityOptionsNotice(getEquityOptionsNotice(
+        cached.payload,
+        "Showing a saved equity options snapshot while Zenin refreshes Massive."
+      ));
     }
     setEquityOptionsLoading(true);
     try {
@@ -862,15 +880,26 @@ useEffect(() => {
       if (!isMounted) return;
       setEquityOptionsData(payload);
       setEquityOptionsError("");
-      setEquityOptionsNotice(Boolean(payload?.stale || payload?.unavailable) ? getSnapshotFallbackMessage(payload) : "");
+      setEquityOptionsNotice(getEquityOptionsNotice(payload));
       writeResilientCache("options-equity-chain", cacheParams, payload);
-      if (!equityExpiry && payload?.activeExpiry) {
+      if (payload?.activeExpiry && (!equityExpiry || payload?.expiryFallback)) {
         setEquityExpiry(payload.activeExpiry);
       }
     } catch (error) {
       if (!isMounted) return;
-      setEquityOptionsError(error?.message || "Equity options snapshot is temporarily unavailable.");
-      setEquityOptionsNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "");
+      if (cached?.payload) {
+        setEquityOptionsData({
+          ...cached.payload,
+          stale: true,
+          unavailable: false,
+          stale_reason: error?.message || "massive_equity_options_refresh_failed"
+        });
+        setEquityOptionsError("Unable to refresh Massive right now; showing the last saved equity options snapshot.");
+        setEquityOptionsNotice(getEquityOptionsNotice(cached.payload));
+      } else {
+        setEquityOptionsError(error?.message || "Equity options snapshot is temporarily unavailable.");
+        setEquityOptionsNotice("Retry the snapshot or switch to another supported underlying.");
+      }
     } finally {
       if (isMounted) setEquityOptionsLoading(false);
     }

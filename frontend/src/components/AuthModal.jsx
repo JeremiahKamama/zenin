@@ -4,6 +4,7 @@ import { clearPostAuthRedirect, getGuestWorkspacePath, getPostAuthRedirectPath, 
 import {
   ensureZeninSessionFromSupabase,
   getSupabaseClient,
+  getSupabaseMfaState,
   isSupabaseConfigured,
   subscribeToSupabaseAuth
 } from "../utils/supabaseAuth";
@@ -44,6 +45,19 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     window.location.href = target;
   };
 
+  const redirectToFullMfa = () => {
+    storePostAuthRedirect(returnTo, "/app");
+    const authUrl = new URL("/auth", window.location.origin);
+    authUrl.searchParams.set("mode", "signin");
+    authUrl.searchParams.set("next", returnTo || "/app");
+    window.location.href = `${authUrl.pathname}${authUrl.search}`;
+  };
+
+  const shouldUseFullMfaScreen = async () => {
+    const state = await getSupabaseMfaState();
+    return state?.aal?.currentLevel === "aal1" && state?.aal?.nextLevel === "aal2";
+  };
+
   useEffect(() => {
     if (isOpen) {
       setMode(initialMode);
@@ -58,6 +72,10 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     if (!isOpen) return () => {};
     const unsubscribe = subscribeToSupabaseAuth(async (event, session) => {
       if (event === "SIGNED_IN" && session) {
+        if (await shouldUseFullMfaScreen()) {
+          redirectToFullMfa();
+          return;
+        }
         const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
         if (exchanged?.user) {
           redirectToApp();
@@ -94,6 +112,10 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       if (authError) throw authError;
       if (!data.session?.access_token) {
         throw new Error("Authentication did not return a valid session. Try again.");
+      }
+      if (await shouldUseFullMfaScreen()) {
+        redirectToFullMfa();
+        return;
       }
       const exchanged = await ensureZeninSessionFromSupabase({ rememberMe: true });
       if (!exchanged?.user) {

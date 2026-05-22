@@ -9214,6 +9214,48 @@ function buildMassiveEquityOptionsPayload(underlying, rows = [], activeExpiry = 
   };
 }
 
+function buildMassiveEquityOptionsUnavailablePayload(underlying, reason, options = {}) {
+  const normalizedReason = String(reason || "massive_equity_options_unavailable").trim();
+  const statusMessage = String(options.statusMessage || "").trim() || (
+    normalizedReason === "massive_api_key_missing"
+      ? "Massive equity-options data is not configured on this backend."
+      : "Massive equity-options data is temporarily unavailable. Retry the snapshot or choose another supported underlying."
+  );
+  return {
+    underlying,
+    source: "Massive REST snapshot",
+    stale: true,
+    unavailable: true,
+    expiries: Array.isArray(options.expiries) ? options.expiries : [],
+    activeExpiry: options.activeExpiry || null,
+    requestedExpiry: options.requestedExpiry || null,
+    chain: [],
+    summary: {
+      spotPrice: 0,
+      totalCallOi: 0,
+      totalPutOi: 0,
+      putCallOiRatio: null,
+      totalCallVolume: 0,
+      totalPutVolume: 0,
+      putCallVolumeRatio: null,
+      atmIv: null,
+      atmStraddleMid: 0,
+      impliedMovePct: null,
+      contracts: 0
+    },
+    strikeCrowding: [],
+    termStructure: [],
+    venueSummary: [],
+    topContracts: [],
+    unusualActivity: [],
+    supportedUnderlyings: DEFAULT_EQUITY_OPTIONS_UNDERLYINGS,
+    stale_reason: normalizedReason,
+    statusMessage,
+    stale_age_seconds: null,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 // Lyra (Derive) Crypto Options Integration
 // ---------------------------------------------------------------------------
 // ✅ STABLE Derive Options Chain Endpoint (FIXED)
@@ -9234,37 +9276,10 @@ app.get("/api/options/equity", validate(equityOptionsQuerySchema, "query"), asyn
   }
 
   if (!MASSIVE_API_KEY) {
-    const unavailable = {
-      underlying: normalizedUnderlying,
-      source: "Massive REST snapshot",
-      stale: true,
-      unavailable: true,
-      expiries: [],
+    return res.json(buildMassiveEquityOptionsUnavailablePayload(normalizedUnderlying, "massive_api_key_missing", {
       activeExpiry: normalizedExpiry || null,
-      chain: [],
-      summary: {
-        spotPrice: 0,
-        totalCallOi: 0,
-        totalPutOi: 0,
-        putCallOiRatio: null,
-        totalCallVolume: 0,
-        totalPutVolume: 0,
-        putCallVolumeRatio: null,
-        atmIv: null,
-        atmStraddleMid: 0,
-        impliedMovePct: null,
-        contracts: 0
-      },
-      strikeCrowding: [],
-      termStructure: [],
-      venueSummary: [],
-      topContracts: [],
-      unusualActivity: [],
-      supportedUnderlyings: DEFAULT_EQUITY_OPTIONS_UNDERLYINGS,
-      stale_reason: "massive_api_key_missing",
-      updatedAt: new Date().toISOString()
-    };
-    return res.json(unavailable);
+      requestedExpiry: normalizedExpiry || null
+    }));
   }
 
   try {
@@ -9284,12 +9299,35 @@ app.get("/api/options/equity", validate(equityOptionsQuerySchema, "query"), asyn
     let payload = buildMassiveEquityOptionsPayload(normalizedUnderlying, rawRows, normalizedExpiry || null);
     if ((!payload.expiries || payload.expiries.length === 0) && Array.isArray(contractsPayload?.results)) {
       payload.expiries = [...new Set(contractsPayload.results.map((row) => normalizeMassiveOptionDate(row?.expiration_date || row?.expiry)).filter(Boolean))].sort();
-      payload.activeExpiry = normalizedExpiry || payload.expiries[0] || null;
+      payload.activeExpiry = payload.expiries.includes(normalizedExpiry) ? normalizedExpiry : (payload.expiries[0] || null);
+    }
+    if (!rawRows.length) {
+      return res.json(buildMassiveEquityOptionsUnavailablePayload(normalizedUnderlying, "massive_equity_options_snapshot_empty", {
+        expiries: payload.expiries,
+        activeExpiry: payload.activeExpiry || null,
+        requestedExpiry: normalizedExpiry || null,
+        statusMessage: `${normalizedUnderlying} returned no Massive option contracts for the current snapshot. Try another supported underlying or refresh after the feed catches up.`
+      }));
     }
     payload.supportedUnderlyings = DEFAULT_EQUITY_OPTIONS_UNDERLYINGS;
     payload.updatedAt = new Date().toISOString();
     payload.stale = false;
     payload.unavailable = false;
+    payload.requestedExpiry = normalizedExpiry || null;
+    if (normalizedExpiry && payload.activeExpiry && normalizedExpiry !== payload.activeExpiry) {
+      payload.expiryFallback = true;
+      payload.statusMessage = `${normalizedExpiry} is not available for ${normalizedUnderlying}; showing ${payload.activeExpiry} instead.`;
+    }
+    if (!payload.chain.length) {
+      payload.stale = true;
+      payload.unavailable = true;
+      payload.stale_reason = normalizedExpiry
+        ? "massive_equity_options_expiry_empty"
+        : "massive_equity_options_chain_empty";
+      payload.statusMessage = normalizedExpiry
+        ? `${normalizedUnderlying} has no chain rows for ${normalizedExpiry}. Choose another expiry or refresh the snapshot.`
+        : `${normalizedUnderlying} returned no chain rows in the latest Massive snapshot. Try another supported underlying or refresh shortly.`;
+    }
     if (Number(limit) > 0 && Array.isArray(payload.chain) && payload.chain.length > Number(limit)) {
       const targetSpot = Number(payload?.summary?.spotPrice || 0);
       const nearestIndex = targetSpot > 0
@@ -9311,36 +9349,14 @@ app.get("/api/options/equity", validate(equityOptionsQuerySchema, "query"), asyn
     if (cached?.payload) {
       return res.json(applyStaleMeta(cached.payload, cached, error?.message || "massive_equity_options_failed"));
     }
-    return res.json({
-      underlying: normalizedUnderlying,
-      source: "Massive REST snapshot",
-      stale: true,
-      unavailable: true,
-      expiries: [],
-      activeExpiry: normalizedExpiry || null,
-      chain: [],
-      summary: {
-        spotPrice: 0,
-        totalCallOi: 0,
-        totalPutOi: 0,
-        putCallOiRatio: null,
-        totalCallVolume: 0,
-        totalPutVolume: 0,
-        putCallVolumeRatio: null,
-        atmIv: null,
-        atmStraddleMid: 0,
-        impliedMovePct: null,
-        contracts: 0
-      },
-      strikeCrowding: [],
-      termStructure: [],
-      venueSummary: [],
-      topContracts: [],
-      unusualActivity: [],
-      supportedUnderlyings: DEFAULT_EQUITY_OPTIONS_UNDERLYINGS,
-      stale_reason: error?.message || "massive_equity_options_failed",
-      updatedAt: new Date().toISOString()
-    });
+    return res.json(buildMassiveEquityOptionsUnavailablePayload(
+      normalizedUnderlying,
+      error?.message || "massive_equity_options_failed",
+      {
+        activeExpiry: normalizedExpiry || null,
+        requestedExpiry: normalizedExpiry || null
+      }
+    ));
   }
 });
 

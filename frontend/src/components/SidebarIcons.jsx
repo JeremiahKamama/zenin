@@ -50,6 +50,17 @@ export function AnalyticsIcon() {
   );
 }
 
+export function ResearchIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M5.5 5.5h8.2a3 3 0 0 1 3 3v10H8.5a3 3 0 0 0-3 3z" {...strokeProps} />
+      <path d="M8.5 9h5.2" {...strokeProps} />
+      <path d="M8.5 12h4" {...strokeProps} />
+      <path d="M17.5 7.5h1.5a2 2 0 0 1 2 2v8.5" {...strokeProps} />
+    </svg>
+  );
+}
+
 export function MetricsIcon() {
   return (
     <svg {...iconProps}>

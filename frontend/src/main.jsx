@@ -3,7 +3,6 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { getGuestWorkspacePath, storePostAuthRedirect } from "./utils/authRedirect";
 import { isDevFullAccessEnabled } from "./utils/devAccess";
-import { hasWorkspaceSession } from "./utils/workspacePersistence";
 import { hasSupabaseSessionHint } from "./utils/supabaseAuth";
 
 function resolveEntry(pathname) {
@@ -23,7 +22,7 @@ function redirectUnauthenticatedAppEntry(entry) {
 
   const params = new URLSearchParams(window.location.search);
   const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
-  if (isDevFullAccessEnabled() || allowGuest || hasWorkspaceSession() || hasSupabaseSessionHint()) return false;
+  if (isDevFullAccessEnabled() || allowGuest || hasSupabaseSessionHint()) return false;
 
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   storePostAuthRedirect(target, "/app");
@@ -93,13 +92,14 @@ function applyGlobalTheme() {
 
 applyGlobalTheme();
 
-const rootElement = redirectedToAuth ? null : document.getElementById("root");
+const redirectedBeforeRender = redirectedToGuestWorkspace || redirectedToAuth;
+const rootElement = redirectedBeforeRender ? null : document.getElementById("root");
 const hasPrerenderedMarkup =
-  !redirectedToAuth &&
+  !redirectedBeforeRender &&
   entry === "public" &&
   rootElement?.dataset?.prerendered === "public";
 
-if (!redirectedToAuth) {
+if (!redirectedBeforeRender) {
 loadEntryComponent(entry).then((RootComponent) => {
   const app = (
     <React.StrictMode>

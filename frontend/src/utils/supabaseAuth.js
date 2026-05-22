@@ -82,6 +82,100 @@ export async function getSupabaseSession() {
   return data?.session || null;
 }
 
+function getVerifiedTotpFactor(factors = []) {
+  return factors.find((factor) => String(factor?.status || "").toLowerCase() === "verified") || null;
+}
+
+export async function getSupabaseMfaState() {
+  const client = getSupabaseClient();
+  if (!client) return { aal: null, factors: [], verifiedTotpFactor: null };
+  const [aalResult, factorsResult] = await Promise.all([
+    client.auth.mfa.getAuthenticatorAssuranceLevel(),
+    client.auth.mfa.listFactors()
+  ]);
+  if (aalResult.error) throw aalResult.error;
+  if (factorsResult.error) throw factorsResult.error;
+  const factors = Array.isArray(factorsResult.data?.totp) ? factorsResult.data.totp : [];
+  return {
+    aal: aalResult.data || null,
+    factors,
+    verifiedTotpFactor: getVerifiedTotpFactor(factors)
+  };
+}
+
+export async function startSupabaseTotpEnrollment({ friendlyName } = {}) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Authentication is not configured for this frontend.");
+  const params = { factorType: "totp" };
+  const normalizedName = String(friendlyName || "").trim();
+  if (normalizedName) params.friendlyName = normalizedName;
+  const { data, error } = await client.auth.mfa.enroll(params);
+  if (error) throw error;
+  return {
+    factorId: data?.id || "",
+    qrCode: data?.totp?.qr_code || "",
+    secret: data?.totp?.secret || ""
+  };
+}
+
+export async function verifySupabaseTotpEnrollment({ factorId, code }) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Authentication is not configured for this frontend.");
+  const challenge = await client.auth.mfa.challenge({ factorId });
+  if (challenge.error) throw challenge.error;
+  const verify = await client.auth.mfa.verify({
+    factorId,
+    challengeId: challenge.data.id,
+    code
+  });
+  if (verify.error) throw verify.error;
+  return verify.data;
+}
+
+export async function unenrollSupabaseMfaFactor(factorId) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Authentication is not configured for this frontend.");
+  const { data, error } = await client.auth.mfa.unenroll({ factorId });
+  if (error) throw error;
+  return data;
+}
+
+export async function verifySupabaseMfaCode(code) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Authentication is not configured for this frontend.");
+  const { factors, verifiedTotpFactor } = await getSupabaseMfaState();
+  const factor = verifiedTotpFactor || factors[0];
+  if (!factor?.id) throw new Error("No authenticator app factor is available for this account.");
+  return verifySupabaseTotpEnrollment({ factorId: factor.id, code });
+}
+
+export async function getSupabaseLinkedIdentities() {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  const { data, error } = await client.auth.getUserIdentities();
+  if (error) throw error;
+  return Array.isArray(data?.identities) ? data.identities : [];
+}
+
+export async function linkSupabaseOAuthIdentity(provider, { redirectTo } = {}) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Authentication is not configured for this frontend.");
+  const { data, error } = await client.auth.linkIdentity({
+    provider,
+    options: redirectTo ? { redirectTo } : undefined
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function unlinkSupabaseOAuthIdentity(identity) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Authentication is not configured for this frontend.");
+  const { data, error } = await client.auth.unlinkIdentity(identity);
+  if (error) throw error;
+  return data;
+}
+
 export async function exchangeSupabaseSession({ rememberMe = true } = {}) {
   const session = await getSupabaseSession();
   const accessToken = session?.access_token;

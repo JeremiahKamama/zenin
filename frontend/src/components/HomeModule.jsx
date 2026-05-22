@@ -20,6 +20,14 @@ const HOME_REBALANCE_STORAGE_KEY = "zenin_home_rebalance_queue";
 const HOME_SIGNAL_ARCHIVE_STORAGE_KEY = "zenin_home_signal_archive";
 const HOME_SIGNAL_SNOOZE_STORAGE_KEY = "zenin_home_signal_snooze";
 const JOURNAL_STORAGE_KEY = "zenin_journal_entries";
+const RESEARCH_THESES_NAMESPACE = "research:knowledge:theses";
+const RESEARCH_CATALYSTS_NAMESPACE = "research:knowledge:catalysts";
+const RESEARCH_TRIGGERS_NAMESPACE = "research:knowledge:triggers";
+const RESEARCH_DECISIONS_NAMESPACE = "research:knowledge:decisions";
+const RESEARCH_THESES_STORAGE_KEY = "zenin_research_knowledge_theses";
+const RESEARCH_CATALYSTS_STORAGE_KEY = "zenin_research_knowledge_catalysts";
+const RESEARCH_TRIGGERS_STORAGE_KEY = "zenin_research_knowledge_triggers";
+const RESEARCH_DECISIONS_STORAGE_KEY = "zenin_research_knowledge_decisions";
 
 function readStoredJson(key, fallback) {
   try {
@@ -64,6 +72,14 @@ function formatSavedTimestamp(value) {
   });
 }
 
+function toTitleLabel(value) {
+  return String(value || "")
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function HomeModule({
   portfolio,
   trades = [],
@@ -82,6 +98,7 @@ export function HomeModule({
   onViewFullMetrics,
   onOpenWatchlist,
   onOpenAnalytics,
+  onOpenResearch,
   openMarketContextOnMount = false,
   onMarketContextOpened
 }) {
@@ -143,6 +160,10 @@ export function HomeModule({
   const [savedHomeAlerts, setSavedHomeAlerts] = useState(() => readStoredJson(HOME_ALERTS_STORAGE_KEY, []));
   const [savedHomeTasks, setSavedHomeTasks] = useState(() => readStoredJson(HOME_TASKS_STORAGE_KEY, []));
   const [savedHomeRebalances, setSavedHomeRebalances] = useState(() => readStoredJson(HOME_REBALANCE_STORAGE_KEY, []));
+  const [researchTheses, setResearchTheses] = useState(() => readStoredJson(RESEARCH_THESES_STORAGE_KEY, []));
+  const [researchCatalysts, setResearchCatalysts] = useState(() => readStoredJson(RESEARCH_CATALYSTS_STORAGE_KEY, []));
+  const [researchTriggers, setResearchTriggers] = useState(() => readStoredJson(RESEARCH_TRIGGERS_STORAGE_KEY, []));
+  const [researchDecisions, setResearchDecisions] = useState(() => readStoredJson(RESEARCH_DECISIONS_STORAGE_KEY, []));
   const moversPerfCacheRef = useRef(new Map());
   const flowTimerRef = useRef(null);
   const homePrefsHydratedRef = useRef(false);
@@ -151,6 +172,11 @@ export function HomeModule({
   const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
 
   const syncHomeCollection = async (namespace, rows, limit = 100) => {
+    return saveWorkspaceCollection(namespace, rows, limit);
+  };
+
+  const syncResearchCollection = async (namespace, storageKey, rows, limit = 500) => {
+    localStorage.setItem(storageKey, JSON.stringify(rows));
     return saveWorkspaceCollection(namespace, rows, limit);
   };
 
@@ -731,6 +757,63 @@ export function HomeModule({
     });
   };
 
+  const handleResearchTriggerAction = (action) => {
+    const triggerCard = flowSelection;
+    const trigger = triggerCard?.trigger;
+    const symbol = String(trigger?.symbol || "PORTFOLIO").toUpperCase();
+    if (!trigger?.id) {
+      setHomeToast("No trigger selected.");
+      return;
+    }
+
+    if (action === "open-research") {
+      closeAttentionFlow();
+      onOpenResearch?.();
+      return;
+    }
+
+    runFlowProcessing(4, `Saving ${symbol} trigger workflow...`, 3, 0, async () => {
+      const nowIso = new Date().toISOString();
+      const nextTriggers = (Array.isArray(researchTriggers) ? researchTriggers : []).map((item) => (
+        String(item?.id) === String(trigger.id)
+          ? { ...item, lastTriggeredAt: nowIso, updatedAt: nowIso }
+          : item
+      ));
+      setResearchTriggers(nextTriggers);
+      await syncResearchCollection(RESEARCH_TRIGGERS_NAMESPACE, RESEARCH_TRIGGERS_STORAGE_KEY, nextTriggers, 500);
+
+      if (action === "promote") {
+        const mappedDecisionAction = trigger.actionType === "sell"
+          ? "exit"
+          : trigger.actionType === "add"
+            ? "buy"
+            : trigger.actionType === "review"
+              ? "watch"
+              : trigger.actionType;
+        const nextDecision = {
+          id: `decision-trigger-${Date.now()}`,
+          symbol,
+          action: mappedDecisionAction,
+          conviction: "Medium",
+          rationale: `${trigger.rationale || trigger.title || "Research trigger fired."} · ${triggerCard?.triggerSummary || ""} · ${triggerCard?.currentValueLabel || ""}`.trim(),
+          thesisId: trigger.linkedThesisId || "",
+          createdAt: nowIso,
+          updatedAt: nowIso
+        };
+        const nextDecisions = [nextDecision, ...(Array.isArray(researchDecisions) ? researchDecisions : [])].slice(0, 500);
+        setResearchDecisions(nextDecisions);
+        await syncResearchCollection(RESEARCH_DECISIONS_NAMESPACE, RESEARCH_DECISIONS_STORAGE_KEY, nextDecisions, 500);
+      }
+
+      setFlowOutcome({
+        title: action === "promote" ? "Decision logged" : "Trigger reviewed",
+        message: action === "promote"
+          ? `${symbol} was promoted into Research Decisions and the trigger cooldown is active.`
+          : `${symbol} trigger was marked reviewed and will stay quiet until its cooldown expires.`
+      });
+    });
+  };
+
   useEffect(() => {
     if (!marketDetailOpen) return;
     
@@ -983,6 +1066,8 @@ export function HomeModule({
       setFlowSelection(missingFlowRows[0] || null);
     } else if (flowKind === "rebalance") {
       setFlowSelection(rebalancePlanRows.rows[0] || null);
+    } else if (flowKind === "research-trigger") {
+      setFlowSelection(activeResearchTriggerRows[0] || null);
     } else {
       setFlowSelection(volatilityFlowRows[0] || null);
     }
@@ -1493,6 +1578,130 @@ export function HomeModule({
 
   const rebalanceDriftPct = Math.abs(allocationBreakdown.cryptoPercent - 50);
 
+  const liveAssetBySymbol = useMemo(() => {
+    const map = new Map();
+    [portfolio, watchlistAssets, assets, marketMovers, moversUniverse].forEach((collection) => {
+      (Array.isArray(collection) ? collection : []).forEach((asset) => {
+        const symbol = String(asset?.symbol || "").trim().toUpperCase();
+        if (!symbol) return;
+        if (!map.has(symbol)) map.set(symbol, asset);
+      });
+    });
+    return map;
+  }, [portfolio, watchlistAssets, assets, marketMovers, moversUniverse]);
+
+  const portfolioWeightBySymbol = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(portfolio) ? portfolio : []).forEach((asset) => {
+      const symbol = String(asset?.symbol || "").trim().toUpperCase();
+      if (!symbol) return;
+      const currency = asset?.currency || asset?.quotedCurrency || "USD";
+      const rawValue = (Number(asset?.price) || 0) * (Number(asset?.quantity) || 0);
+      const value = convertToUSD(rawValue, currency, spotPrices);
+      map.set(symbol, totalAccountEquity > 0 ? (value / totalAccountEquity) * 100 : 0);
+    });
+    return map;
+  }, [portfolio, spotPrices, totalAccountEquity]);
+
+  const activeResearchTriggerRows = useMemo(() => {
+    const triggerRows = Array.isArray(researchTriggers) ? researchTriggers : [];
+    const thesisById = new Map((Array.isArray(researchTheses) ? researchTheses : []).map((item) => [item?.id, item]));
+    const catalystById = new Map((Array.isArray(researchCatalysts) ? researchCatalysts : []).map((item) => [item?.id, item]));
+    const now = Date.now();
+
+    function resolveLivePrice(symbol) {
+      const asset = liveAssetBySymbol.get(symbol);
+      const directSpot = spotPrices?.[symbol];
+      const candidates = [
+        typeof directSpot === "number" ? directSpot : null,
+        Number(directSpot?.price),
+        Number(directSpot?.usd),
+        Number(asset?.price),
+        Number(asset?.currentPrice),
+        Number(asset?.lastPrice),
+        Number(asset?.close),
+        Number(asset?.mark)
+      ];
+      return candidates.find((value) => Number.isFinite(value)) ?? null;
+    }
+
+    function formatTriggerMoney(value) {
+      return formatCurrency(Number(value || 0), "USD", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    return triggerRows.reduce((acc, rawTrigger) => {
+      const trigger = rawTrigger && typeof rawTrigger === "object" ? rawTrigger : {};
+      const status = String(trigger.status || "active").toLowerCase();
+      if (status !== "active") return acc;
+
+      const actionType = String(trigger.actionType || "review").toLowerCase();
+      const conditionType = String(trigger.conditionType || "").toLowerCase();
+      const symbol = String(trigger.symbol || "").trim().toUpperCase();
+      const thresholdValue = Number(trigger.thresholdValue);
+      if (!Number.isFinite(thresholdValue)) return acc;
+
+      const cooldownHours = Math.max(1, Number(trigger.cooldownHours || 24));
+      const lastTriggeredAt = new Date(trigger.lastTriggeredAt || 0).getTime();
+      if (Number.isFinite(lastTriggeredAt) && lastTriggeredAt > 0 && (lastTriggeredAt + (cooldownHours * 60 * 60 * 1000)) > now) {
+        return acc;
+      }
+
+      const linkedThesis = thesisById.get(trigger.linkedThesisId) || null;
+      const linkedCatalyst = catalystById.get(trigger.linkedCatalystId)
+        || (Array.isArray(researchCatalysts) ? researchCatalysts.find((item) => String(item?.symbol || "").toUpperCase() === symbol && String(item?.status || "").toLowerCase() === "upcoming") : null)
+        || null;
+
+      let triggered = false;
+      let currentValueLabel = "Awaiting live state";
+      let triggerSummary = "";
+
+      if (conditionType === "price_above" || conditionType === "price_below") {
+        const livePrice = resolveLivePrice(symbol);
+        if (!Number.isFinite(livePrice)) return acc;
+        triggered = conditionType === "price_above" ? livePrice >= thresholdValue : livePrice <= thresholdValue;
+        currentValueLabel = `Live ${formatTriggerMoney(livePrice)}`;
+        triggerSummary = `${conditionType === "price_above" ? "Above" : "Below"} ${formatTriggerMoney(thresholdValue)}`;
+      } else if (conditionType === "position_weight_above") {
+        const weight = portfolioWeightBySymbol.get(symbol);
+        if (!Number.isFinite(weight)) return acc;
+        triggered = weight >= thresholdValue;
+        currentValueLabel = `Weight ${weight.toFixed(1)}%`;
+        triggerSummary = `Limit ${thresholdValue.toFixed(1)}%`;
+      } else if (conditionType === "catalyst_within_days") {
+        const eventDate = new Date(linkedCatalyst?.eventDate || 0).getTime();
+        if (!Number.isFinite(eventDate) || eventDate <= 0) return acc;
+        const daysUntil = Math.ceil((eventDate - now) / (24 * 60 * 60 * 1000));
+        triggered = daysUntil >= 0 && daysUntil <= thresholdValue;
+        currentValueLabel = `${Math.max(0, daysUntil)} day${Math.max(0, daysUntil) === 1 ? "" : "s"} to event`;
+        triggerSummary = linkedCatalyst?.title ? `${linkedCatalyst.title} within ${thresholdValue}d` : `Catalyst within ${thresholdValue}d`;
+      } else {
+        return acc;
+      }
+
+      if (!triggered) return acc;
+
+      const variant = actionType === "sell" ? "risk" : actionType === "trim" ? "warn" : "info";
+      const severity = actionType === "sell" ? "CRITICAL" : actionType === "trim" ? "WARNING" : "INFO";
+      acc.push({
+        id: `research-trigger:${trigger.id}`,
+        triggerId: trigger.id,
+        variant,
+        severity,
+        type: "research-trigger",
+        title: trigger.title || `${symbol || "Portfolio"} ${toTitleLabel(actionType)} trigger`,
+        text: trigger.rationale || `${toTitleLabel(actionType)} action is now in scope for ${symbol || "the portfolio"}.`,
+        cta: "Review Flow",
+        meta: `${symbol || "Portfolio"} · ${triggerSummary} · ${currentValueLabel}`,
+        trigger,
+        linkedThesis,
+        linkedCatalyst,
+        currentValueLabel,
+        triggerSummary
+      });
+      return acc;
+    }, []);
+  }, [assets, liveAssetBySymbol, marketMovers, moversUniverse, portfolio, portfolioWeightBySymbol, researchCatalysts, researchTheses, researchTriggers, spotPrices]);
+
   const rebalancePlanRows = useMemo(() => {
     const planCost = Number((20 + rebalanceDriftPct * 0.65).toFixed(2));
     const sellValue = Math.max(0, Number((rebalanceDriftPct * 32).toFixed(2)));
@@ -1650,7 +1859,8 @@ export function HomeModule({
       text: `${volatilityFlowRows.length} symbol${volatilityFlowRows.length === 1 ? "" : "s"} moved beyond the current risk threshold.`,
       cta: "Review Alerts",
       meta: `Affected assets: ${volatilityFlowRows.length} · Last checked: just now · Impact: High`
-    }] : [])
+    }] : []),
+    ...activeResearchTriggerRows
   ];
   const archivedAttentionIds = new Set((Array.isArray(archivedAttentionCards) ? archivedAttentionCards : []).map((entry) => entry?.id));
   const snoozedAttentionIds = new Set(
@@ -1673,7 +1883,8 @@ export function HomeModule({
   const attentionFlowSteps = {
     missing: ["Missing Data List", "Asset Detail", "Updating", "Success"],
     rebalance: ["Overview", "Plan", "Confirm", "Success"],
-    volatility: ["Volatility List", "Detail", "Insights", "Complete"]
+    volatility: ["Volatility List", "Detail", "Insights", "Complete"],
+    "research-trigger": ["Trigger", "Action", "Saving", "Complete"]
   };
 
   const renderAttentionFlow = () => {
@@ -1830,6 +2041,64 @@ export function HomeModule({
           </div>
         );
       }
+    } else if (activeAttentionFlow === "research-trigger") {
+      const trigger = flowSelection?.trigger || {};
+      const linkedThesis = flowSelection?.linkedThesis || null;
+      const linkedCatalyst = flowSelection?.linkedCatalyst || null;
+      if (attentionFlowStep === 1) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>{trigger.title || "Research Trigger"}</h3><span>{String(trigger.actionType || "review").toUpperCase()}</span></div>
+            <p>{trigger.rationale || "A research-linked rule is ready for review."}</p>
+            <div className="home-v2-flow-detail-grid">
+              <div><strong>Current state</strong><p>{flowSelection?.currentValueLabel || "Awaiting live read"}</p></div>
+              <div><strong>Trigger rule</strong><p>{flowSelection?.triggerSummary || "Condition not configured"}</p></div>
+              <div><strong>Linked thesis</strong><p>{linkedThesis?.title || "No thesis linked"}</p></div>
+              <div><strong>Linked catalyst</strong><p>{linkedCatalyst?.title || "No catalyst linked"}</p></div>
+            </div>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => setAttentionFlowStep(2)}>Take Action</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={onOpenResearch}>Open Research</button>
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 2) {
+        flowBody = (
+          <div className="home-v2-flow-card">
+            <div className="home-v2-flow-headline"><h3>Action Routing</h3><span>{String(trigger.symbol || "Portfolio").toUpperCase()}</span></div>
+            <ul className="home-v2-flow-bullets">
+              <li>Promote this fired rule into the Research decision log.</li>
+              <li>Mark it reviewed if the desk already acted elsewhere.</li>
+              <li>Open Research if the thesis or catalyst needs editing first.</li>
+            </ul>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={() => handleResearchTriggerAction("promote")}>Promote to Decision</button>
+              <button type="button" className="home-v2-flow-btn" onClick={() => handleResearchTriggerAction("reviewed")}>Mark Reviewed</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={() => handleResearchTriggerAction("open-research")}>Open Research</button>
+            </div>
+          </div>
+        );
+      } else if (attentionFlowStep === 3 && flowBusy) {
+        flowBody = (
+          <div className="home-v2-flow-status-card">
+            <div className="home-v2-flow-spinner" />
+            <h3>Saving trigger action...</h3>
+            <p>{flowActionLabel || "Updating the trigger workflow."}</p>
+          </div>
+        );
+      } else {
+        flowBody = (
+          <div className={`home-v2-flow-status-card ${flowOutcome.tone === "error" ? "warning" : "success"}`}>
+            <div className="home-v2-flow-success-mark">{flowOutcome.tone === "error" ? "!" : "✓"}</div>
+            <h3>{flowOutcome.title || "Trigger workflow saved"}</h3>
+            <p>{flowOutcome.message || "The trigger state was updated."}</p>
+            <div className="home-v2-flow-actions">
+              <button type="button" className="home-v2-flow-btn primary" onClick={onOpenResearch}>Open Research</button>
+              <button type="button" className="home-v2-flow-btn ghost" onClick={closeAttentionFlow}>Close</button>
+            </div>
+          </div>
+        );
+      }
     } else if (attentionFlowStep === 1) {
       flowBody = (
         <div className="home-v2-flow-card">
@@ -1897,7 +2166,7 @@ export function HomeModule({
       <div className="home-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Action Center user flow">
         <div className="home-v2-flow-shell">
           <div className="home-v2-flow-top">
-            <h2>{activeAttentionFlow === "missing" ? "Missing Data Flow" : activeAttentionFlow === "rebalance" ? "Rebalancing Flow" : "Volatility Alert Flow"}</h2>
+            <h2>{activeAttentionFlow === "missing" ? "Missing Data Flow" : activeAttentionFlow === "rebalance" ? "Rebalancing Flow" : activeAttentionFlow === "research-trigger" ? "Research Trigger Flow" : "Volatility Alert Flow"}</h2>
             <button type="button" className="home-v2-flow-close" onClick={closeAttentionFlow} aria-label="Close flow">✕</button>
           </div>
           {renderProgress}
@@ -2428,7 +2697,13 @@ export function HomeModule({
                 <div className="home-exec-signal-meta">{card.meta}</div>
               </div>
               <div className="home-exec-signal-actions">
-                  <button type="button" className="home-exec-btn secondary small" onClick={() => openAttentionFlow(card.id)}>{card.cta}</button>
+                  <button
+                    type="button"
+                    className="home-exec-btn secondary small"
+                    onClick={() => openAttentionFlow(card.type === "research-trigger" ? "research-trigger" : card.id, card)}
+                  >
+                    {card.cta}
+                  </button>
                   <div className="home-exec-triage-tools">
                     <button type="button" onClick={() => { snoozeAttentionCard(card, 24); setHomeToast("Signal snoozed for 24 hours."); }}>Snooze</button>
                     <button type="button" onClick={() => setPendingDismissCard(card)}>Dismiss</button>
