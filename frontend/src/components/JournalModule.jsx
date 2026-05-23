@@ -4,6 +4,7 @@ import { calculateOptionPnL } from "../utils/optionsPnL";
 import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { zeninFetch } from "../utils/zeninFetch";
 import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup, MetricStrip } from "./CompactWorkspaceUI";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
@@ -336,8 +337,8 @@ export function JournalModule({
 
     const enrichWithCategoryPrices = async (symbols, category, target) => {
       try {
-        const res = await fetch(
-          `${BACKEND_URL}/watchlist?category=${encodeURIComponent(category)}&symbols=${encodeURIComponent(symbols.join(","))}`
+        const res = await zeninFetch(
+          `/watchlist?category=${encodeURIComponent(category)}&symbols=${encodeURIComponent(symbols.join(","))}`
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -355,8 +356,8 @@ export function JournalModule({
 
     const enrichWithSearchPrice = async (symbol, type, target) => {
       try {
-        const res = await fetch(
-          `${BACKEND_URL}/search?q=${encodeURIComponent(symbol)}&type=${encodeURIComponent(type)}`
+        const res = await zeninFetch(
+          `/search?q=${encodeURIComponent(symbol)}&type=${encodeURIComponent(type)}`
         );
         if (!res.ok) return false;
         const data = await res.json();

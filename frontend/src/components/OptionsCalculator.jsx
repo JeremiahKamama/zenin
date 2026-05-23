@@ -238,7 +238,7 @@ export function OptionsCalculator({   spotPrice = 0,
       const params = new URLSearchParams({
         symbol: normalizedSymbol, expiry: deribitExpiry, strike: leg.strike, type: leg.type === "put" ? "P" : "C"
       });
-      const res = await fetch(`${BACKEND_URL}/greeks?${params.toString()}`);
+      const res = await zeninFetch(`/greeks?${params.toString()}`);
       if (!res.ok) throw new Error("Greeks fetch failed");
       const data = await res.json();
       if (!data.stale && data.mark !== null) {

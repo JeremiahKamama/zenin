@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { zeninFetch } from "../utils/zeninFetch";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
@@ -51,7 +52,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
     const fetchSnapshot = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/macro-indicators?country=${encodeURIComponent(countryCode)}`, {
+        const res = await zeninFetch(`/macro-indicators?country=${encodeURIComponent(countryCode)}`, {
           signal: controller.signal
         });
         const data = await res.json();

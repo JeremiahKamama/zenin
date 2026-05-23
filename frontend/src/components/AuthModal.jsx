@@ -348,6 +348,34 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               >
                 <span style={{ fontSize: '1.2rem' }}>G</span> Google
               </button>
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                onClick={async () => {
+                  setLoading(true);
+                  setError("");
+                  try {
+                    const opts = await startSupabasePasskeyAuthentication();
+                    const authResp = await startAuthentication(opts);
+                    const verify = await verifySupabasePasskeyAuthentication({ response: authResp, challengeId: opts.challengeId, rememberMe: true });
+                    if (verify?.success) {
+                      const me = await zeninFetchJson("/api/auth/me");
+                      if (!me?.authenticated || !me?.user) throw new Error("Signed in but session not established.");
+                      redirectToApp();
+                    } else {
+                      setError(verify?.error || "Passkey sign-in failed.");
+                    }
+                  } catch (err) {
+                    setError(err?.message || "Passkey sign-in failed");
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+              >
+                Passkey
+              </button>
               {ENABLE_APPLE_OAUTH ? (
                 <button 
                   className="auth-v2-btn auth-v2-btn-ghost" 

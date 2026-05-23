@@ -5,6 +5,7 @@ import { getCurrencySymbol, formatCurrency, convertToUSD, inferAssetCurrency } f
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { zeninFetch } from "../utils/zeninFetch";
 import { getMarketStatus } from "../utils/marketHours";
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -134,7 +135,7 @@ export function AssetModal({
           type: assetType,
           interval: activeInterval
         });
-        const res = await fetch(`${BACKEND_URL}/history?${params.toString()}`);
+        const res = await zeninFetch(`/history?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
         const nextHistory = Array.isArray(data?.history) ? data.history : [];
@@ -184,7 +185,7 @@ export function AssetModal({
       try {
         const quoteType = assetType === "crypto" ? "crypto" : "tradfi";
         const params = new URLSearchParams({ type: quoteType, symbols: assetSymbol });
-        const res = await fetch(`${BACKEND_URL}/prices?${params.toString()}`);
+        const res = await zeninFetch(`/prices?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
         const row = data?.prices?.[assetSymbol] || data?.[assetSymbol] || null;
@@ -218,7 +219,7 @@ export function AssetModal({
       }
       try {
         const params = new URLSearchParams({ symbol: assetSymbol, type: assetType });
-        const res = await fetch(`${BACKEND_URL}/interval-performance?${params.toString()}`);
+        const res = await zeninFetch(`/interval-performance?${params.toString()}`);
         const data = await res.json();
         if (cancelled) return;
         const performance = data?.performance && typeof data.performance === "object" ? data.performance : {};
@@ -259,7 +260,7 @@ export function AssetModal({
       setEarningsLoading(true);
       try {
         const params = new URLSearchParams({ symbol: assetSymbol });
-        const res = await fetch(`${BACKEND_URL}/earnings?${params.toString()}`, { signal: controller.signal });
+        const res = await zeninFetch(`/earnings?${params.toString()}`, { signal: controller.signal });
         const data = await res.json();
         if (controller.signal.aborted) return;
         if (!res.ok || data?.error) {
@@ -332,7 +333,7 @@ export function AssetModal({
     const fetchFinviz = async () => {
       setFinvizLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/finviz?symbol=${assetSymbol}`);
+        const res = await zeninFetch(`/finviz?symbol=${assetSymbol}`);
         const data = await res.json();
         if (data && !data.error) {
           setFinvizData(data);

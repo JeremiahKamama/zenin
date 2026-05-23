@@ -3,8 +3,7 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
-
-const BACKEND_URL = ZENIN_API_BASE_URL;
+import { zeninFetch } from "../utils/zeninFetch";
 const PREDICTION_REFRESH_MS = 21600000; // 6 hours
 
 export function PredictionMarketModule() {
@@ -36,7 +35,7 @@ export function PredictionMarketModule() {
       }
       setPredictionLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/prediction/snapshot`);
+        const res = await zeninFetch(`/prediction/snapshot`);
         if (!res.ok) {
           const text = await res.text();
           throw new Error(`HTTP ${res.status}: ${text}`);
@@ -87,7 +86,7 @@ export function PredictionMarketModule() {
       }
       setMarketDetailsLoading(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/prediction/market-details/${encodeURIComponent(selectedPredictionMarket.id)}`);
+        const res = await zeninFetch(`/prediction/market-details/${encodeURIComponent(selectedPredictionMarket.id)}`);
         if (!res.ok) {
           const text = await res.text();
           throw new Error(`HTTP ${res.status}: ${text}`);

@@ -46,9 +46,22 @@ function getSimulationPlanHeaderValue(endpoint) {
 }
 
 function buildZeninUrl(endpoint) {
-  return endpoint.startsWith("http")
-    ? endpoint
-    : `${ZENIN_API_BASE_URL}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+  if (endpoint.startsWith("http")) return endpoint;
+
+  // Normalize to avoid duplicate `/api` segments in resulting URLs.
+  // Examples to handle:
+  // - ZENIN_API_BASE_URL = "/api" and endpoint = "/api/auth" -> "/api/auth"
+  // - ZENIN_API_BASE_URL = "http://host/api" and endpoint = "/api/auth" -> "http://host/api/auth"
+  // - ZENIN_API_BASE_URL = "http://host/api" and endpoint = "/auth" -> "http://host/api/auth"
+  let normalizedEndpoint = String(endpoint || "");
+
+  // If base ends with '/api', strip a leading '/api' from endpoint to avoid duplication.
+  if (ZENIN_API_BASE_URL.endsWith("/api")) {
+    normalizedEndpoint = normalizedEndpoint.replace(/^\/+api/, "");
+  }
+
+  // Ensure the final concatenation has exactly one slash between base and endpoint.
+  return `${ZENIN_API_BASE_URL}${normalizedEndpoint.startsWith("/") ? "" : "/"}${normalizedEndpoint}`;
 }
 
 async function ensureCsrfToken() {

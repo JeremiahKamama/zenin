@@ -2279,8 +2279,8 @@ const handleOptionTradeClosed = async (tradeId) => {
       for (const batch of batches) {
         if (!batch.length) continue;
         try {
-          const res = await fetch(
-            `${BACKEND_URL}/prices?type=${encodeURIComponent(type)}&symbols=${encodeURIComponent(batch.join(","))}`
+          const res = await zeninFetch(
+            `/prices?type=${encodeURIComponent(type)}&symbols=${encodeURIComponent(batch.join(","))}`
           );
           if (!res.ok) continue;
           const data = await res.json();
@@ -3445,7 +3445,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     setRevenueCatState((prev) => ({ ...prev, syncingPlan: true }));
     try {
-      const res = await zeninFetch(`${BACKEND_URL}/api/account/plan`, {
+      const res = await zeninFetch(`/api/account/plan`, {
         method: "POST",
         body: JSON.stringify({ plan: targetPlan, billingCycle: targetBillingCycle })
       });
@@ -4194,7 +4194,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const handleUpdatePlan = async (targetPlan, billingCycle = "monthly") => {
     try {
-      const res = await zeninFetch(`${BACKEND_URL}/api/account/plan`, {
+      const res = await zeninFetch(`/api/account/plan`, {
         method: "POST",
         body: JSON.stringify({ plan: targetPlan, billingCycle })
       });

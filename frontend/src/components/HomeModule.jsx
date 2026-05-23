@@ -8,6 +8,7 @@ import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { zeninFetchJson } from "../utils/zeninFetch";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { zeninFetch } from "../utils/zeninFetch";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
@@ -351,8 +352,8 @@ export function HomeModule({
         }
 
         try {
-          const res = await fetch(
-            `${BACKEND_URL}/interval-performance?symbol=${encodeURIComponent(symbol)}&type=${encodeURIComponent(moverType)}`
+          const res = await zeninFetch(
+            `/interval-performance?symbol=${encodeURIComponent(symbol)}&type=${encodeURIComponent(moverType)}`
           );
           if (!res.ok) continue;
           const data = await res.json();
