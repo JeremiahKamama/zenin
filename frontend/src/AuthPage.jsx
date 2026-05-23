@@ -2,9 +2,9 @@ import React, { useEffect, useState } from "react";
 import "./public.css";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
-import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect } from "./utils/authRedirect";
+import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
 import { zeninFetchJson } from "./utils/zeninFetch";
-import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "./utils/supabaseAuth";
+import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/supabaseAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
 
 function getModeFromLocation() {
@@ -71,6 +71,17 @@ export default function AuthPage() {
     const target = getPostAuthRedirectPath();
     clearPostAuthRedirect();
     window.location.replace(target);
+  };
+
+  const handleGuestEntry = () => {
+    try {
+      localStorage.removeItem("zenin_auth_user");
+      localStorage.removeItem("zenin_auth_expires_at");
+    } catch {}
+    const guestTarget = new URL(getGuestWorkspacePath(), window.location.origin);
+    guestTarget.searchParams.set("guest", "1");
+    clearPostAuthRedirect();
+    window.location.replace(`${guestTarget.pathname}${guestTarget.search}${guestTarget.hash}`);
   };
 
   const runAction = async (action) => {
@@ -311,6 +322,16 @@ export default function AuthPage() {
                 {loading ? "Creating account..." : "Create account"}
               </button>
 
+              <div style={{ height: 12 }} />
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ width: '100%' }}
+                onClick={handleGuestEntry}
+              >
+                Continue as Guest
+              </button>
+
               <div className="auth-v2-divider">Or continue with</div>
               <div className="auth-v2-oauth-row">
                 <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuth("google")}>
@@ -387,6 +408,16 @@ export default function AuthPage() {
 
               <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onSignIn}>
                 {loading ? "Signing in..." : "Sign in"}
+              </button>
+
+              <div style={{ height: 12 }} />
+              <button 
+                className="auth-v2-btn auth-v2-btn-ghost" 
+                type="button"
+                style={{ width: '100%' }}
+                onClick={handleGuestEntry}
+              >
+                Continue as Guest
               </button>
 
               <div className="auth-v2-divider">Or continue with</div>

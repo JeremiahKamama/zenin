@@ -3729,7 +3729,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     } catch (error) {
       setSupabaseSecurity((prev) => ({ ...prev, loading: false }));
       if (!quiet) {
-        setProfileMessage("twofa", "error", error?.message || "Could not load Supabase security settings.");
+        setProfileMessage("twofa", "error", error?.message || "Could not load security settings.");
       }
     }
   }, [isGuestUser]);
@@ -4287,7 +4287,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const verifyPendingEmail = async () => {
     if (!isGuestUser) {
-      setProfileMessage("email", "info", "Confirm the email-change links sent by Supabase, then refresh this page.");
+      setProfileMessage("email", "info", "Confirm the email-change link sent to your inbox, then refresh this page.");
       return;
     }
     const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
@@ -4427,7 +4427,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (!isGuestUser) {
       const code = String(profileForms.twoFactorCode || "").trim();
       if (!totpSetup.factorId) {
-        setProfileMessage("twofa", "error", "Generate and scan a Supabase authenticator QR code first.");
+      setProfileMessage("twofa", "error", "Generate and scan an authenticator app QR code first.");
         return;
       }
       if (!/^\d{6}$/.test(code)) {
@@ -4439,7 +4439,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         setTotpSetup({ factorId: "", secret: "", qrCodeDataUrl: "", loading: false });
         setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
         await refreshSupabaseSecurity();
-        setProfileMessage("twofa", "success", "Authenticator app MFA is enabled for your Supabase account.");
+        setProfileMessage("twofa", "success", "Authenticator app MFA is enabled for your account.");
       } catch (error) {
         setProfileMessage("twofa", "error", error?.message || "Could not verify the authenticator code.");
       }
@@ -4570,7 +4570,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const regenerateBackupCodes = async () => {
     if (!isGuestUser) {
-      setProfileMessage("twofa", "info", "Supabase TOTP does not expose Zenin-managed backup codes here. Keep a recovery path through your email provider and password recovery.");
+      setProfileMessage("twofa", "info", "TOTP does not expose Zenin-managed backup codes here. Keep a recovery path through your email provider and password recovery.");
       return;
     }
     if (!profileSecurity.twoFactorEnabled) {
@@ -4595,7 +4595,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       try {
         await unenrollSupabaseMfaFactor(factorId);
         await refreshSupabaseSecurity();
-        setProfileMessage("twofa", "info", "Authenticator app MFA was disabled for your Supabase account.");
+        setProfileMessage("twofa", "info", "Authenticator app MFA was disabled for your account.");
       } catch (error) {
         setProfileMessage("twofa", "error", error?.message || "Could not disable authenticator MFA.");
       }
@@ -4666,7 +4666,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     return true;
   })();
 
-  const settingsPreviewNote = "Workspace sync: profile, preferences, and connected-account metadata still save to your Zenin workspace. Identity now runs through Supabase, while advanced MFA and passkey management are still being surfaced inside Zenin.";
+  const settingsPreviewNote = "Workspace sync: profile, preferences, and connected-account metadata still save to your Zenin workspace. Identity now runs through the backend, while advanced MFA and passkey management are still being surfaced inside Zenin.";
 
   const sidebarIconMap = {
     Home: HomeIcon,
@@ -5485,7 +5485,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </>
                           ) : (
                             <p className="settings-meta">
-                              Supabase will send a confirmation link to your new inbox before your sign-in email changes.
+                              We will send a confirmation link to your new inbox before your sign-in email changes.
                             </p>
                           )}
                           <div className="settings-inline-actions">
@@ -5532,7 +5532,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </label>
                           ) : (
                             <p className="settings-meta">
-                              Password changes now run through the Supabase recovery route so the account session and email verification stay in sync.
+                              Password changes now run through the recovery route so the account session and email verification stay in sync.
                             </p>
                           )}
                           {isGuestUser ? (
@@ -5774,8 +5774,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </>
                           ) : (
                             <div className="settings-account-managed-note">
-                              <p className="settings-meta" style={{ marginTop: 0 }}>
-                                Supabase is the source of truth for this signed-in account. Authenticator MFA and OAuth sign-in methods are managed here; passkey and backup-code management are intentionally not exposed until Zenin has a Supabase-backed implementation.
+                                <p className="settings-meta" style={{ marginTop: 0 }}>
+                                Identity is managed by the backend for this signed-in account. Authenticator MFA and OAuth sign-in methods are managed here; passkey and backup-code management are intentionally not exposed until in-app management surfaces are ready.
                               </p>
 
                               <div className="settings-chip-row" style={{ marginTop: "12px" }}>
@@ -5877,7 +5877,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                     </div>
                                   ))}
                                   {!supabaseSecurity.identities.length ? (
-                                    <p className="settings-meta">No linked identities were returned by Supabase.</p>
+                                    <p className="settings-meta">No linked identities were returned.</p>
                                   ) : null}
                                 </div>
                                 <div className="settings-inline-actions" style={{ marginTop: "12px" }}>

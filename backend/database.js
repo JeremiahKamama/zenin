@@ -19,14 +19,7 @@ function isRenderEnvironment(connectionString) {
   return /render\.com/i.test(String(connectionString || ""));
 }
 
-function isSupabaseEnvironment(connectionString) {
-  if (String(process.env.SUPABASE_URL || "").trim()) return true;
-  return /supabase\.(co|com|in)|pooler\.supabase\.com|supabase\.red/i.test(String(connectionString || ""));
-}
-
-function isSupabasePoolerConnection(connectionString) {
-  return /pooler\.supabase\.com/i.test(String(connectionString || ""));
-}
+// Supabase-specific detection removed: prefer explicit DATABASE_URL or provider-specific envs.
 
 function resolveRejectUnauthorized(connectionString) {
   const explicit = process.env.PGSSL_REJECT_UNAUTHORIZED;
@@ -38,15 +31,6 @@ function resolveRejectUnauthorized(connectionString) {
   if (String(process.env.PGSSLMODE || "").toLowerCase() === "no-verify") {
     return false;
   }
-
-  // Supabase's transaction/session pooler commonly presents a cert chain that
-  // fails strict verification in some Node/container environments. Default to
-  // relaxed verification for the pooler unless the operator explicitly opts in
-  // to strict verification above.
-  if (isSupabasePoolerConnection(connectionString)) {
-    return false;
-  }
-
   // In production we always verify TLS certificates unless explicitly overridden.
   if (process.env.NODE_ENV === "production") {
     return true;
@@ -75,7 +59,7 @@ function createPoolConfig() {
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "Missing PostgreSQL connection string. Set DATABASE_URL (or SUPABASE_DIRECT_URL / SUPABASE_DB_URL / RENDER_DATABASE_URL / POSTGRES_URL) in production."
+      "Missing PostgreSQL connection string. Set DATABASE_URL (or RAILWAY_DATABASE_URL / RENDER_DATABASE_URL / POSTGRES_URL) in production."
     );
   }
 
@@ -92,9 +76,7 @@ function createPoolConfig() {
 function resolveConnectionEnv() {
   const candidates = [
     ["DATABASE_URL", process.env.DATABASE_URL],
-    ["SUPABASE_DB_URL", process.env.SUPABASE_DB_URL],
-    ["SUPABASE_DATABASE_URL", process.env.SUPABASE_DATABASE_URL],
-    ["SUPABASE_DIRECT_URL", process.env.SUPABASE_DIRECT_URL],
+    ["RAILWAY_DATABASE_URL", process.env.RAILWAY_DATABASE_URL],
     ["RENDER_DATABASE_URL", process.env.RENDER_DATABASE_URL],
     ["POSTGRES_URL", process.env.POSTGRES_URL],
     ["POSTGRES_PRISMA_URL", process.env.POSTGRES_PRISMA_URL]
@@ -113,11 +95,7 @@ function describeDatabaseConfig() {
       const parsed = new URL(connectionEnv.value);
       return {
         source: connectionEnv.name,
-        provider: isSupabaseEnvironment(connectionEnv.value)
-          ? "supabase"
-          : isRenderEnvironment(connectionEnv.value)
-            ? "render"
-            : "postgresql",
+        provider: isRenderEnvironment(connectionEnv.value) ? "render" : "postgresql",
         host: parsed.hostname || null,
         database: parsed.pathname ? parsed.pathname.replace(/^\//, "") : null,
         ssl: shouldUseSsl(connectionEnv.value)
@@ -125,11 +103,7 @@ function describeDatabaseConfig() {
     } catch {
       return {
         source: connectionEnv.name,
-        provider: isSupabaseEnvironment(connectionEnv.value)
-          ? "supabase"
-          : isRenderEnvironment(connectionEnv.value)
-            ? "render"
-            : "postgresql",
+        provider: isRenderEnvironment(connectionEnv.value) ? "render" : "postgresql",
         host: "invalid connection string",
         database: null,
         ssl: shouldUseSsl(connectionEnv.value)
