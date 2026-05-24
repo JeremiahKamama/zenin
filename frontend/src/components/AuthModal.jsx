@@ -234,59 +234,6 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               Use as Guest
             </button>
 
-            <div className="auth-v2-divider"><span>OR</span></div>
-
-            <div className="auth-v2-modal-row">
-              <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
-                type="button"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                onClick={() => onOAuthStart("google")}
-                disabled={loading}
-              >
-                <span style={{ fontSize: '1.2rem' }}>G</span> Google
-              </button>
-              <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
-                type="button"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                onClick={async () => {
-                  setLoading(true);
-                  setError("");
-                  try {
-                    const opts = await startSupabasePasskeyAuthentication();
-                    const authResp = await startAuthentication(opts);
-                    const verify = await verifySupabasePasskeyAuthentication({ response: authResp, challengeId: opts.challengeId, rememberMe: true });
-                    if (verify?.success) {
-                      const me = await zeninFetchJson("/api/auth/me");
-                      if (!me?.authenticated || !me?.user) throw new Error("Signed in but session not established.");
-                      redirectToApp();
-                    } else {
-                      setError(verify?.error || "Passkey sign-in failed.");
-                    }
-                  } catch (err) {
-                    setError(err?.message || "Passkey sign-in failed");
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                disabled={loading}
-              >
-                Passkey
-              </button>
-              {ENABLE_APPLE_OAUTH ? (
-                <button 
-                  className="auth-v2-btn auth-v2-btn-ghost" 
-                  type="button"
-                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                  onClick={() => onOAuthStart("apple")}
-                  disabled={loading}
-                >
-                  <span style={{ fontSize: '1.2rem' }}></span> Apple
-                </button>
-              ) : null}
-            </div>
-
             <p className="auth-v2-bottom-link" style={{ textAlign: 'center' }}>
               Already have an account? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signin")}>Sign in</button>
             </p>

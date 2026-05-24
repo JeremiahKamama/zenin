@@ -138,19 +138,20 @@ export class ZeninRequestError extends Error {
 }
 
 export async function zeninFetch(endpoint, options = {}) {
+  const { skipSimulationHeaders = false, ...fetchOptions } = options;
   const url = buildZeninUrl(endpoint);
-  const method = String(options.method || "GET").toUpperCase();
+  const method = String(fetchOptions.method || "GET").toUpperCase();
 
   const headers = {
-    ...options.headers,
+    ...fetchOptions.headers,
   };
 
   // Ensure JSON requests have correct content-type
-  if (options.body && !headers["Content-Type"]) {
+  if (fetchOptions.body && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
 
-  const simulatePlan = getSimulationPlanHeaderValue(endpoint);
+  const simulatePlan = skipSimulationHeaders ? null : getSimulationPlanHeaderValue(endpoint);
   if (simulatePlan) {
     headers["x-zenin-simulate-plan"] = simulatePlan;
   }
@@ -163,8 +164,8 @@ export async function zeninFetch(endpoint, options = {}) {
   }
 
   const response = await fetch(url, {
-    ...options,
-    credentials: options.credentials || "include",
+    ...fetchOptions,
+    credentials: fetchOptions.credentials || "include",
     headers
   });
 

@@ -31933,7 +31933,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 
 .analytics-commodity-commandbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(320px, auto);
   gap: 16px;
   align-items: start;
   padding: 4px 0 10px;
@@ -31943,6 +31943,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 .analytics-commodity-titleblock {
   display: grid;
   gap: 5px;
+  min-width: 0;
 }
 
 .analytics-commodity-titleblock span,
@@ -31955,9 +31956,10 @@ body.light-theme-active .tax-workbench-primary-btn {
   color: #69e7ff;
   font-size: 0.62rem;
   font-weight: 900;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.12em;
   line-height: 1.1;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .analytics-commodity-titleblock h2 {
@@ -31966,8 +31968,9 @@ body.light-theme-active .tax-workbench-primary-btn {
   font-family: var(--font-sans);
   font-size: clamp(1.45rem, 2.2vw, 2.05rem);
   font-weight: 850;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .analytics-commodity-titleblock p {
@@ -31975,6 +31978,9 @@ body.light-theme-active .tax-workbench-primary-btn {
   color: rgba(203, 213, 225, 0.68);
   font-family: var(--font-sans);
   font-size: 0.76rem;
+  line-height: 1.2;
+  max-width: 46rem;
+  overflow-wrap: anywhere;
 }
 
 .analytics-commodity-controls {
@@ -31999,12 +32005,17 @@ body.light-theme-active .tax-workbench-primary-btn {
 .analytics-commodity-controls label {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .analytics-commodity-controls strong {
   color: #f4f8ff;
   font-size: 0.68rem;
   font-weight: 850;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .analytics-commodity-controls button {
@@ -32017,11 +32028,15 @@ body.light-theme-active .tax-workbench-primary-btn {
 
 .analytics-commodity-tape {
   display: grid;
-  grid-template-columns: 1.35fr repeat(7, minmax(112px, 1fr));
-  min-height: 94px;
+  grid-template-columns:
+    minmax(190px, 1.15fr)
+    minmax(150px, 0.78fr)
+    repeat(7, minmax(138px, 1fr));
+  min-height: 118px;
   border: 1px solid rgba(95, 125, 139, 0.34);
   border-radius: 3px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: rgba(2, 10, 14, 0.98);
 }
 
@@ -32037,11 +32052,13 @@ body.light-theme-active .tax-workbench-primary-btn {
 
 .analytics-commodity-regime strong {
   color: #ffb000;
-  font-size: 1rem;
+  max-width: 12ch;
+  font-size: 0.96rem;
   font-weight: 950;
   letter-spacing: 0.04em;
   line-height: 1.05;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .analytics-commodity-regime-secondary strong {
@@ -32056,22 +32073,123 @@ body.light-theme-active .tax-workbench-primary-btn {
   font-size: 0.62rem;
   font-style: normal;
   font-weight: 750;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .analytics-commodity-ticker {
-  grid-template-columns: minmax(0, 1fr) 58px;
-  gap: 5px 10px;
+  grid-template-columns: minmax(64px, 1fr) 54px;
+  grid-template-rows: auto auto minmax(16px, auto);
+  align-content: center;
+  gap: 4px 10px;
+  min-width: 138px;
+  padding: 11px 12px;
+  appearance: none;
+  border-top: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.analytics-commodity-ticker:hover,
+.analytics-commodity-ticker.active,
+.analytics-commodity-table tbody tr:hover,
+.analytics-commodity-table tbody tr.active {
+  background: rgba(125, 211, 252, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.22);
 }
 
 .analytics-commodity-ticker strong {
   color: #f4f8ff;
-  font-size: 0.96rem;
+  font-size: 0.86rem;
   font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.analytics-commodity-ticker .analytics-mini-spark {
+.analytics-commodity-ticker span,
+.analytics-commodity-ticker em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-commodity-ticker .analytics-mini-spark,
+.analytics-commodity-ticker .analytics-mini-curve,
+.analytics-commodity-ticker .analytics-curve-placeholder {
   grid-row: 1 / span 3;
   grid-column: 2;
+  justify-self: end;
+  align-self: center;
+  width: 54px;
+  pointer-events: none;
+}
+
+.analytics-commodity-table tbody tr {
+  cursor: pointer;
+}
+
+.analytics-curve-sparkline {
+  display: block;
+  height: 34px;
+  overflow: visible;
+}
+
+.analytics-curve-placeholder {
+  display: grid;
+  min-height: 34px;
+  place-items: center;
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 0.48rem;
+  font-weight: 850;
+  line-height: 1.05;
+  text-align: center;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+.analytics-mini-curve {
+  width: 54px;
+}
+
+.analytics-row-curve,
+.analytics-curve-placeholder.analytics-row-curve {
+  width: 72px;
+}
+
+.analytics-curve-sparkline line {
+  stroke: rgba(148, 163, 184, 0.3);
+  stroke-width: 1;
+}
+
+.analytics-curve-sparkline polyline {
+  fill: none;
+  stroke: #43d36a;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+}
+
+.analytics-curve-sparkline circle {
+  fill: #43d36a;
+  stroke: rgba(2, 10, 14, 0.96);
+  stroke-width: 1;
+}
+
+.analytics-curve-sparkline.negative polyline {
+  stroke: #ff4e45;
+}
+
+.analytics-curve-sparkline.negative circle {
+  fill: #ff4e45;
 }
 
 .analytics-mini-spark,
@@ -32086,6 +32204,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 .analytics-row-spark i {
   display: block;
   width: 5px;
+  flex: 0 0 5px;
   border-radius: 999px 999px 0 0;
   background: #46cf6c;
 }
@@ -32142,6 +32261,10 @@ body.light-theme-active .tax-workbench-primary-btn {
   border-bottom: 1px solid rgba(95, 125, 139, 0.28);
 }
 
+.analytics-commodity-panel-head > div {
+  min-width: 0;
+}
+
 .analytics-commodity-panel-head.compact {
   min-height: 40px;
 }
@@ -32153,8 +32276,10 @@ body.light-theme-active .tax-workbench-primary-btn {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   font-weight: 850;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  line-height: 1.18;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .analytics-commodity-table-wrap {
@@ -32265,11 +32390,15 @@ body.light-theme-active .tax-workbench-primary-btn {
   font-size: 0.66rem;
   font-style: normal;
   font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .analytics-commodity-bottom-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 0.95fr) minmax(320px, 1fr);
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
   gap: 8px;
 }
 
@@ -32393,11 +32522,13 @@ body.light-theme-active .tax-workbench-primary-btn {
   .analytics-factor-main,
   .analytics-macro-grid,
   .analytics-commodity-layout,
+  .analytics-commodity-terminal-grid,
   .analytics-macro-topline,
   .analytics-options-topline,
   .analytics-options-grid,
   .analytics-options-bottom-grid,
-  .analytics-macro-bottom-grid {
+  .analytics-macro-bottom-grid,
+  .analytics-commodity-bottom-grid {
     grid-template-columns: 1fr;
   }
 
@@ -32498,6 +32629,19 @@ body.light-theme-active .tax-workbench-primary-btn {
   .analytics-equities-risk-row {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .analytics-commodity-commandbar {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-commodity-controls {
+    justify-content: flex-start;
+  }
+
+  .analytics-commodity-controls label,
+  .analytics-commodity-controls button {
+    flex: 1 1 132px;
   }
 
   .analytics-factor-row {
@@ -35243,21 +35387,38 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
   line-height: 1.45;
 }
 
-.research-view-tabs {
-  display: flex;
+.research-view-nav {
+  display: grid;
   gap: 8px;
   margin: 0 0 14px;
-  overflow-x: auto;
-  padding-bottom: 2px;
 }
 
-.research-view-tabs button {
+.research-view-tabs,
+.research-view-subtabs {
+  display: flex;
+  overflow-x: auto;
+}
+
+.research-view-tabs {
+  gap: 8px;
+}
+
+.research-view-subtabs {
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--research-line);
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 4px;
+}
+
+.research-view-tabs button,
+.research-view-subtabs button {
   border: 1px solid var(--research-line);
   background: rgba(255, 255, 255, 0.03);
   color: var(--research-muted);
   border-radius: 4px;
-  min-height: 38px;
-  padding: 0 12px;
+  min-height: 34px;
+  padding: 0 11px;
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -35266,11 +35427,31 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
   cursor: pointer;
 }
 
-.research-view-tabs button.active {
+.research-view-tabs button {
+  min-height: 38px;
+}
+
+.research-view-subtabs button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+.research-view-tabs button.active,
+.research-view-subtabs button.active {
   color: var(--research-text);
   border-color: rgba(103, 232, 249, 0.38);
   background: rgba(10, 24, 33, 0.9);
   box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.08);
+}
+
+.research-view-subtabs button.active {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
 }
 
 .research-grid {
@@ -35651,6 +35832,25 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
   gap: 14px;
 }
 
+.research-promotion-box {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--research-line);
+  background: rgba(103, 232, 249, 0.05);
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.research-promotion-box strong {
+  color: var(--research-text);
+}
+
+.research-promotion-box span {
+  color: var(--research-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 .research-drawer-actions {
   display: flex;
   gap: 8px;
@@ -35950,6 +36150,19 @@ body:not(.light-theme-active) .research-document-detail pre {
   line-height: 1.55;
 }
 
+.research-brief-section textarea {
+  width: 100%;
+  border: 1px solid var(--research-line);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--research-text);
+  border-radius: 4px;
+  min-height: 160px;
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.55;
+  resize: vertical;
+}
+
 .research-template-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -35996,6 +36209,12 @@ body:not(.light-theme-active) .research-document-detail pre {
   min-height: 38px;
   padding: 8px 10px;
   font: inherit;
+}
+
+.research-ownership-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .research-timeline-row {
@@ -36060,6 +36279,13 @@ body.light-theme-active .research-document-detail pre {
   border-color: rgba(15, 23, 42, 0.12);
 }
 
+body.light-theme-active .research-promotion-box,
+body.light-theme-active .research-brief-section textarea {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #0f172a;
+}
+
 body.light-theme-active .research-doc-table th {
   background: rgba(15, 23, 42, 0.035);
 }
@@ -36075,6 +36301,609 @@ body.light-theme-active .research-ownership-row select {
   background: #ffffff;
   color: #0f172a;
   border-color: rgba(15, 23, 42, 0.14);
+}
+
+/* Light-mode QA repairs for dense app surfaces. */
+body.light-theme-active,
+body.light-theme-active #root {
+  background: #eef3f8 !important;
+}
+
+body.light-theme-active .app-layout {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0)),
+    #eef3f8 !important;
+}
+
+body.light-theme-active .main-content {
+  color: #0f172a;
+}
+
+body.light-theme-active .view-container,
+body.light-theme-active .analytics-layout,
+body.light-theme-active .research-workspace {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(248, 250, 252, 0.64)),
+    #f7f9fc !important;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+}
+
+.sidebar.sidebar-overhaul-v2 .sidebar-nav {
+  gap: 10px;
+}
+
+.sidebar.sidebar-overhaul-v2 .sidebar-nav-group,
+.sidebar.sidebar-overhaul-v2 .sidebar-nav-stack {
+  gap: 4px;
+}
+
+.sidebar.sidebar-overhaul-v2 .nav-btn {
+  min-height: 42px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.sidebar.sidebar-overhaul-v2 .nav-btn.active .nav-description {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-2px);
+}
+
+body.light-theme-active .analytics-layout,
+body.light-theme-active .analytics-desk-shell,
+body.light-theme-active .analytics-commodities-terminal {
+  --analytics-bg: #f4f7fb;
+  --analytics-panel: #ffffff;
+  --analytics-panel-2: #f8fafc;
+  --analytics-line: rgba(15, 23, 42, 0.12);
+  --analytics-line-strong: rgba(15, 23, 42, 0.22);
+  --analytics-text: #0f172a;
+  color: var(--light-text) !important;
+}
+
+body.light-theme-active .analytics-loading-skeleton {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06) !important;
+}
+
+body.light-theme-active .analytics-skeleton-line {
+  background: linear-gradient(90deg, #e2e8f0, #f8fafc, #dbeafe) !important;
+}
+
+body.light-theme-active .analytics-skeleton-label {
+  color: #475569 !important;
+}
+
+body.light-theme-active .analytics-empty-state,
+body.light-theme-active .analytics-error-state {
+  color: #334155 !important;
+}
+
+body.light-theme-active .analytics-empty-title {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-empty-description {
+  color: #475569 !important;
+}
+
+body.light-theme-active .analytics-research-hero,
+body.light-theme-active .analytics-research-panel,
+body.light-theme-active .analytics-research-metric,
+body.light-theme-active .analytics-research-note,
+body.light-theme-active .analytics-research-compact-status {
+  background: #ffffff !important;
+  background-image: none !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-research-hero {
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 36%),
+    linear-gradient(135deg, #ffffff, #eef6ff) !important;
+}
+
+body.light-theme-active .analytics-research-primary,
+body.light-theme-active .analytics-research-rail {
+  background: #f8fafc !important;
+  background-image: none !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-research-rail-item {
+  border-color: rgba(100, 116, 139, 0.18) !important;
+}
+
+body.light-theme-active .analytics-research-hero h2,
+body.light-theme-active .analytics-research-panel-head strong,
+body.light-theme-active .analytics-research-primary strong,
+body.light-theme-active .analytics-research-metric strong,
+body.light-theme-active .analytics-research-rail-item strong,
+body.light-theme-active .analytics-research-note strong,
+body.light-theme-active .analytics-research-table td:first-child strong {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-research-hero p,
+body.light-theme-active .analytics-research-primary em,
+body.light-theme-active .analytics-research-panel-head em,
+body.light-theme-active .analytics-research-metric em,
+body.light-theme-active .analytics-research-rail-item em,
+body.light-theme-active .analytics-research-compact-status em,
+body.light-theme-active .analytics-research-table td,
+body.light-theme-active .analytics-research-table td:first-child span {
+  color: #475569 !important;
+}
+
+body.light-theme-active .analytics-research-table th {
+  background: #eef4fb !important;
+  color: #334155 !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+}
+
+body.light-theme-active .analytics-research-table tbody tr:hover {
+  background: #e0f2fe !important;
+}
+
+body.light-theme-active .analytics-desk-hero,
+body.light-theme-active .analytics-desk-panel,
+body.light-theme-active .analytics-factor-tile,
+body.light-theme-active .analytics-macro-tile,
+body.light-theme-active .analytics-commodity-tile,
+body.light-theme-active .analytics-provider-strip,
+body.light-theme-active .analytics-equities-command,
+body.light-theme-active .analytics-equities-kpi,
+body.light-theme-active .analytics-equities-status-strip > div,
+body.light-theme-active .analytics-equities-shortcut,
+body.light-theme-active .analytics-macro-lane,
+body.light-theme-active .analytics-options-footstrip > div,
+body.light-theme-active .analytics-options-greek-card,
+body.light-theme-active .analytics-commodities-terminal .analytics-desk-panel,
+body.light-theme-active .analytics-commodity-controls label,
+body.light-theme-active .analytics-commodity-controls button,
+body.light-theme-active .analytics-commodity-tape,
+body.light-theme-active .analytics-curve-stage {
+  background: #ffffff !important;
+  background-image: none !important;
+  border-color: var(--light-border) !important;
+  color: var(--light-text) !important;
+  box-shadow: none !important;
+}
+
+body.light-theme-active .analytics-desk-hero h2,
+body.light-theme-active .analytics-desk-command strong,
+body.light-theme-active .analytics-desk-panel-head strong,
+body.light-theme-active .analytics-factor-tile strong,
+body.light-theme-active .analytics-macro-tile strong,
+body.light-theme-active .analytics-commodity-tile strong,
+body.light-theme-active .analytics-rail-card strong,
+body.light-theme-active .analytics-contract-row strong,
+body.light-theme-active .analytics-desk-panel > strong,
+body.light-theme-active .analytics-equities-copy strong,
+body.light-theme-active .analytics-equities-shortcut strong,
+body.light-theme-active .analytics-equities-kpi strong,
+body.light-theme-active .analytics-equities-status-strip strong,
+body.light-theme-active .analytics-equities-strip-card strong,
+body.light-theme-active .analytics-equities-matrix-table td strong,
+body.light-theme-active .analytics-equities-watch-row strong,
+body.light-theme-active .analytics-equities-movers-row strong,
+body.light-theme-active .analytics-equities-risk-row strong,
+body.light-theme-active .analytics-equities-internals strong,
+body.light-theme-active .analytics-equities-risk-summary strong,
+body.light-theme-active .analytics-macro-lane strong,
+body.light-theme-active .analytics-macro-event strong,
+body.light-theme-active .analytics-macro-risk-card strong,
+body.light-theme-active .analytics-macro-source-row strong,
+body.light-theme-active .analytics-macro-fx-row strong,
+body.light-theme-active .analytics-options-tile strong,
+body.light-theme-active .analytics-options-surface-row strong,
+body.light-theme-active .analytics-options-watch-row strong,
+body.light-theme-active .analytics-options-route-row strong,
+body.light-theme-active .analytics-options-greek-card strong,
+body.light-theme-active .analytics-options-source-row strong,
+body.light-theme-active .analytics-commodity-titleblock h2,
+body.light-theme-active .analytics-commodity-controls strong,
+body.light-theme-active .analytics-commodity-regime-secondary strong,
+body.light-theme-active .analytics-commodity-ticker strong,
+body.light-theme-active .analytics-commodity-panel-head strong,
+body.light-theme-active .analytics-commodity-table td:first-child strong,
+body.light-theme-active .analytics-stress-row strong,
+body.light-theme-active .analytics-inventory-row span,
+body.light-theme-active .analytics-shock-row strong,
+body.light-theme-active .analytics-commodity-footer strong,
+body.light-theme-active .analytics-commodity-alert-row strong,
+body.light-theme-active .analytics-provider-chip strong {
+  color: var(--light-text-strong) !important;
+  opacity: 1 !important;
+}
+
+body.light-theme-active .analytics-desk-hero p,
+body.light-theme-active .analytics-desk-command em,
+body.light-theme-active .analytics-desk-panel-head em,
+body.light-theme-active .analytics-factor-tile em,
+body.light-theme-active .analytics-macro-tile em,
+body.light-theme-active .analytics-commodity-tile em,
+body.light-theme-active .analytics-rail-card em,
+body.light-theme-active .analytics-contract-row em,
+body.light-theme-active .analytics-equities-copy em,
+body.light-theme-active .analytics-equities-kpi em,
+body.light-theme-active .analytics-equities-shortcut em,
+body.light-theme-active .analytics-equities-strip-card span,
+body.light-theme-active .analytics-equities-watch-section > span,
+body.light-theme-active .analytics-equities-breadth-legend span,
+body.light-theme-active .analytics-equities-internals span,
+body.light-theme-active .analytics-equities-risk-summary span,
+body.light-theme-active .analytics-equities-matrix-table th,
+body.light-theme-active .analytics-equities-matrix-table td span,
+body.light-theme-active .analytics-equities-watch-row b,
+body.light-theme-active .analytics-equities-watch-row em,
+body.light-theme-active .analytics-equities-movers-row b,
+body.light-theme-active .analytics-equities-movers-row em,
+body.light-theme-active .analytics-equities-risk-row b,
+body.light-theme-active .analytics-equities-risk-row em,
+body.light-theme-active .analytics-equities-risk-row i,
+body.light-theme-active .analytics-macro-lane span,
+body.light-theme-active .analytics-macro-lane em,
+body.light-theme-active .analytics-macro-lane small,
+body.light-theme-active .analytics-macro-event em,
+body.light-theme-active .analytics-macro-risk-card span,
+body.light-theme-active .analytics-macro-risk-card em,
+body.light-theme-active .analytics-macro-source-row span,
+body.light-theme-active .analytics-macro-source-row em,
+body.light-theme-active .analytics-macro-fx-row span,
+body.light-theme-active .analytics-macro-fx-row em,
+body.light-theme-active .analytics-options-tile span,
+body.light-theme-active .analytics-options-tile em,
+body.light-theme-active .analytics-options-footstrip span,
+body.light-theme-active .analytics-options-footstrip em,
+body.light-theme-active .analytics-options-route-row span,
+body.light-theme-active .analytics-options-route-row em,
+body.light-theme-active .analytics-options-greek-card span,
+body.light-theme-active .analytics-options-greek-card em,
+body.light-theme-active .analytics-options-source-row span,
+body.light-theme-active .analytics-options-source-row em,
+body.light-theme-active .analytics-commodity-titleblock p,
+body.light-theme-active .analytics-commodity-regime em,
+body.light-theme-active .analytics-commodity-ticker em,
+body.light-theme-active .analytics-commodity-panel-head em,
+body.light-theme-active .analytics-commodity-footer,
+body.light-theme-active .analytics-commodity-footer em,
+body.light-theme-active .analytics-commodity-alert-row span,
+body.light-theme-active .analytics-commodity-alert-row em,
+body.light-theme-active .analytics-provider-strip > span,
+body.light-theme-active .analytics-provider-chip,
+body.light-theme-active .analytics-curve-placeholder {
+  color: var(--light-text-muted) !important;
+  opacity: 1 !important;
+}
+
+body.light-theme-active .analytics-desk-hero span,
+body.light-theme-active .analytics-desk-panel > span,
+body.light-theme-active .analytics-desk-panel-head span,
+body.light-theme-active .analytics-factor-tile span,
+body.light-theme-active .analytics-macro-tile span,
+body.light-theme-active .analytics-commodity-tile span,
+body.light-theme-active .analytics-contract-stack > span,
+body.light-theme-active .analytics-rail-card span,
+body.light-theme-active .analytics-commodity-titleblock span,
+body.light-theme-active .analytics-commodity-panel-head span,
+body.light-theme-active .analytics-commodity-regime span,
+body.light-theme-active .analytics-commodity-ticker span,
+body.light-theme-active .analytics-stress-title span,
+body.light-theme-active .analytics-commodity-footer span,
+body.light-theme-active .analytics-commodity-controls span {
+  color: #0369a1 !important;
+}
+
+body.light-theme-active .analytics-desk-command,
+body.light-theme-active .analytics-commodity-commandbar,
+body.light-theme-active .analytics-curve-chart,
+body.light-theme-active .analytics-commodity-ticker,
+body.light-theme-active .analytics-commodity-regime,
+body.light-theme-active .analytics-commodity-footer,
+body.light-theme-active .analytics-stress-section,
+body.light-theme-active .analytics-stress-row,
+body.light-theme-active .analytics-inventory-row,
+body.light-theme-active .analytics-shock-row,
+body.light-theme-active .analytics-commodity-alert-row,
+body.light-theme-active .analytics-commodity-panel-head,
+body.light-theme-active .analytics-commodity-table th,
+body.light-theme-active .analytics-commodity-table td,
+body.light-theme-active .analytics-equities-matrix-table th,
+body.light-theme-active .analytics-equities-matrix-table td,
+body.light-theme-active .analytics-options-surface-row,
+body.light-theme-active .analytics-options-watch-row,
+body.light-theme-active .analytics-options-route-row,
+body.light-theme-active .analytics-options-source-row {
+  border-color: var(--light-border) !important;
+}
+
+body.light-theme-active .analytics-equities-matrix-table td,
+body.light-theme-active .analytics-commodity-table th,
+body.light-theme-active .analytics-commodity-table td {
+  color: var(--light-text) !important;
+}
+
+body.light-theme-active .analytics-equities-matrix-table tbody tr:nth-child(even),
+body.light-theme-active .analytics-commodity-table tbody tr:nth-child(even) {
+  background: #f8fafc !important;
+}
+
+body.light-theme-active .analytics-equities-matrix-table tbody tr:hover,
+body.light-theme-active .analytics-commodity-table tbody tr:hover,
+body.light-theme-active .analytics-commodity-table tbody tr.active,
+body.light-theme-active .analytics-commodity-ticker:hover,
+body.light-theme-active .analytics-commodity-ticker.active {
+  background: #e0f2fe !important;
+  box-shadow: inset 0 0 0 1px rgba(2, 132, 199, 0.24) !important;
+}
+
+body.light-theme-active .analytics-layout input,
+body.light-theme-active .analytics-layout select,
+body.light-theme-active .analytics-layout button:not(.analytics-tab-pill),
+body.light-theme-active .analytics-commodity-controls label,
+body.light-theme-active .analytics-commodity-controls button {
+  background: #ffffff !important;
+  border-color: var(--light-border) !important;
+  color: var(--light-text-strong) !important;
+}
+
+body.light-theme-active .analytics-layout .analytics-tab-pill.active,
+body.light-theme-active .analytics-layout button[style*="rgba(56,189,248"] {
+  background: #dbeafe !important;
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  color: #1e3a8a !important;
+}
+
+body.light-theme-active .research-view-tabs button,
+body.light-theme-active .research-view-subtabs button {
+  color: #475569;
+}
+
+body.light-theme-active .research-view-tabs button.active,
+body.light-theme-active .research-view-subtabs button.active,
+body.light-theme-active .research-link-btn.active {
+  background: #dbeafe;
+  border-color: rgba(37, 99, 235, 0.34);
+  color: #1e3a8a;
+}
+
+body.light-theme-active .research-view-subtabs {
+  background: #eef4fb;
+  border-color: rgba(100, 116, 139, 0.18);
+}
+
+body.light-theme-active .research-btn.primary {
+  background: linear-gradient(135deg, #0f766e, #2563eb);
+  border-color: rgba(37, 99, 235, 0.42);
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+}
+
+body.light-theme-active .research-btn.secondary,
+body.light-theme-active .research-link-btn,
+body.light-theme-active .research-handoff-box button,
+body.light-theme-active .research-notice button {
+  background: #ffffff;
+  border-color: rgba(100, 116, 139, 0.28);
+  color: #334155;
+}
+
+body.light-theme-active .metric-strip-item,
+body.light-theme-active .research-panel,
+body.light-theme-active .research-compose,
+body.light-theme-active .research-inbox-card,
+body.light-theme-active .research-mini-row,
+body.light-theme-active .research-dossier-card,
+body.light-theme-active .research-dossier-surface {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+body.light-theme-active .research-guidance-banner {
+  background: #e0f2fe !important;
+  border-color: rgba(2, 132, 199, 0.22) !important;
+}
+
+body.light-theme-active .home-exec-holding-top strong,
+body.light-theme-active .home-exec-holding-top span,
+body.light-theme-active .home-exec-legend-row strong,
+body.light-theme-active .view-container.home-dashboard.home-exec .home-exec-holding-top strong,
+body.light-theme-active .view-container.home-dashboard.home-exec .home-exec-holding-top span,
+body.light-theme-active .view-container.home-dashboard.home-exec .home-exec-legend-row strong {
+  color: #0f172a !important;
+  opacity: 1 !important;
+}
+
+body.light-theme-active .home-exec-legend-row span,
+body.light-theme-active .view-container.home-dashboard.home-exec .home-exec-legend-row span {
+  color: #475569 !important;
+  opacity: 1 !important;
+}
+
+body.light-theme-active .home-exec-holding-row,
+body.light-theme-active .view-container.home-dashboard.home-exec .home-exec-holding-row {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+}
+
+body.light-theme-active .loading-state {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  color: #475569 !important;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+}
+
+body.light-theme-active .watchlist-table th {
+  background: #eef4fb !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  color: #334155 !important;
+}
+
+body.light-theme-active .watchlist-table td {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.18) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme-active .watchlist-table tbody tr:hover td {
+  background: #e0f2fe !important;
+}
+
+body.light-theme-active .journal-inline-actions {
+  color: #334155 !important;
+}
+
+body.light-theme-active .tax-workbench-utility-toggle {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.28) !important;
+  color: #334155 !important;
+}
+
+body.light-theme-active .portfolio-command-header,
+body.light-theme-active .portfolio-command-summary,
+body.light-theme-active .portfolio-command-attention,
+body.light-theme-active .portfolio-command-rebalance,
+body.light-theme-active .portfolio-command-analysis,
+body.light-theme-active .portfolio-command-prediction-strip,
+body.light-theme-active .portfolio-command-summary-card,
+body.light-theme-active .portfolio-command-attention-card,
+body.light-theme-active .portfolio-command-drift-card,
+body.light-theme-active .portfolio-command-change-card,
+body.light-theme-active .portfolio-command-impact-card,
+body.light-theme-active .portfolio-command-side-card,
+body.light-theme-active .portfolio-command-tab-panel,
+body.light-theme-active .portfolio-command-mini-card,
+body.light-theme-active .portfolio-command-market-card,
+body.light-theme-active .portfolio-command-activity-row,
+body.light-theme-active .portfolio-command-stat-rail div,
+body.light-theme-active .portfolio-command-change-row {
+  background: #ffffff !important;
+  background-image: none !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  color: #0f172a !important;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05) !important;
+}
+
+body.light-theme-active .portfolio-command-titleblock h1,
+body.light-theme-active .portfolio-command-panel-head h3,
+body.light-theme-active .portfolio-command-attention-card strong,
+body.light-theme-active .portfolio-command-summary-card strong,
+body.light-theme-active .portfolio-command-side-list strong,
+body.light-theme-active .portfolio-command-activity-copy strong,
+body.light-theme-active .portfolio-command-activity-values strong,
+body.light-theme-active .portfolio-command-market-card strong,
+body.light-theme-active .portfolio-command-empty h3,
+body.light-theme-active .portfolio-command-change-row strong,
+body.light-theme-active .portfolio-command-table td,
+body.light-theme-active .portfolio-command-table td strong,
+body.light-theme-active .portfolio-command-allocation-cell {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .portfolio-command-titleblock p,
+body.light-theme-active .portfolio-command-panel-head p,
+body.light-theme-active .portfolio-command-empty p,
+body.light-theme-active .portfolio-command-summary-card em,
+body.light-theme-active .portfolio-command-attention-card em,
+body.light-theme-active .portfolio-command-tab-panel > p,
+body.light-theme-active .portfolio-command-change-row,
+body.light-theme-active .portfolio-command-change-row em,
+body.light-theme-active .portfolio-command-change-row b,
+body.light-theme-active .portfolio-command-table td span,
+body.light-theme-active .portfolio-command-stat-rail span,
+body.light-theme-active .portfolio-command-drift-legend,
+body.light-theme-active .portfolio-command-readiness li,
+body.light-theme-active .portfolio-command-mini-card em,
+body.light-theme-active .portfolio-command-market-card em {
+  color: #475569 !important;
+}
+
+body.light-theme-active .portfolio-command-tab {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.24) !important;
+  color: #334155 !important;
+}
+
+body.light-theme-active .portfolio-command-tab.active,
+body.light-theme-active .portfolio-command-primary-cta {
+  background: #dbeafe !important;
+  background-image: none !important;
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  color: #1e3a8a !important;
+}
+
+body.light-theme-active .portfolio-command-table th {
+  background: #eef4fb !important;
+  color: #334155 !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+}
+
+body.light-theme-active .portfolio-command-table td {
+  border-color: rgba(100, 116, 139, 0.18) !important;
+}
+
+body.light-theme-active .portfolio-command-allocation-bar {
+  background: #e2e8f0 !important;
+}
+
+body.light-theme-active .options-exec-header-actions button,
+body.light-theme-active .options-exec-mode-toggle,
+body.light-theme-active .options-exec-mode-toggle button,
+body.light-theme-active .options-exec .sim-choice-btn,
+body.light-theme-active .options-exec .expiry-pill,
+body.light-theme-active .options-exec .pagination-button,
+body.light-theme-active .options-exec .options-calculator-strategy-btn,
+body.light-theme-active .options-exec .options-leg-segment-btn,
+body.light-theme-active .options-exec .options-calculator-action-btn,
+body.light-theme-active .options-exec-secondary-action {
+  background: #ffffff !important;
+  border-color: rgba(100, 116, 139, 0.28) !important;
+  color: #334155 !important;
+}
+
+body.light-theme-active .options-exec-header-actions button.active,
+body.light-theme-active .options-exec-mode-toggle button.active,
+body.light-theme-active .options-exec .sim-choice-btn.active,
+body.light-theme-active .options-exec .sim-choice-btn.horizon.active,
+body.light-theme-active .options-exec .expiry-pill.active,
+body.light-theme-active .options-exec .search-type-button.active,
+body.light-theme-active .options-exec .options-calculator-strategy-btn.active,
+body.light-theme-active .options-exec .options-leg-segment-btn.active {
+  background: #dbeafe !important;
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  color: #1e3a8a !important;
+}
+
+body.light-theme-active .options-exec .sim-choice-label,
+body.light-theme-active .options-exec .sim-choice-btn.active .sim-choice-label,
+body.light-theme-active .options-exec .sim-choice-btn.horizon.active .sim-choice-label {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .options-exec .sim-choice-desc {
+  color: #475569 !important;
+}
+
+body.light-theme-active .analytics-commodity-commandbar {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+body.light-theme-active .analytics-commodity-controls {
+  justify-content: flex-start;
+  max-width: 100%;
+}
+
+body.light-theme-active .analytics-commodity-controls label,
+body.light-theme-active .analytics-commodity-controls button {
+  flex: 1 1 138px;
+  min-width: 0;
 }
 
 @media (max-width: 1240px) {

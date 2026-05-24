@@ -150,12 +150,28 @@ console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES" : "NO"}
 const FRED_API_KEY = cleanApiKey(process.env.FRED_API_KEY || "");
 const EIA_API_KEY = cleanApiKey(process.env.EIA_API_KEY || "");
 const BLS_API_KEY = cleanApiKey(process.env.BLS_API_KEY || process.env.BLS_REGISTRATION_KEY || "");
-const MASSIVE_API_KEY = cleanApiKey(process.env.MASSIVE_API_KEY || process.env.POLYGON_API_KEY || "");
+const MASSIVE_API_KEY = cleanApiKey(
+  process.env.MASSIVE_API_KEY ||
+  process.env.POLY_API_KEY ||
+  process.env.POLYGON_API_KEY ||
+  process.env.MASSIVE_TOKEN ||
+  ""
+);
+const MASSIVE_API_KEY_SOURCE = MASSIVE_API_KEY
+  ? (process.env.MASSIVE_API_KEY
+    ? "MASSIVE_API_KEY"
+    : process.env.POLY_API_KEY
+      ? "POLY_API_KEY"
+      : process.env.POLYGON_API_KEY
+        ? "POLYGON_API_KEY"
+        : "MASSIVE_TOKEN")
+  : null;
 const MASSIVE_REST_BASE_URL = String(process.env.MASSIVE_REST_BASE_URL || "https://api.massive.com").trim().replace(/\/+$/, "");
 const MASSIVE_WS_STOCKS_URL = String(process.env.MASSIVE_WS_STOCKS_URL || "wss://socket.massive.com/stocks").trim();
 const MASSIVE_WS_DELAYED_STOCKS_URL = String(process.env.MASSIVE_WS_DELAYED_STOCKS_URL || "wss://delayed.massive.com/stocks").trim();
 const MASSIVE_WS_OPTIONS_URL = String(process.env.MASSIVE_WS_OPTIONS_URL || "wss://socket.massive.com/options").trim();
 const MASSIVE_WS_DELAYED_OPTIONS_URL = String(process.env.MASSIVE_WS_DELAYED_OPTIONS_URL || "wss://delayed.massive.com/options").trim();
+console.log(`[Startup] Massive API key loaded: ${MASSIVE_API_KEY ? `YES (${MASSIVE_API_KEY_SOURCE})` : "NO"}`);
 
 const providerMemoryCache = new Map();
 const PROVIDER_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -603,7 +619,9 @@ function getMassiveStatus() {
     "Massive",
     Boolean(MASSIVE_API_KEY),
     MASSIVE_API_KEY ? "configured" : "missing_key",
-    MASSIVE_API_KEY ? "WebSocket key configured; upstream stream is used when live subscriptions are active" : "API key not configured"
+    MASSIVE_API_KEY
+      ? `REST snapshots and WebSockets configured via ${MASSIVE_API_KEY_SOURCE || "backend environment"}`
+      : "Massive API key not configured. Set MASSIVE_API_KEY, POLY_API_KEY, or POLYGON_API_KEY on the backend and restart."
   );
 }
 
@@ -9218,7 +9236,7 @@ function buildMassiveEquityOptionsUnavailablePayload(underlying, reason, options
   const normalizedReason = String(reason || "massive_equity_options_unavailable").trim();
   const statusMessage = String(options.statusMessage || "").trim() || (
     normalizedReason === "massive_api_key_missing"
-      ? "Massive equity-options data is not configured on this backend."
+      ? "Massive equity-options data is not configured on this backend. Set MASSIVE_API_KEY, POLY_API_KEY, or POLYGON_API_KEY and restart the backend."
       : "Massive equity-options data is temporarily unavailable. Retry the snapshot or choose another supported underlying."
   );
   return {

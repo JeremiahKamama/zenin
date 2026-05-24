@@ -2326,13 +2326,14 @@ body.page-dark-theme #root {
 
 .auth-v2-oauth-row {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  flex-direction: row;
+  align-items: stretch;
   gap: 12px;
 }
 
 .auth-v2-oauth-row .auth-v2-btn {
-  max-width: 320px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .auth-v2-google-btn .provider-icon {
@@ -2647,7 +2648,7 @@ body.page-dark-theme #root {
   }
 
   .auth-v2-oauth-row {
-    grid-template-columns: 1fr;
+    flex-direction: column;
   }
 
   .auth-v2-tile-grid {
@@ -3311,9 +3312,9 @@ body.page-dark-theme #root {
 }
 
 .auth-v2-oauth-row {
-  display: grid;
-  grid-template-columns: 1fr;
-  max-width: 360px;
+  display: flex;
+  flex-direction: row;
+  max-width: 520px;
   margin: 0 auto;
 }
 

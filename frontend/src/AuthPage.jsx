@@ -245,6 +245,16 @@ export default function AuthPage() {
     await import("./utils/backendOAuth").then(({ startOAuth }) => startOAuth(provider, { returnTo }));
   });
 
+  const onPasskeySignIn = () => runAction(async () => {
+    const opts = await startSupabasePasskeyAuthentication();
+    const attResp = await startAuthentication(opts);
+    const verify = await verifySupabasePasskeyAuthentication({ response: attResp, challengeId: opts.challengeId, rememberMe });
+    if (!verify?.success) {
+      throw new Error(verify?.error || "Passkey sign-in failed.");
+    }
+    await finishSignedInSession();
+  });
+
   const signupPasswordRules = [
     { label: "At least 10 characters", ok: signupForm.password.length >= 10 },
     { label: "Includes a number", ok: /\d/.test(signupForm.password) },
@@ -332,30 +342,6 @@ export default function AuthPage() {
                 Continue as Guest
               </button>
 
-              <div className="auth-v2-divider">Or continue with</div>
-              <div className="auth-v2-oauth-row">
-                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuth("google")}>
-                  Continue with Google
-                </button>
-                <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={async () => {
-                  try {
-                    setLoading(true);
-                    const opts = await startSupabasePasskeyAuthentication();
-                    const attResp = await startAuthentication(opts);
-                    const verify = await verifySupabasePasskeyAuthentication({ response: attResp, challengeId: opts.challengeId, rememberMe });
-                    if (verify?.success) {
-                      await finishSignedInSession();
-                    } else {
-                      setError(verify?.error || "Passkey sign-in failed.");
-                    }
-                  } catch (e) {
-                    setError(e?.message || "Passkey sign-in failed.");
-                  } finally {
-                    setLoading(false);
-                  }
-                }}>Sign in with Passkey</button>
-              </div>
-
               <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Sign in</button></p>
             </>
           ) : null}
@@ -424,6 +410,9 @@ export default function AuthPage() {
               <div className="auth-v2-oauth-row">
                 <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuth("google")}>
                   Continue with Google
+                </button>
+                <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={onPasskeySignIn}>
+                  Sign in with Passkey
                 </button>
               </div>
 

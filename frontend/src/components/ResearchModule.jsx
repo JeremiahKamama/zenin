@@ -14,7 +14,7 @@ import {
   saveWorkspaceCollection,
   writeLocalJson
 } from "../utils/workspacePersistence";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { zeninFetch, zeninFetchJson } from "../utils/zeninFetch";
 
 const SOURCES_NAMESPACE = "research:knowledge:sources";
 const DOCUMENTS_NAMESPACE = "research:knowledge:documents";
@@ -58,22 +58,52 @@ const SOURCE_TYPES = [
   }
 ];
 
-const RESEARCH_VIEWS = [
-  { id: "inbox", label: "Inbox" },
-  { id: "review-queue", label: "Review Queue" },
-  { id: "library", label: "Library" },
-  { id: "tickers", label: "Tickers" },
-  { id: "coverage-map", label: "Coverage Map" },
-  { id: "contradictions", label: "Contradictions" },
-  { id: "theses", label: "Theses" },
-  { id: "catalysts", label: "Catalysts" },
-  { id: "triggers", label: "Triggers" },
-  { id: "sources", label: "Sources" },
-  { id: "briefs", label: "Briefs" },
-  { id: "decisions", label: "Decisions" },
-  { id: "templates", label: "Templates" },
-  { id: "ownership", label: "Ownership" },
-  { id: "timeline", label: "Timeline" }
+const RESEARCH_VIEW_GROUPS = [
+  {
+    id: "capture",
+    label: "Capture",
+    views: [
+      { id: "inbox", label: "Inbox" },
+      { id: "sources", label: "Sources" },
+      { id: "templates", label: "Templates" }
+    ]
+  },
+  {
+    id: "review",
+    label: "Review",
+    views: [
+      { id: "review-queue", label: "Queue" },
+      { id: "contradictions", label: "Conflicts" },
+      { id: "ownership", label: "Ownership" }
+    ]
+  },
+  {
+    id: "coverage",
+    label: "Coverage",
+    views: [
+      { id: "tickers", label: "Tickers" },
+      { id: "coverage-map", label: "Map" },
+      { id: "library", label: "Library" }
+    ]
+  },
+  {
+    id: "conviction",
+    label: "Conviction",
+    views: [
+      { id: "theses", label: "Theses" },
+      { id: "catalysts", label: "Catalysts" },
+      { id: "triggers", label: "Triggers" }
+    ]
+  },
+  {
+    id: "output",
+    label: "Output",
+    views: [
+      { id: "briefs", label: "Briefs" },
+      { id: "decisions", label: "Decisions" },
+      { id: "timeline", label: "Timeline" }
+    ]
+  }
 ];
 
 const DOC_STATUS_OPTIONS = ["unread", "reviewed", "linked", "archived"];
@@ -85,6 +115,9 @@ const TRIGGER_ACTIONS = ["buy", "add", "trim", "sell", "review"];
 const TRIGGER_SCOPE_OPTIONS = ["asset", "portfolio"];
 const ENTITY_RECORD_STATES = ["active", "resolved", "archived"];
 const OWNER_OPTIONS = ["Desk", "PM", "Analyst", "Risk", "Ops"];
+const PRIORITY_OPTIONS = ["low", "medium", "high", "critical"];
+const COVERAGE_SCOPE_OPTIONS = ["single_name", "basket", "sector_theme", "macro"];
+const BRIEF_APPROVAL_STATES = ["draft", "internal_review", "approved"];
 const BRIEF_TEMPLATES = [
   { value: "desk-memo", label: "Desk Memo" },
   { value: "investor-update", label: "Investor Update" },
@@ -261,6 +294,14 @@ function normalizeOwner(value) {
   return trimmed || "Desk";
 }
 
+function normalizePriority(value) {
+  return normalizeStatus(value, PRIORITY_OPTIONS, "medium");
+}
+
+function normalizeCoverageScope(value) {
+  return normalizeStatus(value, COVERAGE_SCOPE_OPTIONS, "single_name");
+}
+
 function normalizeRecordState(value) {
   return normalizeStatus(value, ENTITY_RECORD_STATES, "active");
 }
@@ -329,8 +370,13 @@ function normalizeThesis(thesis = {}) {
     bearCase: String(thesis.bearCase || "").trim(),
     entrySignal: String(thesis.entrySignal || "").trim(),
     invalidation: String(thesis.invalidation || "").trim(),
+    mustPlayOut: String(thesis.mustPlayOut || "").trim(),
+    riskCondition: String(thesis.riskCondition || "").trim(),
     conviction: String(thesis.conviction || "Medium").trim(),
+    coverageScope: normalizeCoverageScope(thesis.coverageScope),
     owner: normalizeOwner(thesis.owner),
+    priority: normalizePriority(thesis.priority),
+    dueDate: thesis.dueDate || "",
     recordState: normalizeRecordState(thesis.recordState),
     resolvedAt: thesis.resolvedAt || "",
     archivedAt: thesis.archivedAt || "",
@@ -348,7 +394,10 @@ function normalizeCatalyst(catalyst = {}) {
     eventDate: catalyst.eventDate || "",
     note: String(catalyst.note || "").trim(),
     status: normalizeStatus(catalyst.status, CATALYST_STATUS_OPTIONS, "upcoming"),
+    coverageScope: normalizeCoverageScope(catalyst.coverageScope),
     owner: normalizeOwner(catalyst.owner),
+    priority: normalizePriority(catalyst.priority),
+    dueDate: catalyst.dueDate || catalyst.eventDate || "",
     recordState: normalizeRecordState(catalyst.recordState),
     resolvedAt: catalyst.resolvedAt || "",
     archivedAt: catalyst.archivedAt || "",
@@ -365,7 +414,10 @@ function normalizeDecision(decision = {}) {
     conviction: String(decision.conviction || "Medium").trim(),
     rationale: String(decision.rationale || "").trim(),
     thesisId: decision.thesisId || "",
+    coverageScope: normalizeCoverageScope(decision.coverageScope),
     owner: normalizeOwner(decision.owner),
+    priority: normalizePriority(decision.priority),
+    dueDate: decision.dueDate || "",
     recordState: normalizeRecordState(decision.recordState),
     resolvedAt: decision.resolvedAt || "",
     archivedAt: decision.archivedAt || "",
@@ -394,7 +446,10 @@ function normalizeTrigger(trigger = {}) {
     rationale: String(trigger.rationale || "").trim(),
     cooldownHours: Math.max(1, numberOrZero(trigger.cooldownHours) || 24),
     status: normalizeStatus(trigger.status, ["active", "paused", "archived"], "active"),
+    coverageScope: normalizeCoverageScope(trigger.coverageScope),
     owner: normalizeOwner(trigger.owner),
+    priority: normalizePriority(trigger.priority),
+    dueDate: trigger.dueDate || "",
     recordState: normalizeRecordState(trigger.recordState),
     resolvedAt: trigger.resolvedAt || "",
     archivedAt: trigger.archivedAt || "",
@@ -414,7 +469,12 @@ function normalizeBrief(brief = {}) {
     template: normalizeStatus(brief.template, templateValues, "desk-memo"),
     content: String(brief.content || "").trim(),
     sections: Array.isArray(brief.sections) ? brief.sections : [],
+    coverageScope: normalizeCoverageScope(brief.coverageScope),
     owner: normalizeOwner(brief.owner),
+    priority: normalizePriority(brief.priority),
+    dueDate: brief.dueDate || "",
+    approvalState: normalizeStatus(brief.approvalState, BRIEF_APPROVAL_STATES, "draft"),
+    commentary: String(brief.commentary || "").trim(),
     recordState: normalizeRecordState(brief.recordState),
     resolvedAt: brief.resolvedAt || "",
     archivedAt: brief.archivedAt || "",
@@ -496,6 +556,37 @@ function keywordMatchesNegative(text = "") {
   return NEGATIVE_RESEARCH_KEYWORDS.some((keyword) => normalized.includes(keyword));
 }
 
+function computeCoverageHealth(row) {
+  let score = 20;
+  if (row.activeThesis) score += 22;
+  if (row.activeThesis && !row.thesisStale) score += 15;
+  if (row.catalystDueSoon || row.upcomingCatalystCount > 0) score += 12;
+  if (row.activeTriggerCount > 0) score += 10;
+  if (row.decisionCount > 0) score += 8;
+  if (row.briefCount > 0) score += 8;
+  if (row.exposure > 0 && !row.unsupportedByThesis) score += 10;
+  if (row.unsupportedByThesis) score -= 18;
+  if (row.thesisStale) score -= 14;
+  if (row.docCount === 0) score -= 10;
+  const normalized = Math.max(0, Math.min(100, score));
+  const label = normalized >= 75 ? "Strong" : normalized >= 55 ? "Developing" : normalized >= 35 ? "Thin" : "At Risk";
+  return { score: normalized, label };
+}
+
+function describeDueState(dateValue) {
+  if (!dateValue) return "No due date";
+  const diff = daysUntil(dateValue);
+  if (diff === null) return "No due date";
+  if (diff < 0) return `${Math.abs(diff)} day${Math.abs(diff) === 1 ? "" : "s"} overdue`;
+  if (diff === 0) return "Due today";
+  return `Due in ${diff} day${diff === 1 ? "" : "s"}`;
+}
+
+function isOverdue(dateValue, recordState) {
+  const diff = daysUntil(dateValue);
+  return Boolean(dateValue && diff !== null && diff < 0 && recordState === "active");
+}
+
 function ResearchObjectControls({ onEdit, onDuplicate, onResolve, onArchive, state }) {
   return (
     <div className="research-action-row">
@@ -529,6 +620,9 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
   const [isSyncingObsidian, setIsSyncingObsidian] = useState(false);
   const [backendStatus, setBackendStatus] = useState("checking");
   const [editingEntity, setEditingEntity] = useState({ type: "", id: "" });
+  const [ownerFilter, setOwnerFilter] = useState("Desk");
+  const [ownershipMode, setOwnershipMode] = useState("mine");
+  const [pendingPromotion, setPendingPromotion] = useState({ docId: "", draftType: "", scope: "single_name", targetSymbol: "" });
 
   const [draft, setDraft] = useState({ title: "", body: "", sourceId: "source-manual-default", status: "unread" });
   const [sourceDraft, setSourceDraft] = useState({ type: "notion", name: "", url: "" });
@@ -540,7 +634,12 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     bullCase: "",
     invalidation: "",
     conviction: "Medium",
-    owner: "Desk"
+    mustPlayOut: "",
+    riskCondition: "",
+    coverageScope: "single_name",
+    owner: "Desk",
+    priority: "medium",
+    dueDate: ""
   });
   const [catalystDraft, setCatalystDraft] = useState({
     symbol: "",
@@ -549,7 +648,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     eventDate: "",
     note: "",
     status: "upcoming",
-    owner: "Desk"
+    coverageScope: "single_name",
+    owner: "Desk",
+    priority: "medium",
+    dueDate: ""
   });
   const [triggerDraft, setTriggerDraft] = useState({
     title: "",
@@ -563,7 +665,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     rationale: "",
     cooldownHours: 24,
     status: "active",
-    owner: "Desk"
+    coverageScope: "single_name",
+    owner: "Desk",
+    priority: "medium",
+    dueDate: ""
   });
   const [decisionDraft, setDecisionDraft] = useState({
     symbol: "",
@@ -571,13 +676,21 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     conviction: "Medium",
     rationale: "",
     thesisId: "",
-    owner: "Desk"
+    coverageScope: "single_name",
+    owner: "Desk",
+    priority: "medium",
+    dueDate: ""
   });
   const [briefDraft, setBriefDraft] = useState({
     title: "",
     symbol: "",
     template: "desk-memo",
-    owner: "Desk"
+    coverageScope: "single_name",
+    owner: "Desk",
+    priority: "medium",
+    dueDate: "",
+    approvalState: "draft",
+    commentary: ""
   });
   const [obsidianConfig, setObsidianConfig] = useState(() => readLocalJson(OBSIDIAN_LOCAL_CONFIG_KEY, {
     endpoint: "https://127.0.0.1:27124",
@@ -844,13 +957,22 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     watchlistSymbols
   ]);
 
+  const coverageRows = useMemo(() => {
+    return tickerRows.map((row) => ({
+      ...row,
+      thesisState: row.activeThesis ? toSlugLabel(row.activeThesis.stage) : "No thesis",
+      researchDepth: row.docCount + row.thesisCount + row.catalystCount + row.triggerCount + row.decisionCount + row.briefCount,
+      coverageHealth: computeCoverageHealth(row)
+    }));
+  }, [tickerRows]);
+
   useEffect(() => {
     if (!selectedTicker && tickerRows.length) setSelectedTicker(tickerRows[0].symbol);
   }, [selectedTicker, tickerRows]);
 
   const selectedDoc = useMemo(() => documentsWithLinks.find((doc) => doc.id === selectedDocId) || null, [documentsWithLinks, selectedDocId]);
   const selectedBrief = useMemo(() => normalizedBriefs.find((brief) => brief.id === selectedBriefId) || null, [normalizedBriefs, selectedBriefId]);
-  const selectedTickerRecord = useMemo(() => tickerRows.find((row) => row.symbol === selectedTicker) || null, [selectedTicker, tickerRows]);
+  const selectedTickerRecord = useMemo(() => coverageRows.find((row) => row.symbol === selectedTicker) || null, [coverageRows, selectedTicker]);
   const selectedTickerDocs = useMemo(() => documentsWithLinks.filter((doc) => (doc.symbols || []).includes(selectedTicker)), [documentsWithLinks, selectedTicker]);
   const selectedTickerTheses = useMemo(() => normalizedTheses.filter((item) => item.symbol === selectedTicker), [normalizedTheses, selectedTicker]);
   const selectedTickerCatalysts = useMemo(() => normalizedCatalysts.filter((item) => item.symbol === selectedTicker), [normalizedCatalysts, selectedTicker]);
@@ -950,7 +1072,8 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         .filter((item) => item.symbol === row.symbol)
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
       const thesis = normalizedTheses.find((item) => item.symbol === row.symbol && item.recordState !== "archived" && item.stage !== "archived");
-      const negativeDoc = documentsWithLinks.find((doc) => (doc.symbols || []).includes(row.symbol) && keywordMatchesNegative(`${doc.title}\n${doc.body}\n${doc.summary}`));
+      const activeTrigger = normalizedTriggers.find((item) => item.symbol === row.symbol && item.recordState !== "archived" && item.status === "active");
+      const nextCatalyst = normalizedCatalysts.find((item) => item.symbol === row.symbol && item.recordState !== "archived" && item.status === "upcoming");
       if (thesis && latestDecision && ["exit", "invalidate", "pass"].includes(latestDecision.action) && ["active thesis", "in portfolio"].includes(thesis.stage)) {
         items.push({
           id: `decision-${row.symbol}`,
@@ -961,17 +1084,54 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
           onOpen: () => beginEdit("thesis", thesis)
         });
       }
-      if (thesis && negativeDoc && thesis.conviction === "High") {
+      if (thesis && !thesis.invalidation) {
         items.push({
-          id: `doc-${negativeDoc.id}`,
+          id: `invalidation-${thesis.id}`,
           symbol: row.symbol,
-          title: "Negative note against high-conviction thesis",
-          detail: `${negativeDoc.title} contains risk language that should either update the thesis or be explicitly dismissed.`,
-          actionLabel: "Open note",
-          onOpen: () => {
-            setSelectedDocId(negativeDoc.id);
-            setActiveView("inbox");
-          }
+          title: "Thesis has no invalidation line",
+          detail: "The view is active, but the desk still has no explicit falsification condition logged.",
+          actionLabel: "Add invalidation",
+          onOpen: () => beginEdit("thesis", thesis)
+        });
+      }
+      if (thesis && !thesis.mustPlayOut) {
+        items.push({
+          id: `must-play-${thesis.id}`,
+          symbol: row.symbol,
+          title: "Thesis is missing the must-happen condition",
+          detail: "The setup has no explicit 'what must happen next' clause, so contradiction checks stay fuzzy.",
+          actionLabel: "Refine thesis",
+          onOpen: () => beginEdit("thesis", thesis)
+        });
+      }
+      if (thesis && !thesis.riskCondition) {
+        items.push({
+          id: `risk-condition-${thesis.id}`,
+          symbol: row.symbol,
+          title: "Thesis has no risk condition",
+          detail: "The desk still has no explicit risk state or market condition that should force a harder review.",
+          actionLabel: "Add risk condition",
+          onOpen: () => beginEdit("thesis", thesis)
+        });
+      }
+      if (thesis && !nextCatalyst && ["active thesis", "in portfolio"].includes(thesis.stage)) {
+        items.push({
+          id: `catalyst-gap-${thesis.id}`,
+          symbol: row.symbol,
+          title: "Active thesis has no catalyst path",
+          detail: "The desk is carrying the view without a dated event or check-in to validate it.",
+          actionLabel: "Add catalyst",
+          onOpen: () => primeTickerAction(row.symbol, "catalysts", "catalyst")
+        });
+      }
+      if (thesis && !activeTrigger && ["active thesis", "in portfolio"].includes(thesis.stage)) {
+        items.push({
+          id: `trigger-gap-${thesis.id}`,
+          symbol: row.symbol,
+          title: "Active thesis has no trigger guardrail",
+          detail: "There is no threshold rule attached to the live view, so action still depends on memory.",
+          actionLabel: "Add trigger",
+          onOpen: () => primeTickerAction(row.symbol, "triggers", "trigger")
         });
       }
       if (row.unsupportedByThesis && row.exposure > 0) {
@@ -988,14 +1148,6 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     return items;
   }, [documentsWithLinks, normalizedDecisions, normalizedTheses, tickerRows]);
 
-  const coverageRows = useMemo(() => {
-    return tickerRows.map((row) => ({
-      ...row,
-      thesisState: row.activeThesis ? toSlugLabel(row.activeThesis.stage) : "No thesis",
-      researchDepth: row.docCount + row.thesisCount + row.catalystCount + row.triggerCount + row.decisionCount + row.briefCount
-    }));
-  }, [tickerRows]);
-
   const ownershipRows = useMemo(() => {
     const rows = [];
     normalizedTheses.forEach((item) => rows.push({ id: item.id, kind: "Thesis", label: `${item.symbol} · ${item.title}`, owner: item.owner, state: item.recordState, item }));
@@ -1003,17 +1155,24 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     normalizedTriggers.forEach((item) => rows.push({ id: item.id, kind: "Trigger", label: item.title, owner: item.owner, state: item.recordState, item }));
     normalizedDecisions.forEach((item) => rows.push({ id: item.id, kind: "Decision", label: `${item.symbol} · ${toSlugLabel(item.action)}`, owner: item.owner, state: item.recordState, item }));
     normalizedBriefs.forEach((item) => rows.push({ id: item.id, kind: "Brief", label: item.title, owner: item.owner, state: item.recordState, item }));
-    return rows.sort((a, b) => a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label));
-  }, [normalizedBriefs, normalizedCatalysts, normalizedDecisions, normalizedTheses, normalizedTriggers]);
+    return rows
+      .filter((row) => ownershipMode === "all" || row.owner === ownerFilter)
+      .sort((a, b) => {
+        const aDue = new Date(a.item?.dueDate || 0).getTime();
+        const bDue = new Date(b.item?.dueDate || 0).getTime();
+        if (aDue && bDue && aDue !== bDue) return aDue - bDue;
+        return a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label);
+      });
+  }, [normalizedBriefs, normalizedCatalysts, normalizedDecisions, normalizedTheses, normalizedTriggers, ownerFilter, ownershipMode]);
 
   const timelineRows = useMemo(() => {
     const rows = [];
     documentsWithLinks.forEach((item) => rows.push({ id: `doc-${item.id}`, at: item.updatedAt, kind: "Research Note", title: item.title, subtitle: `${item.sourceName} · ${toSlugLabel(item.status)}` }));
-    normalizedTheses.forEach((item) => rows.push({ id: `thesis-${item.id}`, at: item.updatedAt, kind: "Thesis", title: `${item.symbol} · ${item.title}`, subtitle: `${toSlugLabel(item.stage)} · ${item.owner}` }));
-    normalizedCatalysts.forEach((item) => rows.push({ id: `catalyst-${item.id}`, at: item.updatedAt, kind: "Catalyst", title: `${item.symbol} · ${item.title}`, subtitle: `${formatDateOnly(item.eventDate)} · ${toSlugLabel(item.status)}` }));
-    normalizedTriggers.forEach((item) => rows.push({ id: `trigger-${item.id}`, at: item.updatedAt, kind: "Trigger", title: item.title, subtitle: describeTriggerCondition(item) }));
-    normalizedDecisions.forEach((item) => rows.push({ id: `decision-${item.id}`, at: item.updatedAt, kind: "Decision", title: `${item.symbol} · ${toSlugLabel(item.action)}`, subtitle: `${item.conviction} conviction` }));
-    normalizedBriefs.forEach((item) => rows.push({ id: `brief-${item.id}`, at: item.updatedAt, kind: "Brief", title: item.title, subtitle: BRIEF_TEMPLATES.find((brief) => brief.value === item.template)?.label || "Brief" }));
+    normalizedTheses.forEach((item) => rows.push({ id: `thesis-${item.id}`, at: item.updatedAt, kind: "Thesis", title: `${item.symbol} · ${item.title}`, subtitle: `${toSlugLabel(item.stage)} · ${toSlugLabel(item.priority)} priority · ${item.owner}` }));
+    normalizedCatalysts.forEach((item) => rows.push({ id: `catalyst-${item.id}`, at: item.updatedAt, kind: "Catalyst", title: `${item.symbol} · ${item.title}`, subtitle: `${formatDateOnly(item.eventDate)} · ${toSlugLabel(item.status)} · ${toSlugLabel(item.priority)} priority` }));
+    normalizedTriggers.forEach((item) => rows.push({ id: `trigger-${item.id}`, at: item.updatedAt, kind: "Trigger", title: item.title, subtitle: `${describeTriggerCondition(item)} · ${toSlugLabel(item.priority)} priority` }));
+    normalizedDecisions.forEach((item) => rows.push({ id: `decision-${item.id}`, at: item.updatedAt, kind: "Decision", title: `${item.symbol} · ${toSlugLabel(item.action)}`, subtitle: `${item.conviction} conviction · ${toSlugLabel(item.priority)} priority` }));
+    normalizedBriefs.forEach((item) => rows.push({ id: `brief-${item.id}`, at: item.updatedAt, kind: "Brief", title: item.title, subtitle: `${BRIEF_TEMPLATES.find((brief) => brief.value === item.template)?.label || "Brief"} · ${toSlugLabel(item.approvalState)}` }));
     return rows.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
   }, [documentsWithLinks, normalizedBriefs, normalizedCatalysts, normalizedDecisions, normalizedTheses, normalizedTriggers]);
 
@@ -1085,7 +1244,12 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         bullCase: item.bullCase,
         invalidation: item.invalidation,
         conviction: item.conviction,
-        owner: item.owner
+        mustPlayOut: item.mustPlayOut,
+        riskCondition: item.riskCondition,
+        coverageScope: item.coverageScope,
+        owner: item.owner,
+        priority: item.priority,
+        dueDate: item.dueDate
       });
       setActiveView("theses");
     }
@@ -1097,7 +1261,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         eventDate: item.eventDate,
         note: item.note,
         status: item.status,
-        owner: item.owner
+        coverageScope: item.coverageScope,
+        owner: item.owner,
+        priority: item.priority,
+        dueDate: item.dueDate
       });
       setActiveView("catalysts");
     }
@@ -1114,7 +1281,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         rationale: item.rationale,
         cooldownHours: item.cooldownHours,
         status: item.status,
-        owner: item.owner
+        coverageScope: item.coverageScope,
+        owner: item.owner,
+        priority: item.priority,
+        dueDate: item.dueDate
       });
       setActiveView("triggers");
     }
@@ -1125,7 +1295,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         conviction: item.conviction,
         rationale: item.rationale,
         thesisId: item.thesisId,
-        owner: item.owner
+        coverageScope: item.coverageScope,
+        owner: item.owner,
+        priority: item.priority,
+        dueDate: item.dueDate
       });
       setActiveView("decisions");
     }
@@ -1134,7 +1307,12 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         title: item.title,
         symbol: item.symbol,
         template: item.template,
-        owner: item.owner
+        coverageScope: item.coverageScope,
+        owner: item.owner,
+        priority: item.priority,
+        dueDate: item.dueDate,
+        approvalState: item.approvalState,
+        commentary: item.commentary
       });
       setSelectedBriefId(item.id);
       setActiveView("briefs");
@@ -1335,7 +1513,9 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     }
     setIsSyncingObsidian(true);
     try {
-      const response = await fetch(`${endpoint}/active/`, {
+      const response = await zeninFetch(`${endpoint}/active/`, {
+        credentials: "omit",
+        skipSimulationHeaders: true,
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "text/markdown, text/plain, application/vnd.olrapi.note+json, application/json"
@@ -1392,23 +1572,23 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
 
   function clearDrafts(type) {
     if (type === "thesis") {
-      setThesisDraft({ symbol: "", title: "", stage: "watching", summary: "", bullCase: "", invalidation: "", conviction: "Medium", owner: "Desk" });
+      setThesisDraft({ symbol: "", title: "", stage: "watching", summary: "", bullCase: "", invalidation: "", conviction: "Medium", mustPlayOut: "", riskCondition: "", coverageScope: "single_name", owner: "Desk", priority: "medium", dueDate: "" });
       resetEditingIf("thesis");
     }
     if (type === "catalyst") {
-      setCatalystDraft({ symbol: "", title: "", type: "earnings", eventDate: "", note: "", status: "upcoming", owner: "Desk" });
+      setCatalystDraft({ symbol: "", title: "", type: "earnings", eventDate: "", note: "", status: "upcoming", coverageScope: "single_name", owner: "Desk", priority: "medium", dueDate: "" });
       resetEditingIf("catalyst");
     }
     if (type === "trigger") {
-      setTriggerDraft({ title: "", symbol: "", scopeType: "asset", actionType: "review", conditionType: "price_below", thresholdValue: "", linkedThesisId: "", linkedCatalystId: "", rationale: "", cooldownHours: 24, status: "active", owner: "Desk" });
+      setTriggerDraft({ title: "", symbol: "", scopeType: "asset", actionType: "review", conditionType: "price_below", thresholdValue: "", linkedThesisId: "", linkedCatalystId: "", rationale: "", cooldownHours: 24, status: "active", coverageScope: "single_name", owner: "Desk", priority: "medium", dueDate: "" });
       resetEditingIf("trigger");
     }
     if (type === "decision") {
-      setDecisionDraft({ symbol: "", action: "watch", conviction: "Medium", rationale: "", thesisId: "", owner: "Desk" });
+      setDecisionDraft({ symbol: "", action: "watch", conviction: "Medium", rationale: "", thesisId: "", coverageScope: "single_name", owner: "Desk", priority: "medium", dueDate: "" });
       resetEditingIf("decision");
     }
     if (type === "brief") {
-      setBriefDraft({ title: "", symbol: "", template: "desk-memo", owner: "Desk" });
+      setBriefDraft({ title: "", symbol: "", template: "desk-memo", coverageScope: "single_name", owner: "Desk", priority: "medium", dueDate: "", approvalState: "draft", commentary: "" });
       resetEditingIf("brief");
     }
   }
@@ -1428,8 +1608,13 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       summary: thesisDraft.summary,
       bullCase: thesisDraft.bullCase,
       invalidation: thesisDraft.invalidation,
+      mustPlayOut: thesisDraft.mustPlayOut,
+      riskCondition: thesisDraft.riskCondition,
       conviction: thesisDraft.conviction,
+      coverageScope: thesisDraft.coverageScope,
       owner: thesisDraft.owner,
+      priority: thesisDraft.priority,
+      dueDate: thesisDraft.dueDate,
       recordState: base?.recordState || "active",
       createdAt: base?.createdAt || nowIso(),
       updatedAt: nowIso()
@@ -1457,7 +1642,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       eventDate: catalystDraft.eventDate,
       note: catalystDraft.note,
       status: catalystDraft.status,
+      coverageScope: catalystDraft.coverageScope,
       owner: catalystDraft.owner,
+      priority: catalystDraft.priority,
+      dueDate: catalystDraft.dueDate || catalystDraft.eventDate,
       recordState: base?.recordState || "active",
       createdAt: base?.createdAt || nowIso(),
       updatedAt: nowIso()
@@ -1498,7 +1686,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       rationale: triggerDraft.rationale,
       cooldownHours: triggerDraft.cooldownHours,
       status: triggerDraft.status,
+      coverageScope: triggerDraft.coverageScope,
       owner: triggerDraft.owner,
+      priority: triggerDraft.priority,
+      dueDate: triggerDraft.dueDate,
       recordState: base?.recordState || "active",
       createdAt: base?.createdAt || nowIso(),
       updatedAt: nowIso()
@@ -1525,7 +1716,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       conviction: decisionDraft.conviction,
       rationale: decisionDraft.rationale,
       thesisId: decisionDraft.thesisId,
+      coverageScope: decisionDraft.coverageScope,
       owner: decisionDraft.owner,
+      priority: decisionDraft.priority,
+      dueDate: decisionDraft.dueDate,
       recordState: base?.recordState || "active",
       createdAt: base?.createdAt || nowIso(),
       updatedAt: nowIso()
@@ -1538,7 +1732,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     await persistResearchBundle({ decisions: nextDecisions }, `${nextDecision.symbol} decision ${base ? "updated" : "logged"}.`);
   }
 
-  function buildBriefSections({ symbol, template, docs, thesis, catalysts: linkedCatalysts, decisions: linkedDecisions, row }) {
+  function buildBriefSections({ symbol, template, docs, thesis, catalysts: linkedCatalysts, decisions: linkedDecisions, row, commentary }) {
     const sections = [];
     const label = BRIEF_TEMPLATES.find((item) => item.value === template)?.label || "Desk Memo";
     sections.push({
@@ -1580,7 +1774,9 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     });
     sections.push({
       title: "Commentary",
-      body: docs.length
+      body: commentary?.trim()
+        ? commentary.trim()
+        : docs.length
         ? docs.slice(0, 3).map((item) => `${item.title}: ${item.summary}`).join("\n")
         : "No supporting notes yet. Import source material before distributing this output."
     });
@@ -1602,7 +1798,8 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       thesis: relatedThesis || null,
       catalysts: relatedCatalysts,
       decisions: relatedDecisions,
-      row
+      row,
+      commentary: briefDraft.commentary
     });
     const content = sections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
     const base = editingEntity.type === "brief" ? briefs.find((item) => item.id === editingEntity.id) : null;
@@ -1614,7 +1811,12 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       template: briefDraft.template,
       content,
       sections,
+      coverageScope: briefDraft.coverageScope,
       owner: briefDraft.owner,
+      priority: briefDraft.priority,
+      dueDate: briefDraft.dueDate,
+      approvalState: briefDraft.approvalState,
+      commentary: briefDraft.commentary,
       recordState: base?.recordState || "active",
       createdAt: base?.createdAt || nowIso(),
       updatedAt: nowIso()
@@ -1635,8 +1837,9 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       ? "Backend offline · local-only mode"
       : "Checking backend reachability";
 
-  function seedDraftFromDocument(doc, draftType) {
-    const symbol = String(doc?.symbols?.[0] || "").trim().toUpperCase();
+  function continueDocumentPromotion(doc, draftType, scopeOverride, targetSymbolOverride) {
+    const scope = scopeOverride || pendingPromotion.scope || "single_name";
+    const symbol = String(targetSymbolOverride || doc?.symbols?.[0] || "").trim().toUpperCase();
     if (!symbol) {
       setNotice("This note has no linked ticker yet. Add one in the note text first.");
       return;
@@ -1645,20 +1848,25 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     if (draftType === "thesis") {
       setThesisDraft({
         symbol,
-        title: `${symbol} thesis`,
+        title: scope === "single_name" ? `${symbol} thesis` : `${symbol} ${toSlugLabel(scope)} thesis`,
         stage: "watching",
         summary: doc.summary,
         bullCase: doc.summary,
         invalidation: "",
         conviction: "Medium",
-        owner: "Desk"
+        mustPlayOut: "",
+        riskCondition: "",
+        coverageScope: scope,
+        owner: "Desk",
+        priority: "medium",
+        dueDate: ""
       });
       setEditingEntity({ type: "", id: "" });
       setActiveView("theses");
     }
     if (draftType === "trigger") {
       setTriggerDraft({
-        title: `${symbol} review trigger`,
+        title: scope === "single_name" ? `${symbol} review trigger` : `${symbol} ${toSlugLabel(scope)} review trigger`,
         symbol,
         scopeType: "asset",
         actionType: "review",
@@ -1669,7 +1877,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         rationale: doc.summary,
         cooldownHours: 24,
         status: "active",
-        owner: "Desk"
+        coverageScope: scope,
+        owner: "Desk",
+        priority: "medium",
+        dueDate: ""
       });
       setEditingEntity({ type: "", id: "" });
       setActiveView("triggers");
@@ -1677,12 +1888,15 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     if (draftType === "catalyst") {
       setCatalystDraft({
         symbol,
-        title: `${symbol} catalyst`,
+        title: scope === "single_name" ? `${symbol} catalyst` : `${symbol} ${toSlugLabel(scope)} catalyst`,
         type: "custom",
         eventDate: "",
         note: doc.summary,
         status: "upcoming",
-        owner: "Desk"
+        coverageScope: scope,
+        owner: "Desk",
+        priority: "medium",
+        dueDate: ""
       });
       setEditingEntity({ type: "", id: "" });
       setActiveView("catalysts");
@@ -1695,12 +1909,31 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         conviction: thesisMatch?.conviction || "Medium",
         rationale: doc.summary,
         thesisId: thesisMatch?.id || "",
-        owner: "Desk"
+        coverageScope: scope,
+        owner: "Desk",
+        priority: "medium",
+        dueDate: ""
       });
       setEditingEntity({ type: "", id: "" });
       setActiveView("decisions");
     }
+    setPendingPromotion({ docId: "", draftType: "", scope: "single_name", targetSymbol: "" });
     updateDocumentStatus(doc.id, "linked");
+  }
+
+  function requestDocumentPromotion(doc, draftType) {
+    const symbols = Array.isArray(doc?.symbols) ? doc.symbols.filter(Boolean) : [];
+    if (symbols.length <= 1) {
+      continueDocumentPromotion(doc, draftType, "single_name", symbols[0] || "");
+      return;
+    }
+    setSelectedDocId(doc.id);
+    setPendingPromotion({
+      docId: doc.id,
+      draftType,
+      scope: "basket",
+      targetSymbol: symbols[0] || ""
+    });
   }
 
   function primeTickerAction(symbol, targetView, draftType) {
@@ -1787,21 +2020,92 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     }
   }
 
+  async function saveSelectedBriefEdits(nextSelectedBrief) {
+    const updatedBrief = normalizeBrief({
+      ...nextSelectedBrief,
+      updatedAt: nowIso()
+    });
+    const nextBriefs = briefs.map((item) => item.id === updatedBrief.id ? updatedBrief : item);
+    setBriefs(nextBriefs);
+    setSelectedBriefId(updatedBrief.id);
+    setBriefDraft((prev) => ({
+      ...prev,
+      title: updatedBrief.title,
+      symbol: updatedBrief.symbol,
+      template: updatedBrief.template,
+      coverageScope: updatedBrief.coverageScope,
+      owner: updatedBrief.owner,
+      priority: updatedBrief.priority,
+      dueDate: updatedBrief.dueDate,
+      approvalState: updatedBrief.approvalState,
+      commentary: updatedBrief.commentary
+    }));
+    await persistResearchBundle({ briefs: nextBriefs }, `${updatedBrief.title} edits saved.`);
+  }
+
+  function updateSelectedBriefSection(sectionTitle, body) {
+    if (!selectedBrief) return;
+    const nextSections = selectedBrief.sections.map((section) => section.title === sectionTitle ? { ...section, body } : section);
+    const nextContent = nextSections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
+    const updatedBrief = {
+      ...selectedBrief,
+      sections: nextSections,
+      content: nextContent
+    };
+    const nextBriefs = briefs.map((item) => item.id === selectedBrief.id ? updatedBrief : item);
+    setBriefs(nextBriefs);
+  }
+
+  function updateSelectedBriefField(field, value) {
+    if (!selectedBrief) return;
+    const updatedBrief = normalizeBrief({
+      ...selectedBrief,
+      [field]: value,
+      sections: field === "commentary"
+        ? selectedBrief.sections.map((section) => section.title === "Commentary" ? { ...section, body: value } : section)
+        : selectedBrief.sections
+    });
+    updatedBrief.content = updatedBrief.sections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
+    const nextBriefs = briefs.map((item) => item.id === selectedBrief.id ? updatedBrief : item);
+    setBriefs(nextBriefs);
+  }
+
   function renderViewTabs() {
+    const activeGroup = RESEARCH_VIEW_GROUPS.find((group) => group.views.some((view) => view.id === activeView)) || RESEARCH_VIEW_GROUPS[0];
+
     return (
-      <div className="research-view-tabs" role="tablist" aria-label="Research workspace views">
-        {RESEARCH_VIEWS.map((view) => (
-          <button
-            key={view.id}
-            type="button"
-            role="tab"
-            aria-selected={activeView === view.id}
-            className={activeView === view.id ? "active" : ""}
-            onClick={() => setActiveView(view.id)}
-          >
-            {view.label}
-          </button>
-        ))}
+      <div className="research-view-nav" aria-label="Research workspace navigation">
+        <div className="research-view-tabs" role="tablist" aria-label="Research workflows">
+          {RESEARCH_VIEW_GROUPS.map((group) => {
+            const isActive = group.id === activeGroup.id;
+            return (
+              <button
+                key={group.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={isActive ? "active" : ""}
+                onClick={() => setActiveView(group.views[0].id)}
+              >
+                {group.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="research-view-subtabs" role="tablist" aria-label={`${activeGroup.label} views`}>
+          {activeGroup.views.map((view) => (
+            <button
+              key={view.id}
+              type="button"
+              role="tab"
+              aria-selected={activeView === view.id}
+              className={activeView === view.id ? "active" : ""}
+              onClick={() => setActiveView(view.id)}
+            >
+              {view.label}
+            </button>
+          ))}
+        </div>
       </div>
     );
   }
@@ -1874,10 +2178,11 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                         {toSlugLabel(status)}
                       </button>
                     ))}
-                    <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(doc, "thesis")}>Promote to Thesis</button>
-                    <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(doc, "trigger")}>Create Trigger</button>
-                    <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(doc, "catalyst")}>Add Catalyst</button>
-                    <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(doc, "decision")}>Log Decision</button>
+                    {(doc.symbols || []).length > 1 ? <span className="research-pill">{doc.symbols.length} symbols</span> : null}
+                    <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "thesis")}>Promote to Thesis</button>
+                    <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "trigger")}>Create Trigger</button>
+                    <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "catalyst")}>Add Catalyst</button>
+                    <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "decision")}>Log Decision</button>
                     <button type="button" className="research-link-btn" onClick={() => setSelectedDocId(doc.id)}>Review</button>
                   </div>
                 </article>
@@ -2065,7 +2370,17 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
               <article className="research-dossier-card">
                 <span>Current exposure</span>
                 <strong>{selectedTickerRecord.exposure > 0 ? formatCurrency(selectedTickerRecord.exposure) : "No position"}</strong>
-                <em>{selectedTickerRecord.exposure > 0 ? `${formatPercent(selectedTickerRecord.weight)} of portfolio` : "Not currently in portfolio"}</em>
+                <em>{selectedTickerRecord.exposure > 0 ? "Live capital tied to the current book." : "Not currently in portfolio."}</em>
+              </article>
+              <article className="research-dossier-card">
+                <span>Portfolio weight</span>
+                <strong>{selectedTickerRecord.exposure > 0 ? formatPercent(selectedTickerRecord.weight) : "0.0%"}</strong>
+                <em>{selectedTickerRecord.exposure > 0 ? "Weight versus total tracked portfolio value." : "No active allocation logged."}</em>
+              </article>
+              <article className="research-dossier-card">
+                <span>Coverage health</span>
+                <strong>{selectedTickerRecord.coverageHealth.label}</strong>
+                <em>{selectedTickerRecord.coverageHealth.score}/100 weighted coverage score.</em>
               </article>
               <article className="research-dossier-card">
                 <span>Watchlist / book</span>
@@ -2073,14 +2388,19 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                 <em>{selectedTickerRecord.tracked ? "Portfolio or watchlist linked" : "Research-only symbol so far"}</em>
               </article>
               <article className="research-dossier-card">
-                <span>Thesis support</span>
-                <strong>{selectedTickerRecord.unsupportedByThesis ? "Unsupported" : selectedTickerRecord.activeThesis ? toSlugLabel(selectedTickerRecord.activeThesis.stage) : "No thesis"}</strong>
-                <em>{selectedTickerRecord.thesisStale ? "Active thesis is stale" : selectedTickerRecord.unsupportedByThesis ? "Tracked without active thesis" : "Research support is current"}</em>
+                <span>Unsupported by thesis</span>
+                <strong>{selectedTickerRecord.unsupportedByThesis ? "Yes" : "No"}</strong>
+                <em>{selectedTickerRecord.unsupportedByThesis ? "Tracked exposure still lacks an active thesis." : selectedTickerRecord.activeThesis ? `Backed by ${toSlugLabel(selectedTickerRecord.activeThesis.stage)}.` : "No live exposure conflict."}</em>
               </article>
               <article className="research-dossier-card">
-                <span>Catalyst clock</span>
-                <strong>{selectedTickerRecord.nextCatalyst?.title || "No catalyst"}</strong>
-                <em>{selectedTickerRecord.nextCatalyst ? `${formatDateOnly(selectedTickerRecord.nextCatalyst.eventDate)}${selectedTickerRecord.catalystDueSoon ? " · due soon" : ""}` : "Add an event to keep timing explicit."}</em>
+                <span>Thesis stale</span>
+                <strong>{selectedTickerRecord.thesisStale ? "Yes" : "No"}</strong>
+                <em>{selectedTickerRecord.activeThesis ? `Last thesis update ${formatDateOnly(selectedTickerRecord.activeThesis.updatedAt)}` : "No active thesis to age yet."}</em>
+              </article>
+              <article className="research-dossier-card">
+                <span>Catalyst due soon</span>
+                <strong>{selectedTickerRecord.catalystDueSoon ? "Yes" : selectedTickerRecord.nextCatalyst ? "Scheduled" : "No catalyst"}</strong>
+                <em>{selectedTickerRecord.nextCatalyst ? `${selectedTickerRecord.nextCatalyst.title} · ${formatDateOnly(selectedTickerRecord.nextCatalyst.eventDate)}` : "Add an event to keep timing explicit."}</em>
               </article>
               <article className="research-dossier-card">
                 <span>Trigger coverage</span>
@@ -2111,31 +2431,31 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   {selectedTickerTheses.slice(0, 2).map((item) => (
                     <div key={item.id} className="research-mini-row static">
                       <strong>{item.title}</strong>
-                      <span>{toSlugLabel(item.stage)} · {item.owner} · {item.recordState}</span>
+                      <span>{toSlugLabel(item.stage)} · {toSlugLabel(item.priority)} priority · {describeDueState(item.dueDate)} · {item.owner}</span>
                     </div>
                   ))}
                   {selectedTickerCatalysts.slice(0, 2).map((item) => (
                     <div key={item.id} className="research-mini-row static">
                       <strong>{item.title}</strong>
-                      <span>{formatDateOnly(item.eventDate)} · {toSlugLabel(item.type)}</span>
+                      <span>{formatDateOnly(item.eventDate)} · {toSlugLabel(item.type)} · {toSlugLabel(item.priority)} priority</span>
                     </div>
                   ))}
                   {selectedTickerTriggers.slice(0, 2).map((item) => (
                     <div key={item.id} className="research-mini-row static">
                       <strong>{toSlugLabel(item.actionType)} trigger</strong>
-                      <span>{describeTriggerCondition(item)} · {toSlugLabel(item.recordState)}</span>
+                      <span>{describeTriggerCondition(item)} · {toSlugLabel(item.priority)} priority · {describeDueState(item.dueDate)}</span>
                     </div>
                   ))}
                   {selectedTickerDecisions.slice(0, 2).map((item) => (
                     <div key={item.id} className="research-mini-row static">
                       <strong>{toSlugLabel(item.action)}</strong>
-                      <span>{item.conviction} conviction · {item.rationale}</span>
+                      <span>{item.conviction} conviction · {toSlugLabel(item.priority)} priority · {describeDueState(item.dueDate)}</span>
                     </div>
                   ))}
                   {selectedTickerBriefs.slice(0, 1).map((item) => (
                     <div key={item.id} className="research-mini-row static">
                       <strong>{item.title}</strong>
-                      <span>{BRIEF_TEMPLATES.find((brief) => brief.value === item.template)?.label || "Brief"} · {item.owner}</span>
+                      <span>{BRIEF_TEMPLATES.find((brief) => brief.value === item.template)?.label || "Brief"} · {toSlugLabel(item.approvalState)} · {item.owner}</span>
                     </div>
                   ))}
                   {!selectedTickerTheses.length && !selectedTickerCatalysts.length && !selectedTickerTriggers.length && !selectedTickerDecisions.length && !selectedTickerBriefs.length ? (
@@ -2174,6 +2494,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                     <th>Symbol</th>
                     <th>Exposure</th>
                     <th>Weight</th>
+                    <th>Health</th>
                     <th>Research Depth</th>
                     <th>Thesis</th>
                     <th>Flags</th>
@@ -2190,6 +2511,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                       </td>
                       <td>{row.exposure > 0 ? formatCurrency(row.exposure) : "—"}</td>
                       <td>{row.exposure > 0 ? formatPercent(row.weight) : "—"}</td>
+                      <td>{row.coverageHealth.label} · {row.coverageHealth.score}</td>
                       <td>{row.researchDepth}</td>
                       <td>{row.thesisState}</td>
                       <td>
@@ -2273,6 +2595,22 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                 {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
+            <label>
+              <span>Coverage scope</span>
+              <select value={thesisDraft.coverageScope} onChange={(event) => setThesisDraft((prev) => ({ ...prev, coverageScope: event.target.value }))}>
+                {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select value={thesisDraft.priority} onChange={(event) => setThesisDraft((prev) => ({ ...prev, priority: event.target.value }))}>
+                {PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Due date</span>
+              <input type="date" value={thesisDraft.dueDate} onChange={(event) => setThesisDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
+            </label>
             <label className="wide">
               <span>Summary</span>
               <textarea value={thesisDraft.summary} onChange={(event) => setThesisDraft((prev) => ({ ...prev, summary: event.target.value }))} rows={3} placeholder="Core view in one compact paragraph." />
@@ -2284,6 +2622,14 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
             <label className="wide">
               <span>Invalidation</span>
               <textarea value={thesisDraft.invalidation} onChange={(event) => setThesisDraft((prev) => ({ ...prev, invalidation: event.target.value }))} rows={2} placeholder="What changes your mind." />
+            </label>
+            <label className="wide">
+              <span>Must play out</span>
+              <textarea value={thesisDraft.mustPlayOut} onChange={(event) => setThesisDraft((prev) => ({ ...prev, mustPlayOut: event.target.value }))} rows={2} placeholder="What must happen for the setup to stay alive." />
+            </label>
+            <label className="wide">
+              <span>Risk condition</span>
+              <textarea value={thesisDraft.riskCondition} onChange={(event) => setThesisDraft((prev) => ({ ...prev, riskCondition: event.target.value }))} rows={2} placeholder="What desk or market condition should force a harder review." />
             </label>
           </div>
           <div className="research-action-row">
@@ -2301,7 +2647,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   <div className="research-inbox-head">
                     <div>
                       <strong>{thesis.symbol} · {thesis.title}</strong>
-                      <span>{toSlugLabel(thesis.stage)} · {thesis.conviction} conviction · {thesis.owner}</span>
+                      <span>{toSlugLabel(thesis.stage)} · {thesis.conviction} conviction · {toSlugLabel(thesis.coverageScope)} · {toSlugLabel(thesis.priority)} priority · {thesis.owner}</span>
                     </div>
                     <div className="research-inline-pills">
                       <span className={`research-status-pill ${thesis.recordState === "resolved" ? "reviewed" : thesis.recordState === "archived" ? "archived" : "linked"}`}>{toSlugLabel(thesis.recordState)}</span>
@@ -2317,6 +2663,16 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                     <div>
                       <span>Invalidation</span>
                       <strong>{thesis.invalidation || "Not logged yet."}</strong>
+                    </div>
+                  </div>
+                  <div className="research-thesis-foot">
+                    <div>
+                      <span>Must play out</span>
+                      <strong>{thesis.mustPlayOut || "Not logged yet."}</strong>
+                    </div>
+                    <div>
+                      <span>Priority / due</span>
+                      <strong>{toSlugLabel(thesis.priority)} · {describeDueState(thesis.dueDate)}</strong>
                     </div>
                   </div>
                   <ResearchObjectControls
@@ -2373,6 +2729,22 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                 {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
+            <label>
+              <span>Coverage scope</span>
+              <select value={catalystDraft.coverageScope} onChange={(event) => setCatalystDraft((prev) => ({ ...prev, coverageScope: event.target.value }))}>
+                {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select value={catalystDraft.priority} onChange={(event) => setCatalystDraft((prev) => ({ ...prev, priority: event.target.value }))}>
+                {PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Due date</span>
+              <input type="date" value={catalystDraft.dueDate} onChange={(event) => setCatalystDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
+            </label>
             <label className="wide">
               <span>Note</span>
               <textarea value={catalystDraft.note} onChange={(event) => setCatalystDraft((prev) => ({ ...prev, note: event.target.value }))} rows={3} placeholder="Why the event matters and what would change after it prints." />
@@ -2393,11 +2765,21 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   <div className="research-inbox-head">
                     <div>
                       <strong>{item.symbol} · {item.title}</strong>
-                      <span>{formatDateOnly(item.eventDate)} · {toSlugLabel(item.type)} · {item.owner}</span>
+                      <span>{formatDateOnly(item.eventDate)} · {toSlugLabel(item.type)} · {toSlugLabel(item.coverageScope)} · {toSlugLabel(item.priority)} priority · {item.owner}</span>
                     </div>
                     <span className={`research-status-pill ${item.recordState === "resolved" ? "reviewed" : "linked"}`}>{toSlugLabel(item.recordState)}</span>
                   </div>
                   <p>{item.note || "No supporting note yet."}</p>
+                  <div className="research-thesis-foot">
+                    <div>
+                      <span>Due state</span>
+                      <strong>{describeDueState(item.dueDate || item.eventDate)}</strong>
+                    </div>
+                    <div>
+                      <span>Status</span>
+                      <strong>{toSlugLabel(item.status)}</strong>
+                    </div>
+                  </div>
                   <ResearchObjectControls
                     state={item.recordState}
                     onEdit={() => beginEdit("catalyst", item)}
@@ -2481,6 +2863,22 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                 {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
+            <label>
+              <span>Coverage scope</span>
+              <select value={triggerDraft.coverageScope} onChange={(event) => setTriggerDraft((prev) => ({ ...prev, coverageScope: event.target.value }))}>
+                {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select value={triggerDraft.priority} onChange={(event) => setTriggerDraft((prev) => ({ ...prev, priority: event.target.value }))}>
+                {PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Due date</span>
+              <input type="date" value={triggerDraft.dueDate} onChange={(event) => setTriggerDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
+            </label>
             <label className="wide">
               <span>Trigger title</span>
               <input value={triggerDraft.title} onChange={(event) => setTriggerDraft((prev) => ({ ...prev, title: event.target.value }))} placeholder="Trim NVDA if weight exceeds 12%" />
@@ -2506,7 +2904,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   <div className="research-inbox-head">
                     <div>
                       <strong>{trigger.title}</strong>
-                      <span>{trigger.symbol || "Portfolio"} · {toSlugLabel(trigger.actionType)} · {trigger.owner}</span>
+                      <span>{trigger.symbol || "Portfolio"} · {toSlugLabel(trigger.actionType)} · {toSlugLabel(trigger.coverageScope)} · {toSlugLabel(trigger.priority)} priority · {trigger.owner}</span>
                     </div>
                     <div className="research-inline-pills">
                       <span className={`research-status-pill ${trigger.recordState === "resolved" ? "reviewed" : trigger.recordState === "archived" ? "archived" : "linked"}`}>{toSlugLabel(trigger.recordState)}</span>
@@ -2522,6 +2920,16 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                     <div>
                       <span>Cooldown</span>
                       <strong>{trigger.cooldownHours}h · {trigger.lastTriggeredAt ? `Last fired ${formatDateTime(trigger.lastTriggeredAt)}` : "Not fired yet"}</strong>
+                    </div>
+                  </div>
+                  <div className="research-thesis-foot">
+                    <div>
+                      <span>Due state</span>
+                      <strong>{describeDueState(trigger.dueDate)}</strong>
+                    </div>
+                    <div>
+                      <span>Status</span>
+                      <strong>{toSlugLabel(trigger.status)}</strong>
                     </div>
                   </div>
                   <ResearchObjectControls
@@ -2597,7 +3005,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                     {group.items.map((source) => (
                       <div key={source.id} className="research-mini-row static">
                         <strong>{source.name}</strong>
-                        <span>{inferSourceLabel(source.type)} · {source.syncMode} · {source.documentCount || 0} docs</span>
+                        <span>{inferSourceLabel(source.type)} · {toSlugLabel(deriveSourceReadiness(source).key)} · {source.syncMode} · {source.documentCount || 0} docs · {source.lastSyncedAt ? `Last sync ${formatDateTime(source.lastSyncedAt)}` : "Never synced"}</span>
                       </div>
                     ))}
                   </div>
@@ -2649,9 +3057,35 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                 {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
+            <label>
+              <span>Coverage scope</span>
+              <select value={briefDraft.coverageScope} onChange={(event) => setBriefDraft((prev) => ({ ...prev, coverageScope: event.target.value }))}>
+                {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select value={briefDraft.priority} onChange={(event) => setBriefDraft((prev) => ({ ...prev, priority: event.target.value }))}>
+                {PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Due date</span>
+              <input type="date" value={briefDraft.dueDate} onChange={(event) => setBriefDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
+            </label>
+            <label>
+              <span>Approval state</span>
+              <select value={briefDraft.approvalState} onChange={(event) => setBriefDraft((prev) => ({ ...prev, approvalState: event.target.value }))}>
+                {BRIEF_APPROVAL_STATES.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
             <label className="wide">
               <span>Title</span>
               <input value={briefDraft.title} onChange={(event) => setBriefDraft((prev) => ({ ...prev, title: event.target.value }))} placeholder="Morning macro risk pack" />
+            </label>
+            <label className="wide">
+              <span>Commentary</span>
+              <textarea value={briefDraft.commentary} onChange={(event) => setBriefDraft((prev) => ({ ...prev, commentary: event.target.value }))} rows={3} placeholder="Add the desk framing, distribution context, or PM angle before generating the output." />
             </label>
           </div>
           <div className="research-action-row">
@@ -2661,7 +3095,55 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
 
           {selectedBrief ? (
             <div className="research-brief-preview">
-              <DensePanelHeader title={selectedBrief.title} subtitle={`${selectedBrief.symbol || "Desk-wide"} · ${formatDateTime(selectedBrief.updatedAt)} · ${selectedBrief.owner}`} />
+              <DensePanelHeader
+                title={selectedBrief.title}
+                subtitle={`${selectedBrief.symbol || "Desk-wide"} · ${formatDateTime(selectedBrief.updatedAt)} · ${selectedBrief.owner}`}
+                actions={<span className="research-pill">{toSlugLabel(selectedBrief.approvalState)}</span>}
+              />
+              <div className="research-form-grid">
+                <label>
+                  <span>Title</span>
+                  <input value={selectedBrief.title} onChange={(event) => updateSelectedBriefField("title", event.target.value)} />
+                </label>
+                <label>
+                  <span>Output mode</span>
+                  <select value={selectedBrief.template} onChange={(event) => updateSelectedBriefField("template", event.target.value)}>
+                    {BRIEF_TEMPLATES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Owner</span>
+                  <select value={selectedBrief.owner} onChange={(event) => updateSelectedBriefField("owner", event.target.value)}>
+                    {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Approval state</span>
+                  <select value={selectedBrief.approvalState} onChange={(event) => updateSelectedBriefField("approvalState", event.target.value)}>
+                    {BRIEF_APPROVAL_STATES.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Priority</span>
+                  <select value={selectedBrief.priority} onChange={(event) => updateSelectedBriefField("priority", event.target.value)}>
+                    {PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Due date</span>
+                  <input type="date" value={selectedBrief.dueDate || ""} onChange={(event) => updateSelectedBriefField("dueDate", event.target.value)} />
+                </label>
+                <label>
+                  <span>Coverage scope</span>
+                  <select value={selectedBrief.coverageScope} onChange={(event) => updateSelectedBriefField("coverageScope", event.target.value)}>
+                    {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+                  </select>
+                </label>
+                <label className="wide">
+                  <span>Commentary</span>
+                  <textarea value={selectedBrief.commentary || ""} onChange={(event) => updateSelectedBriefField("commentary", event.target.value)} rows={3} />
+                </label>
+              </div>
               <div className="research-brief-section-grid">
                 {BRIEF_SECTION_ORDER.map((sectionTitle) => {
                   const section = selectedBrief.sections.find((item) => item.title === sectionTitle);
@@ -2669,10 +3151,14 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   return (
                     <article key={sectionTitle} className="research-brief-section">
                       <strong>{section.title}</strong>
-                      <pre>{section.body}</pre>
+                      <textarea value={section.body} onChange={(event) => updateSelectedBriefSection(sectionTitle, event.target.value)} rows={section.title === "Commentary" ? 6 : 8} />
                     </article>
                   );
                 })}
+              </div>
+              <div className="research-action-row">
+                <button type="button" className="research-btn primary" onClick={() => saveSelectedBriefEdits(selectedBrief)}>Save edits</button>
+                <span className="research-muted-copy">{toSlugLabel(selectedBrief.template)} · {toSlugLabel(selectedBrief.priority)} priority · {describeDueState(selectedBrief.dueDate)}</span>
               </div>
               <ResearchObjectControls
                 state={selectedBrief.recordState}
@@ -2692,7 +3178,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
               {normalizedBriefs.map((brief) => (
                 <button key={brief.id} type="button" className={`research-mini-row ${selectedBriefId === brief.id ? "active" : ""}`.trim()} onClick={() => setSelectedBriefId(brief.id)}>
                   <strong>{brief.title}</strong>
-                  <span>{brief.symbol || "Desk-wide"} · {BRIEF_TEMPLATES.find((item) => item.value === brief.template)?.label}</span>
+                  <span>{brief.symbol || "Desk-wide"} · {BRIEF_TEMPLATES.find((item) => item.value === brief.template)?.label} · {toSlugLabel(brief.approvalState)}</span>
                 </button>
               ))}
             </div>
@@ -2739,6 +3225,22 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                 {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
+            <label>
+              <span>Coverage scope</span>
+              <select value={decisionDraft.coverageScope} onChange={(event) => setDecisionDraft((prev) => ({ ...prev, coverageScope: event.target.value }))}>
+                {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select value={decisionDraft.priority} onChange={(event) => setDecisionDraft((prev) => ({ ...prev, priority: event.target.value }))}>
+                {PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Due date</span>
+              <input type="date" value={decisionDraft.dueDate} onChange={(event) => setDecisionDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
+            </label>
             <label className="wide">
               <span>Rationale</span>
               <textarea value={decisionDraft.rationale} onChange={(event) => setDecisionDraft((prev) => ({ ...prev, rationale: event.target.value }))} rows={4} placeholder="What changed, what was sized, and what still needs confirmation." />
@@ -2759,11 +3261,21 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   <div className="research-inbox-head">
                     <div>
                       <strong>{decision.symbol} · {toSlugLabel(decision.action)}</strong>
-                      <span>{decision.conviction} conviction · {formatDateTime(decision.createdAt)} · {decision.owner}</span>
+                      <span>{decision.conviction} conviction · {toSlugLabel(decision.coverageScope)} · {toSlugLabel(decision.priority)} priority · {formatDateTime(decision.createdAt)} · {decision.owner}</span>
                     </div>
                     <button type="button" className="research-symbol-chip" onClick={() => { setSelectedTicker(decision.symbol); setActiveView("tickers"); }}>Dossier</button>
                   </div>
                   <p>{decision.rationale}</p>
+                  <div className="research-thesis-foot">
+                    <div>
+                      <span>Due state</span>
+                      <strong>{describeDueState(decision.dueDate)}</strong>
+                    </div>
+                    <div>
+                      <span>Linked thesis</span>
+                      <strong>{decision.thesisId ? "Attached" : "No thesis linked"}</strong>
+                    </div>
+                  </div>
                   <ResearchObjectControls
                     state={decision.recordState}
                     onEdit={() => beginEdit("decision", decision)}
@@ -2808,18 +3320,35 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     return (
       <div className="research-view-grid research-view-grid-wide">
         <section className="research-panel">
-          <DensePanelHeader title="Ownership" subtitle="Who owns the thesis, trigger, catalyst, decision, or brief in small-team workflows." />
+          <DensePanelHeader
+            title="Ownership"
+            subtitle="Who owns the thesis, trigger, catalyst, decision, or brief in small-team workflows."
+            actions={(
+              <InlineControlGroup>
+                <select value={ownershipMode} onChange={(event) => setOwnershipMode(event.target.value)} className="research-inline-select">
+                  <option value="mine">My items</option>
+                  <option value="all">All items</option>
+                </select>
+                <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)} className="research-inline-select">
+                  {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </InlineControlGroup>
+            )}
+          />
           {ownershipRows.length ? (
             <div className="research-ownership-list">
               {ownershipRows.map((row) => (
                 <div key={`${row.kind}-${row.id}`} className="research-ownership-row">
                   <div>
                     <strong>{row.kind} · {row.label}</strong>
-                    <span>{toSlugLabel(row.state)}</span>
+                    <span>{toSlugLabel(row.state)} · {toSlugLabel(row.item.priority || "medium")} priority · {describeDueState(row.item.dueDate)}</span>
                   </div>
-                  <select value={row.owner} onChange={(event) => updateOwner(row.kind, row.id, event.target.value)}>
-                    {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
-                  </select>
+                  <div className="research-ownership-actions">
+                    {isOverdue(row.item.dueDate, row.state) ? <span className="research-status-pill archived">Overdue</span> : null}
+                    <select value={row.owner} onChange={(event) => updateOwner(row.kind, row.id, event.target.value)}>
+                      {OWNER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
+                    </select>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2914,7 +3443,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
 
       <div className="research-guidance-banner" role="note">
         <strong>Research Flow</strong>
-        <span>Use Inbox to capture notes, Review Queue to clear drift, Tickers for symbol dossiers, Theses to formalize the view, Catalysts to time it, Triggers to define action thresholds, Decisions to log what the desk did, Briefs to hand the work forward, and Timeline to audit how the view evolved.</span>
+        <span>Capture notes, review drift, map coverage, build conviction, and hand forward briefs or decisions without leaving the research workflow.</span>
       </div>
 
       {renderViewTabs()}
@@ -2935,6 +3464,34 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       >
         {selectedDoc ? (
           <div className="research-document-detail">
+            {pendingPromotion.docId === selectedDoc.id ? (
+              <div className="research-promotion-box">
+                <strong>{toSlugLabel(pendingPromotion.draftType)} promotion</strong>
+                <span>Choose the right research scope and primary symbol before promoting this multi-name note.</span>
+                <div className="research-form-grid">
+                  <label>
+                    <span>Coverage scope</span>
+                    <select value={pendingPromotion.scope} onChange={(event) => setPendingPromotion((prev) => ({ ...prev, scope: event.target.value }))}>
+                      {COVERAGE_SCOPE_OPTIONS.map((value) => <option key={value} value={value}>{toSlugLabel(value)}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Primary symbol</span>
+                    <select value={pendingPromotion.targetSymbol} onChange={(event) => setPendingPromotion((prev) => ({ ...prev, targetSymbol: event.target.value }))}>
+                      {(selectedDoc.symbols || []).map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="research-action-row">
+                  <button type="button" className="research-btn primary" onClick={() => continueDocumentPromotion(selectedDoc, pendingPromotion.draftType, pendingPromotion.scope, pendingPromotion.targetSymbol)}>
+                    Continue promotion
+                  </button>
+                  <button type="button" className="research-btn secondary" onClick={() => setPendingPromotion({ docId: "", draftType: "", scope: "single_name", targetSymbol: "" })}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <div className="research-detail-symbols">
               {(Array.isArray(selectedDoc.symbols) && selectedDoc.symbols.length ? selectedDoc.symbols : ["Unlinked"]).map((symbol) => (
                 <button
@@ -2957,10 +3514,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   {toSlugLabel(status)}
                 </button>
               ))}
-              <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(selectedDoc, "thesis")}>Promote to Thesis</button>
-              <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(selectedDoc, "trigger")}>Create Trigger</button>
-              <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(selectedDoc, "catalyst")}>Add Catalyst</button>
-              <button type="button" className="research-link-btn" onClick={() => seedDraftFromDocument(selectedDoc, "decision")}>Log Decision</button>
+              <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "thesis")}>Promote to Thesis</button>
+              <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "trigger")}>Create Trigger</button>
+              <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "catalyst")}>Add Catalyst</button>
+              <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "decision")}>Log Decision</button>
             </div>
             {selectedDoc.url ? <a href={selectedDoc.url} target="_blank" rel="noreferrer">Open source reference</a> : null}
             <pre>{selectedDoc.body || selectedDoc.summary}</pre>
