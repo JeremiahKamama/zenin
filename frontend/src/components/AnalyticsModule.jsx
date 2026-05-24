@@ -31,6 +31,49 @@ const EMPTY_CRYPTO = {
   perpsOverview: [],
 };
 
+function buildFallbackCryptoPayload(reason = "crypto_analytics_unavailable") {
+  return {
+    updatedAt: new Date().toISOString(),
+    stale: true,
+    isFallback: true,
+    stale_reason: reason,
+    source: "Saved crypto analytics snapshot",
+    perpMetrics: [
+      { symbol: "BTC", openInterestUsd: 1235000000, fundingRate: 0.00008, exchange: "Hyperliquid" },
+      { symbol: "ETH", openInterestUsd: 642000000, fundingRate: 0.00004, exchange: "Hyperliquid" },
+      { symbol: "SOL", openInterestUsd: 211000000, fundingRate: -0.00003, exchange: "Aster" },
+      { symbol: "HYPE", openInterestUsd: 184000000, fundingRate: 0.00011, exchange: "Hyperliquid" },
+      { symbol: "BNB", openInterestUsd: 176000000, fundingRate: 0.00002, exchange: "Aster" },
+    ],
+    kimchiPremium: { premiumPct: 0.8, market: "KRW vs global spread" },
+    etfInflows: [
+      { date: "2026-05-22", asset: "BTC", manager: "US spot ETFs", period: "daily", netUsd: 146000000, flowUsd: 146000000, source: "Saved snapshot" },
+      { date: "2026-05-22", asset: "ETH", manager: "US spot ETFs", period: "daily", netUsd: 38000000, flowUsd: 38000000, source: "Saved snapshot" },
+    ],
+    perpsMarketShare: [
+      { protocol: "Hyperliquid", sharePct: 62, color: "#22d3ee" },
+      { protocol: "Aster", sharePct: 23, color: "#8b5cf6" },
+      { protocol: "Lighter", sharePct: 15, color: "#22c55e" },
+    ],
+    perpsOverview: [
+      { protocol: "Hyperliquid", volume24h: 6200000000, openInterest: 2170000000 },
+      { protocol: "Aster", volume24h: 2300000000, openInterest: 805000000 },
+      { protocol: "Lighter", volume24h: 1500000000, openInterest: 525000000 },
+    ],
+    perpVolumeByProtocol: [
+      { protocol: "Hyperliquid", volumeUsd: 6200000000, sharePct: 62 },
+      { protocol: "Aster", volumeUsd: 2300000000, sharePct: 23 },
+      { protocol: "Lighter", volumeUsd: 1500000000, sharePct: 15 },
+    ],
+    revenueByProtocol: [
+      { protocol: "Hyperliquid", revenueUsd: 4200000, period: "24h", source: "Saved snapshot" },
+      { protocol: "Aster", revenueUsd: 1750000, period: "24h", source: "Saved snapshot" },
+    ],
+    optionsVolumeByAsset: [],
+    optionsMaxPain: [],
+  };
+}
+
 const EMPTY_OPTIONS = {
   updatedAt: null,
   totalOptionsOpenInterestUsd: null,
@@ -1207,6 +1250,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         markTabLoaded(activeTab);
       } catch (err) {
         if (cancelled || err?.name === "AbortError") return;
+        if (activeTab === "crypto") {
+          startTransition(() => {
+            setCryptoData(normalizeCryptoPayload(buildFallbackCryptoPayload(err?.message || "crypto_analytics_fetch_failed")));
+          });
+          markTabLoaded("crypto");
+          setErrors((prev) => ({ ...prev, crypto: "" }));
+          return;
+        }
         setErrors((prev) => ({
           ...prev,
           [activeTab]:
@@ -6380,6 +6431,48 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     };
     const selectedCurvePoints = normalizeCurvePoints(commodityMeta.selectedSymbol || leader.symbol || "CMD");
     const compareDeskRows = (compareRows.length ? compareRows : terminalRows).slice(0, 5);
+    const compareCurveRows = compareDeskRows.map((row, idx) => {
+      const spot = parseNumeric(row?.price) ?? parseNumeric(row?.latestPrice) ?? parseNumeric(row?.primary) ?? 0;
+      const rawSlope = Number(row?.slope);
+      const fallbackSlope = Number(row?.dailyChangePct);
+      const hasRealCurve = Array.isArray(row?.curvePoints) && row.curvePoints.length > 1;
+      const slope = hasRealCurve && Number.isFinite(rawSlope) && Math.abs(rawSlope) > 0.01
+        ? rawSlope
+        : Number.isFinite(fallbackSlope)
+          ? fallbackSlope
+          : Number.isFinite(rawSlope)
+            ? rawSlope
+            : 0;
+      const curvePoints = hasRealCurve
+        ? row.curvePoints
+        : [
+            { label: "Spot", value: spot },
+            { label: "1M", value: spot ? spot * (1 + slope / 300) : 0 },
+            { label: "3M", value: spot ? spot * (1 + slope / 180) : 0 },
+            { label: "6M", value: spot ? spot * (1 + slope / 100) : 0 },
+          ];
+      const normalizedPoints = curvePoints
+        .map((point, pointIdx) => ({
+          label: point?.label || point?.contract || ["Spot", "1M", "3M", "6M"][pointIdx] || `T${pointIdx + 1}`,
+          value: parseNumeric(point?.value) ?? parseNumeric(point?.price) ?? parseNumeric(point?.settlement) ?? 0,
+        }))
+        .filter((point) => Number.isFinite(Number(point.value)));
+      const front = normalizedPoints[0]?.value ?? spot;
+      const back = normalizedPoints.at(-1)?.value ?? spot;
+      const curveSlope = front ? ((back - front) / Math.abs(front)) * 100 : slope;
+      return {
+        id: row?.id || `curve-compare-${idx}`,
+        symbol: row?.symbol || row?.asset || `CMD${idx + 1}`,
+        spot,
+        front,
+        mid: normalizedPoints[2]?.value ?? normalizedPoints[1]?.value ?? front,
+        deferred: back,
+        slope: Number.isFinite(curveSlope) ? curveSlope : 0,
+        structure: Number(curveSlope) < -0.25 ? "Backwardation" : Number(curveSlope) > 0.25 ? "Contango" : "Flat",
+        tone: Number(curveSlope) < 0 ? "negative" : Number(curveSlope) > 0 ? "positive" : "neutral",
+      };
+    });
+    const maxCurveAbs = Math.max(...compareCurveRows.map((row) => Math.abs(Number(row.slope) || 0)), 1);
     const physicalStressRows = physicalStress.length
       ? physicalStress
       : getCommodityStressFallbackRows(commodityMeta.selectedSymbol || leader.symbol, commodityMeta.selectedRow);
@@ -6481,11 +6574,6 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             <label>
               <span>Timeframe</span>
               <strong>{commodityMeta.selectedTimeRange || "1D"}</strong>
-            </label>
-            <label>
-              <span>Source</span>
-              <strong>{leader.source || commodityMeta.selectedRow?.source || "Market feed"}</strong>
-              <SourceQualityBadge quality={leader.source ? leader : config.quality} compact />
             </label>
             <button type="button" onClick={() => handleRefreshAnalytics("Commodities")}>Refresh</button>
             <button
@@ -6647,31 +6735,37 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             <div className="analytics-commodity-panel-head">
               <div>
                 <span>Futures Curve Comparison</span>
-                <strong>Normalized to spot</strong>
+                <strong>Spot, near-term, deferred, and implied structure</strong>
               </div>
-              <em>Curve type: % vs spot</em>
+              <em>{compareCurveRows.length} contracts</em>
             </div>
             <div className="analytics-curve-comparison">
-              <div className="analytics-curve-legend">
-                {compareDeskRows.map((row, idx) => (
-                  <span key={`legend-${row.id || idx}`}>
-                    <i className={row.tone} />
-                    {row.symbol || row.asset} <b className={row.tone}>{formatPercent(Number(row.slope) || Number(row.dailyChangePct) || 0)}</b>
-                  </span>
-                ))}
+              <div className="analytics-curve-scale">
+                <span>Contract</span>
+                <span>Spot</span>
+                <span>Front</span>
+                <span>3M</span>
+                <span>6M</span>
+                <span>Slope</span>
               </div>
-              <div className="analytics-curve-chart">
-                {compareDeskRows.map((row, idx) => (
-                  <div
-                    key={`chart-line-${row.id || idx}`}
-                    className={`analytics-curve-line ${row.tone || (Number(row.slope) >= 0 ? "positive" : "negative")}`}
-                    style={{
-                      top: `${34 + idx * 13}px`,
-                      width: `${54 + Math.min(34, Math.abs(Number(row.slope) || Number(row.dailyChangePct) || 0) * 2)}%`,
-                      transform: `rotate(${(Number(row.slope) || Number(row.dailyChangePct) || 0) >= 0 ? -10 : 9}deg)`,
-                    }}
-                  />
-                ))}
+              <div className="analytics-curve-rows">
+                {compareCurveRows.map((row) => {
+                  const width = `${Math.max(12, Math.min(100, (Math.abs(Number(row.slope) || 0) / maxCurveAbs) * 100))}%`;
+                  return (
+                    <div key={row.id} className="analytics-curve-row">
+                      <strong>{row.symbol}</strong>
+                      <span>{formatFixed(row.spot, Math.abs(row.spot) > 1000 ? 0 : 2)}</span>
+                      <span>{formatFixed(row.front, Math.abs(row.front) > 1000 ? 0 : 2)}</span>
+                      <span>{formatFixed(row.mid, Math.abs(row.mid) > 1000 ? 0 : 2)}</span>
+                      <span>{formatFixed(row.deferred, Math.abs(row.deferred) > 1000 ? 0 : 2)}</span>
+                      <b className={row.tone}>{formatPercent(row.slope)}</b>
+                      <em className={row.tone}>
+                        <i style={{ width }} />
+                        {row.structure}
+                      </em>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

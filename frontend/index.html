@@ -139,110 +139,19 @@
         }
       }
     </style>
-    <script>
-      (function () {
-        var path = String(window.location.pathname || "/").toLowerCase();
-        var isAuth = path.indexOf("/auth") === 0;
-        var isApp = path.indexOf("/app") === 0;
-        var siteUrl = "https://www.zenin.capital";
-        var entry = isAuth ? "auth" : isApp ? "app" : "public";
-        var robots = entry === "public"
-          ? "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
-          : "noindex, nofollow, noarchive";
-        var title = "Zenin Capital | Portfolio Tracker, Stock Research, Options Analysis, and Tax Estimator";
-        if (entry === "auth") title = "Zenin Capital | Sign In, Sign Up, and Account Security";
-        if (entry === "app") title = "Zenin Capital App | Trading Dashboard";
-
-        var robotsMeta = document.querySelector('meta[name="robots"]');
-        if (robotsMeta) robotsMeta.setAttribute("content", robots);
-
-        var canonical = document.querySelector('link[rel="canonical"]');
-        if (canonical) {
-          canonical.setAttribute("href", siteUrl + (entry === "public" ? "/" : path));
-        }
-
-        document.title = title;
-        window.__ZENIN_ENTRY__ = entry;
-      })();
-    </script>
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "name": "Zenin Capital",
-        "url": "https://www.zenin.capital/",
-        "applicationCategory": "FinanceApplication",
-        "operatingSystem": "Web",
-        "description": "Zenin Capital is a multi-asset market intelligence platform for portfolio tracking, stock research, options analysis, prediction-market monitoring, and tax estimation.",
-        "offers": [
-          {
-            "@type": "Offer",
-            "name": "Starter",
-            "price": "0",
-            "priceCurrency": "USD"
-          },
-          {
-            "@type": "Offer",
-            "name": "Pro",
-            "price": "29",
-            "priceCurrency": "USD"
-          },
-          {
-            "@type": "Offer",
-            "name": "Desk",
-            "price": "99",
-            "priceCurrency": "USD"
-          }
-        ],
-        "featureList": [
-          "Portfolio tracking",
-          "Stock research",
-          "Options analysis",
-          "Prediction-market monitoring",
-          "Tax estimation"
-        ]
-      }
-    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="zenin-boot">
+        <div class="zenin-boot-card">
+          <div class="zenin-boot-brand">Zenin Capital</div>
+          <h1 class="zenin-boot-title">Loading Zenin</h1>
+          <p class="zenin-boot-copy">Initializing portfolios, watchlists, market data, and your workspace.</p>
+          <div class="zenin-boot-progress" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
     <template id="zenin-public-prerender"></template>
-    <script>
-      (function () {
-        var entry = window.__ZENIN_ENTRY__ || "public";
-        var root = document.getElementById("root");
-        var template = document.getElementById("zenin-public-prerender");
-        if (!root) return;
-
-        if (entry === "public" && template && template.innerHTML.trim()) {
-          root.innerHTML = template.innerHTML;
-          root.dataset.prerendered = "public";
-          return;
-        }
-
-        var title = entry === "auth" ? "Preparing secure access" : "Loading your workspace";
-        var copy = entry === "auth"
-          ? "Starting Zenin account access with passkeys, OAuth, and recovery flows."
-          : "Initializing portfolios, watchlists, market data, and your Zenin workspace.";
-
-        root.dataset.prerendered = "boot";
-        root.innerHTML =
-          '<div class="zenin-boot">' +
-            '<div class="zenin-boot-card">' +
-              '<div class="zenin-boot-brand">Zenin Capital</div>' +
-              '<h1 class="zenin-boot-title">' + title + '</h1>' +
-              '<p class="zenin-boot-copy">' + copy + '</p>' +
-              '<div class="zenin-boot-progress" aria-hidden="true"></div>' +
-            '</div>' +
-          '</div>';
-      })();
-    </script>
-    <script>
-      if (window.__ZENIN_ENTRY__ && window.__ZENIN_ENTRY__ !== "public") {
-        var canonical = document.querySelector('link[rel="canonical"]');
-        if (canonical) canonical.setAttribute("href", "https://www.zenin.capital" + window.location.pathname);
-      }
-    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

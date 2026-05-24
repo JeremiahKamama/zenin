@@ -269,6 +269,12 @@ function isGuestAccessRequested() {
   return GUEST_ACCESS_VALUES.has(String(params.get("guest") || "").trim().toLowerCase());
 }
 
+function isGuestQueryRequested() {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  return GUEST_ACCESS_VALUES.has(String(params.get("guest") || "").trim().toLowerCase());
+}
+
 function redirectToAuthGate() {
   if (typeof window === "undefined") return;
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -341,6 +347,156 @@ const getFallbackAssetsForCategory = (category) =>
 
 const moduleLoadingFallback = <div className="loading-state module-loading-state">Loading workspace...</div>;
 
+function GuestStatusChip({ status }) {
+  const labelMap = {
+    live: "Live",
+    cached: "Cached",
+    saved: "Saved data",
+    delayed: "Delayed",
+    preview: "Preview"
+  };
+  const normalized = String(status || "preview").toLowerCase();
+  return <span className={`guest-status-chip ${normalized}`}>{labelMap[normalized] || "Preview"}</span>;
+}
+
+function GuestSavedDataBanner({ lastUpdated, liveStreamStatus, watchlistNotice, onRetryLiveData }) {
+  const status = liveStreamStatus === "connected" ? "live" : watchlistNotice ? "cached" : "saved";
+  return (
+    <section className="guest-data-banner" aria-label="Guest data status">
+      <div>
+        <GuestStatusChip status={status} />
+        <strong>Guest mode uses saved market data</strong>
+        <span>Snapshot {lastUpdated}. Retry live data when the backend feed is reachable.</span>
+      </div>
+      <button type="button" onClick={onRetryLiveData}>
+        Retry live data
+      </button>
+    </section>
+  );
+}
+
+function GuestPreviewCard({ module, isFocused = false, onOpenSection }) {
+  const href = `/app?guest=1&section=${getGuestSectionSlug(module.section)}`;
+  return (
+    <article className={`guest-preview-card ${isFocused ? "focused" : ""}`}>
+      <header>
+        <div>
+          <span>{module.eyebrow}</span>
+          <h3>{module.title}</h3>
+        </div>
+        <GuestStatusChip status={module.status} />
+      </header>
+      <p>{module.summary}</p>
+      <div className="guest-preview-metrics">
+        <strong>{module.primaryMetric}</strong>
+        <span>{module.secondaryMetric}</span>
+      </div>
+      <ul>
+        {module.bullets.map((bullet) => (
+          <li key={bullet}>{bullet}</li>
+        ))}
+      </ul>
+      <div className="guest-preview-table" aria-label={`${module.section} demo rows`}>
+        {module.rows.map((row) => (
+          <div key={`${module.section}-${row.join("-")}`}>
+            <strong>{row[0]}</strong>
+            <span>{row[1]}</span>
+            <em>{row[2]}</em>
+          </div>
+        ))}
+      </div>
+      <div className="guest-preview-actions">
+        <button type="button" onClick={() => onOpenSection(module.section)}>
+          Open preview
+        </button>
+        <a href={href}>Share link</a>
+      </div>
+    </article>
+  );
+}
+
+function GuestWorkflowCard({ workflow, onOpenSection }) {
+  return (
+    <article className="guest-workflow-card">
+      <header>
+        <span>{workflow.section}</span>
+        <h3>{workflow.title}</h3>
+      </header>
+      <ol>
+        {workflow.steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+      <button type="button" onClick={() => onOpenSection(workflow.section)}>
+        Start workflow
+      </button>
+    </article>
+  );
+}
+
+function GuestWorkspacePreview({
+  activeSection,
+  liveStreamStatus,
+  lastLivePriceAt,
+  watchlistNotice,
+  onOpenSection,
+  onRetryLiveData
+}) {
+  const focusedModule = GUEST_PREVIEW_BY_SECTION[activeSection] || null;
+  const modules = focusedModule
+    ? [focusedModule, ...GUEST_PREVIEW_MODULES.filter((module) => module.section !== focusedModule.section)]
+    : GUEST_PREVIEW_MODULES;
+  const lastUpdated = lastLivePriceAt
+    ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : GUEST_DEMO_SNAPSHOT_LABEL;
+
+  return (
+    <div className="view-container guest-workspace-preview">
+      <GuestSavedDataBanner
+        lastUpdated={lastUpdated}
+        liveStreamStatus={liveStreamStatus}
+        watchlistNotice={watchlistNotice}
+        onRetryLiveData={onRetryLiveData}
+      />
+      <section className="guest-workspace-hero">
+        <div>
+          <span>Guest workspace</span>
+          <h2>{focusedModule ? focusedModule.title : "Explore Zenin by tracking an asset, researching a catalyst, and journaling a decision."}</h2>
+          <p>
+            Use the saved demo workspace to inspect each core loop. Create an account when you want live data,
+            connected portfolios, synced notes, and persistent research.
+          </p>
+        </div>
+        <div className="guest-onboarding-checklist" aria-label="Guest onboarding checklist">
+          {GUEST_ONBOARDING_STEPS.map((step, index) => (
+            <span key={step} className={index < 2 ? "complete" : ""}>
+              <i aria-hidden="true">{index < 2 ? "OK" : index + 1}</i>
+              {step}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      <section className="guest-workflow-grid" aria-label="Sample workflows">
+        {GUEST_WORKFLOWS.map((workflow) => (
+          <GuestWorkflowCard key={workflow.title} workflow={workflow} onOpenSection={onOpenSection} />
+        ))}
+      </section>
+
+      <section className="guest-preview-grid" aria-label="Module demo previews">
+        {modules.map((module) => (
+          <GuestPreviewCard
+            key={module.section}
+            module={module}
+            isFocused={module.section === activeSection}
+            onOpenSection={onOpenSection}
+          />
+        ))}
+      </section>
+    </div>
+  );
+}
+
 const SIDEBAR_SECTION_META = {
   Home: {
     group: "Core",
@@ -390,6 +546,140 @@ const SIDEBAR_SECTION_META = {
 };
 
 const SIDEBAR_GROUP_ORDER = ["Core", "Research", "Tools"];
+
+const GUEST_DEMO_SNAPSHOT_LABEL = "May 24, 2026, 12:25";
+
+const GUEST_PREVIEW_MODULES = [
+  {
+    section: "Portfolio",
+    eyebrow: "Portfolio preview",
+    title: "Inspect a sample portfolio",
+    summary: "Review allocation, cash, P/L, and rebalance prompts without connecting an account.",
+    status: "saved",
+    primaryMetric: "$14.6K",
+    secondaryMetric: "+8.4% demo P/L",
+    bullets: ["AAPL and BTC holdings", "Allocation drift highlighted", "Read-only rebalance estimate"],
+    rows: [
+      ["AAPL", "$1,895", "+11.5%"],
+      ["BTC", "$4,713", "+45.0%"],
+      ["Cash", "$8,000", "Ready"]
+    ]
+  },
+  {
+    section: "Analytics",
+    eyebrow: "Analytics preview",
+    title: "Scan cross-market dashboards",
+    summary: "Compare crypto, options, equities, macro, and commodities using a saved market snapshot.",
+    status: "cached",
+    primaryMetric: "5 desks",
+    secondaryMetric: "Live retry available",
+    bullets: ["Crypto flow matrix", "Commodities stress stack", "Macro and equity factor tape"],
+    rows: [
+      ["Crypto", "Fallback matrix", "Saved"],
+      ["Commodities", "Curve desk", "Cached"],
+      ["Macro", "Risk indicators", "Delayed"]
+    ]
+  },
+  {
+    section: "Options",
+    eyebrow: "Options preview",
+    title: "Review derivatives risk",
+    summary: "Open interest, volatility, max-pain, and whale-flow examples are staged for evaluation.",
+    status: "preview",
+    primaryMetric: "$2.4B",
+    secondaryMetric: "sample OI",
+    bullets: ["BTC and ETH chains", "Gamma and skew samples", "Flow queue examples"],
+    rows: [
+      ["BTC", "Deribit", "IV 52%"],
+      ["ETH", "Deribit", "IV 61%"],
+      ["NVDA", "Equity proxy", "Watch"]
+    ]
+  },
+  {
+    section: "Research",
+    eyebrow: "Research preview",
+    title: "Turn a catalyst into a thesis",
+    summary: "Use prefilled briefs, catalysts, and follow-ups to see the research workflow.",
+    status: "saved",
+    primaryMetric: "6 briefs",
+    secondaryMetric: "2 active catalysts",
+    bullets: ["Ticker-linked notes", "Catalyst queue", "Bull/base/bear framing"],
+    rows: [
+      ["NVDA", "Earnings setup", "Open"],
+      ["BTC", "ETF flow pulse", "Monitor"],
+      ["CL", "Inventory stress", "Review"]
+    ]
+  },
+  {
+    section: "Journal",
+    eyebrow: "Journal preview",
+    title: "Capture the decision record",
+    summary: "Demo notes show how the app closes the loop from signal to decision.",
+    status: "saved",
+    primaryMetric: "4 notes",
+    secondaryMetric: "2 decisions",
+    bullets: ["Trade thesis", "Risk checklist", "Post-trade review"],
+    rows: [
+      ["NVDA", "Wait for guide", "Logged"],
+      ["BTC", "ETF inflow chase", "Avoid"],
+      ["CL", "Curve stress", "Watch"]
+    ]
+  },
+  {
+    section: "Tax Estimator",
+    eyebrow: "Tax preview",
+    title: "Estimate tax impact",
+    summary: "Sample lots demonstrate realized P/L, holding periods, and taxable scenarios.",
+    status: "preview",
+    primaryMetric: "$1.2K",
+    secondaryMetric: "demo gain",
+    bullets: ["Short vs long-term lots", "Scenario toggles", "Export-ready summary"],
+    rows: [
+      ["AAPL", "Long-term", "$195"],
+      ["BTC", "Short-term", "$1,017"],
+      ["Cash", "No event", "$0"]
+    ]
+  }
+];
+
+const GUEST_PREVIEW_BY_SECTION = GUEST_PREVIEW_MODULES.reduce((acc, item) => {
+  acc[item.section] = item;
+  return acc;
+}, {});
+
+const GUEST_WORKFLOWS = [
+  {
+    title: "Track asset",
+    section: "Watchlist",
+    steps: ["Add NVDA or BTC", "Check saved prices", "Retry live data when available"]
+  },
+  {
+    title: "Research catalyst",
+    section: "Research",
+    steps: ["Open the catalyst queue", "Frame bull/base/bear", "Attach notes to the asset"]
+  },
+  {
+    title: "Model risk",
+    section: "Analytics",
+    steps: ["Scan the dashboard", "Compare macro or flow stress", "Journal the decision"]
+  }
+];
+
+const GUEST_ONBOARDING_STEPS = [
+  "Review the demo workspace",
+  "Track one asset",
+  "Open one research preview",
+  "Create an account to save live workspace data"
+];
+
+function getGuestSectionSlug(section) {
+  return String(section || "Home").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "home";
+}
+
+function getSectionFromGuestSlug(slug, sections) {
+  const normalized = String(slug || "").trim().toLowerCase();
+  return sections.find((section) => getGuestSectionSlug(section) === normalized) || "";
+}
 
 const searchFallbackAssets = (query, type) => {
   const normalizedQuery = String(query || "").trim().toLowerCase();
@@ -716,6 +1006,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [watchlistStale, setWatchlistStale] = useState(false);
   const [watchlistNotice, setWatchlistNotice] = useState("");
+  const [watchlistRetryNonce, setWatchlistRetryNonce] = useState(0);
   const [sharedWatchlistAccess, setSharedWatchlistAccess] = useState({ shared: false, allowed: true, requiredPlan: "starter" });
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
@@ -1263,7 +1554,7 @@ function App() {
         setWatchlistNotice(cached?.payload ? getSnapshotFallbackMessage(cached.payload) : "Live market data is unavailable. Showing saved symbols without fresh prices.");
         setLoading(false);
       });
-  }, [activeCategory]);
+  }, [activeCategory, watchlistRetryNonce]);
 
 useEffect(() => {
     if (activeCategory !== "stocks" || !assets.length) return;
@@ -1309,6 +1600,30 @@ useEffect(() => {
       window.history.pushState({ page: "app" }, "", "/app");
     }
   };
+
+  const syncGuestSectionUrl = useCallback((section) => {
+    if (!isGuestQueryRequested() || typeof window === "undefined") return;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.pathname = "/app";
+    nextUrl.searchParams.set("guest", "1");
+    nextUrl.searchParams.set("section", getGuestSectionSlug(section));
+    window.history.replaceState({ page: "app", section }, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+  }, []);
+
+  const openWorkspaceSection = useCallback((section) => {
+    const appSections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
+    if (!appSections.includes(section)) return;
+    if (routeState.type === "company") navigateToAppRoute();
+    if (section === "Home") setHomeSubview(null);
+    setActiveSection(section);
+    syncGuestSectionUrl(section);
+  }, [routeState.type, syncGuestSectionUrl]);
+
+  const retryLiveData = useCallback(() => {
+    setWatchlistStale(false);
+    setWatchlistNotice("Retrying live data. Saved rows stay visible while Zenin checks the feed.");
+    setWatchlistRetryNonce((value) => value + 1);
+  }, []);
 
   const openCompanyProfile = (asset) => {
     if (!asset || normalizeAssetType(asset) !== "stock") return;
@@ -2551,12 +2866,17 @@ const handleOptionTradeClosed = async (tradeId) => {
   const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
   const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
   const [activeSection, setActiveSection] = useState(() => {
+    if (typeof window !== "undefined" && isGuestQueryRequested()) {
+      const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
+      if (requestedSection) return requestedSection;
+    }
     return sections.includes(savedSection) ? savedSection : "Home";
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
   const devFullAccess = useMemo(() => isDevFullAccessEnabled(), []);
+  const explicitGuestAccess = useMemo(() => isGuestQueryRequested(), []);
   const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
@@ -2623,6 +2943,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   });
   const [isGuestUser, setIsGuestUser] = useState(() => devFullAccess || allowGuestAccess || !hasStoredAuthSession());
+  const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
 
   const [themeMode, setThemeMode] = useState(() => {
     try {
@@ -4688,6 +5009,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const isSidebarVisuallyCollapsed = isSidebarCollapsed;
   const usesWorkspaceShell = routeState.type !== "company";
+  const shouldRenderGuestPreview = isExplicitGuestMode && (activeSection === "Home" || Boolean(GUEST_PREVIEW_BY_SECTION[activeSection]));
   const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
   const sharedWatchlistLocked = sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed;
   const hasDeskFeatureAccess = isAdmin || normalizeCurrentPlan(currentPlan) === "desk";
@@ -4773,14 +5095,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                   const navCode = `${group.label.slice(0, 1).toUpperCase()}${String(itemIndex + 1).padStart(2, "0")}`;
 
                   return (
-                    <button
+                    <a
                       key={section}
+                      href={isExplicitGuestMode ? `/app?guest=1&section=${getGuestSectionSlug(section)}` : "#"}
                       className={`nav-btn ${isActiveSection ? "active" : ""}`}
-                      onClick={() => {
+                      onClick={isExplicitGuestMode ? undefined : (event) => {
                         if (!accessibleSections.includes(section)) return;
-                        if (routeState.type === "company") navigateToAppRoute();
-                        if (section === "Home") setHomeSubview(null);
-                        setActiveSection(section);
+                        event.preventDefault();
+                        openWorkspaceSection(section);
                       }}
                       title={section}
                       aria-current={isActiveSection ? "page" : undefined}
@@ -4805,7 +5127,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       {isActiveSection && !isSidebarVisuallyCollapsed ? (
                         <span className="nav-kicker">{meta.eyebrow}</span>
                       ) : null}
-                    </button>
+                    </a>
                   );
                 })}
               </div>
@@ -4921,7 +5243,18 @@ const handleOptionTradeClosed = async (tradeId) => {
         ) : (
           <GenericErrorBoundary resetKey={`${routeState.type}:${routeState.type === "company" ? routeState.symbol || "company" : activeSection}`}>
             <Suspense fallback={moduleLoadingFallback}>
-        {activeSection === "Home" && (
+        {shouldRenderGuestPreview && (
+          <GuestWorkspacePreview
+            activeSection={activeSection}
+            liveStreamStatus={liveStreamStatus}
+            lastLivePriceAt={lastLivePriceAt}
+            watchlistNotice={watchlistNotice}
+            onOpenSection={openWorkspaceSection}
+            onRetryLiveData={retryLiveData}
+          />
+        )}
+
+        {activeSection === "Home" && !shouldRenderGuestPreview && (
           <>
             {renderConnectNudge("home")}
             {homeSubview === "metrics" ? (
@@ -4957,27 +5290,15 @@ const handleOptionTradeClosed = async (tradeId) => {
                 balance={balance}
                 openMarketContextOnMount={homeSubview === "market-context"}
                 onMarketContextOpened={() => setHomeSubview(null)}
-                onViewAllPositions={() => {
-                  if (routeState.type === "company") navigateToAppRoute();
-                  setActiveSection("Portfolio");
-                }}
+                onViewAllPositions={() => openWorkspaceSection("Portfolio")}
                 onViewFullMetrics={() => {
                   if (routeState.type === "company") navigateToAppRoute();
                   setActiveSection("Home");
                   setHomeSubview("metrics");
                 }}
-                onOpenWatchlist={() => {
-                  if (routeState.type === "company") navigateToAppRoute();
-                  setActiveSection("Watchlist");
-                }}
-                onOpenAnalytics={() => {
-                  if (routeState.type === "company") navigateToAppRoute();
-                  setActiveSection("Analytics");
-                }}
-                onOpenResearch={() => {
-                  if (routeState.type === "company") navigateToAppRoute();
-                  setActiveSection("Research");
-                }}
+                onOpenWatchlist={() => openWorkspaceSection("Watchlist")}
+                onOpenAnalytics={() => openWorkspaceSection("Analytics")}
+                onOpenResearch={() => openWorkspaceSection("Research")}
               />
             )}
           </>
@@ -4985,6 +5306,14 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         {activeSection === "Watchlist" && (
           <div className="view-container">
+            {isExplicitGuestMode ? (
+              <GuestSavedDataBanner
+                lastUpdated={lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}
+                liveStreamStatus={liveStreamStatus}
+                watchlistNotice={watchlistNotice}
+                onRetryLiveData={retryLiveData}
+              />
+            ) : null}
             {sharedWatchlistLocked ? (
               <>
                 <section className="desk-watchlist-lock" role="status">
@@ -5178,7 +5507,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         )}
 
-        {activeSection === "Portfolio" && (
+        {activeSection === "Portfolio" && !shouldRenderGuestPreview && (
           <div className="view-container portfolio-shell-view">
             {renderConnectNudge("portfolio")}
             <PortfolioModule
@@ -5214,14 +5543,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                   };
                   setSelectedAsset(enriched);
                 }}
-                onOpenPredictions={() => {
-                  if (routeState.type === "company") navigateToAppRoute();
-                  setActiveSection("Predictions");
-                }}
-                onOpenJournal={() => {
-                  if (routeState.type === "company") navigateToAppRoute();
-                  setActiveSection("Journal");
-                }}
+                onOpenPredictions={() => openWorkspaceSection("Predictions")}
+                onOpenJournal={() => openWorkspaceSection("Journal")}
                 onOpenMarketContext={() => {
                   if (routeState.type === "company") navigateToAppRoute();
                   setActiveSection("Home");
@@ -5239,24 +5562,24 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         )}
 
-       {activeSection === "Analytics" && (
+       {activeSection === "Analytics" && !shouldRenderGuestPreview && (
         <div className="view-container">
           <AnalyticsModule backendUrl={BACKEND_URL} hasDeskFeatureAccess={hasDeskFeatureAccess} />
         </div>
       )}
 
-        {activeSection === "Research" && (
+        {activeSection === "Research" && !shouldRenderGuestPreview && (
           <div className="view-container">
             <ResearchModule
               portfolio={portfolioWithEntry}
               watchlistAssets={watchlistAssets}
-              onOpenWatchlist={() => setActiveSection("Watchlist")}
-              onOpenPortfolio={() => setActiveSection("Portfolio")}
+              onOpenWatchlist={() => openWorkspaceSection("Watchlist")}
+              onOpenPortfolio={() => openWorkspaceSection("Portfolio")}
             />
           </div>
         )}
 
-        {activeSection === "Options" && (
+        {activeSection === "Options" && !shouldRenderGuestPreview && (
           <OptionsModule
             activeOptionsTrades={activeOptionsTrades}
             setActiveOptionsTrades={setActiveOptionsTrades}
@@ -5272,7 +5595,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           <PredictionMarketModule />
         )}
 
-        {activeSection === "Journal" && (
+        {activeSection === "Journal" && !shouldRenderGuestPreview && (
           <JournalModule
             trades={trades}
             portfolio={portfolioWithEntry}
@@ -5284,7 +5607,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           />
         )}
 
-        {activeSection === "Tax Estimator" && (
+        {activeSection === "Tax Estimator" && !shouldRenderGuestPreview && (
           <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} />
         )}
             </Suspense>
