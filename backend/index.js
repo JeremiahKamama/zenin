@@ -512,6 +512,81 @@ const EIA_SERIES_BY_COMMODITY = {
   ]
 };
 
+const COMMODITY_STRESS_SOURCE_PROFILES = {
+  CL: {
+    weatherAreas: ["TX", "LA", "OK"],
+    rows: [
+      { category: "Inventories", label: "U.S. commercial crude stocks", source: "EIA Weekly Petroleum Status Report", sourceUrl: "https://www.eia.gov/petroleum/supply/weekly/", sourceType: "Official weekly stocks", note: "U.S. crude and petroleum product stocks by PADD" },
+      { category: "Inventories", label: "Cushing crude stocks", source: "EIA Petroleum & Other Liquids", sourceUrl: "https://www.eia.gov/petroleum/data.php", sourceType: "Official storage hub stocks", note: "Tank farm and pipeline stocks for the Cushing delivery hub" },
+      { category: "Weather", label: "Gulf Coast energy alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=TX", sourceType: "Live weather alerts", note: "Texas, Louisiana, and Oklahoma alerts mapped to production/refining/logistics risk" },
+    ],
+  },
+  BZ: {
+    weatherAreas: ["TX", "LA"],
+    rows: [
+      { category: "Inventories", label: "OECD petroleum inventories", source: "IEA Oil Market Report", sourceUrl: "https://www.iea.org/reports/oil-market-report-may-2026", sourceType: "Official global oil balance source", note: "Brent risk is best tracked with global commercial stock and product balance data" },
+      { category: "Inventories", label: "U.S. petroleum stocks proxy", source: "EIA Weekly Petroleum Status Report", sourceUrl: "https://www.eia.gov/petroleum/supply/weekly/", sourceType: "Official weekly stocks", note: "U.S. stock changes are a liquid proxy for Atlantic Basin inventory stress" },
+      { category: "Weather", label: "Gulf Coast export/refinery alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=TX", sourceType: "Live weather alerts", note: "Storms, flooding, heat, or freeze risk around U.S. Gulf energy infrastructure" },
+    ],
+  },
+  NG: {
+    weatherAreas: ["TX", "LA", "OK", "PA"],
+    rows: [
+      { category: "Inventories", label: "Lower 48 working gas storage", source: "EIA Natural Gas Storage Dashboard", sourceUrl: "https://www.eia.gov/naturalgas/storage/dashboard/", sourceType: "Official weekly storage", note: "Working gas in underground storage for the Lower 48" },
+      { category: "Inventories", label: "Natural gas weekly update", source: "EIA Natural Gas Weekly Update", sourceUrl: "https://www.eia.gov/naturalgas/weekly/", sourceType: "Official market update", note: "Storage, production, demand, and regional price context" },
+      { category: "Weather", label: "Gas-weighted weather alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=TX", sourceType: "Live weather alerts", note: "Alerts across major producing and demand regions" },
+    ],
+  },
+  GC: {
+    weatherAreas: ["NV", "AK"],
+    rows: [
+      { category: "Warehouse Stocks", label: "COMEX gold vault stocks", source: "CME Group daily metals stocks", sourceUrl: "https://www.cmegroup.com/clearing/operations-and-deliveries/nymex-delivery-notices.html", sourceType: "Exchange warehouse source", note: "Registered and eligible vault inventories for deliverable metal" },
+      { category: "Warehouse Stocks", label: "LBMA vault holdings", source: "LBMA vault holdings", sourceUrl: "https://www.lbma.org.uk/prices-and-data/london-vault-holdings-data", sourceType: "Official London vault source", note: "London market gold holdings and monthly changes" },
+      { category: "Weather", label: "Mine-region disruption alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=NV", sourceType: "Live weather alerts", note: "Weather alerts for U.S. gold-producing regions" },
+    ],
+  },
+  SI: {
+    weatherAreas: ["NV", "AK"],
+    rows: [
+      { category: "Warehouse Stocks", label: "COMEX silver vault stocks", source: "CME Group daily metals stocks", sourceUrl: "https://www.cmegroup.com/clearing/operations-and-deliveries/nymex-delivery-notices.html", sourceType: "Exchange warehouse source", note: "Registered and eligible vault inventories for deliverable silver" },
+      { category: "Warehouse Stocks", label: "LBMA silver vault holdings", source: "LBMA vault holdings", sourceUrl: "https://www.lbma.org.uk/prices-and-data/london-vault-holdings-data", sourceType: "Official London vault source", note: "London market silver holdings and monthly changes" },
+      { category: "Weather", label: "Mine-region disruption alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=NV", sourceType: "Live weather alerts", note: "Weather alerts for U.S. silver-producing regions" },
+    ],
+  },
+  HG: {
+    weatherAreas: ["AZ", "UT"],
+    rows: [
+      { category: "Warehouse Stocks", label: "LME copper warehouse stocks", source: "London Metal Exchange reports", sourceUrl: "https://www.lme.com/en/Market-data/Reports-and-data/Warehouse-and-stocks-reports", sourceType: "Exchange warehouse source", note: "Global LME warranted stocks and cancelled warrants" },
+      { category: "Warehouse Stocks", label: "COMEX copper stocks", source: "CME Group daily metals stocks", sourceUrl: "https://www.cmegroup.com/clearing/operations-and-deliveries/nymex-delivery-notices.html", sourceType: "Exchange warehouse source", note: "Deliverable U.S. exchange copper inventory" },
+      { category: "Weather", label: "U.S. copper mine alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=AZ", sourceType: "Live weather alerts", note: "Arizona and Utah alerts mapped to domestic mine/logistics risk" },
+    ],
+  },
+  ZC: {
+    weatherAreas: ["IA", "IL", "NE"],
+    rows: [
+      { category: "Inventories", label: "U.S. corn stocks", source: "USDA/NASS Grain Stocks", sourceUrl: "https://www.nass.usda.gov/Surveys/Guide_to_NASS_Surveys/Grain_Stocks/", sourceType: "Official crop stocks", note: "Quarterly grain stocks and disappearance" },
+      { category: "Inventories", label: "WASDE corn balance sheet", source: "USDA WASDE", sourceUrl: "https://www.usda.gov/oce/commodity/wasde", sourceType: "Official supply-demand source", note: "Ending stocks, production, use, and export balance" },
+      { category: "Weather", label: "Corn Belt weather alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=IA", sourceType: "Live weather alerts", note: "Iowa, Illinois, and Nebraska alerts for planting/growing/harvest risk" },
+    ],
+  },
+  ZW: {
+    weatherAreas: ["KS", "ND", "OK"],
+    rows: [
+      { category: "Inventories", label: "U.S. wheat stocks", source: "USDA/NASS Grain Stocks", sourceUrl: "https://www.nass.usda.gov/Surveys/Guide_to_NASS_Surveys/Grain_Stocks/", sourceType: "Official crop stocks", note: "Quarterly wheat stocks and disappearance" },
+      { category: "Inventories", label: "WASDE wheat balance sheet", source: "USDA WASDE", sourceUrl: "https://www.usda.gov/oce/commodity/wasde", sourceType: "Official supply-demand source", note: "Ending stocks, production, food/feed use, and exports" },
+      { category: "Weather", label: "Wheat belt weather alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=KS", sourceType: "Live weather alerts", note: "Kansas, North Dakota, and Oklahoma alerts for crop stress" },
+    ],
+  },
+  ZS: {
+    weatherAreas: ["IA", "IL", "MN"],
+    rows: [
+      { category: "Inventories", label: "U.S. soybean stocks", source: "USDA/NASS Grain Stocks", sourceUrl: "https://www.nass.usda.gov/Surveys/Guide_to_NASS_Surveys/Grain_Stocks/", sourceType: "Official crop stocks", note: "Quarterly soybean stocks and disappearance" },
+      { category: "Inventories", label: "WASDE soybean balance sheet", source: "USDA WASDE", sourceUrl: "https://www.usda.gov/oce/commodity/wasde", sourceType: "Official supply-demand source", note: "Ending stocks, crush, exports, and production balance" },
+      { category: "Weather", label: "Soybean belt weather alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=IA", sourceType: "Live weather alerts", note: "Iowa, Illinois, and Minnesota alerts for crop stress" },
+    ],
+  },
+};
+
 async function fetchEiaSeries(seriesId) {
   if (!EIA_API_KEY) throw new Error("eia_api_key_missing");
   const params = new URLSearchParams({ api_key: EIA_API_KEY, series_id: seriesId });
@@ -523,6 +598,112 @@ async function fetchEiaSeries(seriesId) {
   return rows
     .map((row) => ({ date: String(row?.[0] || ""), value: toProviderNumber(row?.[1]) }))
     .filter((row) => row.date && row.value !== null);
+}
+
+function getCommodityStressProfile(item) {
+  const symbol = String(item?.symbol || "").toUpperCase();
+  if (COMMODITY_STRESS_SOURCE_PROFILES[symbol]) return COMMODITY_STRESS_SOURCE_PROFILES[symbol];
+  const group = String(item?.group || "").toLowerCase();
+  if (group === "energy") return COMMODITY_STRESS_SOURCE_PROFILES.CL;
+  if (group === "agriculture") return COMMODITY_STRESS_SOURCE_PROFILES.ZC;
+  if (group === "metals" || group === "industrial" || group === "battery") return COMMODITY_STRESS_SOURCE_PROFILES.HG;
+  return {
+    weatherAreas: ["TX"],
+    rows: [
+      { category: "Inventories", label: `${item?.name || item?.symbol || "Commodity"} inventory source`, source: "Commodity catalog", sourceUrl: "https://www.eia.gov/petroleum/data.php", sourceType: "Configured source pointer", note: "No dedicated official pull mapping is configured for this contract yet" },
+      { category: "Weather", label: "U.S. weather alerts", source: "NOAA/NWS active alerts", sourceUrl: "https://api.weather.gov/alerts/active?area=TX", sourceType: "Live weather alerts", note: "Generic U.S. disruption proxy until a contract-specific region is mapped" },
+    ],
+  };
+}
+
+async function fetchNwsActiveAlertsByAreas(areaCodes = []) {
+  const uniqueAreas = [...new Set(areaCodes.map((area) => String(area || "").trim().toUpperCase()).filter(Boolean))].slice(0, 4);
+  if (!uniqueAreas.length) return [];
+  const settled = await Promise.allSettled(uniqueAreas.map(async (area) => {
+    const payload = await cachedProviderFetch(`nws-alerts:${area}`, () =>
+      fetchJsonWithTimeout(`https://api.weather.gov/alerts/active?area=${encodeURIComponent(area)}`, {
+        headers: {
+          Accept: "application/geo+json",
+          "User-Agent": "Zenin commodity stress monitor (support@zenin.local)",
+        },
+        timeoutMs: 5000,
+      }),
+      10 * 60 * 1000
+    );
+    const features = Array.isArray(payload?.features) ? payload.features : [];
+    const severe = features.find((feature) => /extreme|severe/i.test(String(feature?.properties?.severity || ""))) || features[0] || null;
+    return {
+      area,
+      alertCount: features.length,
+      event: severe?.properties?.event || null,
+      severity: severe?.properties?.severity || null,
+      effective: severe?.properties?.effective || null,
+      sourceUrl: `https://api.weather.gov/alerts/active?area=${encodeURIComponent(area)}`,
+    };
+  }));
+  return settled
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+}
+
+async function buildCommodityStressRows(item) {
+  const profile = getCommodityStressProfile(item);
+  const sourceRows = profile.rows.map((row, idx) => ({
+    id: `stress-source-${idx}`,
+    symbol: item.symbol,
+    ...row,
+    value: null,
+    unit: "",
+    status: "Source mapped",
+    pulled: false,
+    stale: true,
+    unavailable: true,
+  }));
+
+  const eiaRows = await fetchEiaCommodityFundamentals(item.symbol).catch(() => ({ rows: [] }));
+  const inventoryRows = (eiaRows.rows || [])
+    .filter((row) => /stock|storage|working gas/i.test(String(row.metric || "")))
+    .map((row, idx) => ({
+      id: `stress-eia-${idx}`,
+      symbol: item.symbol,
+      category: "Inventories",
+      label: row.metric,
+      value: row.value,
+      unit: row.unit,
+      asOf: row.asOf,
+      source: "EIA",
+      sourceType: "Official energy inventory pull",
+      sourceUrl: "https://www.eia.gov/petroleum/data.php",
+      note: row.seriesId ? `Series ${row.seriesId}` : row.sourceWhy || "Official U.S. energy time series",
+      status: "Pulled",
+      pulled: true,
+      stale: false,
+      unavailable: false,
+    }));
+
+  const nwsRows = await fetchNwsActiveAlertsByAreas(profile.weatherAreas).catch(() => []);
+  const weatherRows = nwsRows.map((row) => ({
+    id: `stress-weather-${row.area}`,
+    symbol: item.symbol,
+    category: "Weather",
+    label: `${row.area} active weather alerts`,
+    value: row.alertCount,
+    unit: "alerts",
+    asOf: row.effective || new Date().toISOString(),
+    source: "NOAA/NWS",
+    sourceType: "Live active alert pull",
+    sourceUrl: row.sourceUrl,
+    note: row.event ? `${row.event}${row.severity ? ` (${row.severity})` : ""}` : "No active severe alert headline returned",
+    status: "Pulled",
+    pulled: true,
+    stale: false,
+    unavailable: false,
+    tone: row.alertCount > 0 ? "warning" : "positive",
+  }));
+
+  const bySourceKey = new Set([...inventoryRows, ...weatherRows].map((row) => `${row.category}:${row.label}`.toLowerCase()));
+  const mappedRows = sourceRows.filter((row) => !bySourceKey.has(`${row.category}:${row.label}`.toLowerCase()));
+  return [...inventoryRows, ...weatherRows, ...mappedRows];
 }
 
 async function fetchEiaCommodityFundamentals(symbol) {
@@ -743,6 +924,7 @@ const corsAllowedHeaders = [
   "Authorization",
   "X-Requested-With",
   "Accept",
+  "X-CSRF-Token",
   "X-Zenin-Simulate-Plan"
 ];
 
@@ -10703,6 +10885,10 @@ const COMMODITY_SOURCE_MAP = {
     sourceType: "Inventory, production, supply-demand datasets",
     why: "Core commodity drivers",
   },
+  stress: {
+    sourceType: "Official inventory, warehouse, and weather feeds",
+    why: "Physical-market stress should separate live pulls from sourced-but-keyed datasets",
+  },
   calendar: {
     sourceType: "Economic calendar API",
     why: "Release timing, actual vs forecast",
@@ -11078,6 +11264,51 @@ app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
       stale_reason: error?.message || "commodity_fundamentals_fetch_failed",
       metrics: items,
       items
+    });
+  }
+});
+
+app.get("/api/commodities/:symbol/stress", async (req, res) => {
+  const item = getCommodity(req.params.symbol);
+  try {
+    const rows = await buildCommodityStressRows(item);
+    const pulledCount = rows.filter((row) => row?.pulled).length;
+    res.json({
+      updatedAt: new Date().toISOString(),
+      symbol: item.symbol,
+      source: pulledCount ? "EIA/NOAA/NWS + official source map" : "Official source map",
+      stale: pulledCount === 0 || undefined,
+      stale_reason: pulledCount ? undefined : "commodity_stress_sources_mapped_no_live_rows",
+      rows,
+      stress: rows,
+      providers: buildDataProviderStatus({
+        eia: buildProviderStatus("EIA", Boolean(EIA_API_KEY), EIA_API_KEY ? "connected" : "missing_key", "Energy inventory and storage series"),
+        nws: buildProviderStatus("NOAA/NWS", true, "connected", "Active weather alerts do not require an API key")
+      })
+    });
+  } catch (error) {
+    const profile = getCommodityStressProfile(item);
+    const rows = profile.rows.map((row, idx) => ({
+      id: `stress-fallback-${idx}`,
+      symbol: item.symbol,
+      ...row,
+      value: null,
+      unit: "",
+      status: "Source mapped",
+      pulled: false,
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "commodity_stress_fetch_failed",
+    }));
+    res.json({
+      updatedAt: new Date().toISOString(),
+      symbol: item.symbol,
+      source: "Official source map",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "commodity_stress_fetch_failed",
+      rows,
+      stress: rows,
     });
   }
 });

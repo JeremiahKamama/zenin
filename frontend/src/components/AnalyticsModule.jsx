@@ -124,6 +124,7 @@ const EMPTY_COMMODITIES = {
   list: [],
   priceSeries: [],
   fundamentals: [],
+  stress: [],
   flows: [],
   seasonality: [],
   curve: [],
@@ -146,6 +147,32 @@ const COMMODITY_TERMINAL_UNIVERSE = [
   { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: 6.45, dailyChangePct: 1.55, ytdChangePct: 6.1, oneYearReturnPct: -2.8, curveStructure: "Weather bid", inventory: "Above Avg", demand: "Weak", risk: "High", source: "Yahoo Finance + USDA" },
   { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: 12.37, dailyChangePct: 1.21, ytdChangePct: 7.4, oneYearReturnPct: 6.7, curveStructure: "Carry", inventory: "High", demand: "Neutral", risk: "Medium", source: "Yahoo Finance + USDA" },
 ];
+
+const COMMODITY_STRESS_FALLBACKS = {
+  energy: [
+    { category: "Inventories", label: "Weekly petroleum or gas stocks", status: "Source mapped", note: "Official inventory pull needs a configured EIA key", source: "EIA", sourceUrl: "https://www.eia.gov/petroleum/data.php" },
+    { category: "Inventories", label: "Weekly storage release", status: "Source mapped", note: "Use EIA weekly reports for crude, products, and natural gas storage", source: "EIA weekly reports", sourceUrl: "https://www.eia.gov/petroleum/supply/weekly/" },
+    { category: "Weather", label: "Energy-region weather alerts", status: "Source mapped", note: "Backend pulls active NOAA/NWS alerts when reachable", source: "NOAA/NWS", sourceUrl: "https://api.weather.gov/alerts/active?area=TX" },
+  ],
+  metals: [
+    { category: "Warehouse Stocks", label: "Exchange warehouse stocks", status: "Source mapped", note: "Registered/eligible vault stocks and warranted inventories", source: "CME Group", sourceUrl: "https://www.cmegroup.com/clearing/operations-and-deliveries/nymex-delivery-notices.html" },
+    { category: "Warehouse Stocks", label: "LME warehouse reports", status: "Source mapped", note: "Warranted stocks and cancelled warrants for base metals", source: "LME", sourceUrl: "https://www.lme.com/en/Market-data/Reports-and-data/Warehouse-and-stocks-reports" },
+    { category: "Weather", label: "Mine-region weather alerts", status: "Source mapped", note: "Backend pulls active NOAA/NWS alerts for mapped U.S. mining regions", source: "NOAA/NWS", sourceUrl: "https://api.weather.gov/alerts/active?area=AZ" },
+  ],
+  agriculture: [
+    { category: "Inventories", label: "Grain stocks", status: "Source mapped", note: "Official crop stocks require USDA/NASS source access", source: "USDA/NASS", sourceUrl: "https://www.nass.usda.gov/Surveys/Guide_to_NASS_Surveys/Grain_Stocks/" },
+    { category: "Inventories", label: "WASDE balance sheet", status: "Source mapped", note: "Ending stocks, production, use, and export balance", source: "USDA WASDE", sourceUrl: "https://www.usda.gov/oce/commodity/wasde" },
+    { category: "Weather", label: "Crop-belt weather alerts", status: "Source mapped", note: "Backend pulls active NOAA/NWS alerts for mapped crop regions", source: "NOAA/NWS", sourceUrl: "https://api.weather.gov/alerts/active?area=IA" },
+  ],
+};
+
+function getCommodityStressFallbackRows(symbol, selectedRow = null) {
+  const key = String(symbol || selectedRow?.symbol || "").toUpperCase();
+  const group = String(selectedRow?.group || "").toLowerCase();
+  if (["CL", "BZ", "NG", "RB"].includes(key) || group === "energy") return COMMODITY_STRESS_FALLBACKS.energy;
+  if (["ZC", "ZW", "ZS"].includes(key) || group === "agriculture") return COMMODITY_STRESS_FALLBACKS.agriculture;
+  return COMMODITY_STRESS_FALLBACKS.metals;
+}
 
 const MACRO_CATEGORY_OPTIONS = [
   { key: "growth", label: "Growth" },
@@ -1012,9 +1039,10 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         fetchJson("/commodities/alerts"),
       ]);
 
-      const [priceRes, fundamentalsRes, flowsRes, seasonalityRes, curveRes, compareRes, calendarRes, correlationRes] = await Promise.all([
+      const [priceRes, fundamentalsRes, stressRes, flowsRes, seasonalityRes, curveRes, compareRes, calendarRes, correlationRes] = await Promise.all([
         selectedCommoditySymbol ? fetchJson(`/commodities/${encodeURIComponent(selectedCommoditySymbol)}/price?range=${encodeURIComponent(selectedCommodityTimeRange)}&region=${encodeURIComponent(selectedCommodityRegion)}`) : Promise.resolve(null),
         selectedCommoditySymbol ? fetchJson(`/commodities/${encodeURIComponent(selectedCommoditySymbol)}/fundamentals`) : Promise.resolve(null),
+        selectedCommoditySymbol ? fetchJson(`/commodities/${encodeURIComponent(selectedCommoditySymbol)}/stress`) : Promise.resolve(null),
         selectedCommoditySymbol ? fetchJson(`/commodities/${encodeURIComponent(selectedCommoditySymbol)}/flows?mode=${encodeURIComponent(commodityFlowMode)}`) : Promise.resolve(null),
         selectedCommoditySymbol ? fetchJson(`/commodities/${encodeURIComponent(selectedCommoditySymbol)}/seasonality`) : Promise.resolve(null),
         selectedCommoditySymbol ? fetchJson(`/commodities/${encodeURIComponent(selectedCommoditySymbol)}/curve`) : Promise.resolve(null),
@@ -1042,6 +1070,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         list: newList,
         priceSeries: rowsFrom(priceRes, "series"),
         fundamentals: rowsFrom(fundamentalsRes, "items").length ? rowsFrom(fundamentalsRes, "items") : rowsFrom(fundamentalsRes, "metrics"),
+        stress: rowsFrom(stressRes, "rows").length ? rowsFrom(stressRes, "rows") : rowsFrom(stressRes, "stress"),
         flows: rowsFrom(flowsRes, "items").length ? rowsFrom(flowsRes, "items") : rowsFrom(flowsRes, "flows"),
         seasonality: rowsFrom(seasonalityRes, "items").length ? rowsFrom(seasonalityRes, "items") : rowsFrom(seasonalityRes, "seasonality"),
         curve: rowsFrom(curveRes, "points").length ? rowsFrom(curveRes, "points") : rowsFrom(curveRes, "curve"),
@@ -1049,7 +1078,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         calendar: rowsFrom(calendarRes, "events").length ? rowsFrom(calendarRes, "events") : rowsFrom(calendarRes, "calendar"),
         alerts: rowsFrom(alertsRes, "items").length ? rowsFrom(alertsRes, "items") : rowsFrom(alertsRes, "alerts"),
         correlation: rowsFrom(correlationRes, "rows").length ? rowsFrom(correlationRes, "rows") : rowsFrom(correlationRes, "correlation"),
-        providers: overviewRes?.providers || listRes?.providers || fundamentalsRes?.providers || prev.providers || null,
+        providers: overviewRes?.providers || listRes?.providers || stressRes?.providers || fundamentalsRes?.providers || prev.providers || null,
       }));
       setCommodityAlertRules((prev) => (prev.length ? prev : rowsFrom(alertsRes, "items")));
       markTabLoaded("commodities");
@@ -2000,6 +2029,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         rail: [
           { label: "Flow mode", value: commodityFlowMode.toUpperCase(), helper: `${(commoditiesData.flows || []).length} rows` },
           { label: "Fundamentals", value: String((commoditiesData.fundamentals || []).length), helper: "Inventory/demand" },
+          { label: "Stress stack", value: String((commoditiesData.stress || []).length), helper: "Inventory/weather" },
           { label: "Seasonality", value: String((commoditiesData.seasonality || []).length), helper: selectedCommodityTimeRange },
           { label: "Alerts", value: String((commodityAlertRules || []).length + (commoditiesData.alerts || []).length), helper: "Saved + active" },
         ],
@@ -2010,6 +2040,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
           selectedRow: selectedCommodityRow,
           curveRows: Array.isArray(commoditiesData.curve) ? commoditiesData.curve : [],
           fundamentals: Array.isArray(commoditiesData.fundamentals) ? commoditiesData.fundamentals : [],
+          stress: Array.isArray(commoditiesData.stress) ? commoditiesData.stress : [],
           flows: Array.isArray(commoditiesData.flows) ? commoditiesData.flows : [],
           seasonality: Array.isArray(commoditiesData.seasonality) ? commoditiesData.seasonality : [],
           compare: Array.isArray(commoditiesData.compare) ? commoditiesData.compare : [],
@@ -6230,6 +6261,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     const commodityMeta = config.commodityMeta || {};
     const curveRows = Array.isArray(commodityMeta.curveRows) ? commodityMeta.curveRows : [];
     const fundamentals = Array.isArray(commodityMeta.fundamentals) ? commodityMeta.fundamentals : [];
+    const physicalStress = Array.isArray(commodityMeta.stress) ? commodityMeta.stress : [];
     const flows = Array.isArray(commodityMeta.flows) ? commodityMeta.flows : [];
     const seasonality = Array.isArray(commodityMeta.seasonality) ? commodityMeta.seasonality : [];
     const compareRows = Array.isArray(commodityMeta.compare) ? commodityMeta.compare : [];
@@ -6348,41 +6380,68 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     };
     const selectedCurvePoints = normalizeCurvePoints(commodityMeta.selectedSymbol || leader.symbol || "CMD");
     const compareDeskRows = (compareRows.length ? compareRows : terminalRows).slice(0, 5);
-    const stressRows = [
-      {
-        section: "Flow monitor",
-        rows: (flows.length ? flows : []).slice(0, 4).map((row, idx) => ({
-          id: `flow-${idx}`,
-          label: row?.date || row?.type || "Flow snapshot",
-          value: row?.value,
-          unit: "contracts",
-          note: row?.trend || row?.sourceWhy || row?.sourceType || "Flow signal",
-          tone: String(row?.trend || "").toLowerCase().includes("decline") ? "negative" : "positive",
-        })),
-      },
-      {
-        section: "Fundamental stack",
-        rows: (fundamentals.length ? fundamentals : []).slice(0, 4).map((row, idx) => ({
-          id: `fund-${idx}`,
-          label: row?.metric || `Metric ${idx + 1}`,
-          value: row?.value,
-          unit: row?.unit || "",
-          note: row?.sourceWhy || row?.sourceType || "Fundamental snapshot",
-          tone: "neutral",
-        })),
-      },
-      {
-        section: "Calendar & catalysts",
-        rows: (calendarRows.length ? calendarRows : []).slice(0, 4).map((row, idx) => ({
-          id: `cal-${idx}`,
-          label: row?.event || `Catalyst ${idx + 1}`,
-          value: row?.date,
-          unit: "",
-          note: row?.importance || row?.sourceWhy || row?.sourceType || "Calendar event",
-          tone: String(row?.importance || "").toLowerCase().includes("high") ? "negative" : "warning",
-        })),
-      },
-    ].filter((section) => section.rows.length);
+    const physicalStressRows = physicalStress.length
+      ? physicalStress
+      : getCommodityStressFallbackRows(commodityMeta.selectedSymbol || leader.symbol, commodityMeta.selectedRow);
+    const groupedPhysicalStress = physicalStressRows.reduce((groups, row, idx) => {
+      const section = row?.category || row?.sourceType || "Physical Stress";
+      if (!groups.has(section)) groups.set(section, []);
+      groups.get(section).push({
+        id: row?.id || `stress-${idx}`,
+        label: row?.label || row?.metric || row?.source || "Stress source",
+        value: row?.value,
+        unit: row?.unit || "",
+        note: row?.note || row?.sourceType || row?.status || "Mapped source",
+        source: row?.source,
+        sourceUrl: row?.sourceUrl,
+        status: row?.pulled ? "Pulled" : row?.status || "Source mapped",
+        tone:
+          row?.tone ||
+          (row?.pulled
+            ? Number(row?.value) > 0
+              ? "warning"
+              : "positive"
+            : "neutral"),
+      });
+      return groups;
+    }, new Map());
+    const stressRows = groupedPhysicalStress.size
+      ? Array.from(groupedPhysicalStress.entries()).map(([section, rows]) => ({ section, rows: rows.slice(0, 5) }))
+      : [
+          {
+            section: "Flow monitor",
+            rows: (flows.length ? flows : []).slice(0, 4).map((row, idx) => ({
+              id: `flow-${idx}`,
+              label: row?.date || row?.type || "Flow snapshot",
+              value: row?.value,
+              unit: "contracts",
+              note: row?.trend || row?.sourceWhy || row?.sourceType || "Flow signal",
+              tone: String(row?.trend || "").toLowerCase().includes("decline") ? "negative" : "positive",
+            })),
+          },
+          {
+            section: "Fundamental stack",
+            rows: (fundamentals.length ? fundamentals : []).slice(0, 4).map((row, idx) => ({
+              id: `fund-${idx}`,
+              label: row?.metric || `Metric ${idx + 1}`,
+              value: row?.value,
+              unit: row?.unit || "",
+              note: row?.sourceWhy || row?.sourceType || "Fundamental snapshot",
+              tone: "neutral",
+            })),
+          },
+          {
+            section: "Calendar & catalysts",
+            rows: (calendarRows.length ? calendarRows : []).slice(0, 4).map((row, idx) => ({
+              id: `cal-${idx}`,
+              label: row?.event || `Catalyst ${idx + 1}`,
+              value: row?.date,
+              unit: "",
+              note: row?.importance || row?.sourceWhy || row?.sourceType || "Calendar event",
+              tone: String(row?.importance || "").toLowerCase().includes("high") ? "negative" : "warning",
+            })),
+          },
+        ].filter((section) => section.rows.length);
     const seasonalityMonitorRows = (seasonality.length ? seasonality : [])
       .filter((row) => Number.isFinite(Number(row?.avgReturnPct)))
       .slice(0, 6)
@@ -6564,9 +6623,18 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                         ? `${formatFixed(Number(row.value), Math.abs(Number(row.value)) > 1000 ? 0 : 2)}${row.unit ? ` ${row.unit}` : ""}`
                         : Number.isFinite(Number(row.slope))
                           ? formatPercent(row.slope)
-                          : row.inventory || row.source || "—"}
+                          : row.status || row.inventory || row.source || "—"}
                     </b>
-                    <span>{row.note || row.risk || row.region || row.source || "Monitor"}</span>
+                    <span>
+                      {row.note || row.risk || row.region || "Monitor"}
+                      {row.sourceUrl ? (
+                        <a href={row.sourceUrl} target="_blank" rel="noreferrer">
+                          {row.source || "Source"}
+                        </a>
+                      ) : row.source ? (
+                        <em>{row.source}</em>
+                      ) : null}
+                    </span>
                   </div>
                 ))}
               </div>

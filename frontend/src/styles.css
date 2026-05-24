@@ -32396,6 +32396,27 @@ body.light-theme-active .tax-workbench-primary-btn {
   white-space: nowrap;
 }
 
+.analytics-stress-row span {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.analytics-stress-row a,
+.analytics-stress-row em {
+  color: #69e7ff;
+  font-size: 0.6rem;
+  font-style: normal;
+  font-weight: 900;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.analytics-stress-row a:hover {
+  text-decoration: underline;
+}
+
 .analytics-commodity-bottom-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(260px, 1fr));
@@ -36594,6 +36615,8 @@ body.light-theme-active .analytics-commodity-panel-head span,
 body.light-theme-active .analytics-commodity-regime span,
 body.light-theme-active .analytics-commodity-ticker span,
 body.light-theme-active .analytics-stress-title span,
+body.light-theme-active .analytics-stress-row a,
+body.light-theme-active .analytics-stress-row em,
 body.light-theme-active .analytics-commodity-footer span,
 body.light-theme-active .analytics-commodity-controls span {
   color: #0369a1 !important;

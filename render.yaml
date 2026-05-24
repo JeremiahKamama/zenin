@@ -15,7 +15,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: FRONTEND_URL
-        value: https://zenin-beta.vercel.app
+        value: https://www.zenin.capital
+      - key: FRONTEND_URLS
+        value: https://www.zenin.capital,https://zenin.capital,https://zenin-beta.vercel.app
       - key: DATABASE_URL
         sync: false
       # Supabase envs removed: authentication is now backend-managed. If you
