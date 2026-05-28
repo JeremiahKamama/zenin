@@ -37273,6 +37273,19 @@ body.light-theme-active .analytics-commodity-controls button {
   gap: 8px 10px;
 }
 
+.guest-data-banner-actions,
+.guest-hero-actions,
+.guest-contextual-signup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.guest-hero-actions {
+  margin-top: 4px;
+}
+
 .guest-data-banner strong {
   color: #f8fafc;
   font-size: 13px;
@@ -37284,6 +37297,9 @@ body.light-theme-active .analytics-commodity-controls button {
 }
 
 .guest-data-banner button,
+.guest-data-banner a,
+.guest-hero-actions button,
+.guest-hero-actions a,
 .guest-preview-actions button,
 .guest-preview-actions a,
 .guest-workflow-card button {
@@ -37305,6 +37321,9 @@ body.light-theme-active .analytics-commodity-controls button {
 }
 
 .guest-data-banner button:hover,
+.guest-data-banner a:hover,
+.guest-hero-actions button:hover,
+.guest-hero-actions a:hover,
 .guest-preview-actions button:hover,
 .guest-preview-actions a:hover,
 .guest-workflow-card button:hover {
@@ -37314,11 +37333,65 @@ body.light-theme-active .analytics-commodity-controls button {
 }
 
 .guest-data-banner button:focus-visible,
+.guest-data-banner a:focus-visible,
+.guest-hero-actions button:focus-visible,
+.guest-hero-actions a:focus-visible,
 .guest-preview-actions button:focus-visible,
 .guest-preview-actions a:focus-visible,
 .guest-workflow-card button:focus-visible {
   outline: 2px solid rgba(125, 211, 252, 0.95);
   outline-offset: 2px;
+}
+
+.guest-signup-cta {
+  border-color: rgba(34, 211, 238, 0.72) !important;
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.95), rgba(59, 130, 246, 0.78)) !important;
+  color: #020617 !important;
+  box-shadow: 0 12px 28px rgba(8, 47, 73, 0.32);
+}
+
+.guest-signup-cta:hover {
+  border-color: rgba(125, 211, 252, 0.95) !important;
+  background: linear-gradient(135deg, rgba(103, 232, 249, 0.98), rgba(96, 165, 250, 0.86)) !important;
+}
+
+.guest-contextual-signup {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(14, 116, 144, 0.24), rgba(15, 23, 42, 0.72));
+}
+
+.guest-contextual-signup > div {
+  display: grid;
+  gap: 5px;
+  min-width: min(100%, 360px);
+}
+
+.guest-contextual-signup span {
+  color: #67e8f9;
+  font: 800 10px/1.2 "JetBrains Mono", "SFMono-Regular", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.guest-contextual-signup h3,
+.guest-contextual-signup p {
+  margin: 0;
+}
+
+.guest-contextual-signup h3 {
+  color: #f8fafc;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.guest-contextual-signup p {
+  color: rgba(203, 213, 225, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .guest-status-chip {
@@ -37568,6 +37641,10 @@ body.light-theme-active .analytics-commodity-controls button {
   }
 
   .guest-data-banner button,
+  .guest-data-banner a,
+  .guest-hero-actions button,
+  .guest-hero-actions a,
+  .guest-contextual-signup a,
   .guest-preview-actions button,
   .guest-preview-actions a,
   .guest-workflow-card button {
@@ -37581,6 +37658,9 @@ body.light-theme-active .analytics-commodity-controls button {
 
 @media (prefers-reduced-motion: reduce) {
   .guest-data-banner button,
+  .guest-data-banner a,
+  .guest-hero-actions button,
+  .guest-hero-actions a,
   .guest-preview-actions button,
   .guest-preview-actions a,
   .guest-workflow-card button {
@@ -37588,6 +37668,9 @@ body.light-theme-active .analytics-commodity-controls button {
   }
 
   .guest-data-banner button:hover,
+  .guest-data-banner a:hover,
+  .guest-hero-actions button:hover,
+  .guest-hero-actions a:hover,
   .guest-preview-actions button:hover,
   .guest-preview-actions a:hover,
   .guest-workflow-card button:hover {
@@ -37604,7 +37687,8 @@ body.light-theme-active .guest-data-banner {
 body.light-theme-active .guest-workspace-hero,
 body.light-theme-active .guest-workflow-card,
 body.light-theme-active .guest-preview-card,
-body.light-theme-active .guest-onboarding-checklist {
+body.light-theme-active .guest-onboarding-checklist,
+body.light-theme-active .guest-contextual-signup {
   border-color: rgba(15, 23, 42, 0.12);
   background: rgba(255, 255, 255, 0.92);
 }
@@ -37616,6 +37700,7 @@ body.light-theme-active .guest-preview-card.focused {
 
 body.light-theme-active .guest-data-banner strong,
 body.light-theme-active .guest-workspace-hero h2,
+body.light-theme-active .guest-contextual-signup h3,
 body.light-theme-active .guest-workflow-card h3,
 body.light-theme-active .guest-preview-card h3,
 body.light-theme-active .guest-preview-metrics strong,
@@ -37625,6 +37710,7 @@ body.light-theme-active .guest-preview-table strong {
 
 body.light-theme-active .guest-data-banner span:not(.guest-status-chip),
 body.light-theme-active .guest-workspace-hero p,
+body.light-theme-active .guest-contextual-signup p,
 body.light-theme-active .guest-preview-card p,
 body.light-theme-active .guest-workflow-card ol,
 body.light-theme-active .guest-preview-card ul,

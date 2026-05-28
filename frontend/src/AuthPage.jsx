@@ -25,8 +25,15 @@ function isStrongPassword(password) {
 
 function isRecoveryLinkActive() {
   if (typeof window === "undefined") return false;
-  const locationValue = `${window.location.search}${window.location.hash}`.toLowerCase();
-  return locationValue.includes("type=recovery") || locationValue.includes("reset=1");
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+  const hasResetToken =
+    Boolean(searchParams.get("token") || searchParams.get("t")) ||
+    Boolean(hashParams.get("token") || hashParams.get("access_token"));
+  const isRecoveryType =
+    String(searchParams.get("type") || hashParams.get("type") || "").trim().toLowerCase() === "recovery";
+  const isResetFlag = searchParams.get("reset") === "1" || hashParams.get("reset") === "1";
+  return hasResetToken || isRecoveryType || isResetFlag;
 }
 
 function getRedirectUrl(path = "/auth?mode=signin") {

@@ -27,8 +27,15 @@ const forgotPasswordRequestSchema = z.object({
 
 const forgotPasswordConfirmSchema = z.object({
   token: z.string().min(1),
-  password: passwordSchema,
-});
+  newPassword: passwordSchema.optional(),
+  password: passwordSchema.optional(),
+}).refine((data) => data.newPassword || data.password, {
+  path: ["newPassword"],
+  message: "Password is required",
+}).transform((data) => ({
+  token: data.token,
+  newPassword: data.newPassword || data.password,
+}));
 
 const tradeExecutionInputSchema = z.object({
   symbol: symbolSchema,

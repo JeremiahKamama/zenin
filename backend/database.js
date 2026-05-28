@@ -1362,9 +1362,21 @@ async function initializeDatabase() {
         user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL UNIQUE,
         expires_at TIMESTAMPTZ NOT NULL,
+        email_provider TEXT,
+        email_provider_message_id TEXT,
+        email_sent_at TIMESTAMPTZ,
+        email_error JSONB,
         used_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE password_reset_tokens
+      ADD COLUMN IF NOT EXISTS email_provider TEXT,
+      ADD COLUMN IF NOT EXISTS email_provider_message_id TEXT,
+      ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS email_error JSONB;
     `);
 
     await client.query(`
@@ -1888,6 +1900,12 @@ async function initializeDatabase() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_active
       ON password_reset_tokens (user_id, expires_at, used_at);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_email_provider_message
+      ON password_reset_tokens (email_provider_message_id)
+      WHERE email_provider_message_id IS NOT NULL;
     `);
 
     await client.query(`
@@ -4421,6 +4439,47 @@ const userAuth = {
       INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
       VALUES ($1, $2, $3);
     `, [toUserId(userId), String(tokenHash || ""), expiresAt]);
+  },
+
+  updatePasswordResetEmailDelivery: async (tokenHash, delivery = {}) => {
+    if (!tokenHash) return null;
+    const result = await pool.query(`
+      UPDATE password_reset_tokens
+      SET
+        email_provider = $2,
+        email_provider_message_id = $3,
+        email_sent_at = CASE WHEN $4::boolean THEN NOW() ELSE email_sent_at END,
+        email_error = $5
+      WHERE token_hash = $1
+      RETURNING id, user_id AS "userId", email_provider_message_id AS "providerMessageId";
+    `, [
+      String(tokenHash || ""),
+      delivery.provider || "resend",
+      delivery.providerMessageId || null,
+      Boolean(delivery.sent),
+      delivery.error ? JSON.stringify(delivery.error) : null
+    ]);
+    return result.rows[0] || null;
+  },
+
+  updatePasswordResetEmailEventByProviderId: async (providerMessageId, event = {}) => {
+    if (!providerMessageId) return null;
+    const result = await pool.query(`
+      UPDATE password_reset_tokens
+      SET
+        email_provider = COALESCE(email_provider, $2),
+        email_error = CASE
+          WHEN $3::jsonb IS NULL THEN email_error
+          ELSE $3::jsonb
+        END
+      WHERE email_provider_message_id = $1
+      RETURNING id, user_id AS "userId", email_provider_message_id AS "providerMessageId";
+    `, [
+      String(providerMessageId || ""),
+      event.provider || "resend",
+      event.error ? JSON.stringify(event.error) : null
+    ]);
+    return result.rows[0] || null;
   },
 
   consumePasswordResetToken: async (tokenHash) => {

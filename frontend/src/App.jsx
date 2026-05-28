@@ -359,8 +359,9 @@ function GuestStatusChip({ status }) {
   return <span className={`guest-status-chip ${normalized}`}>{labelMap[normalized] || "Preview"}</span>;
 }
 
-function GuestSavedDataBanner({ lastUpdated, liveStreamStatus, watchlistNotice, onRetryLiveData }) {
+function GuestSavedDataBanner({ activeSection, lastUpdated, liveStreamStatus, watchlistNotice, onRetryLiveData }) {
   const status = liveStreamStatus === "connected" ? "live" : watchlistNotice ? "cached" : "saved";
+  const signupHref = getGuestSignupHref(activeSection);
   return (
     <section className="guest-data-banner" aria-label="Guest data status">
       <div>
@@ -368,9 +369,14 @@ function GuestSavedDataBanner({ lastUpdated, liveStreamStatus, watchlistNotice, 
         <strong>Guest mode uses saved market data</strong>
         <span>Snapshot {lastUpdated}. Retry live data when the backend feed is reachable.</span>
       </div>
-      <button type="button" onClick={onRetryLiveData}>
-        Retry live data
-      </button>
+      <div className="guest-data-banner-actions">
+        <a className="guest-signup-cta" href={signupHref}>
+          Create free account
+        </a>
+        <button type="button" onClick={onRetryLiveData}>
+          Retry live data
+        </button>
+      </div>
     </section>
   );
 }
@@ -434,8 +440,69 @@ function GuestWorkflowCard({ workflow, onOpenSection }) {
   );
 }
 
+const GUEST_CONTEXTUAL_SIGNUP_COPY = {
+  Watchlist: {
+    eyebrow: "Asset workflow opened",
+    title: "Save this watchlist setup",
+    body: "Create an account to keep tracked assets, live price retries, and alerts available next time."
+  },
+  Research: {
+    eyebrow: "Research preview opened",
+    title: "Save this research setup",
+    body: "Create an account to keep catalyst notes, thesis framing, and follow-ups synced to your workspace."
+  },
+  Analytics: {
+    eyebrow: "Analytics workflow opened",
+    title: "Save this dashboard view",
+    body: "Create an account to unlock live data, persistent dashboards, and journal-ready market context."
+  },
+  Portfolio: {
+    eyebrow: "Portfolio preview opened",
+    title: "Save this portfolio view",
+    body: "Create an account to connect portfolios, preserve allocation views, and track live performance."
+  },
+  Options: {
+    eyebrow: "Options preview opened",
+    title: "Save this derivatives review",
+    body: "Create an account to keep options flow, volatility context, and risk notes in one workspace."
+  },
+  Journal: {
+    eyebrow: "Journal preview opened",
+    title: "Save this decision record",
+    body: "Create an account to keep notes, trade theses, and reviews attached to your market work."
+  },
+  "Tax Estimator": {
+    eyebrow: "Tax preview opened",
+    title: "Save this tax scenario",
+    body: "Create an account to preserve lots, scenarios, and export-ready tax summaries."
+  }
+};
+
+function GuestContextualSignupNudge({ section, interaction }) {
+  if (!interaction) return null;
+  const copy = GUEST_CONTEXTUAL_SIGNUP_COPY[section] || {
+    eyebrow: "Workspace preview opened",
+    title: "Save this workspace",
+    body: "Create an account to keep live data, notes, portfolios, and research synced."
+  };
+  const signupHref = getGuestSignupHref(section);
+  return (
+    <section className="guest-contextual-signup" aria-label="Save guest workspace">
+      <div>
+        <span>{copy.eyebrow}</span>
+        <h3>{copy.title}</h3>
+        <p>{copy.body}</p>
+      </div>
+      <a className="guest-signup-cta" href={signupHref}>
+        Create account to save
+      </a>
+    </section>
+  );
+}
+
 function GuestWorkspacePreview({
   activeSection,
+  guestInteraction,
   liveStreamStatus,
   lastLivePriceAt,
   watchlistNotice,
@@ -449,10 +516,12 @@ function GuestWorkspacePreview({
   const lastUpdated = lastLivePriceAt
     ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
     : GUEST_DEMO_SNAPSHOT_LABEL;
+  const signupHref = getGuestSignupHref(activeSection);
 
   return (
     <div className="view-container guest-workspace-preview">
       <GuestSavedDataBanner
+        activeSection={activeSection}
         lastUpdated={lastUpdated}
         liveStreamStatus={liveStreamStatus}
         watchlistNotice={watchlistNotice}
@@ -466,6 +535,14 @@ function GuestWorkspacePreview({
             Use the saved demo workspace to inspect each core loop. Create an account when you want live data,
             connected portfolios, synced notes, and persistent research.
           </p>
+          <div className="guest-hero-actions">
+            <a className="guest-signup-cta" href={signupHref}>
+              Save this workspace
+            </a>
+            <button type="button" onClick={() => onOpenSection("Watchlist")}>
+              Continue exploring
+            </button>
+          </div>
         </div>
         <div className="guest-onboarding-checklist" aria-label="Guest onboarding checklist">
           {GUEST_ONBOARDING_STEPS.map((step, index) => (
@@ -476,6 +553,8 @@ function GuestWorkspacePreview({
           ))}
         </div>
       </section>
+
+      <GuestContextualSignupNudge section={activeSection} interaction={guestInteraction} />
 
       <section className="guest-workflow-grid" aria-label="Sample workflows">
         {GUEST_WORKFLOWS.map((workflow) => (
@@ -674,6 +753,17 @@ const GUEST_ONBOARDING_STEPS = [
 
 function getGuestSectionSlug(section) {
   return String(section || "Home").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "home";
+}
+
+function getGuestSignupHref(section) {
+  const fallbackNext = `/app?guest=1&section=${getGuestSectionSlug(section)}`;
+  const nextPath = typeof window !== "undefined"
+    ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+    : fallbackNext;
+  const authUrl = new URL("/auth", typeof window !== "undefined" ? window.location.origin : "https://www.zenin.capital");
+  authUrl.searchParams.set("mode", "signup");
+  authUrl.searchParams.set("next", nextPath || fallbackNext);
+  return `${authUrl.pathname}${authUrl.search}${authUrl.hash}`;
 }
 
 function getSectionFromGuestSlug(slug, sections) {
@@ -1616,6 +1706,9 @@ useEffect(() => {
     if (routeState.type === "company") navigateToAppRoute();
     if (section === "Home") setHomeSubview(null);
     setActiveSection(section);
+    if (isGuestQueryRequested() && section !== "Home") {
+      setGuestInteraction(section);
+    }
     syncGuestSectionUrl(section);
   }, [routeState.type, syncGuestSectionUrl]);
 
@@ -2872,6 +2965,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
     return sections.includes(savedSection) ? savedSection : "Home";
   });
+  const [guestInteraction, setGuestInteraction] = useState("");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
@@ -5246,6 +5340,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         {shouldRenderGuestPreview && (
           <GuestWorkspacePreview
             activeSection={activeSection}
+            guestInteraction={guestInteraction}
             liveStreamStatus={liveStreamStatus}
             lastLivePriceAt={lastLivePriceAt}
             watchlistNotice={watchlistNotice}
@@ -5307,12 +5402,16 @@ const handleOptionTradeClosed = async (tradeId) => {
         {activeSection === "Watchlist" && (
           <div className="view-container">
             {isExplicitGuestMode ? (
-              <GuestSavedDataBanner
-                lastUpdated={lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}
-                liveStreamStatus={liveStreamStatus}
-                watchlistNotice={watchlistNotice}
-                onRetryLiveData={retryLiveData}
-              />
+              <>
+                <GuestSavedDataBanner
+                  activeSection={activeSection}
+                  lastUpdated={lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}
+                  liveStreamStatus={liveStreamStatus}
+                  watchlistNotice={watchlistNotice}
+                  onRetryLiveData={retryLiveData}
+                />
+                <GuestContextualSignupNudge section={activeSection} interaction={guestInteraction} />
+              </>
             ) : null}
             {sharedWatchlistLocked ? (
               <>

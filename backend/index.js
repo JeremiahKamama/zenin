@@ -14,8 +14,9 @@ const {
 } = require("@simplewebauthn/server");
 const { createClient: createSupabaseClient } = require("@supabase/supabase-js");
 const { OAuth2Client } = require("google-auth-library");
+const { Webhook } = require("svix");
 // const appleSignin = require("apple-signin-auth");
-const { sendPasswordResetEmail, sendVerificationEmail } = require("./email");
+const { getEmailDeliveryConfig, sendPasswordResetEmail, sendVerificationEmail } = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -978,7 +979,8 @@ app.use((req, res, next) => {
 });
 
 const CSRF_EXEMPT_PATHS = new Set([
-  "/api/auth/oauth/apple/callback"
+  "/api/auth/oauth/apple/callback",
+  "/api/webhooks/resend"
 ]);
 
 function shouldEnforceCsrf(req) {
@@ -1130,7 +1132,12 @@ const optionsChainLimiter = rateLimit({
 });
 
 
-app.use(express.json({ limit: "100kb" }));
+app.use(express.json({
+  limit: "100kb",
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use([
   "/api/prices",
   "/api/history",
@@ -2074,6 +2081,147 @@ async function logSecurityEvent(req, {
     actorType: req?.auth?.isGuest ? "guest" : (req?.auth?.user?.isAdmin ? "admin" : "user")
   });
 }
+
+function getEmailDeliverySent(delivery) {
+  return Boolean(delivery && (delivery.sent === true || delivery === true));
+}
+
+function getEmailDeliveryLogContext(delivery = {}) {
+  if (!delivery || typeof delivery !== "object") {
+    return { sent: Boolean(delivery) };
+  }
+  return {
+    sent: Boolean(delivery.sent),
+    provider: delivery.provider || "resend",
+    providerMessageId: delivery.providerMessageId || null,
+    error: delivery.error || null,
+    deliveryConfig: delivery.deliveryConfig || getEmailDeliveryConfig()
+  };
+}
+
+async function recordPasswordResetEmailDelivery(token, delivery = {}) {
+  if (!token) return null;
+  return userAuth.updatePasswordResetEmailDelivery(hashToken(token), delivery).catch((error) => {
+    console.error("[Auth] Failed to update password reset delivery metadata:", error?.message || error);
+    return null;
+  });
+}
+
+function getResendWebhookSecret() {
+  return String(process.env.RESEND_WEBHOOK_SECRET || process.env.RESEND_WEBHOOK_SIGNING_SECRET || "").trim();
+}
+
+function getResendWebhookHeaders(req) {
+  return {
+    "svix-id": req.headers["svix-id"],
+    "svix-timestamp": req.headers["svix-timestamp"],
+    "svix-signature": req.headers["svix-signature"],
+    "webhook-id": req.headers["webhook-id"],
+    "webhook-timestamp": req.headers["webhook-timestamp"],
+    "webhook-signature": req.headers["webhook-signature"]
+  };
+}
+
+function getResendEventLevel(type) {
+  if (["email.failed", "email.bounced", "email.complained"].includes(type)) return "error";
+  if (["email.delivery_delayed"].includes(type)) return "warning";
+  return "info";
+}
+
+function getResendEventError(type, data = {}) {
+  if (data.failed) return data.failed;
+  if (data.bounce) return data.bounce;
+  if (data.complaint) return data.complaint;
+  if (type === "email.delivery_delayed") return { reason: "delivery_delayed" };
+  return null;
+}
+
+app.post("/api/webhooks/resend", async (req, res) => {
+  const webhookSecret = getResendWebhookSecret();
+  if (!webhookSecret) {
+    await admin.recordSystemLog({
+      level: "error",
+      message: "Resend webhook received but RESEND_WEBHOOK_SECRET is not configured.",
+      context: { eventType: "resend_webhook_missing_secret" },
+      requestId: req.requestId,
+      ipAddress: resolveClientIp(req),
+      service: "Email",
+      endpoint: "POST /api/webhooks/resend",
+      statusCode: 503,
+      actorType: "system"
+    }).catch(() => {});
+    return res.status(503).json({ error: "Webhook secret is not configured." });
+  }
+
+  let event;
+  try {
+    const webhook = new Webhook(webhookSecret);
+    event = webhook.verify(req.rawBody || Buffer.from(JSON.stringify(req.body || {})), getResendWebhookHeaders(req));
+  } catch (error) {
+    await admin.recordSystemLog({
+      level: "warning",
+      message: "Rejected Resend webhook with invalid signature.",
+      context: {
+        eventType: "resend_webhook_invalid_signature",
+        error: String(error?.message || error).slice(0, 300)
+      },
+      requestId: req.requestId,
+      ipAddress: resolveClientIp(req),
+      service: "Email",
+      endpoint: "POST /api/webhooks/resend",
+      statusCode: 400,
+      actorType: "system"
+    }).catch(() => {});
+    return res.status(400).json({ error: "Invalid webhook signature." });
+  }
+
+  const type = String(event?.type || "resend.unknown");
+  const data = event?.data || {};
+  const providerMessageId = data.email_id || data.emailId || null;
+  const recipients = Array.isArray(data.to) ? data.to : (data.to ? [data.to] : []);
+  const deliveryError = getResendEventError(type, data);
+
+  let resetTokenMatch = null;
+  if (providerMessageId) {
+    resetTokenMatch = await userAuth.updatePasswordResetEmailEventByProviderId(providerMessageId, {
+      provider: "resend",
+      error: deliveryError
+    }).catch((error) => {
+      console.error("[Email] Failed to map Resend webhook to password reset token:", error?.message || error);
+      return null;
+    });
+  }
+
+  await admin.recordSystemLog({
+    level: getResendEventLevel(type),
+    message: `Resend webhook received: ${type}`,
+    context: {
+      eventType: "resend_webhook",
+      resendEventType: type,
+      resendCreatedAt: event?.created_at || null,
+      svixId: req.headers["svix-id"] || req.headers["webhook-id"] || null,
+      provider: "resend",
+      providerMessageId,
+      recipientHashes: recipients.map((email) => hashToken(String(email || "").trim().toLowerCase())).filter(Boolean),
+      subject: data.subject || null,
+      tags: data.tags || null,
+      deliveryError,
+      passwordResetTokenId: resetTokenMatch?.id || null,
+      targetUserId: resetTokenMatch?.userId || null
+    },
+    requestId: req.requestId,
+    ipAddress: resolveClientIp(req),
+    service: "Email",
+    endpoint: "POST /api/webhooks/resend",
+    statusCode: 200,
+    userId: resetTokenMatch?.userId || null,
+    actorType: "system"
+  }).catch((error) => {
+    console.error("[Email] Failed to log Resend webhook:", error?.message || error);
+  });
+
+  return res.json({ success: true });
+});
 
 const securityAnomalyState = new Map();
 
@@ -4442,6 +4590,38 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/api/admin/users/recovery-status", requireSignedIn, requireAdmin, requireRecentAdminReauth, async (req, res) => {
+  try {
+    const email = String(req.query?.email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    const user = await userAuth.findUserByEmail(email);
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: user?.id || null,
+      action: "CHECK_RECOVERY_STATUS",
+      details: {
+        requestId: req.requestId,
+        emailHash: hashToken(email),
+        found: Boolean(user),
+        emailDelivery: getEmailDeliveryConfig()
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({
+      success: true,
+      found: Boolean(user),
+      user: user ? sanitizeAuthUser(user) : null,
+      emailDelivery: getEmailDeliveryConfig()
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to check recovery status", error);
+  }
+});
+
 function normalizeAdminRoleInput(value, fallback = "user") {
   const normalized = String(value || "").trim().toLowerCase();
   if (["user", "support_admin", "billing_admin", "ops_admin", "super_admin"].includes(normalized)) {
@@ -4537,8 +4717,15 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, requireRecentAdminRe
       return res.status(500).json({ error: "Failed to create the user." });
     }
 
-    const token = await admin.createPasswordResetToken(createdUser.id);
-    const recoveryEmailSent = await sendPasswordResetEmail(email, token);
+    const token = crypto.randomBytes(40).toString("hex");
+    await userAuth.createPasswordResetToken({
+      userId: createdUser.id,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString()
+    });
+    const recoveryEmailDelivery = await sendPasswordResetEmail(email, token);
+    await recordPasswordResetEmailDelivery(token, recoveryEmailDelivery);
+    const recoveryEmailSent = getEmailDeliverySent(recoveryEmailDelivery);
 
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
@@ -4550,12 +4737,18 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, requireRecentAdminRe
         adminRole,
         reason,
         requestId: req.requestId,
+        recoveryEmailDelivery: getEmailDeliveryLogContext(recoveryEmailDelivery),
         diff: buildAuditDiff({}, createdUser)
       },
       ipAddress: resolveClientIp(req)
     });
 
-    return res.status(201).json({ success: true, user: createdUser, recoveryEmailSent });
+    return res.status(201).json({
+      success: true,
+      user: createdUser,
+      recoveryEmailSent,
+      recoveryEmailProviderMessageId: recoveryEmailDelivery?.providerMessageId || null
+    });
   } catch (error) {
     return handleServerError(res, "Failed to create user", error);
   }
@@ -4763,8 +4956,15 @@ app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, requireR
     if (!targetUser) {
       return res.status(404).json({ error: "User not found" });
     }
-    const token = await admin.createPasswordResetToken(id);
-    const recoveryEmailSent = await sendPasswordResetEmail(targetUser.email, token);
+    const token = crypto.randomBytes(40).toString("hex");
+    await userAuth.createPasswordResetToken({
+      userId: id,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString()
+    });
+    const recoveryEmailDelivery = await sendPasswordResetEmail(targetUser.email, token);
+    await recordPasswordResetEmailDelivery(token, recoveryEmailDelivery);
+    const recoveryEmailSent = getEmailDeliverySent(recoveryEmailDelivery);
 
     await admin.logAdminAction({
       adminId: req.auth?.user?.id || 0,
@@ -4773,6 +4973,7 @@ app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, requireR
       details: {
         reason,
         requestId: req.requestId,
+        recoveryEmailDelivery: getEmailDeliveryLogContext(recoveryEmailDelivery),
         note: recoveryEmailSent
           ? "Recovery email sent via dashboard"
           : "Recovery token created but email delivery failed"
@@ -4784,7 +4985,11 @@ app.post("/api/admin/users/:id/recover", requireSignedIn, requireAdmin, requireR
       return res.status(503).json({ success: false, error: "Recovery email could not be sent." });
     }
 
-    return res.json({ success: true, recoveryEmailSent: true });
+    return res.json({
+      success: true,
+      recoveryEmailSent: true,
+      recoveryEmailProviderMessageId: recoveryEmailDelivery?.providerMessageId || null
+    });
   } catch (error) {
     return handleServerError(res, "Failed to generate recovery link", error);
   }
@@ -5190,7 +5395,21 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     const { hash: codeHash } = derivePasswordHash(verificationCode);
     
     await userAuth.updateUserVerificationCode(created.id, codeHash);
-    await sendVerificationEmail(email, verificationCode);
+    const verificationEmailDelivery = await sendVerificationEmail(email, verificationCode);
+    await logSecurityEvent(req, {
+      level: getEmailDeliverySent(verificationEmailDelivery) ? "info" : "warning",
+      message: getEmailDeliverySent(verificationEmailDelivery)
+        ? "Verification email accepted by provider."
+        : "Verification code created but email delivery failed.",
+      eventType: "verification_email_requested",
+      targetUserId: created.id,
+      context: {
+        emailHash: hashToken(email),
+        emailDeliveryResult: getEmailDeliveryLogContext(verificationEmailDelivery)
+      }
+    }).catch((error) => {
+      console.error("[Auth] Failed to log verification email delivery:", error?.message || error);
+    });
 
     const session = await issueSessionForUser(created.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
@@ -5353,7 +5572,9 @@ app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(for
     }
 
     const user = await userAuth.findUserByEmail(email);
+    const emailHash = hashToken(email);
     let devResetToken = null;
+    let emailDelivery = null;
     if (user) {
       const rawToken = crypto.randomBytes(40).toString("hex");
       devResetToken = rawToken;
@@ -5365,8 +5586,28 @@ app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(for
 
       // Send actual email (fire and forget for better response time, or await if preferred)
       // For now, we await to ensure we catch potential configuration errors in logs
-      await sendPasswordResetEmail(email, rawToken);
+      emailDelivery = await sendPasswordResetEmail(email, rawToken);
+      await recordPasswordResetEmailDelivery(rawToken, emailDelivery);
     }
+
+    const emailSent = getEmailDeliverySent(emailDelivery);
+    await logSecurityEvent(req, {
+      level: user && !emailSent ? "warning" : "info",
+      message: user
+        ? (emailSent ? "Password reset email accepted by provider." : "Password reset token created but email delivery failed.")
+        : "Password reset requested for unknown email.",
+      eventType: "password_reset_requested",
+      targetUserId: user?.id || null,
+      context: {
+        emailHash,
+        accountFound: Boolean(user),
+        emailSent: Boolean(emailSent),
+        emailDeliveryResult: getEmailDeliveryLogContext(emailDelivery),
+        emailDelivery: getEmailDeliveryConfig()
+      }
+    }).catch((error) => {
+      console.error("[Auth] Failed to log password reset request:", error?.message || error);
+    });
 
     return res.json({
       success: true,
@@ -5554,7 +5795,21 @@ app.post("/api/auth/resend-verification", async (req, res) => {
     const { hash: codeHash } = derivePasswordHash(verificationCode);
     
     await userAuth.updateUserVerificationCode(user.id, codeHash);
-    await sendVerificationEmail(user.email, verificationCode);
+    const verificationEmailDelivery = await sendVerificationEmail(user.email, verificationCode);
+    await logSecurityEvent(req, {
+      level: getEmailDeliverySent(verificationEmailDelivery) ? "info" : "warning",
+      message: getEmailDeliverySent(verificationEmailDelivery)
+        ? "Verification email accepted by provider."
+        : "Verification code created but email delivery failed.",
+      eventType: "verification_email_requested",
+      targetUserId: user.id,
+      context: {
+        emailHash: hashToken(String(user.email || "").trim().toLowerCase()),
+        emailDeliveryResult: getEmailDeliveryLogContext(verificationEmailDelivery)
+      }
+    }).catch((error) => {
+      console.error("[Auth] Failed to log verification email delivery:", error?.message || error);
+    });
 
     return res.json({ success: true, message: "Verification code sent" });
   } catch (error) {

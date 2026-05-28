@@ -7,12 +7,41 @@ const { Resend } = require("resend");
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const SMTP_FROM = process.env.SMTP_FROM || "Zenin Capital <onboarding@resend.dev>";
+const SMTP_FROM_USES_RESEND_TEST_DOMAIN = /@resend\.dev(?:[>\s"]|$)/i.test(SMTP_FROM);
 
 // Detect placeholder / unconfigured key
 const RESEND_CONFIGURED =
   RESEND_API_KEY &&
   RESEND_API_KEY.startsWith("re_") &&
   RESEND_API_KEY !== "re_your_api_key";
+
+function sanitizeEmailError(error) {
+  if (!error) return null;
+  return {
+    name: error.name || error.code || null,
+    message: String(error.message || error.error || error).slice(0, 500),
+    statusCode: error.statusCode || error.status || null
+  };
+}
+
+function buildDeliveryResult({ sent = false, providerMessageId = null, error = null } = {}) {
+  return {
+    sent: Boolean(sent),
+    provider: "resend",
+    providerMessageId: providerMessageId || null,
+    error: sanitizeEmailError(error),
+    deliveryConfig: getEmailDeliveryConfig()
+  };
+}
+
+function getEmailDeliveryConfig() {
+  return {
+    resendConfigured: Boolean(RESEND_CONFIGURED),
+    from: SMTP_FROM,
+    usesResendTestDomain: SMTP_FROM_USES_RESEND_TEST_DOMAIN,
+    productionReady: Boolean(RESEND_CONFIGURED && !SMTP_FROM_USES_RESEND_TEST_DOMAIN)
+  };
+}
 
 // Initialize Resend client (lazy)
 let resend = null;
@@ -57,7 +86,18 @@ async function sendPasswordResetEmail(email, resetToken) {
   if (!client) {
     console.warn("[Email] RESEND_API_KEY missing or placeholder — falling back to console log.");
     logDevResetLink(email, resetLink);
-    return false; // return false so callers know real email wasn't sent
+    return buildDeliveryResult({
+      sent: false,
+      error: { message: "RESEND_API_KEY missing or placeholder" }
+    });
+  }
+
+  if (process.env.NODE_ENV === "production" && SMTP_FROM_USES_RESEND_TEST_DOMAIN) {
+    console.error("[Email] SMTP_FROM uses onboarding@resend.dev in production. Configure a verified sender domain in Resend.");
+    return buildDeliveryResult({
+      sent: false,
+      error: { message: "SMTP_FROM uses resend.dev test sender in production" }
+    });
   }
 
   // --- Production: send via Resend ---
@@ -102,15 +142,15 @@ async function sendPasswordResetEmail(email, resetToken) {
       console.error(`[Email] Resend error sending to ${email}:`, error);
       // Still log the link as a fallback so nothing is totally lost
       logDevResetLink(email, resetLink);
-      return false;
+      return buildDeliveryResult({ sent: false, error });
     }
 
     console.log(`[Email] Sent to ${email} via Resend (id: ${data.id})`);
-    return true;
+    return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
   } catch (err) {
     console.error(`[Email] Unexpected error sending to ${email}:`, err);
     logDevResetLink(email, resetLink);
-    return false;
+    return buildDeliveryResult({ sent: false, error: err });
   }
 }
 
@@ -131,7 +171,18 @@ async function sendVerificationEmail(email, code) {
     console.log(`[DEV] Recipient: ${email}`);
     console.log(`[DEV] Code     : ${code}`);
     console.log("=".repeat(70) + "\n");
-    return false;
+    return buildDeliveryResult({
+      sent: false,
+      error: { message: "RESEND_API_KEY missing or placeholder" }
+    });
+  }
+
+  if (process.env.NODE_ENV === "production" && SMTP_FROM_USES_RESEND_TEST_DOMAIN) {
+    console.error("[Email] SMTP_FROM uses onboarding@resend.dev in production. Configure a verified sender domain in Resend.");
+    return buildDeliveryResult({
+      sent: false,
+      error: { message: "SMTP_FROM uses resend.dev test sender in production" }
+    });
   }
 
   const htmlContent = `
@@ -175,18 +226,19 @@ async function sendVerificationEmail(email, code) {
 
     if (error) {
       console.error(`[Email] Resend error sending to ${email}:`, error);
-      return false;
+      return buildDeliveryResult({ sent: false, error });
     }
 
     console.log(`[Email] Sent verification to ${email} (id: ${data.id})`);
-    return true;
+    return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
   } catch (err) {
     console.error(`[Email] Unexpected error sending verification to ${email}:`, err);
-    return false;
+    return buildDeliveryResult({ sent: false, error: err });
   }
 }
 
 module.exports = {
+  getEmailDeliveryConfig,
   sendPasswordResetEmail,
   sendVerificationEmail,
 };
