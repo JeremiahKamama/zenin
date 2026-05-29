@@ -11,11 +11,11 @@ import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
 import { zeninFetchJson } from "../utils/zeninFetch";
 
 const CATEGORY_TABS = [
-  { id: "crypto", label: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
-  { id: "options", label: "Options", icon: "O", description: "Binance + Deribit options data" },
-  { id: "equities", label: "Equities", icon: "E", description: "Asset Classes, Industries, Regions" },
-  { id: "macro", label: "Macro", icon: "M", description: "Macro indicators, FX and risk context" },
-  { id: "commodities", label: "Commodities", icon: "X", description: "Commodities hub, flows, inventory and curve" },
+  { id: "crypto", label: "Crypto Desk", shortLabel: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
+  { id: "options", label: "Options Desk", shortLabel: "Options", icon: "O", description: "Binance + Deribit options data" },
+  { id: "equities", label: "Equities Desk", shortLabel: "Equities", icon: "E", description: "Asset Classes, Industries, Regions" },
+  { id: "macro", label: "Macro Desk", shortLabel: "Macro", icon: "M", description: "Macro indicators, FX and risk context" },
+  { id: "commodities", label: "Commodities Desk", shortLabel: "Commodities", icon: "X", description: "Commodities hub, flows, inventory and curve" },
 ];
 
 const EMPTY_CRYPTO = {
@@ -2121,31 +2121,58 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
     );
   };
 
-  const analyticsLayoutTitle = activeTab === "equities" ? "Equity Factor Desk" : "Cross-market dashboards";
-  const analyticsLayoutDescription =
+  const activeDeskTab = CATEGORY_TABS.find((tab) => tab.id === activeTab) || CATEGORY_TABS[0];
+  const activeDeskQuality =
+    activeTab === "crypto"
+      ? getSourceQuality(cryptoData)
+      : activeTab === "options"
+      ? getSourceQuality(optionsData)
+      : activeTab === "macro"
+      ? getSourceQuality(macroData)
+      : activeTab === "commodities"
+      ? getSourceQuality(commoditiesData)
+      : getSourceQuality(equitiesData);
+  const activeDeskFocus =
     activeTab === "equities"
-      ? "Breadth, factors, sectors, earnings, and index concentration in one compact operator view."
-      : "Switch between Crypto, Options, Equities, Macro, and Commodities analytics.";
+      ? primaryBenchmarkLabel
+      : activeTab === "macro"
+      ? selectedGeoCode
+      : activeTab === "commodities"
+      ? selectedCommoditySymbol || "WTI"
+      : activeTab === "options"
+      ? (optionsData.greeks || optionsData.optionsVolumeByAsset || [])[0]?.asset || "Vol surface"
+      : selectedPerpExchange || "Perp flow";
+  const activeDeskTimeframe =
+    activeTab === "commodities"
+      ? selectedCommodityTimeRange
+      : activeTab === "crypto"
+      ? etfPeriodToggle
+      : timeRange;
+  const analyticsLayoutTitle = "Cross-market desk";
+  const analyticsLayoutDescription = "One operator surface for crypto, options, equities, macro, and commodities desks.";
   const deskAnalyticsLocked = !hasDeskFeatureAccess && ["options", "equities", "macro", "commodities"].includes(activeTab);
-  const analyticsToolbar =
-    activeTab === "equities" ? (
-      <div className="analytics-equities-toolbar">
+  const analyticsToolbar = (
+      <div className="analytics-equities-toolbar analytics-desk-commandbar">
         <div className="analytics-equities-toolbar-pill">
-          <span>Region</span>
-          <strong>US</strong>
+          <span>Desk</span>
+          <strong>{activeDeskTab.shortLabel || activeDeskTab.label}</strong>
         </div>
         <div className="analytics-equities-toolbar-pill">
-          <span>Index</span>
-          <strong>{primaryBenchmarkLabel}</strong>
+          <span>Focus</span>
+          <strong>{activeDeskFocus}</strong>
+        </div>
+        <div className="analytics-equities-toolbar-pill">
+          <span>Status</span>
+          <strong>{activeDeskQuality.label}</strong>
         </div>
         <div className="analytics-equities-toolbar-pill">
           <span>Timeframe</span>
-          <strong>{timeRange}</strong>
+          <strong>{activeDeskTimeframe}</strong>
         </div>
         <button
           type="button"
           className="analytics-equities-toolbar-btn"
-          onClick={() => handleRefreshAnalytics("Equities")}
+          onClick={() => handleRefreshAnalytics(activeDeskTab.shortLabel || activeDeskTab.label)}
         >
           Refresh
         </button>
@@ -2155,19 +2182,19 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
           onClick={() =>
             handleSaveAnalyticsView(
               {
-                tab: "equities",
-                section: selectedMainCategory,
-                horizon: timeRange,
+                tab: activeTab,
+                section: activeDeskFocus,
+                horizon: activeDeskTimeframe,
                 query: searchQuery,
               },
-              "Equities desk view saved."
+              `${activeDeskTab.label} view saved.`
             )
           }
         >
           Save View
         </button>
       </div>
-    ) : null;
+    );
 
   return (
     <AnalyticsLayout
@@ -5026,7 +5053,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           })}
                           {!(commoditiesData.flows || []).length && (
                             <tr>
-                              <td colSpan={3} style={{ padding: 16, textAlign: "center", color: "var(--color-text-secondary)" }}>No flow data available.</td>
+                              <td colSpan={3}>
+                                <AnalyticsDeskEmpty
+                                  title="No flow tape yet"
+                                  description="CFTC, allocation, or inventory flow rows will appear here after this commodity feed returns positioning data."
+                                />
+                              </td>
                             </tr>
                           )}
                         </tbody>
@@ -5222,7 +5254,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           })}
                           {!(commoditiesData.curve || []).length && (
                             <tr>
-                              <td colSpan={3} style={{ padding: 16, textAlign: "center", color: "var(--color-text-secondary)" }}>No curve data available.</td>
+                              <td colSpan={3}>
+                                <AnalyticsDeskEmpty
+                                  title="No term structure yet"
+                                  description="The chart stays honest until multiple contract months are returned by the backend."
+                                />
+                              </td>
                             </tr>
                           )}
                         </tbody>
@@ -5675,6 +5712,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
   const isOptions = activeTab === "options";
   const isMacro = activeTab === "macro";
   const isCommodities = activeTab === "commodities";
+  const [selectedOptionsAsset, setSelectedOptionsAsset] = useState("");
   const visibleRows = rows.length ? rows : [{ asset: "Source pending", primary: "—", secondary: "—", tertiary: "Monitor", signal: "Awaiting data", tone: "neutral" }];
   const visibleRail = rail.length ? rail : [{ label: "Source", value: "Pending", helper: "Awaiting data" }];
   const curveRows = visibleRows.slice(0, 6);
@@ -5709,6 +5747,24 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     const expiryQueueRows = maxPainRows.slice(0, 6);
     const topGreek = greekRows[0] || null;
     const totalRouteVolume = routeRows.reduce((sum, row) => sum + (Number(row.volumeUsd ?? row.volume) || 0), 0);
+    const focusedOptionsRow =
+      visibleRows.find((row) => String(row.asset || "").toUpperCase() === String(selectedOptionsAsset || "").toUpperCase()) ||
+      visibleRows[0] ||
+      null;
+    const focusedOptionsAsset = focusedOptionsRow?.asset || "Options surface";
+    const focusedRouteRows = routeRows.filter((row) => String(row.asset || row.underlying || "").toUpperCase() === String(focusedOptionsAsset || "").toUpperCase());
+    const focusedGreekRow = greekRows.find((row) => String(row.asset || row.instrument || "").toUpperCase() === String(focusedOptionsAsset || "").toUpperCase()) || topGreek;
+    const focusRouteVolume = focusedRouteRows.reduce((sum, row) => sum + (Number(row.volumeUsd ?? row.volume) || 0), 0);
+    const handleOptionsFocus = (row) => {
+      const nextAsset = String(row?.asset || "").trim();
+      if (nextAsset) setSelectedOptionsAsset(nextAsset);
+    };
+    const handleOptionsKeyDown = (event, row) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        handleOptionsFocus(row);
+      }
+    };
 
     return (
       <section className="analytics-desk-shell analytics-options-command">
@@ -5750,7 +5806,14 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             </div>
             <div className="analytics-options-surface-rows">
               {visibleRows.slice(0, 8).map((row, idx) => (
-                <div key={row.id || `opt-row-${idx}`} className="analytics-options-surface-row">
+                <div
+                  key={row.id || `opt-row-${idx}`}
+                  className={`analytics-options-surface-row ${row.asset === focusedOptionsAsset ? "active" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleOptionsFocus(row)}
+                  onKeyDown={(event) => handleOptionsKeyDown(event, row)}
+                >
                   <div>
                     <strong>{row.asset}</strong>
                     <span>{row.tertiary}</span>
@@ -5761,10 +5824,18 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 </div>
               ))}
             </div>
+            {focusedOptionsRow ? (
+              <div className="analytics-options-focus-read">
+                <span>Selected read</span>
+                <strong>{focusedOptionsAsset}</strong>
+                <em>{focusedOptionsRow.signal || "Monitor current route and volatility pressure."}</em>
+                <b>{focusedOptionsRow.primary} · {focusedOptionsRow.secondary}</b>
+              </div>
+            ) : null}
             <div className="analytics-options-footstrip">
               <div><span>Surface nodes</span><strong>{greekRows.length}</strong></div>
               <div><span>Venue routes</span><strong>{routeRows.length}</strong></div>
-              <div><span>Lead asset</span><strong>{topGreek?.asset || topGreek?.instrument || "Pending"}</strong></div>
+              <div><span>Focus route vol</span><strong>{formatCompactMoney(focusRouteVolume)}</strong></div>
             </div>
           </div>
 
@@ -5785,7 +5856,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                     <b>{formatCompactMoney(row.volumeUsd)}</b>
                     <em>{row.routes} routes</em>
                   </div>
-                )) : <div className="analytics-options-watch-empty">No venue flow rows.</div>}
+                )) : <AnalyticsDeskEmpty title="No venue split yet" description="Refresh after options volume loads to compare Deribit routes and listed-underlying flow." />}
               </div>
             </div>
 
@@ -5798,7 +5869,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                     <b>{row.expiry || "Expiry"}</b>
                     <em>{formatMoney(row.maxPain, 0)}</em>
                   </div>
-                )) : <div className="analytics-options-watch-empty">No max pain rows.</div>}
+                )) : <AnalyticsDeskEmpty title="No max pain map" description="Expiry pressure appears here once max-pain rows are available." />}
               </div>
             </div>
 
@@ -5811,7 +5882,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                     <b>{row.strike}</b>
                     <em>{row.oi.toLocaleString()} OI</em>
                   </div>
-                )) : <div className="analytics-options-watch-empty">No strike OI rows.</div>}
+                )) : <AnalyticsDeskEmpty title="No strike crowding" description="Open-interest clusters will appear here when strike-level data is returned." />}
               </div>
             </div>
           </aside>
@@ -5834,7 +5905,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                   <em>{row.asset || "Basket"}</em>
                   <b>{formatCompactMoney(row.volumeUsd ?? row.volume)}</b>
                 </div>
-              )) : <div className="analytics-options-watch-empty">No route rows.</div>}
+              )) : <AnalyticsDeskEmpty title="No route rows" description="Route volume needs exchange or listed-underlying volume rows before this panel can rank flow." />}
             </div>
           </div>
 
@@ -5853,8 +5924,15 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                   <em>Δ {formatFixed(row.delta, 2)} · Γ {formatFixed(row.gamma, 4)}</em>
                   <b>Vega {formatFixed(row.vega, 2)} · Theta {formatFixed(row.theta, 2)}</b>
                 </div>
-              )) : <div className="analytics-options-watch-empty">No greek rows.</div>}
+              )) : <AnalyticsDeskEmpty title="No greek nodes" description="IV, delta, gamma, vega, and theta cards populate once surface data is configured." />}
             </div>
+            {focusedGreekRow ? (
+              <div className="analytics-options-focus-read compact">
+                <span>Focus greek</span>
+                <strong>{focusedGreekRow.asset || focusedGreekRow.instrument || focusedOptionsAsset}</strong>
+                <em>IV {focusedGreekRow.iv == null ? "pending" : formatPercent(focusedGreekRow.iv)} · Δ {formatFixed(focusedGreekRow.delta, 2)} · Γ {formatFixed(focusedGreekRow.gamma, 4)}</em>
+              </div>
+            ) : null}
           </div>
 
           <div className="analytics-desk-panel analytics-options-source-panel">
@@ -6629,6 +6707,24 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
           ))}
         </div>
 
+        <div className="analytics-commodity-focus-read">
+          <div>
+            <span>Selected commodity</span>
+            <strong>{selectedTerminalRow.symbol || selectedSymbol}</strong>
+            <em>{selectedTerminalRow.asset || commodityMeta.selectedRow?.name || "Desk focus"}</em>
+          </div>
+          <div>
+            <span>Curve read</span>
+            <strong>{selectedCurvePoints.length > 1 ? `${selectedCurvePoints.length} contract nodes` : "Front-month only"}</strong>
+            <em>{selectedCurvePoints.length > 1 ? "Term structure is available for slope review." : "No synthetic curve is drawn until the backend returns multiple contracts."}</em>
+          </div>
+          <div>
+            <span>Physical read</span>
+            <strong>{selectedTerminalRow.inventory || "Monitor"}</strong>
+            <em>{selectedTerminalRow.demand || selectedTerminalRow.risk || "Demand and risk signals populate as fundamentals load."}</em>
+          </div>
+        </div>
+
         <div className="analytics-commodity-terminal-grid">
           <div className="analytics-desk-panel analytics-commodity-matrix">
             <div className="analytics-commodity-panel-head">
@@ -6697,7 +6793,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <strong>Inventories, warehouse stocks, and weather</strong>
               </div>
             </div>
-            {stressRows.map((section) => (
+            {stressRows.length ? stressRows.map((section) => (
               <div key={section.section} className="analytics-stress-section">
                 <div className="analytics-stress-title">
                   <span>{section.section}</span>
@@ -6726,7 +6822,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                   </div>
                 ))}
               </div>
-            ))}
+            )) : <AnalyticsDeskEmpty title="No stress stack yet" description="Inventory, flow, and catalyst rows will populate after fundamentals or calendar data loads." />}
           </aside>
         </div>
 
@@ -6836,7 +6932,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>{row.rule || row.message || row.title || "Alert rule"}</span>
                 <em>{row.status || row.severity || "active"}</em>
               </div>
-            )) : <div className="analytics-options-watch-empty">No commodity alerts.</div>}
+            )) : <AnalyticsDeskEmpty title="No commodity alerts" description="Save an alert from a catalyst or price rule to monitor this desk." />}
           </div>
         </div>
 
@@ -6852,6 +6948,15 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
   }
 
   return null;
+}
+
+function AnalyticsDeskEmpty({ title = "No rows yet", description = "Refresh this desk or adjust filters once the backend has data." }) {
+  return (
+    <div className="analytics-desk-empty">
+      <strong>{title}</strong>
+      <span>{description}</span>
+    </div>
+  );
 }
 
 function CommodityCurveSparkline({ points = [], tone = "neutral", className = "" }) {

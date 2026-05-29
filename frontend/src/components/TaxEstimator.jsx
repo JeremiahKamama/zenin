@@ -1328,6 +1328,63 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           </section>
         ) : null}
 
+        <section className="tax-scenario-workbench" aria-label="Tax scenario workbench">
+          <div className="tax-scenario-command">
+            <span>Scenario workbench</span>
+            <h3>Model the consequence before you sell.</h3>
+            <p>
+              Connected to {Array.isArray(portfolio) ? portfolio.length : 0} portfolio holding{Array.isArray(portfolio) && portfolio.length === 1 ? "" : "s"}
+              {" "}and {Array.isArray(trades) ? trades.length : 0} trade record{Array.isArray(trades) && trades.length === 1 ? "" : "s"}.
+            </p>
+          </div>
+          <div className="tax-scenario-controls">
+            <label>
+              <span>Jurisdiction</span>
+              <select
+                value={jurisdictions[0] || "USA"}
+                onChange={(event) => setJurisdictions((current) => [event.target.value, ...current.filter((key) => key !== event.target.value).slice(0, 3)])}
+              >
+                {Object.entries(taxRules).map(([key, info]) => (
+                  <option key={key} value={key}>{countryFlag(key)} {info.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Basis method</span>
+              <select value={advanced.costBasisMethod} onChange={(event) => handleAdvancedChange("costBasisMethod", event.target.value)}>
+                <option value="fifo">FIFO</option>
+                <option value="lifo">LIFO</option>
+                <option value="hifo">HIFO</option>
+                <option value="average">Average cost</option>
+              </select>
+            </label>
+            <label>
+              <span>Sale timing</span>
+              <select value={scenario.shiftDays} onChange={(event) => setScenario((current) => ({ ...current, shiftDays: Number(event.target.value) }))}>
+                <option value={0}>Today</option>
+                <option value={30}>+30 days</option>
+                <option value={90}>+90 days</option>
+                <option value={365}>+1 year</option>
+              </select>
+            </label>
+            <button type="submit" className="tax-workbench-primary-btn">Run scenario</button>
+          </div>
+          <div className="tax-scenario-delta">
+            <div>
+              <span>Estimated tax</span>
+              <strong>{formatMoney(summaryPreview.estimatedTax, advanced.currency || "USD")}</strong>
+            </div>
+            <div>
+              <span>Taxable gain</span>
+              <strong>{formatMoney(summaryPreview.taxableGain, advanced.currency || "USD")}</strong>
+            </div>
+            <div>
+              <span>After-tax result</span>
+              <strong>{formatMoney(netAfterTax, advanced.currency || "USD")}</strong>
+            </div>
+          </div>
+        </section>
+
         <div className="tax-workbench-primary-grid">
           <section className="tax-workbench-panel tax-workbench-jurisdictions">
             <DensePanelHeader

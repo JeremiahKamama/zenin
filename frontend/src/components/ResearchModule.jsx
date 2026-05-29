@@ -61,7 +61,7 @@ const SOURCE_TYPES = [
 const RESEARCH_VIEW_GROUPS = [
   {
     id: "capture",
-    label: "Capture",
+    label: "Intake",
     views: [
       { id: "inbox", label: "Inbox" },
       { id: "sources", label: "Sources" },
@@ -97,7 +97,7 @@ const RESEARCH_VIEW_GROUPS = [
   },
   {
     id: "output",
-    label: "Output",
+    label: "Handoff",
     views: [
       { id: "briefs", label: "Briefs" },
       { id: "decisions", label: "Decisions" },
@@ -2115,8 +2115,8 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       <div className="research-view-grid research-view-grid-wide">
         <section className="research-panel">
           <DensePanelHeader
-            title="Research Inbox"
-            subtitle="Capture notes fast, classify them once, and promote them directly into desk objects."
+            title="Intake Tape"
+            subtitle="Capture, classify, and promote notes into the desk workflow."
             actions={(
               <InlineControlGroup>
                 <select value={activeSourceType} onChange={(event) => setActiveSourceType(event.target.value)} className="research-inline-select">
@@ -2130,7 +2130,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
 
           <div className="research-compose">
             <div className="research-compose-head">
-              <strong>Add research note</strong>
+              <strong>Capture note</strong>
               <div className="research-compose-toolbar">
                 <select value={draft.sourceId} onChange={(event) => setDraft((prev) => ({ ...prev, sourceId: event.target.value }))}>
                   {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
@@ -2141,10 +2141,10 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
               </div>
             </div>
             <input value={draft.title} onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))} placeholder="Memo title, e.g. NVDA channel check after COMPUTEX" />
-            <textarea value={draft.body} onChange={(event) => setDraft((prev) => ({ ...prev, body: event.target.value }))} placeholder="Paste the research body. Symbols like $NVDA, AAPL, BTC, SPY are linked automatically." rows={5} />
+            <textarea value={draft.body} onChange={(event) => setDraft((prev) => ({ ...prev, body: event.target.value }))} placeholder="Paste the desk note. Symbols like $NVDA, AAPL, BTC, SPY are linked automatically." rows={4} />
             <div className="research-compose-actions">
               <span>Detected: {extractTickerLinks(`${draft.title}\n${draft.body}`).join(", ") || "No tickers yet"}</span>
-              <button type="button" className="research-btn primary" onClick={saveManualDraft}>Index note</button>
+              <button type="button" className="research-btn primary" onClick={saveManualDraft}>Add to tape</button>
             </div>
           </div>
 
@@ -2207,7 +2207,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
         </section>
 
         <aside className="research-panel research-rail-panel">
-          <DensePanelHeader title="Triage Snapshot" subtitle="What needs attention next." />
+          <DensePanelHeader title="Triage Stack" subtitle="What needs attention next." />
           <div className="research-summary-list">
             <div>
               <strong>{documentsWithLinks.filter((doc) => doc.status === "unread").length}</strong>
@@ -3408,13 +3408,13 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     <section className="research-workspace">
       <CompactPageHeader
         eyebrow="Research"
-        title="Knowledge Base"
-        description="Capture source-backed research, turn it into theses and catalysts, wire action triggers, and keep a compact desk memory inside Zenin."
+        title="Research Terminal"
+        description="Turn source-backed notes into theses, catalysts, triggers, briefs, and decisions without leaving the desk."
         meta={<span>{backendMeta}</span>}
         actions={(
           <InlineControlGroup>
             <button type="button" className="research-btn secondary" onClick={() => fileInputRef.current?.click()}>
-              Import Markdown
+              Import
             </button>
             <button type="button" className="research-btn primary" onClick={() => persistResearchBundle({}, "Research workspace saved.")} disabled={isSaving}>
               {isSaving ? "Saving..." : saveLabel}
@@ -3442,8 +3442,8 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
       ) : null}
 
       <div className="research-guidance-banner" role="note">
-        <strong>Research Flow</strong>
-        <span>Capture notes, review drift, map coverage, build conviction, and hand forward briefs or decisions without leaving the research workflow.</span>
+        <strong>Desk Flow</strong>
+        <span>Intake → review → coverage → conviction → handoff.</span>
       </div>
 
       {renderViewTabs()}

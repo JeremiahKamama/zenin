@@ -41,9 +41,12 @@ export function Watchlist({
   onPageChange,
   liveStatus = "idle",
   lastLivePriceAt = null,
+  isGuestMode = false,
+  onIntent,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("list"); // "grid" or "list"
+  const [selectedIntentAsset, setSelectedIntentAsset] = useState(null);
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
@@ -457,6 +460,27 @@ useEffect(() => {
     return asset?.marketType ? String(asset.marketType).toUpperCase() : "Tracked";
   };
 
+  const getCatalystLabel = (asset) => {
+    const symbol = normalizeSymbol(asset?.symbol);
+    const earningsRow = earningsRows.find((row) => row.symbol === symbol)?.item;
+    if (earningsRow?.nextEarnings) return `Earnings ${formatEarningsDate(earningsRow.nextEarnings)}`;
+    if (asset?.marketType === "macro") return "Macro print";
+    if (asset?.type === "crypto" || asset?.marketType === "spot") return "Flow pulse";
+    return asset?.theme ? `${asset.theme} thesis` : "Research queue";
+  };
+
+  const getGuestSignupHref = () => {
+    if (typeof window === "undefined") return "/auth?mode=signup&next=%2Fapp%3Fguest%3D1%26section%3Dwatchlist";
+    const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    return `/auth?mode=signup&next=${encodeURIComponent(next || "/app?guest=1&section=watchlist")}`;
+  };
+
+  const handleIntent = (asset, intent = "inspect") => {
+    setSelectedIntentAsset(asset);
+    onIntent?.(asset, intent);
+    if (intent === "inspect") onAdd?.(asset);
+  };
+
   return (
     <>
       <section className="watchlist-panel watchlist-panel-compact">
@@ -600,13 +624,13 @@ useEffect(() => {
                         <thead>
                           <tr>
                             <th>Symbol</th>
-                            <th>Name</th>
                             <th className="numeric">Last</th>
                             <th className="numeric">% Chg</th>
-                            <th>Category</th>
-                            <th>Theme</th>
+                            <th>Thesis</th>
+                            <th>Alert</th>
+                            <th>Last catalyst</th>
                             <th>Session</th>
-                            <th className="numeric">Star</th>
+                            <th className="numeric">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -617,32 +641,25 @@ useEffect(() => {
                               <tr
                                 key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
                                 className={asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}
-                                onClick={() => onAdd(asset)}
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter" || event.key === " ") {
-                                    event.preventDefault();
-                                    onAdd(asset);
-                                  }
-                                }}
-                                tabIndex={0}
-                                role="button"
                                 title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
                               >
                                 <td>
                                   <div className="watchlist-symbol-cell">
                                     <strong>{asset.symbol}</strong>
-                                    <span>{asset.marketType || asset.type || "tracked"}</span>
+                                    <span>{asset.name || asset.marketType || asset.type || "tracked"}</span>
                                   </div>
                                 </td>
-                                <td>{asset.name}</td>
                                 <td className="numeric">{formatAssetPrice(asset)}</td>
                                 <td className={`numeric ${hasChange ? (change >= 0 ? "positive" : "negative") : ""}`}>
                                   {hasChange ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "—"}
                                 </td>
-                                <td>{asset.category || activeCategory}</td>
-                                <td>{asset.theme || "—"}</td>
+                                <td>{asset.theme || asset.category || "Unassigned"}</td>
+                                <td><span className={hasChange && Math.abs(change) >= 2 ? "watchlist-alert-chip active" : "watchlist-alert-chip"}>{hasChange && Math.abs(change) >= 2 ? "Review" : "Quiet"}</span></td>
+                                <td>{getCatalystLabel(asset)}</td>
                                 <td>{getSessionLabel(asset)}</td>
-                                <td className="numeric">
+                                <td className="numeric watchlist-row-actions">
+                                  <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "inspect")}>Open</button>
+                                  <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "journal")}>Journal</button>
                                   <button
                                     className={`star-button compact ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
                                     onClick={(e) => {
@@ -679,7 +696,7 @@ useEffect(() => {
                       <article
                         key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
                         className={`asset-card clickable ${asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}`}
-                        onClick={() => onAdd(asset)}
+                        onClick={() => handleIntent(asset, "inspect")}
                         title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
                       >
                         <div className="asset-card-main">
@@ -805,7 +822,7 @@ useEffect(() => {
                           className="watchlist-earnings-row"
                           onClick={() => {
                             const match = displayedAssets.find((asset) => asset.symbol === symbol) || assets.find((asset) => asset.symbol === symbol);
-                            if (match) onAdd(match);
+                            if (match) handleIntent(match, "catalyst");
                           }}
                         >
                           <strong>{symbol}</strong>
@@ -821,6 +838,25 @@ useEffect(() => {
               </aside>
             ) : null}
           </div>
+
+          {selectedIntentAsset ? (
+            <section className="watchlist-intent-panel" aria-label="Selected watchlist workflow">
+              <div className="watchlist-intent-main">
+                <span>Asset workflow opened</span>
+                <h3>{normalizeSymbol(selectedIntentAsset.symbol)} decision setup</h3>
+                <p>
+                  {selectedIntentAsset.name || normalizeSymbol(selectedIntentAsset.symbol)} is now the active context. Attach research,
+                  record the decision, or keep the alert quiet until the next catalyst.
+                </p>
+              </div>
+              <div className="watchlist-intent-actions">
+                <button type="button" onClick={() => handleIntent(selectedIntentAsset, "research")}>Research</button>
+                <button type="button" onClick={() => handleIntent(selectedIntentAsset, "journal")}>Journal</button>
+                <button type="button" onClick={() => handleIntent(selectedIntentAsset, "alert")}>Alert</button>
+                {isGuestMode ? <a href={getGuestSignupHref()}>Create account to save</a> : null}
+              </div>
+            </section>
+          ) : null}
         </>
       )}
       </section>

@@ -227,7 +227,7 @@ export function PredictionMarketModule() {
       return whaleSort.direction === "asc" ? aNum - bNum : bNum - aNum;
     });
     return sorted;
-  }, [predictionWhaleRows, whaleMinSize, whaleSort]);
+  }, [predictionWhaleRows, whaleCategory, whaleMinSize, whaleSort]);
 
   const predictionWhalePageSize = 10;
   const predictionWhaleTotalPages = Math.max(1, Math.ceil(filteredPredictionWhales.length / predictionWhalePageSize));
@@ -262,6 +262,24 @@ export function PredictionMarketModule() {
     ? predictionMarketsByCategory[activeCategory].slice(0, 5)
     : [];
 
+  const allPredictionMarkets = useMemo(() => {
+    if (!predictionMarketsByCategory || typeof predictionMarketsByCategory !== "object") return [];
+    return Object.values(predictionMarketsByCategory).flatMap((markets) => Array.isArray(markets) ? markets : []);
+  }, [predictionMarketsByCategory]);
+
+  const predictionDeskStats = useMemo(() => {
+    const categoryRows = predictionCategories.map((category) => {
+      const markets = Array.isArray(predictionMarketsByCategory?.[category]) ? predictionMarketsByCategory[category] : [];
+      const volume = markets.reduce((sum, market) => sum + (Number(market?.volume24h || market?.volume || 0) || 0), 0);
+      return { category, count: markets.length, volume };
+    });
+    const totalVolume = categoryRows.reduce((sum, row) => sum + row.volume, 0);
+    const leadCategory = [...categoryRows].sort((a, b) => b.volume - a.volume)[0] || categoryRows[0] || null;
+    const whaleNotional = filteredPredictionWhales.reduce((sum, item) => sum + (Number(item?.transactionSize || 0) || 0), 0);
+    const whalePnl = filteredPredictionWhales.reduce((sum, item) => sum + (Number(item?._pnl) || 0), 0);
+    return { categoryRows, totalVolume, leadCategory, whaleNotional, whalePnl };
+  }, [filteredPredictionWhales, predictionCategories, predictionMarketsByCategory]);
+
   const formatProbability = (price) => {
     const n = Number(price);
     if (!Number.isFinite(n)) return "—";
@@ -291,15 +309,55 @@ export function PredictionMarketModule() {
     return Math.round(Math.max(0, Math.min(1, n)) * 100);
   };
 
+  const leadMarket = selectedCategoryMarkets[0] || allPredictionMarkets[0] || null;
+  const deskStatusLabel = predictionLoading ? "Refreshing" : predictionStale ? "Cached" : "Live";
+  const activeCategoryLabel = getPredictionCategoryLabel(activeCategory);
+  const leadProbability = leadMarket ? formatProbability(leadMarket.yesPrice) : "—";
+
   return (
-    <div className="view-container prediction-terminal">
-      <div className="watchlist-panel glass prediction-market-panel" style={{ padding: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "10px" }}>
-          <div className="header-left">
-            <h2>Prediction Markets</h2>
-            <div className="asset-count">Top 5 markets per category · refreshes every 6 hours</div>
+    <div className="view-container prediction-terminal prediction-desk">
+      <section className="prediction-desk-command">
+        <div className="prediction-desk-copy">
+          <span>Prediction risk desk</span>
+          <h2>Probability Desk</h2>
+          <p>Event odds, whale flow, and mark-to-entry pressure in one compact risk surface.</p>
+        </div>
+        <div className="prediction-desk-strip" aria-label="Prediction desk status">
+          <div>
+            <span>Status</span>
+            <strong>{deskStatusLabel}</strong>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div>
+            <span>Book</span>
+            <strong>{activeCategoryLabel}</strong>
+          </div>
+          <div>
+            <span>Markets</span>
+            <strong>{allPredictionMarkets.length || "—"}</strong>
+          </div>
+          <div>
+            <span>Lead prob</span>
+            <strong>{leadProbability}</strong>
+          </div>
+          <div>
+            <span>Whale notional</span>
+            <strong>{formatDollar(predictionDeskStats.whaleNotional)}</strong>
+          </div>
+        </div>
+      </section>
+
+      {predictionStale && predictionNotice ? (
+        <div className="snapshot-inline-note prediction-desk-notice">{predictionNotice}</div>
+      ) : null}
+
+      <div className="prediction-desk-grid">
+      <div className="watchlist-panel glass prediction-market-panel">
+        <div className="section-header prediction-panel-head">
+          <div className="header-left">
+            <h2>Event probability tape</h2>
+            <div className="asset-count">Top markets by category · refreshes every 6 hours</div>
+          </div>
+          <div className="prediction-panel-status">
             <div className="asset-count">
               {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
             </div>
@@ -309,7 +367,7 @@ export function PredictionMarketModule() {
             </span>
           </div>
         </div>
-        <div className="category-tabs" style={{ marginBottom: "12px" }}>
+        <div className="category-tabs prediction-desk-tabs">
           {predictionCategories.map((category) => (
             <button
               key={category}
@@ -321,9 +379,6 @@ export function PredictionMarketModule() {
             </button>
           ))}
         </div>
-        {predictionStale && predictionNotice ? (
-          <div className="snapshot-inline-note" style={{ marginBottom: "12px" }}>{predictionNotice}</div>
-        ) : null}
 
         {predictionLoading && !predictionSnapshot ? (
           <div className="loading-state">Loading prediction markets...</div>
@@ -380,11 +435,30 @@ export function PredictionMarketModule() {
         )}
       </div>
 
-      <div className="watchlist-panel glass prediction-whale-panel" style={{ padding: "16px" }}>
-        <div className="section-header" style={{ marginBottom: "10px" }}>
+      <aside className="prediction-risk-rail">
+        <div className="prediction-risk-card">
+          <span>Event focus</span>
+          <strong>{leadMarket?.question || "No active market"}</strong>
+          <em>{leadMarket ? `Ends ${formatDateLabel(leadMarket.endDate)} · Vol ${formatDollar(leadMarket.volume24h || leadMarket.volume || 0)}` : "Waiting for market data."}</em>
+        </div>
+        <div className="prediction-risk-card">
+          <span>Lead category</span>
+          <strong>{predictionDeskStats.leadCategory ? getPredictionCategoryLabel(predictionDeskStats.leadCategory.category) : "—"}</strong>
+          <em>{predictionDeskStats.leadCategory ? `${predictionDeskStats.leadCategory.count} markets · ${formatDollar(predictionDeskStats.leadCategory.volume)} volume` : "No category breadth yet."}</em>
+        </div>
+        <div className="prediction-risk-card">
+          <span>Whale pressure</span>
+          <strong>{formatSignedDollar(predictionDeskStats.whalePnl)}</strong>
+          <em>{filteredPredictionWhales.length} trades above {formatDollar(whaleMinSize)}</em>
+        </div>
+      </aside>
+      </div>
+
+      <div className="watchlist-panel glass prediction-whale-panel">
+        <div className="section-header prediction-panel-head">
           <div className="header-left">
-            <h2>Whale Transactions</h2>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <h2>Flow blotter</h2>
+            <div className="prediction-panel-status">
               <div className="asset-count">Large prediction-market flow · {filteredPredictionWhales.length} matches</div>
               <span className={`data-health-badge ${predictionLoading ? "loading" : predictionStale ? "hazard" : "ok"}`} title={predictionLoading ? "Refreshing whale transactions" : predictionStale ? "Showing previous whale snapshot" : "Whale transactions are up to date"}>
                 <span className={`status-icon ${predictionLoading ? "spinner" : ""}`}>{predictionLoading ? "⟳" : predictionStale ? "⚠" : "✓"}</span>
@@ -392,9 +466,9 @@ export function PredictionMarketModule() {
               </span>
             </div>
           </div>
-          <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
-            <div className="asset-dropdown-container" style={{ display: "grid", gap: "4px", justifyItems: "end" }}>
-              <div className="asset-count" style={{ fontSize: "0.72rem" }}>Category</div>
+          <div className="prediction-filter-bar">
+            <label className="asset-dropdown-container">
+              <span>Category</span>
               <select
                 value={whaleCategory}
                 onChange={(e) => setWhaleCategory(e.target.value)}
@@ -405,9 +479,9 @@ export function PredictionMarketModule() {
                   <option key={cat} value={cat}>{getPredictionCategoryLabel(cat)}</option>
                 ))}
               </select>
-            </div>
-            <div className="asset-dropdown-container" style={{ display: "grid", gap: "4px", justifyItems: "end" }}>
-              <div className="asset-count" style={{ fontSize: "0.72rem" }}>Min Size</div>
+            </label>
+            <label className="asset-dropdown-container">
+              <span>Min Size</span>
               <select
                 value={whaleMinSize}
                 onChange={(e) => setWhaleMinSize(Number(e.target.value) || 10000)}
@@ -419,7 +493,7 @@ export function PredictionMarketModule() {
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
           </div>
         </div>
 

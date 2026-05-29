@@ -381,6 +381,37 @@ function GuestSavedDataBanner({ activeSection, lastUpdated, liveStreamStatus, wa
   );
 }
 
+function GuestMissionBar({ activeSection, onOpenSection }) {
+  const steps = [
+    { key: "Watchlist", label: "Track asset", detail: "Start with NVDA, BTC, or a macro country." },
+    { key: "Research", label: "Open research", detail: "Attach catalyst context to the asset." },
+    { key: "Journal", label: "Save decision", detail: "Capture the call before it disappears." }
+  ];
+  const activeIndex = Math.max(0, steps.findIndex((step) => step.key === activeSection));
+  return (
+    <section className="guest-mission-bar" aria-label="Guest conversion path">
+      <div className="guest-mission-copy">
+        <span>Demo path</span>
+        <strong>Track an asset, inspect the thesis, then save the decision.</strong>
+      </div>
+      <div className="guest-mission-steps">
+        {steps.map((step, index) => (
+          <button
+            key={step.key}
+            type="button"
+            className={index <= activeIndex ? "active" : ""}
+            onClick={() => onOpenSection(step.key)}
+          >
+            <i aria-hidden="true">{index + 1}</i>
+            <span>{step.label}</span>
+            <small>{step.detail}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function GuestPreviewCard({ module, isFocused = false, onOpenSection }) {
   const href = `/app?guest=1&section=${getGuestSectionSlug(module.section)}`;
   return (
@@ -527,13 +558,14 @@ function GuestWorkspacePreview({
         watchlistNotice={watchlistNotice}
         onRetryLiveData={onRetryLiveData}
       />
+      <GuestMissionBar activeSection={activeSection} onOpenSection={onOpenSection} />
       <section className="guest-workspace-hero">
         <div>
           <span>Guest workspace</span>
-          <h2>{focusedModule ? focusedModule.title : "Explore Zenin by tracking an asset, researching a catalyst, and journaling a decision."}</h2>
+          <h2>{focusedModule ? focusedModule.title : "Run the asset-to-decision loop before you sign up."}</h2>
           <p>
-            Use the saved demo workspace to inspect each core loop. Create an account when you want live data,
-            connected portfolios, synced notes, and persistent research.
+            This saved workspace behaves like a working desk: watchlist first, thesis second, journal last. Create an
+            account when you want the setup, notes, and tax scenarios to persist.
           </p>
           <div className="guest-hero-actions">
             <a className="guest-signup-cta" href={signupHref}>
@@ -5473,6 +5505,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                   onPageChange={handlePageChange}
                   liveStatus={liveStreamStatus}
                   lastLivePriceAt={lastLivePriceAt}
+                  isGuestMode={isExplicitGuestMode}
+                  onIntent={(asset, intent) => setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`)}
                 />
               </>
             ) : (
@@ -5600,6 +5634,10 @@ const handleOptionTradeClosed = async (tradeId) => {
               onPageChange={handlePageChange}
               liveStatus={liveStreamStatus}
               lastLivePriceAt={lastLivePriceAt}
+              isGuestMode={isExplicitGuestMode}
+              onIntent={(asset, intent) => {
+                if (isExplicitGuestMode) setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
+              }}
             />
               </>
             )}

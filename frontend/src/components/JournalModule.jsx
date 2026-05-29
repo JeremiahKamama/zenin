@@ -1870,6 +1870,15 @@ export function JournalModule({
             onJumpToReview={enterReviewMode}
             reviewModeActive={isReviewModeActive}
           />
+          <JournalDecisionLayer
+            debriefPnl={debriefPnl}
+            ruleAdherence={ruleAdherence}
+            emotionalDiscipline={emotionalDiscipline}
+            primaryLesson={primaryLesson}
+            reviewQueueItems={reviewQueueItems}
+            onNewEntry={openNewEntry}
+            onJumpToReview={enterReviewMode}
+          />
           <JournalDebriefDashboard
             dateKey={activeDebriefDate}
             syncTimestampLabel={syncTimestampLabel}
@@ -1973,8 +1982,8 @@ function JournalDebriefHeader({
     <CompactPageHeader
       className="journal-debrief-head"
       eyebrow="Journal"
-      title="Trader Debrief"
-      description="Session evidence, behavioral drift, and review signals pulled into one closeout workspace."
+      title="Decision Memory"
+      description="Saved decisions, review evidence, and behavior signals from the assets you acted on."
       actions={(
         <div className="journal-debrief-head-actions">
           <div className="journal-debrief-sync-box" aria-label={`Sync state ${syncTimestampLabel}`}>
@@ -2007,6 +2016,56 @@ function JournalDebriefHeader({
         </div>
       )}
     />
+  );
+}
+
+function JournalDecisionLayer({
+  debriefPnl,
+  ruleAdherence,
+  emotionalDiscipline,
+  primaryLesson,
+  reviewQueueItems,
+  onNewEntry,
+  onJumpToReview
+}) {
+  const qualityScore = Math.round(
+    [
+      Number.isFinite(ruleAdherence) ? ruleAdherence : null,
+      Number.isFinite(emotionalDiscipline) ? emotionalDiscipline : null,
+      Number(debriefPnl || 0) >= 0 ? 72 : 48
+    ].filter((value) => value != null).reduce((sum, value, _index, arr) => sum + value / arr.length, 0)
+  );
+  const templates = [
+    ["Trade", "Record entry, exit, thesis, and mistake tags."],
+    ["Research note", "Save the catalyst, variant view, and invalidation."],
+    ["Risk decision", "Log sizing, exposure, and what would change your mind."],
+    ["Post-mortem", "Turn the outcome into one rule to repeat or remove."]
+  ];
+  return (
+    <section className="journal-decision-layer" aria-label="Saved decision layer">
+      <div className="journal-decision-primary">
+        <span>Saved decision layer</span>
+        <h3>Turn market work into memory.</h3>
+        <p>{primaryLesson || "Capture the decision, evidence, and next rule before the context fades."}</p>
+        <div className="journal-decision-actions">
+          <button type="button" className="journal-btn primary" onClick={onNewEntry}>Record decision</button>
+          <button type="button" className="journal-btn secondary" onClick={onJumpToReview}>Review queue</button>
+        </div>
+      </div>
+      <div className="journal-decision-score">
+        <span>Decision quality</span>
+        <strong>{Number.isFinite(qualityScore) ? `${qualityScore}%` : "—"}</strong>
+        <small>{reviewQueueItems.length ? `${reviewQueueItems.length} follow-up${reviewQueueItems.length === 1 ? "" : "s"} waiting` : "No urgent follow-ups"}</small>
+      </div>
+      <div className="journal-decision-templates">
+        {templates.map(([title, detail]) => (
+          <button key={title} type="button" onClick={onNewEntry}>
+            <strong>{title}</strong>
+            <span>{detail}</span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
