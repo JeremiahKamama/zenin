@@ -5,9 +5,10 @@ const { Resend } = require("resend");
  * https://resend.com/docs/introduction
  */
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const SMTP_FROM = process.env.SMTP_FROM || "Zenin Capital <onboarding@resend.dev>";
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const SMTP_FROM = process.env.SMTP_FROM || process.env.EMAIL_FROM || "Zenin Capital <onboarding@resend.dev>";
 const SMTP_FROM_USES_RESEND_TEST_DOMAIN = /@resend\.dev(?:[>\s"]|$)/i.test(SMTP_FROM);
+const RESEND_WEBHOOK_CONFIGURED = Boolean(String(process.env.RESEND_WEBHOOK_SECRET || process.env.RESEND_WEBHOOK_SIGNING_SECRET || "").trim());
 
 // Detect placeholder / unconfigured key
 const RESEND_CONFIGURED =
@@ -37,6 +38,7 @@ function buildDeliveryResult({ sent = false, providerMessageId = null, error = n
 function getEmailDeliveryConfig() {
   return {
     resendConfigured: Boolean(RESEND_CONFIGURED),
+    resendWebhookConfigured: RESEND_WEBHOOK_CONFIGURED,
     from: SMTP_FROM,
     usesResendTestDomain: SMTP_FROM_USES_RESEND_TEST_DOMAIN,
     productionReady: Boolean(RESEND_CONFIGURED && !SMTP_FROM_USES_RESEND_TEST_DOMAIN)
@@ -136,6 +138,9 @@ async function sendPasswordResetEmail(email, resetToken) {
       to: email,
       subject: "Reset your Zenin Capital password",
       html: htmlContent,
+      tags: [
+        { name: "zenin_type", value: "password_reset" }
+      ],
     });
 
     if (error) {
@@ -222,6 +227,9 @@ async function sendVerificationEmail(email, code) {
       to: email,
       subject: `Verify your Zenin Capital account - ${code}`,
       html: htmlContent,
+      tags: [
+        { name: "zenin_type", value: "account_verification" }
+      ],
     });
 
     if (error) {

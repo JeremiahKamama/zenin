@@ -1982,8 +1982,8 @@ function JournalDebriefHeader({
     <CompactPageHeader
       className="journal-debrief-head"
       eyebrow="Journal"
-      title="Decision Memory"
-      description="Saved decisions, review evidence, and behavior signals from the assets you acted on."
+      title="Decision Ledger"
+      description="A compact record of trade theses, evidence, outcomes, and follow-up reviews."
       actions={(
         <div className="journal-debrief-head-actions">
           <div className="journal-debrief-sync-box" aria-label={`Sync state ${syncTimestampLabel}`}>
@@ -2042,10 +2042,10 @@ function JournalDecisionLayer({
     ["Post-mortem", "Turn the outcome into one rule to repeat or remove."]
   ];
   return (
-    <section className="journal-decision-layer" aria-label="Saved decision layer">
+    <section className="journal-decision-layer" aria-label="Decision ledger layer">
       <div className="journal-decision-primary">
-        <span>Saved decision layer</span>
-        <h3>Turn market work into memory.</h3>
+        <span>Decision layer</span>
+        <h3>Convert market work into reviewable decisions.</h3>
         <p>{primaryLesson || "Capture the decision, evidence, and next rule before the context fades."}</p>
         <div className="journal-decision-actions">
           <button type="button" className="journal-btn primary" onClick={onNewEntry}>Record decision</button>

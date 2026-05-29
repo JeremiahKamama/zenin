@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ZeninLogo } from "./Branding";
-import { clearPostAuthRedirect, getGuestWorkspacePath, getPostAuthRedirectPath, storePostAuthRedirect } from "../utils/authRedirect";
+import { clearPostAuthRedirect, getGuestWorkspacePath, getSignedInWorkspacePath, storePostAuthRedirect } from "../utils/authRedirect";
 import { zeninFetchJson } from "../utils/zeninFetch";
 import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "../utils/supabaseAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
@@ -36,7 +36,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
   const [forgotForm, setForgotForm] = useState({ email: "" });
 
   const redirectToApp = () => {
-    const target = getPostAuthRedirectPath();
+    const target = getSignedInWorkspacePath();
     clearPostAuthRedirect();
     window.location.href = target;
   };

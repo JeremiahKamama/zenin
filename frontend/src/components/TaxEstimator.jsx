@@ -936,11 +936,11 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
   const canExportResults = results.length > 0;
   const accountantCopy = useMemo(() => ({
-    eyebrow: accountantMode ? "Accountant Review" : "Tax Estimator",
-    title: accountantMode ? "Accountant Review Workbench" : "Global Tax Estimator",
+    eyebrow: accountantMode ? "Accountant Review" : "Tax desk",
+    title: accountantMode ? "Accountant Review Workbench" : "Tax Scenario Desk",
     subtitle: accountantMode
       ? "Audit-ready ledger, filing assumptions, and jurisdiction outputs prepared for review and handoff."
-      : "Forensic Ledger · Capital Gains Analysis & Liability Estimation",
+      : "Capital gains, filing assumptions, and after-tax outcomes in one compact workbench.",
     syncLabel: accountantMode ? "Review mode" : "Sync State",
     syncValue: accountantMode ? "Accountant mode · Audit posture enabled" : `Synced · ${formatSavedTimestamp(new Date().toISOString())}`,
     exportLabel: accountantMode ? "Export review CSV" : "Export",
@@ -1330,8 +1330,8 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
 
         <section className="tax-scenario-workbench" aria-label="Tax scenario workbench">
           <div className="tax-scenario-command">
-            <span>Scenario workbench</span>
-            <h3>Model the consequence before you sell.</h3>
+            <span>Scenario desk</span>
+            <h3>Model the tax consequence before you sell.</h3>
             <p>
               Connected to {Array.isArray(portfolio) ? portfolio.length : 0} portfolio holding{Array.isArray(portfolio) && portfolio.length === 1 ? "" : "s"}
               {" "}and {Array.isArray(trades) ? trades.length : 0} trade record{Array.isArray(trades) && trades.length === 1 ? "" : "s"}.

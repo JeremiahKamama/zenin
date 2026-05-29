@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import "./public.css";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
-import { clearPostAuthRedirect, getPostAuthRedirectPath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
+import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
 import { zeninFetchJson } from "./utils/zeninFetch";
 import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/supabaseAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
@@ -75,7 +75,7 @@ export default function AuthPage() {
   const [recoveryReady, setRecoveryReady] = useState(isRecoveryLinkActive);
 
   const redirectToApp = () => {
-    const target = getPostAuthRedirectPath();
+    const target = getSignedInWorkspacePath();
     clearPostAuthRedirect();
     window.location.replace(target);
   };
@@ -193,7 +193,9 @@ export default function AuthPage() {
     if (data?.requiresVerification) {
       updateMode("signin");
       setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
-      setMessage("Check your inbox to confirm your email, then return to sign in.");
+      setMessage(data?.verificationEmailSent === false
+        ? "Account created, but Zenin could not send the verification email. Check the Resend sender/API key configuration, then request a new code."
+        : "Check your inbox to confirm your email, then return to sign in.");
       return;
     }
     await finishSignedInSession();

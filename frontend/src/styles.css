@@ -5207,6 +5207,19 @@ body.light-theme-active .user-icon {
   background: var(--color-surface-card);
 }
 
+.app-auth-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--color-bg);
+}
+
+.app-auth-loading .module-loading-state {
+  width: min(420px, 100%);
+  min-height: 160px;
+}
+
 /* ── Watchlist Star Button ───────────────────────────────────────── */
 .asset-card {
   position: relative;
@@ -28548,6 +28561,16 @@ body.light-theme-active .settings-field span {
   color: var(--light-text-muted) !important;
 }
 
+body.light-theme-active .settings-toggle-row {
+  color: var(--light-text) !important;
+  border-color: var(--light-border) !important;
+  background: #f8fafc !important;
+}
+
+body.light-theme-active .settings-toggle-row input[type="checkbox"] {
+  accent-color: #0284c7;
+}
+
 body.light-theme-active .settings-category-btn {
   color: var(--light-text) !important;
 }
@@ -28598,6 +28621,20 @@ body.light-theme-active .theme-pill.active {
   color: #1e3a8a !important;
   border-color: var(--light-border-strong) !important;
   background: #dbeafe !important;
+}
+
+body.light-theme-active .settings-danger-panel {
+  border-color: rgba(185, 28, 28, 0.26) !important;
+}
+
+body.light-theme-active .settings-danger-panel .settings-panel-header {
+  color: #991b1b !important;
+}
+
+body.light-theme-active .settings-danger-btn {
+  color: #991b1b !important;
+  border-color: rgba(185, 28, 28, 0.36) !important;
+  background: #fee2e2 !important;
 }
 
 body.light-theme-active button:disabled,
@@ -29107,6 +29144,45 @@ body.light-theme-active .journal-v2 .negative {
   border-color: rgba(132, 152, 174, 0.24);
   background: rgba(4, 7, 11, 0.68);
   color: #c8d2df;
+}
+
+.settings-danger-panel {
+  border-color: rgba(248, 113, 113, 0.28) !important;
+}
+
+.settings-danger-panel .settings-panel-header {
+  color: #fecaca;
+}
+
+.settings-danger-panel .settings-panel-header:hover {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: rgba(127, 29, 29, 0.2) !important;
+  color: #fca5a5;
+}
+
+.settings-danger-btn {
+  min-height: 38px;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: 3px;
+  background: rgba(127, 29, 29, 0.36);
+  color: #fee2e2;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.settings-danger-btn:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.72);
+  background: rgba(153, 27, 27, 0.52);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.settings-danger-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .settings-primary-btn:hover:not(:disabled),
@@ -37658,6 +37734,7 @@ body.light-theme-active .analytics-commodity-controls button {
 .guest-data-banner a,
 .guest-hero-actions button,
 .guest-hero-actions a,
+.guest-contextual-signup .guest-signup-cta,
 .guest-preview-actions button,
 .guest-preview-actions a,
 .guest-workflow-card button {
@@ -37682,6 +37759,7 @@ body.light-theme-active .analytics-commodity-controls button {
 .guest-data-banner a:hover,
 .guest-hero-actions button:hover,
 .guest-hero-actions a:hover,
+.guest-contextual-signup .guest-signup-cta:hover,
 .guest-preview-actions button:hover,
 .guest-preview-actions a:hover,
 .guest-workflow-card button:hover {
@@ -37694,6 +37772,7 @@ body.light-theme-active .analytics-commodity-controls button {
 .guest-data-banner a:focus-visible,
 .guest-hero-actions button:focus-visible,
 .guest-hero-actions a:focus-visible,
+.guest-contextual-signup .guest-signup-cta:focus-visible,
 .guest-preview-actions button:focus-visible,
 .guest-preview-actions a:focus-visible,
 .guest-workflow-card button:focus-visible {
@@ -38066,6 +38145,34 @@ body.light-theme-active .guest-preview-table strong {
   color: #0f172a;
 }
 
+body.light-theme-active .guest-workspace-hero span,
+body.light-theme-active .guest-preview-card header span,
+body.light-theme-active .guest-workflow-card header span,
+body.light-theme-active .guest-mission-copy span,
+body.light-theme-active .journal-decision-primary span,
+body.light-theme-active .tax-scenario-command span,
+body.light-theme-active .watchlist-intent-main span,
+body.light-theme-active .journal-decision-score span,
+body.light-theme-active .tax-scenario-delta span {
+  color: #0e7490;
+}
+
+body.light-theme-active .guest-onboarding-checklist span {
+  color: #334155;
+}
+
+body.light-theme-active .guest-onboarding-checklist i {
+  border-color: rgba(15, 23, 42, 0.16);
+  color: #475569;
+  background: #ffffff;
+}
+
+body.light-theme-active .guest-onboarding-checklist .complete i {
+  border-color: rgba(22, 163, 74, 0.34);
+  color: #047857;
+  background: rgba(220, 252, 231, 0.9);
+}
+
 .guest-mission-bar,
 .watchlist-intent-panel,
 .journal-decision-layer,
@@ -38407,6 +38514,14 @@ body.light-theme-active .guest-preview-table div {
   color: #475569;
 }
 
+body.light-theme-active .guest-preview-metrics span {
+  color: #64748b;
+}
+
+body.light-theme-active .guest-preview-table em {
+  color: #0891b2;
+}
+
 body.light-theme-active .guest-preview-table,
 body.light-theme-active .guest-preview-table div,
 body.light-theme-active .guest-preview-metrics {
@@ -38702,6 +38817,14 @@ body.light-theme-active .prediction-market-title {
   color: #0f172a;
 }
 
+body.light-theme-active .prediction-desk-copy span,
+body.light-theme-active .prediction-desk-strip span,
+body.light-theme-active .prediction-risk-card span,
+body.light-theme-active .prediction-filter-bar label > span,
+body.light-theme-active .prediction-filter-bar .asset-dropdown-container span {
+  color: #0e7490;
+}
+
 body.light-theme-active .prediction-desk-copy p,
 body.light-theme-active .prediction-risk-card em,
 body.light-theme-active .prediction-market-meta,
@@ -38745,5 +38868,233 @@ body.light-theme-active .prediction-filter-bar select {
 
   .prediction-desk-strip > div:last-child {
     border-bottom: 0;
+  }
+}
+
+/* Final terminal consistency pass: remaining desks, settings, and shared modal surfaces */
+.options-exec-header,
+.portfolio-command-header,
+.tax-workbench-command-header,
+.journal-debrief-head.compact-page-header,
+.settings-window-header,
+.company-page-header,
+.asset-modal-window .modal-header,
+.indicator-country-modal .modal-header {
+  border-radius: 6px;
+  border-color: rgba(103, 232, 249, 0.18);
+  background:
+    linear-gradient(135deg, rgba(8, 47, 73, 0.32), rgba(2, 6, 23, 0.74)),
+    rgba(2, 6, 23, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.options-exec-eyebrow,
+.portfolio-command-eyebrow,
+.tax-workbench-command-title span,
+.journal-debrief-head .compact-page-eyebrow,
+.settings-title-block span,
+.company-page-header .eyebrow,
+.asset-modal-window .modal-header span,
+.indicator-country-modal .modal-header span {
+  color: #67e8f9;
+  font-size: 0.68rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.options-exec-header h1,
+.portfolio-command-titleblock h1,
+.tax-workbench-command-title h2,
+.journal-debrief-head h1,
+.settings-title-block h2,
+.company-page-header h1,
+.asset-modal-window .modal-header h2,
+.indicator-country-modal .modal-header h2 {
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.options-exec-header p,
+.portfolio-command-titleblock p,
+.tax-workbench-command-title p,
+.journal-debrief-head p,
+.settings-title-block p,
+.company-page-header p {
+  max-width: 680px;
+  color: rgba(203, 213, 225, 0.72);
+}
+
+.options-exec-header-actions button,
+.portfolio-v2-link,
+.tax-workbench-command-actions button,
+.journal-btn,
+.settings-primary-btn,
+.settings-category-btn,
+.portfolio-command-tab {
+  border-radius: 5px;
+}
+
+.options-exec-metrics .metric-card,
+.watchlist-panel-compact,
+.journal-decision-layer,
+.tax-scenario-workbench,
+.portfolio-command-summary,
+.portfolio-command-analysis,
+.settings-panel,
+.company-page-framework,
+.asset-modal-window,
+.indicator-country-modal {
+  border-color: rgba(148, 163, 184, 0.18);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(2, 6, 23, 0.86)),
+    rgba(2, 6, 23, 0.84);
+}
+
+.portfolio-command-tab {
+  min-height: 38px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.journal-decision-layer {
+  align-items: stretch;
+}
+
+.journal-decision-primary h3,
+.tax-scenario-command h3,
+.settings-panel-header span:first-child {
+  letter-spacing: 0;
+}
+
+.tax-scenario-workbench {
+  grid-template-columns: minmax(220px, 0.75fr) minmax(320px, 1.2fr) minmax(220px, 0.8fr);
+  gap: 12px;
+}
+
+.settings-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-ops-card,
+.settings-ops-checklist > div {
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 5px;
+  background: rgba(2, 6, 23, 0.5);
+}
+
+.settings-ops-card span,
+.settings-ops-checklist strong {
+  display: block;
+  color: #67e8f9;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.settings-ops-card strong {
+  display: block;
+  margin-top: 10px;
+  color: #f8fafc;
+  font-size: 1rem;
+  line-height: 1.1;
+}
+
+.settings-ops-card em,
+.settings-ops-checklist span {
+  display: block;
+  margin-top: 6px;
+  color: rgba(203, 213, 225, 0.68);
+  font-size: 0.78rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.settings-ops-checklist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+body.light-theme-active .options-exec-header,
+body.light-theme-active .portfolio-command-header,
+body.light-theme-active .tax-workbench-command-header,
+body.light-theme-active .journal-debrief-head.compact-page-header,
+body.light-theme-active .settings-window-header,
+body.light-theme-active .company-page-header,
+body.light-theme-active .asset-modal-window .modal-header,
+body.light-theme-active .indicator-country-modal .modal-header {
+  border-color: rgba(15, 23, 42, 0.12);
+  background:
+    linear-gradient(135deg, rgba(224, 242, 254, 0.9), rgba(255, 255, 255, 0.96)),
+    #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+body.light-theme-active .options-exec-header h1,
+body.light-theme-active .portfolio-command-titleblock h1,
+body.light-theme-active .tax-workbench-command-title h2,
+body.light-theme-active .journal-debrief-head h1,
+body.light-theme-active .settings-title-block h2,
+body.light-theme-active .company-page-header h1,
+body.light-theme-active .asset-modal-window .modal-header h2,
+body.light-theme-active .indicator-country-modal .modal-header h2,
+body.light-theme-active .settings-ops-card strong {
+  color: #0f172a;
+}
+
+body.light-theme-active .options-exec-header p,
+body.light-theme-active .portfolio-command-titleblock p,
+body.light-theme-active .tax-workbench-command-title p,
+body.light-theme-active .journal-debrief-head p,
+body.light-theme-active .settings-title-block p,
+body.light-theme-active .company-page-header p,
+body.light-theme-active .settings-ops-card em,
+body.light-theme-active .settings-ops-checklist span {
+  color: rgba(51, 65, 85, 0.72);
+}
+
+body.light-theme-active .options-exec-metrics .metric-card,
+body.light-theme-active .watchlist-panel-compact,
+body.light-theme-active .journal-decision-layer,
+body.light-theme-active .tax-scenario-workbench,
+body.light-theme-active .portfolio-command-summary,
+body.light-theme-active .portfolio-command-analysis,
+body.light-theme-active .settings-panel,
+body.light-theme-active .company-page-framework,
+body.light-theme-active .asset-modal-window,
+body.light-theme-active .indicator-country-modal,
+body.light-theme-active .settings-ops-card,
+body.light-theme-active .settings-ops-checklist > div {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+body.light-theme-active .settings-ops-card span,
+body.light-theme-active .settings-ops-checklist strong {
+  color: #0369a1;
+}
+
+@media (max-width: 1200px) {
+  .tax-scenario-workbench,
+  .settings-ops-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .tax-scenario-workbench,
+  .settings-ops-grid,
+  .settings-ops-checklist {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-command-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
   }
 }

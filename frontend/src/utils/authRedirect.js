@@ -12,6 +12,20 @@ export function getPostAuthRedirectPath({ search = null, fallback = "/app" } = {
   return queryNext || storedNext || fallback;
 }
 
+export function getSignedInWorkspacePath({ search = null, fallback = "/app" } = {}) {
+  const target = sanitizeInternalPath(getPostAuthRedirectPath({ search, fallback }), fallback);
+  try {
+    const url = new URL(target, "https://zenin.local");
+    if (url.pathname.startsWith("/app")) {
+      url.searchParams.delete("guest");
+      return `${url.pathname}${url.search}${url.hash}` || fallback;
+    }
+  } catch {
+    // Fall through to the sanitized target below.
+  }
+  return target;
+}
+
 export function getGuestWorkspacePath({ search = null, fallback = "/app" } = {}) {
   const candidate = sanitizeInternalPath(getPostAuthRedirectPath({ search, fallback }), fallback);
   return candidate.startsWith("/app") ? candidate : fallback;

@@ -3105,10 +3105,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
         <div className="portfolio-command-tabs">
           {[
             { id: "holdings", label: "Holdings" },
-            { id: "attribution", label: "What Drove Performance" },
-            { id: "exposure", label: "Where You&apos;re Overweight" },
+            { id: "attribution", label: "Attribution" },
+            { id: "exposure", label: "Exposure" },
             { id: "fees", label: "Fees" },
-            { id: "prediction", label: "Prediction Markets", beta: true },
+            { id: "prediction", label: "Event Risk", beta: true },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -3194,7 +3194,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <div className="portfolio-command-panel-head">
             <div>
               <h3>Prediction Markets</h3>
-              <p>Optional event-driven extension for macro and cross-asset views.</p>
+              <p>Event-driven context for macro, policy, earnings, and cross-asset risk.</p>
             </div>
             <div className="portfolio-command-inline-actions">
               <span className="portfolio-command-beta-pill">Beta</span>

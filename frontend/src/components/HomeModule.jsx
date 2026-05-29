@@ -251,12 +251,12 @@ export function HomeModule({
     const marketType = String(asset?.marketType || "").toLowerCase();
     const symbol = String(asset?.symbol || "").toUpperCase();
     
-    if (type.includes("crypto") || type === "stablecoin" || type === "exchange token" || marketType === "spot") return "Crypto";
-    if (type.includes("forex") || type.includes("fx") || symbol.includes("/") || asset?.pair) return "Forex";
-    if (type.includes("commodity") || ["GLD", "GC", "CL", "NG"].includes(symbol)) return "Commodity";
-    if (type.includes("option")) return "Option";
+    if (type.includes("crypto") || type === "stablecoin" || type === "exchange token" || marketType === "spot") return "crypto";
+    if (type.includes("forex") || type.includes("fx") || symbol.includes("/") || asset?.pair) return "forex";
+    if (type.includes("commodity") || ["GLD", "GC", "CL", "NG"].includes(symbol)) return "commodity";
+    if (type.includes("option")) return "option";
     
-    return "Equity";
+    return "equity";
   };
 
   const moversUniverse = useMemo(() => {

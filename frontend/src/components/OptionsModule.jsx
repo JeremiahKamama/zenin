@@ -1464,9 +1464,13 @@ useEffect(() => {
     <div className="view-container options-terminal options-exec">
       <header className="options-exec-header">
         <div>
-          <div className="options-exec-eyebrow">Options</div>
-          <h1>Options</h1>
-          <p>{optionsMarketMode === "equity" ? "Listed Equity Options" : "Crypto Options Flow"}</p>
+          <div className="options-exec-eyebrow">Derivatives desk</div>
+          <h1>Options Risk Desk</h1>
+          <p>
+            {optionsMarketMode === "equity"
+              ? "Listed chains, surface context, and execution risk for equity underlyings."
+              : "Crypto volatility, flow, positions, and expiry pressure in one workstation."}
+          </p>
         </div>
         <span className="options-exec-live-badge">
           <span aria-hidden="true" />

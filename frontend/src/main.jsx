@@ -1,9 +1,7 @@
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
-import { getGuestWorkspacePath, storePostAuthRedirect } from "./utils/authRedirect";
-import { isDevFullAccessEnabled } from "./utils/devAccess";
-import { hasSupabaseSessionHint } from "./utils/supabaseAuth";
+import { getGuestWorkspacePath } from "./utils/authRedirect";
 
 function resolveEntry(pathname) {
   if (typeof window !== "undefined" && window.__ZENIN_ENTRY__) {
@@ -15,22 +13,6 @@ function resolveEntry(pathname) {
   if (path.startsWith("/terms")) return "terms";
   if (path.startsWith("/privacy")) return "privacy";
   return "public";
-}
-
-function redirectUnauthenticatedAppEntry(entry) {
-  if (entry !== "app" || typeof window === "undefined") return false;
-
-  const params = new URLSearchParams(window.location.search);
-  const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
-  if (isDevFullAccessEnabled() || allowGuest || hasSupabaseSessionHint()) return false;
-
-  const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  storePostAuthRedirect(target, "/app");
-  const authUrl = new URL("/auth", window.location.origin);
-  authUrl.searchParams.set("mode", "signup");
-  authUrl.searchParams.set("next", target);
-  window.location.replace(`${authUrl.pathname}${authUrl.search}${authUrl.hash}`);
-  return true;
 }
 
 function redirectMisroutedGuestEntry(entry) {
@@ -47,7 +29,6 @@ function redirectMisroutedGuestEntry(entry) {
 
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");
 const redirectedToGuestWorkspace = redirectMisroutedGuestEntry(entry);
-const redirectedToAuth = !redirectedToGuestWorkspace && redirectUnauthenticatedAppEntry(entry);
 
 async function loadEntryComponent(currentEntry) {
   try {
@@ -92,7 +73,7 @@ function applyGlobalTheme() {
 
 applyGlobalTheme();
 
-const redirectedBeforeRender = redirectedToGuestWorkspace || redirectedToAuth;
+const redirectedBeforeRender = redirectedToGuestWorkspace;
 const rootElement = redirectedBeforeRender ? null : document.getElementById("root");
 const hasPrerenderedMarkup =
   !redirectedBeforeRender &&

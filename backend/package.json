@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@simplewebauthn/server": "^9.0.3",
-    "@supabase/supabase-js": "^2.106.0",
     "apple-signin-auth": "^1.7.5",
     "axios": "^1.16.1",
     "cors": "^2.8.5",

@@ -19,7 +19,7 @@ function isRenderEnvironment(connectionString) {
   return /render\.com/i.test(String(connectionString || ""));
 }
 
-// Supabase-specific detection removed: prefer explicit DATABASE_URL or provider-specific envs.
+// Database hosting is explicit: Render runs the backend and Railway provides Postgres via DATABASE_URL.
 
 function resolveRejectUnauthorized(connectionString) {
   const explicit = process.env.PGSSL_REJECT_UNAUTHORIZED;
@@ -6532,6 +6532,114 @@ const admin = {
     `, [resolvedId]);
     if (!result.rows[0]) return null;
     return existing || result.rows[0];
+  },
+
+  inspectUserDeletion: async (userId) => {
+    const resolvedId = toUserId(userId);
+    const userResult = await pool.query(`
+      SELECT
+        id,
+        email,
+        supabase_user_id AS "supabaseUserId",
+        auth_provider AS "authProvider"
+      FROM app_users
+      WHERE id = $1
+      LIMIT 1;
+    `, [resolvedId]);
+    const user = userResult.rows[0] || null;
+    if (!user) return null;
+
+    const ownedWorkspaces = await pool.query(`
+      SELECT
+        w.id,
+        w.name,
+        w.slug,
+        COUNT(wm.user_id) FILTER (WHERE wm.status = 'active')::int AS "activeMemberCount"
+      FROM workspaces w
+      LEFT JOIN workspace_members wm ON wm.workspace_id = w.id
+      WHERE w.owner_user_id = $1
+      GROUP BY w.id
+      ORDER BY w.id ASC;
+    `, [resolvedId]);
+
+    return {
+      user: {
+        id: Number(user.id),
+        email: String(user.email || ""),
+        supabaseUserId: user.supabaseUserId || null,
+        authProvider: user.authProvider || "email"
+      },
+      ownedWorkspaces: ownedWorkspaces.rows.map((row) => ({
+        id: Number(row.id),
+        name: String(row.name || ""),
+        slug: String(row.slug || ""),
+        activeMemberCount: Number(row.activeMemberCount || 0)
+      }))
+    };
+  },
+
+  deleteOwnAccount: async (userId) => {
+    const resolvedId = toUserId(userId);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const userResult = await client.query(`
+        SELECT id, email
+        FROM app_users
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE;
+      `, [resolvedId]);
+      const user = userResult.rows[0] || null;
+      if (!user) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      const ownerBlockers = await client.query(`
+        SELECT
+          w.id,
+          w.name,
+          COUNT(wm.user_id) FILTER (WHERE wm.status = 'active')::int AS "activeMemberCount"
+        FROM workspaces w
+        LEFT JOIN workspace_members wm ON wm.workspace_id = w.id
+        WHERE w.owner_user_id = $1
+        GROUP BY w.id
+        HAVING COUNT(wm.user_id) FILTER (WHERE wm.status = 'active') > 1;
+      `, [resolvedId]);
+
+      if (ownerBlockers.rows.length) {
+        const error = new Error("Transfer or remove workspace members before deleting your account.");
+        error.code = "WORKSPACE_OWNER_HAS_MEMBERS";
+        error.workspaces = ownerBlockers.rows.map((row) => ({
+          id: Number(row.id),
+          name: String(row.name || ""),
+          activeMemberCount: Number(row.activeMemberCount || 0)
+        }));
+        throw error;
+      }
+
+      await client.query(`
+        UPDATE auth_sessions
+        SET revoked_at = NOW()
+        WHERE user_id = $1 AND revoked_at IS NULL;
+      `, [resolvedId]);
+
+      const deleted = await client.query(`
+        DELETE FROM app_users
+        WHERE id = $1
+        RETURNING id, email;
+      `, [resolvedId]);
+
+      await client.query("COMMIT");
+      return deleted.rows[0] || user;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   },
 
   revokeUserSessions: async (userId) => {

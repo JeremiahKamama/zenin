@@ -142,6 +142,15 @@ const passwordUpdateSchema = z.object({
   newPassword: passwordSchema,
 });
 
+const accountDeleteSchema = z.object({
+  currentPassword: z.string().max(1024).optional().default(""),
+  confirmEmail: emailSchema,
+  confirmationPhrase: z.string().trim(),
+}).refine((value) => value.confirmationPhrase === "DELETE MY ACCOUNT", {
+  path: ["confirmationPhrase"],
+  message: "Type DELETE MY ACCOUNT to confirm.",
+});
+
 const planUpdateSchema = z.object({
   plan: z.enum(["starter", "pro", "desk"]),
   billingCycle: z.enum(["monthly", "yearly"]),
@@ -318,6 +327,7 @@ module.exports = {
   emailRequestSchema,
   emailConfirmSchema,
   passwordUpdateSchema,
+  accountDeleteSchema,
   planUpdateSchema,
   workspaceUpdateSchema,
   workspaceInviteSchema,

@@ -275,6 +275,14 @@ function isGuestQueryRequested() {
   return GUEST_ACCESS_VALUES.has(String(params.get("guest") || "").trim().toLowerCase());
 }
 
+function clearGuestQueryFromAppUrl() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.pathname.startsWith("/app") || !url.searchParams.has("guest")) return;
+  url.searchParams.delete("guest");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function redirectToAuthGate() {
   if (typeof window === "undefined") return;
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -873,10 +881,6 @@ function hasSectionAccessForUser(plan, isAdmin, section) {
   const requiredPlan = requiredPlanForSection(section);
   const planRank = getAppRuntimeConfig()?.subscription?.planRank || {};
   return Number(planRank[userPlan] || 0) >= Number(planRank[requiredPlan] || 0);
-}
-
-function hasStoredAuthSession() {
-  return hasWorkspaceSession();
 }
 
 function isAdminUser(user) {
@@ -3068,7 +3072,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return "";
     }
   });
-  const [isGuestUser, setIsGuestUser] = useState(() => devFullAccess || allowGuestAccess || !hasStoredAuthSession());
+  const [isGuestUser, setIsGuestUser] = useState(() => devFullAccess || allowGuestAccess);
   const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
 
   const [themeMode, setThemeMode] = useState(() => {
@@ -3334,6 +3338,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           setUserEmail(String(data.user.email || localStorage.getItem("zenin_email") || "user@zenin.app"));
           setIsAdmin(userIsAdmin);
           setIsGuestUser(false);
+          clearGuestQueryFromAppUrl();
           setAuthUserId(data.user.id != null ? String(data.user.id) : "");
           setAuthDisplayName(String(data.user.displayName || "").trim());
           setCurrentPlan(effectivePlan);
@@ -3350,7 +3355,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       } catch {
         if (!mounted) return;
         if (!allowGuestAccess) {
-          setAccessCheckLoading(false);
+          redirectToAuthGate();
           return;
         }
         localStorage.removeItem("zenin_auth_user");
@@ -3591,7 +3596,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     apiSecret: ""
   });
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
-  const settingsCategories = ["Profile", "Subscription", "Workspace", "General", "Accounts", "Layout", "Notification"];
+  const settingsCategories = ["Profile", "Subscription", "Workspace", "General", "Accounts", "Operations", "Layout", "Notification"];
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
     const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
@@ -3622,7 +3627,10 @@ const handleOptionTradeClosed = async (tradeId) => {
     phoneNumber: "",
     recoveryEmail: "",
     passkeyName: "Primary Device",
-    passkeyProvider: passkeyOptions[0] || "iCloud Keychain"
+    passkeyProvider: passkeyOptions[0] || "iCloud Keychain",
+    deleteCurrentPassword: "",
+    deleteConfirmEmail: "",
+    deleteConfirmationPhrase: ""
   });
   const [supabaseSecurity, setSupabaseSecurity] = useState({
     loading: false,
@@ -3635,8 +3643,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [profileFeedback, setProfileFeedback] = useState({
     email: null,
     password: null,
-    twofa: null
+    twofa: null,
+    delete: null
   });
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(() => getBrowserNotificationPermission());
   const [notificationFeedback, setNotificationFeedback] = useState(null);
   const revenueCatPaywallRef = useRef(null);
@@ -4870,6 +4880,83 @@ const handleOptionTradeClosed = async (tradeId) => {
     setProfileMessage("password", "success", "Password updated successfully.");
   };
 
+  const clearAccountStorage = useCallback(() => {
+    const keysToRemove = [
+      "zenin_auth_user",
+      "zenin_auth_expires_at",
+      "zenin_supabase_session_present",
+      "zenin_email",
+      "zenin_balance",
+      "zenin_portfolio",
+      "zenin_watchlist_assets",
+      "zenin_active_options_trades",
+      "zenin_custom_stock_themes",
+      "zenin_trades",
+      "zenin_preferences",
+      "zenin_profile_security",
+      "zenin_connected_accounts",
+      "zenin_active_section",
+      "zenin_journal_entries",
+      "zenin_tax_estimates",
+      "zenin_tax_audit_trail",
+      "zenin_fx_rates",
+      "zenin_pricing_billing_cycle",
+      "zenin_post_auth_next"
+    ];
+
+    try {
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.removeItem(getConnectPromptSessionKey(authUserId));
+      }
+    } catch {
+      // Continue even when browser storage is unavailable.
+    }
+  }, [authUserId]);
+
+  const deleteAccount = async () => {
+    if (isGuestUser) {
+      setProfileMessage("delete", "error", "Sign in before deleting an account.");
+      return;
+    }
+
+    const confirmEmail = String(profileForms.deleteConfirmEmail || "").trim().toLowerCase();
+    const confirmationPhrase = String(profileForms.deleteConfirmationPhrase || "").trim();
+    const currentPassword = String(profileForms.deleteCurrentPassword || "");
+
+    if (confirmEmail !== String(profileSecurity.email || userEmail || "").trim().toLowerCase()) {
+      setProfileMessage("delete", "error", "Enter your current account email to confirm deletion.");
+      return;
+    }
+    if (confirmationPhrase !== "DELETE MY ACCOUNT") {
+      setProfileMessage("delete", "error", "Type DELETE MY ACCOUNT exactly to continue.");
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    setProfileMessage("delete", "info", "Deleting account...");
+    try {
+      const res = await zeninFetch("/api/account", {
+        method: "DELETE",
+        body: JSON.stringify({ currentPassword, confirmEmail, confirmationPhrase })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const workspaceNames = Array.isArray(data?.workspaces)
+          ? data.workspaces.map((workspace) => workspace.name).filter(Boolean).join(", ")
+          : "";
+        const suffix = workspaceNames ? ` Affected workspace: ${workspaceNames}.` : "";
+        throw new Error(`${data?.error || "Account deletion failed."}${suffix}`);
+      }
+      clearAccountStorage();
+      window.location.replace("/");
+    } catch (error) {
+      setProfileMessage("delete", "error", error?.message || "Account deletion failed.");
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
   const enableTwoFactor = async () => {
     if (!isGuestUser) {
       const code = String(profileForms.twoFactorCode || "").trim();
@@ -5099,6 +5186,12 @@ const handleOptionTradeClosed = async (tradeId) => {
     String(profileForms?.newPassword || "").trim() &&
     String(profileForms?.confirmPassword || "").trim()
   );
+  const canDeleteAccount = Boolean(
+    !isGuestUser &&
+    !isDeletingAccount &&
+    String(profileForms?.deleteConfirmEmail || "").trim().toLowerCase() === String(profileSecurity.email || userEmail || "").trim().toLowerCase() &&
+    String(profileForms?.deleteConfirmationPhrase || "").trim() === "DELETE MY ACCOUNT"
+  );
   const canEnableTwoFactor = (() => {
     if (!isGuestUser) {
       return Boolean(totpSetup.factorId) && /^\d{6}$/.test(String(profileForms?.twoFactorCode || "").trim());
@@ -5167,6 +5260,14 @@ const handleOptionTradeClosed = async (tradeId) => {
       </section>
     );
   };
+
+  if (accessCheckLoading) {
+    return (
+      <div className="app-auth-loading" role="status" aria-live="polite">
+        <div className="loading-state module-loading-state">Loading workspace...</div>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
@@ -6373,6 +6474,61 @@ const handleOptionTradeClosed = async (tradeId) => {
                         </div>
                       )}
                     </div>
+
+                    <div className="settings-panel settings-danger-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-delete")}>
+                        <span>Delete Account</span>
+                        <span>{expandedSettingsPanels["profile-delete"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["profile-delete"] && (
+                        <div className="settings-panel-body">
+                          <p className="settings-warning">
+                            This permanently deletes your Zenin account, connected-account credentials, workspace data you own, and saved portfolio records. Team workspaces must have other active members removed or transferred first.
+                          </p>
+                          <label className="settings-field">
+                            <span>Current Email</span>
+                            <input
+                              type="email"
+                              value={profileForms.deleteConfirmEmail}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, deleteConfirmEmail: e.target.value }))}
+                              placeholder={profileSecurity.email || userEmail || "name@example.com"}
+                              autoComplete="email"
+                            />
+                          </label>
+                          <label className="settings-field">
+                            <span>Current Password</span>
+                            <input
+                              type="password"
+                              value={profileForms.deleteCurrentPassword}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, deleteCurrentPassword: e.target.value }))}
+                              placeholder="Required for password accounts"
+                              autoComplete="current-password"
+                            />
+                          </label>
+                          <label className="settings-field">
+                            <span>Confirmation Phrase</span>
+                            <input
+                              type="text"
+                              value={profileForms.deleteConfirmationPhrase}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, deleteConfirmationPhrase: e.target.value }))}
+                              placeholder="DELETE MY ACCOUNT"
+                            />
+                          </label>
+                          <div className="settings-inline-actions">
+                            <button
+                              className="settings-danger-btn"
+                              onClick={deleteAccount}
+                              disabled={!canDeleteAccount}
+                            >
+                              {isDeletingAccount ? "Deleting..." : "Delete Account"}
+                            </button>
+                          </div>
+                          {profileFeedback.delete?.text ? (
+                            <p className={`settings-status ${profileFeedback.delete.type}`}>{profileFeedback.delete.text}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
 
@@ -6861,6 +7017,64 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <button className="settings-primary-btn" onClick={openConnectWindow}>
                             Add Account
                           </button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {activeSettingsCategory === "Operations" && (
+                  <>
+                    <div className="settings-preview-note">
+                      Operational checks capture feed health, access posture, conversion blockers, and interface quality in one admin surface.
+                    </div>
+
+                    <div className="settings-panel settings-ops-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("ops-health")}>
+                        <span>Workspace Health</span>
+                        <span>{expandedSettingsPanels["ops-health"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["ops-health"] && (
+                        <div className="settings-panel-body">
+                          <div className="settings-ops-grid">
+                            <div className="settings-ops-card">
+                              <span>Market feed</span>
+                              <strong>{liveStreamStatus === "connected" ? "Live" : liveStreamStatus === "degraded" ? "Degraded" : "Saved snapshot"}</strong>
+                              <em>{lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}</em>
+                            </div>
+                            <div className="settings-ops-card">
+                              <span>Account posture</span>
+                              <strong>{isAdmin ? "Admin" : isGuestUser ? "Guest" : accountPlanLabel}</strong>
+                              <em>{isGuestUser ? "Preview workspace" : "Authenticated workspace"}</em>
+                            </div>
+                            <div className="settings-ops-card">
+                              <span>Workspace</span>
+                              <strong>{activeWorkspace?.name || "Personal workspace"}</strong>
+                              <em>{activeWorkspace?.membership?.role || (isAdmin ? "admin" : "member")}</em>
+                            </div>
+                            <div className="settings-ops-card">
+                              <span>Coverage</span>
+                              <strong>{watchlistAssets.length} tracked</strong>
+                              <em>{connectedAccounts.length} connected account{connectedAccounts.length === 1 ? "" : "s"}</em>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel settings-ops-panel">
+                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("ops-capture")}>
+                        <span>Issue Capture</span>
+                        <span>{expandedSettingsPanels["ops-capture"] ? "−" : "+"}</span>
+                      </button>
+                      {expandedSettingsPanels["ops-capture"] && (
+                        <div className="settings-panel-body">
+                          <div className="settings-ops-checklist">
+                            <div><strong>Data access</strong><span>Feed status, retry visibility, stale snapshots, and unavailable endpoints.</span></div>
+                            <div><strong>Conversion blockers</strong><span>Guest previews, locked modules, billing state, and account creation handoff.</span></div>
+                            <div><strong>Trust controls</strong><span>OAuth, passkeys, MFA posture, workspace roles, and notification reachability.</span></div>
+                            <div><strong>Interface quality</strong><span>Theme contrast, dense-table overflow, module crashes, and modal consistency.</span></div>
+                          </div>
                         </div>
                       )}
                     </div>

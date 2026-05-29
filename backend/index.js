@@ -12,7 +12,6 @@ const {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } = require("@simplewebauthn/server");
-const { createClient: createSupabaseClient } = require("@supabase/supabase-js");
 const { OAuth2Client } = require("google-auth-library");
 const { Webhook } = require("svix");
 // const appleSignin = require("apple-signin-auth");
@@ -45,6 +44,7 @@ const {
   emailRequestSchema,
   emailConfirmSchema,
   passwordUpdateSchema,
+  accountDeleteSchema,
   planUpdateSchema,
   twoFactorEnableSchema,
   passkeyRegisterSchema,
@@ -1171,28 +1171,6 @@ if (AUTH_HASH_KEY.length < 32) {
 const OAUTH_PROVIDERS = ["google", "github", "microsoft"];
 const ARCHIVED_OAUTH_PROVIDERS = new Set(["apple"]);
 const ADMIN_MIGRATION_KEY = String(process.env.ADMIN_MIGRATION_KEY || "").trim();
-const SUPABASE_URL = String(
-  process.env.SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL ||
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||
-  ""
-).trim();
-const SUPABASE_PUBLISHABLE_KEY = String(
-  process.env.SUPABASE_PUBLISHABLE_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  ""
-).trim();
-const supabaseAuthClient =
-  SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
-    ? createSupabaseClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-          detectSessionInUrl: false
-        }
-      })
-    : null;
 const ALLOW_DEV_AUTH_DEBUG =
   process.env.NODE_ENV !== "production" &&
   String(process.env.ENABLE_DEV_AUTH_DEBUG || "").trim().toLowerCase() === "true";
@@ -1568,10 +1546,6 @@ function getSessionTokenFromCookie(req) {
   return token || null;
 }
 
-function hasSupabaseAuthConfig() {
-  return Boolean(supabaseAuthClient);
-}
-
 function getCsrfTokenFromCookie(req) {
   const cookies = parseCookies(req);
   const token = String(cookies[CSRF_COOKIE_NAME] || "").trim();
@@ -1683,39 +1657,7 @@ async function resolveAuthContext(req) {
     }
   }
 
-  const bearerToken = getBearerToken(req);
-  if (!bearerToken || !hasSupabaseAuthConfig()) {
-    return guestContext;
-  }
-
-  try {
-    const { data, error } = await supabaseAuthClient.auth.getUser(bearerToken);
-    if (error || !data?.user?.id || !data.user.email) {
-      return guestContext;
-    }
-    const provider = String(
-      data.user.app_metadata?.provider ||
-      data.user.identities?.[0]?.provider ||
-      "supabase"
-    ).trim().toLowerCase() || "supabase";
-    const localUser = await userAuth.upsertSupabaseUser({
-      supabaseUserId: data.user.id,
-      email: data.user.email,
-      displayName: data.user.user_metadata?.display_name || data.user.user_metadata?.full_name || data.user.email,
-      authProvider: provider,
-      emailVerified: Boolean(data.user.email_confirmed_at)
-    });
-    return {
-      isGuest: false,
-      userId: Number(localUser.id),
-      user: sanitizeAuthUser(localUser),
-      token: bearerToken,
-      authSource: "supabase"
-    };
-  } catch (error) {
-    console.warn("[Auth] Supabase token verification failed:", error?.message || error);
-    return guestContext;
-  }
+  return guestContext;
 }
 
 app.use(async (req, _res, next) => {
@@ -4393,43 +4335,6 @@ app.get("/api/auth/me", attachActiveWorkspace, async (req, res) => {
   });
 });
 
-app.post("/api/auth/supabase/exchange", async (req, res) => {
-  try {
-    if (!hasSupabaseAuthConfig()) {
-      return apiError(res, 503, {
-        error: "Supabase Auth is not configured.",
-        message: "Add Supabase URL and publishable key to enable authentication.",
-        code: "SUPABASE_AUTH_NOT_CONFIGURED",
-        retryable: false
-      });
-    }
-    if (!req.auth || req.auth.isGuest || req.auth.authSource !== "supabase") {
-      return apiError(res, 401, {
-        error: "Supabase access token required.",
-        message: "Sign in with Supabase again and retry.",
-        code: "SUPABASE_TOKEN_REQUIRED",
-        retryable: false
-      });
-    }
-
-    const rememberMe = req.body?.rememberMe !== false;
-    const session = await issueSessionForUser(req.auth.userId, req, { persistent: rememberMe });
-    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
-
-    const user = await userAuth.findUserById(req.auth.userId);
-    const active = await workspaces.getActiveForUser(req.auth.userId);
-
-    return res.json({
-      success: true,
-      expiresAt: session.expiresAt,
-      user: sanitizeAuthUser(user),
-      workspace: sanitizeWorkspace(active?.workspace, active?.membership)
-    });
-  } catch (error) {
-    return handleServerError(res, "Supabase session exchange failed", error);
-  }
-});
-
 app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {
   try {
     const currentPassword = String(req.body?.currentPassword || "");
@@ -4540,6 +4445,77 @@ app.post("/api/account/password", authLimiter, requireSignedIn, validate(passwor
     return res.json({ success: true, user: sanitizeAuthUser(user) });
   } catch (error) {
     return handleServerError(res, "Password update failed", error);
+  }
+});
+
+app.delete("/api/account", authLimiter, requireSignedIn, validate(accountDeleteSchema), async (req, res) => {
+  try {
+    const currentUser = await userAuth.findUserById(req.auth.userId);
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const confirmedEmail = String(req.body?.confirmEmail || "").trim().toLowerCase();
+    const currentEmail = String(currentUser.email || "").trim().toLowerCase();
+    if (confirmedEmail !== currentEmail) {
+      return res.status(400).json({ error: "Confirm your current account email before deleting." });
+    }
+
+    const storedPasswordHash = String(currentUser.passwordHash || "").trim();
+    if (storedPasswordHash) {
+      const currentPassword = String(req.body?.currentPassword || "");
+      if (!currentPassword || !verifyPassword(currentPassword, storedPasswordHash)) {
+        return res.status(401).json({ error: "Current password is incorrect." });
+      }
+    }
+
+    const deletionPlan = await admin.inspectUserDeletion(req.auth.userId);
+    if (!deletionPlan) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const workspaceBlockers = deletionPlan.ownedWorkspaces.filter((workspace) => Number(workspace.activeMemberCount || 0) > 1);
+    if (workspaceBlockers.length) {
+      return res.status(409).json({
+        error: "Transfer or remove workspace members before deleting your account.",
+        code: "WORKSPACE_OWNER_HAS_MEMBERS",
+        workspaces: workspaceBlockers
+      });
+    }
+
+    const deleted = await admin.deleteOwnAccount(req.auth.userId);
+    if (!deleted) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    clearSessionCookie(res, req);
+    await admin.recordSystemLog({
+      level: "warning",
+      service: "Account",
+      endpoint: "DELETE /api/account",
+      message: "User account deleted by owner.",
+      requestId: req.requestId,
+      ipAddress: resolveClientIp(req),
+      statusCode: 200,
+      context: {
+        deletedUserId: req.auth.userId,
+        emailHash: hashToken(currentEmail),
+        ownedWorkspaceCount: deletionPlan.ownedWorkspaces.length,
+        legacySupabaseUserIdPresent: Boolean(deletionPlan.user.supabaseUserId)
+      }
+    }).catch(() => {});
+
+    req.auth = { isGuest: true, userId: null, user: null, token: null, authSource: "deleted" };
+    return res.json({ success: true });
+  } catch (error) {
+    if (error?.code === "WORKSPACE_OWNER_HAS_MEMBERS") {
+      return res.status(409).json({
+        error: error.message,
+        code: error.code,
+        workspaces: error.workspaces || []
+      });
+    }
+    return handleServerError(res, "Account deletion failed", error);
   }
 });
 
@@ -5417,7 +5393,8 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     return res.status(201).json({
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(created),
-      requiresVerification: true
+      requiresVerification: true,
+      verificationEmailSent: getEmailDeliverySent(verificationEmailDelivery)
     });
   } catch (error) {
     return handleServerError(res, "Signup failed", error);
@@ -5811,7 +5788,13 @@ app.post("/api/auth/resend-verification", async (req, res) => {
       console.error("[Auth] Failed to log verification email delivery:", error?.message || error);
     });
 
-    return res.json({ success: true, message: "Verification code sent" });
+    return res.json({
+      success: true,
+      message: getEmailDeliverySent(verificationEmailDelivery)
+        ? "Verification code sent"
+        : "Verification code created, but email delivery is not configured or failed.",
+      verificationEmailSent: getEmailDeliverySent(verificationEmailDelivery)
+    });
   } catch (error) {
     return handleServerError(res, "Failed to resend verification", error);
   }
@@ -13668,7 +13651,7 @@ if (require.main === module) {
     );
     if (/ENOTFOUND|getaddrinfo/i.test(String(error?.message || ""))) {
       console.error(
-        "Database hostname could not be resolved. Verify that DATABASE_URL (or the active Supabase/managed Postgres URL) points at a live database endpoint and that the host is reachable from this deployment."
+        "Database hostname could not be resolved. Verify that DATABASE_URL points at the live Railway Postgres endpoint and that the host is reachable from this deployment."
       );
     }
     process.exit(1);
