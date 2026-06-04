@@ -4790,27 +4790,35 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
 
     if (!isGuestUser) {
+      if (!password) {
+        setProfileMessage("email", "error", "Current password is required.");
+        return;
+      }
       try {
-        if (!isSupabaseConfigured()) {
-          throw new Error("Secure account authentication is not configured.");
-        }
-        const client = getSupabaseClient();
-        const { error: authError } = await client.auth.updateUser({
-          email: nextEmail
+        const res = await zeninFetch("/api/account/email/request", {
+          method: "POST",
+          body: JSON.stringify({ newEmail: nextEmail, currentPassword: password })
         });
-        if (authError) {
-          throw authError;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || "Email change request failed.");
         }
-        setProfileSecurity((prev) => ({
-          ...prev,
-          pendingEmail: nextEmail,
-          pendingEmailRequestedAt: new Date().toISOString()
-        }));
+        if (data?.user) {
+          localStorage.setItem("zenin_auth_user", JSON.stringify(data.user));
+          setProfileSecurity(profileSecurityFromUser(data.user, data.user.email || profileSecurity.email || userEmail));
+        } else {
+          setProfileSecurity((prev) => ({
+            ...prev,
+            pendingEmail: nextEmail,
+            pendingEmailRequestedAt: new Date().toISOString()
+          }));
+        }
         setProfileForms((prev) => ({ ...prev, newEmail: "", emailPassword: "", emailVerificationCode: "" }));
+        const devCode = data?.devVerificationCode ? ` Dev code: ${data.devVerificationCode}.` : "";
         setProfileMessage(
           "email",
           "success",
-          `Confirmation links were sent for ${nextEmail}. Approve the email change from your inbox to finish updating your sign-in address.`
+          `${data?.message || `Verification code sent to ${nextEmail}.`} Enter the 6-digit code below to finish updating your sign-in email.${devCode}`
         );
         return;
       } catch (error) {
@@ -4843,10 +4851,6 @@ const handleOptionTradeClosed = async (tradeId) => {
   };
 
   const verifyPendingEmail = async () => {
-    if (!isGuestUser) {
-      setProfileMessage("email", "info", "Confirm the email-change link sent to your inbox, then refresh this page.");
-      return;
-    }
     const pendingEmail = String(profileSecurity.pendingEmail || "").trim().toLowerCase();
     const typedCode = String(profileForms.emailVerificationCode || "").trim();
     if (!pendingEmail) {
@@ -4859,7 +4863,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
     if (!isGuestUser) {
       try {
-        const res = await zeninFetch("/account/email/confirm", {
+        const res = await zeninFetch("/api/account/email/confirm", {
           method: "POST",
           body: JSON.stringify({ verificationCode: typedCode })
         });
@@ -6133,44 +6137,47 @@ const handleOptionTradeClosed = async (tradeId) => {
                               placeholder="name@example.com"
                             />
                           </label>
+                          <label className="settings-field">
+                            <span>Current Password</span>
+                            <input
+                              type="password"
+                              value={profileForms.emailPassword}
+                              onChange={(e) => setProfileForms((prev) => ({ ...prev, emailPassword: e.target.value }))}
+                              placeholder={isGuestUser ? "Enter demo password" : "Enter current password"}
+                            />
+                          </label>
+                          {hasPendingEmail ? (
+                            <label className="settings-field">
+                              <span>Verification Code</span>
+                              <input
+                                type="text"
+                                value={profileForms.emailVerificationCode}
+                                onChange={(e) => setProfileForms((prev) => ({
+                                  ...prev,
+                                  emailVerificationCode: e.target.value.replace(/\D/g, "").slice(0, 6)
+                                }))}
+                                placeholder="6-digit code"
+                              />
+                            </label>
+                          ) : null}
                           {isGuestUser ? (
-                            <>
-                              <label className="settings-field">
-                                <span>Current Password</span>
-                                <input
-                                  type="password"
-                                  value={profileForms.emailPassword}
-                                  onChange={(e) => setProfileForms((prev) => ({ ...prev, emailPassword: e.target.value }))}
-                                  placeholder="Enter current password"
-                                />
-                              </label>
-                              <label className="settings-field">
-                                <span>Verification Code</span>
-                                <input
-                                  type="text"
-                                  value={profileForms.emailVerificationCode}
-                                  onChange={(e) => setProfileForms((prev) => ({
-                                    ...prev,
-                                    emailVerificationCode: e.target.value.replace(/\D/g, "").slice(0, 6)
-                                  }))}
-                                  placeholder="6-digit code"
-                                />
-                              </label>
-                            </>
+                            <p className="settings-meta">
+                              Demo accounts generate a local 6-digit code in this settings panel.
+                            </p>
                           ) : (
                             <p className="settings-meta">
-                              We will send a confirmation link to your new inbox before your sign-in email changes.
+                              We will send a 6-digit verification code to your new inbox before your sign-in email changes.
                             </p>
                           )}
                           <div className="settings-inline-actions">
                             <button
                               className="settings-primary-btn"
                               onClick={requestEmailChange}
-                              disabled={isGuestUser ? !canSendEmailVerification : !String(profileForms?.newEmail || "").trim()}
+                              disabled={!canSendEmailVerification}
                             >
-                              {isGuestUser ? "Send Verification" : "Request Email Change"}
+                              Send Verification Code
                             </button>
-                            {isGuestUser ? (
+                            {hasPendingEmail ? (
                               <button
                                 className="settings-secondary-btn"
                                 onClick={verifyPendingEmail}
