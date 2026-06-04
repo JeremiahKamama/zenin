@@ -45,6 +45,12 @@ function getAuthActionErrorMessage(error) {
   if (error?.code === "ACCOUNT_NOT_FOUND" || error?.status === 404) {
     return "No Zenin account exists for that email. Check the address, or create an account if this is your first time here.";
   }
+  if (error?.code === "EMAIL_DELIVERY_FAILED" || error?.code === "EMAIL_DELIVERY_NOT_CONFIGURED") {
+    return error?.message || "Zenin could not send this email. Please try again in a moment.";
+  }
+  if (error?.code === "VERIFICATION_CODE_STORAGE_FAILED") {
+    return "Zenin could not create a fresh verification code. Please try again in a moment.";
+  }
   if (error?.status === 503 || error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED") {
     return "Zenin's auth service is temporarily unavailable or still waking up. Please wait a moment and try signing in again.";
   }
@@ -261,9 +267,10 @@ export default function AuthPage() {
 
   const onResendVerification = () => runAction(async () => {
     const data = await zeninFetchJson("/api/auth/resend-verification", { method: "POST", body: JSON.stringify({}) });
+    const devCode = data?.devVerificationCode ? ` Dev code: ${data.devVerificationCode}.` : "";
     setMessage(data?.verificationEmailSent === false
-      ? "Zenin created a new code, but email delivery is not configured or failed."
-      : "A new verification code was sent.");
+      ? `Zenin created a new code, but email delivery is not configured or failed.${devCode}`
+      : `A new verification code was sent.${devCode}`);
   });
 
   const onResetPassword = () => runAction(async () => {

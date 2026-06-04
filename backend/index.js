@@ -4567,7 +4567,7 @@ app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(em
       nextEmail,
       codeHash: hashToken(verificationCode)
     });
-    const verificationEmailDelivery = await sendVerificationEmail(nextEmail, verificationCode);
+    const verificationEmailDelivery = await sendVerificationEmail(nextEmail, verificationCode, { purpose: "email_change" });
     await logSecurityEvent(req, {
       level: getEmailDeliverySent(verificationEmailDelivery) ? "info" : "warning",
       message: getEmailDeliverySent(verificationEmailDelivery)
@@ -5875,7 +5875,7 @@ app.post("/api/auth/verify-email", async (req, res) => {
       });
     }
 
-    const session = await resolveSessionFromRequest(req);
+    const session = req.auth && !req.auth.isGuest ? req.auth : null;
     if (!session) {
       return apiError(res, 401, {
         error: "Session expired",
@@ -5947,7 +5947,7 @@ app.post("/api/auth/verify-email", async (req, res) => {
 app.post("/api/auth/resend-verification", async (req, res) => {
   try {
     if (requireProductionEmailDeliveryReady(res)) return;
-    const session = await resolveSessionFromRequest(req);
+    const session = req.auth && !req.auth.isGuest ? req.auth : null;
     if (!session) {
       return apiError(res, 401, {
         error: "Session expired",
@@ -5989,8 +5989,19 @@ app.post("/api/auth/resend-verification", async (req, res) => {
 
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
     const { hash: codeHash } = derivePasswordHash(verificationCode);
-    
-    await userAuth.updateUserVerificationCode(user.id, codeHash);
+
+    try {
+      await userAuth.updateUserVerificationCode(user.id, codeHash);
+    } catch (error) {
+      return handleServerError(res, "Failed to persist verification code", error, {
+        status: 503,
+        error: "Verification code could not be created.",
+        message: "Zenin could not create a fresh verification code. Please try again in a moment.",
+        code: "VERIFICATION_CODE_STORAGE_FAILED",
+        retryable: true
+      });
+    }
+
     const verificationEmailDelivery = await sendVerificationEmail(user.email, verificationCode);
     await logSecurityEvent(req, {
       level: getEmailDeliverySent(verificationEmailDelivery) ? "info" : "warning",
@@ -6015,7 +6026,8 @@ app.post("/api/auth/resend-verification", async (req, res) => {
       message: getEmailDeliverySent(verificationEmailDelivery)
         ? "Verification code sent"
         : "Verification code created, but email delivery is not configured or failed.",
-      verificationEmailSent: getEmailDeliverySent(verificationEmailDelivery)
+      verificationEmailSent: getEmailDeliverySent(verificationEmailDelivery),
+      ...(ALLOW_DEV_AUTH_DEBUG ? { devVerificationCode: verificationCode } : {})
     });
   } catch (error) {
     return handleServerError(res, "Failed to resend verification", error);

@@ -10,6 +10,10 @@ const SMTP_FROM = String(process.env.SMTP_FROM || process.env.EMAIL_FROM || "").
 const SMTP_FROM_CONFIGURED = Boolean(SMTP_FROM);
 const SMTP_FROM_USES_RESEND_TEST_DOMAIN = /@resend\.dev(?:[>\s"]|$)/i.test(SMTP_FROM);
 const RESEND_WEBHOOK_CONFIGURED = Boolean(String(process.env.RESEND_WEBHOOK_SECRET || process.env.RESEND_WEBHOOK_SIGNING_SECRET || "").trim());
+const RESEND_PASSWORD_RESET_TEMPLATE_ID = String(process.env.RESEND_PASSWORD_RESET_TEMPLATE_ID || process.env.RESEND_TEMPLATE_RESET_PASSWORD || "reset-password").trim();
+const RESEND_EMAIL_VERIFICATION_TEMPLATE_ID = String(process.env.RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || process.env.RESEND_TEMPLATE_EMAIL_VERIFICATION || "email-verification").trim();
+const RESEND_EMAIL_CHANGE_TEMPLATE_ID = String(process.env.RESEND_EMAIL_CHANGE_TEMPLATE_ID || process.env.RESEND_TEMPLATE_EMAIL_CHANGE || "email-change-verification").trim();
+const RESEND_ALERT_TEMPLATE_ID = String(process.env.RESEND_ALERT_TEMPLATE_ID || process.env.RESEND_TEMPLATE_ALERT || "").trim();
 
 // Detect placeholder / unconfigured key
 const RESEND_CONFIGURED =
@@ -45,6 +49,71 @@ function buildDeliveryResult({ sent = false, providerMessageId = null, error = n
   };
 }
 
+function buildTemplateVariables(values = {}) {
+  const normalized = {};
+  Object.entries(values || {}).forEach(([key, value]) => {
+    const cleanKey = String(key || "").trim();
+    if (!cleanKey) return;
+    normalized[cleanKey] = value == null ? "" : value;
+  });
+  return normalized;
+}
+
+function canUseTemplate(templateId) {
+  return Boolean(String(templateId || "").trim());
+}
+
+async function sendWithTemplateFallback(client, {
+  email,
+  subject,
+  html,
+  text = null,
+  tags = [],
+  templateId = "",
+  templateVariables = {},
+  logLabel = "email"
+}) {
+  const templatePayload = canUseTemplate(templateId)
+    ? {
+        from: SMTP_FROM,
+        to: email,
+        subject,
+        template: {
+          id: String(templateId).trim(),
+          variables: buildTemplateVariables(templateVariables)
+        },
+        tags
+      }
+    : null;
+
+  const inlinePayload = {
+    from: SMTP_FROM,
+    to: email,
+    subject,
+    html,
+    ...(text == null ? {} : { text }),
+    tags
+  };
+
+  if (templatePayload) {
+    const { data, error } = await client.emails.send(templatePayload);
+    if (!error) {
+      console.log(`[Email] Sent ${logLabel} template ${templateId} to ${email} (id: ${data.id})`);
+      return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
+    }
+    console.error(`[Email] Resend template error sending ${logLabel} to ${email}:`, error);
+  }
+
+  const { data, error } = await client.emails.send(inlinePayload);
+  if (error) {
+    console.error(`[Email] Resend error sending ${logLabel} to ${email}:`, error);
+    return buildDeliveryResult({ sent: false, error });
+  }
+
+  console.log(`[Email] Sent ${logLabel} to ${email} via Resend (id: ${data.id})`);
+  return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
+}
+
 function getEmailDeliveryConfig() {
   return {
     resendConfigured: Boolean(RESEND_CONFIGURED),
@@ -52,6 +121,12 @@ function getEmailDeliveryConfig() {
     resendWebhookConfigured: RESEND_WEBHOOK_CONFIGURED,
     from: SMTP_FROM,
     usesResendTestDomain: SMTP_FROM_USES_RESEND_TEST_DOMAIN,
+    templates: {
+      passwordReset: RESEND_PASSWORD_RESET_TEMPLATE_ID || null,
+      emailVerification: RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || null,
+      emailChange: RESEND_EMAIL_CHANGE_TEMPLATE_ID || null,
+      alert: RESEND_ALERT_TEMPLATE_ID || null
+    },
     productionReady: Boolean(RESEND_CONFIGURED && SMTP_FROM_CONFIGURED && !SMTP_FROM_USES_RESEND_TEST_DOMAIN)
   };
 }
@@ -157,25 +232,27 @@ async function sendPasswordResetEmail(email, resetToken) {
   `;
 
   try {
-    const { data, error } = await client.emails.send({
-      from: SMTP_FROM,
-      to: email,
+    const delivery = await sendWithTemplateFallback(client, {
+      email,
       subject: "Reset your Zenin Capital password",
       html: htmlContent,
+      templateId: RESEND_PASSWORD_RESET_TEMPLATE_ID,
+      templateVariables: {
+        RESET_LINK: resetLink,
+        reset_link: resetLink,
+        APP_NAME: "Zenin Capital",
+        app_name: "Zenin Capital",
+        company_name: "Zenin Capital"
+      },
       tags: [
         { name: "zenin_type", value: "password_reset" }
       ],
+      logLabel: "password reset"
     });
-
-    if (error) {
-      console.error(`[Email] Resend error sending to ${email}:`, error);
-      // Still log the link as a fallback so nothing is totally lost
+    if (!delivery.sent) {
       logDevResetLink(email, resetLink);
-      return buildDeliveryResult({ sent: false, error });
     }
-
-    console.log(`[Email] Sent to ${email} via Resend (id: ${data.id})`);
-    return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
+    return delivery;
   } catch (err) {
     console.error(`[Email] Unexpected error sending to ${email}:`, err);
     logDevResetLink(email, resetLink);
@@ -189,9 +266,20 @@ async function sendPasswordResetEmail(email, resetToken) {
  * @param {string} email - Recipient email address
  * @param {string} code - The 6-digit verification code
  */
-async function sendVerificationEmail(email, code) {
+async function sendVerificationEmail(email, code, options = {}) {
   const client = getResendClient();
   const escapedCode = escapeHtml(code);
+  const purpose = String(options.purpose || "account_verification").trim().toLowerCase();
+  const isEmailChange = purpose === "email_change";
+  const templateId = String(options.templateId || (isEmailChange ? RESEND_EMAIL_CHANGE_TEMPLATE_ID : RESEND_EMAIL_VERIFICATION_TEMPLATE_ID) || "").trim();
+  const subject = isEmailChange
+    ? `Verify your new Zenin Capital email - ${code}`
+    : `Verify your Zenin Capital account - ${code}`;
+  const heading = isEmailChange ? "Verify your new email" : "Verify your account";
+  const intro = isEmailChange
+    ? "To finish changing your Zenin Capital sign-in email, please enter the following verification code:"
+    : "To complete your registration with Zenin Capital, please enter the following verification code:";
+  const tagValue = isEmailChange ? "email_change_verification" : "account_verification";
 
   // --- Dev fallback: no Resend key ---
   if (!client) {
@@ -230,10 +318,10 @@ async function sendVerificationEmail(email, code) {
         <p style="color: #666666; font-size: 14px; margin-top: 5px;">Capital Management</p>
       </div>
       
-      <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 20px;">Verify your account</h2>
+      <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 20px;">${heading}</h2>
       
       <p style="font-size: 16px; line-height: 1.5; margin-bottom: 25px;">
-        To complete your registration with Zenin Capital, please enter the following verification code:
+        ${intro}
       </p>
       
       <div style="text-align: center; margin-bottom: 30px;">
@@ -255,23 +343,29 @@ async function sendVerificationEmail(email, code) {
   `;
 
   try {
-    const { data, error } = await client.emails.send({
-      from: SMTP_FROM,
-      to: email,
-      subject: `Verify your Zenin Capital account - ${code}`,
+    return await sendWithTemplateFallback(client, {
+      email,
+      subject,
       html: htmlContent,
+      templateId,
+      templateVariables: {
+        CODE: code,
+        code,
+        APP_NAME: "Zenin Capital",
+        app_name: "Zenin Capital",
+        company_name: "Zenin Capital",
+        PURPOSE: purpose,
+        purpose,
+        NEW_EMAIL: email,
+        new_email: email,
+        RECIPIENT_EMAIL: email,
+        recipient_email: email
+      },
       tags: [
-        { name: "zenin_type", value: "account_verification" }
+        { name: "zenin_type", value: tagValue }
       ],
+      logLabel: isEmailChange ? "email-change verification" : "verification"
     });
-
-    if (error) {
-      console.error(`[Email] Resend error sending to ${email}:`, error);
-      return buildDeliveryResult({ sent: false, error });
-    }
-
-    console.log(`[Email] Sent verification to ${email} (id: ${data.id})`);
-    return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
   } catch (err) {
     console.error(`[Email] Unexpected error sending verification to ${email}:`, err);
     return buildDeliveryResult({ sent: false, error: err });
@@ -374,24 +468,33 @@ async function sendAlertEmail(email, alert = {}) {
   `;
 
   try {
-    const { data, error } = await client.emails.send({
-      from: SMTP_FROM,
-      to: email,
+    return await sendWithTemplateFallback(client, {
+      email,
       subject,
       html: htmlContent,
       text: `${title}\n\n${body}\n\nOpen Zenin: ${actionUrl}`,
+      templateId: RESEND_ALERT_TEMPLATE_ID,
+      templateVariables: {
+        TITLE: title,
+        title,
+        BODY: body,
+        body,
+        WORKSPACE_NAME: workspaceName,
+        workspace_name: workspaceName,
+        SYMBOL: symbol,
+        symbol,
+        SEVERITY: severity.toUpperCase(),
+        severity: severity.toUpperCase(),
+        ACTION_URL: actionUrl,
+        action_url: actionUrl,
+        APP_NAME: "Zenin Capital",
+        app_name: "Zenin Capital"
+      },
       tags: [
         { name: "zenin_type", value: type }
       ],
+      logLabel: `${type} alert`
     });
-
-    if (error) {
-      console.error(`[Email] Resend error sending alert to ${email}:`, error);
-      return buildDeliveryResult({ sent: false, error });
-    }
-
-    console.log(`[Email] Sent ${type} alert to ${email} (id: ${data.id})`);
-    return buildDeliveryResult({ sent: true, providerMessageId: data?.id || null });
   } catch (err) {
     console.error(`[Email] Unexpected error sending alert to ${email}:`, err);
     return buildDeliveryResult({ sent: false, error: err });
