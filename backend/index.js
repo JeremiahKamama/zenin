@@ -15,7 +15,13 @@ const {
 const { OAuth2Client } = require("google-auth-library");
 const { Webhook } = require("svix");
 // const appleSignin = require("apple-signin-auth");
-const { getEmailDeliveryConfig, sendPasswordResetEmail, sendVerificationEmail } = require("./email");
+const {
+  getEmailDeliveryConfig,
+  isEmailDeliveryProductionReady,
+  sendAlertEmail,
+  sendPasswordResetEmail,
+  sendVerificationEmail
+} = require("./email");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -41,6 +47,7 @@ const {
   workspaceInviteSchema,
   workspaceMemberRoleSchema,
   workspaceAlertAssignmentSchema,
+  alertDispatchSchema,
   emailRequestSchema,
   emailConfirmSchema,
   passwordUpdateSchema,
@@ -1493,6 +1500,76 @@ function isWorkspaceNamespaceValid(namespace) {
   return /^[a-z0-9:_-]{3,80}$/i.test(String(namespace || "").trim());
 }
 
+function normalizeAlertDeliveryType(type) {
+  const normalized = String(type || "").trim().toLowerCase();
+  if (normalized === "watchlist") return "watchlist_alert";
+  if (normalized === "workspace_assignment") return "workspace_assignment";
+  return "market_alert";
+}
+
+async function getAlertEmailRecipient(userId, { requirePriceAlerts = false } = {}) {
+  const result = await pool.query(`
+    SELECT id, email, email_verified AS "emailVerified"
+    FROM app_users
+    WHERE id = $1
+    LIMIT 1;
+  `, [Number(userId)]);
+  const user = result.rows[0];
+  if (!user?.email || !user.emailVerified) {
+    return {
+      allowed: false,
+      reason: user?.email ? "email_not_verified" : "email_missing",
+      email: user?.email || null
+    };
+  }
+
+  const preferencesResult = await userWorkspace.docs.get(user.id, "settings:preferences", {});
+  const preferences = preferencesResult?.document && typeof preferencesResult.document === "object"
+    ? preferencesResult.document
+    : {};
+
+  if (preferences.notifyEmail === false) {
+    return { allowed: false, reason: "email_notifications_disabled", email: user.email };
+  }
+
+  if (requirePriceAlerts && preferences.notifyPriceAlerts === false) {
+    return { allowed: false, reason: "price_alerts_disabled", email: user.email };
+  }
+
+  return {
+    allowed: true,
+    email: user.email,
+    preferences
+  };
+}
+
+function getFrontendAppUrl(pathname = "/app") {
+  const frontendUrl = String(process.env.FRONTEND_URL || "https://www.zenin.capital").replace(/\/+$/, "");
+  const pathValue = String(pathname || "/app");
+  return `${frontendUrl}${pathValue.startsWith("/") ? pathValue : `/${pathValue}`}`;
+}
+
+async function dispatchAlertEmailToUser(userId, alert, options = {}) {
+  const recipient = await getAlertEmailRecipient(userId, options);
+  if (!recipient.allowed) {
+    return {
+      attempted: false,
+      sent: false,
+      skipped: true,
+      reason: recipient.reason,
+      email: recipient.email || null
+    };
+  }
+
+  const delivery = await sendAlertEmail(recipient.email, alert);
+  return {
+    attempted: true,
+    skipped: false,
+    email: recipient.email,
+    ...delivery
+  };
+}
+
 function normalizePlanInput(plan) {
   const normalized = String(plan || "").trim().toLowerCase();
   if (["starter", "pro", "desk"].includes(normalized)) return normalized;
@@ -2038,6 +2115,42 @@ function getEmailDeliveryLogContext(delivery = {}) {
     providerMessageId: delivery.providerMessageId || null,
     error: delivery.error || null,
     deliveryConfig: delivery.deliveryConfig || getEmailDeliveryConfig()
+  };
+}
+
+function requireProductionEmailDeliveryReady(res) {
+  const config = getEmailDeliveryConfig();
+  if (process.env.NODE_ENV !== "production" || isEmailDeliveryProductionReady()) {
+    return false;
+  }
+  return apiError(res, 503, {
+    error: "Transactional email is not configured.",
+    message: "Email delivery is unavailable. Configure RESEND_API_KEY and SMTP_FROM with a verified Resend sender domain, then retry.",
+    code: "EMAIL_DELIVERY_NOT_CONFIGURED",
+    retryable: true,
+    details: {
+      resendConfigured: config.resendConfigured,
+      fromConfigured: config.fromConfigured,
+      usesResendTestDomain: config.usesResendTestDomain,
+      resendWebhookConfigured: config.resendWebhookConfigured
+    }
+  });
+}
+
+function emailDeliveryUnavailablePayload(delivery = {}, fallbackMessage = "Email delivery is unavailable.") {
+  const config = delivery?.deliveryConfig || getEmailDeliveryConfig();
+  return {
+    error: fallbackMessage,
+    message: "Zenin could not send this email. Configure RESEND_API_KEY and SMTP_FROM with a verified Resend sender domain, then retry.",
+    code: "EMAIL_DELIVERY_FAILED",
+    retryable: true,
+    details: {
+      resendConfigured: Boolean(config.resendConfigured),
+      fromConfigured: Boolean(config.fromConfigured),
+      usesResendTestDomain: Boolean(config.usesResendTestDomain),
+      resendWebhookConfigured: Boolean(config.resendWebhookConfigured),
+      providerError: delivery?.error?.message || null
+    }
   };
 }
 
@@ -3844,6 +3957,58 @@ app.get("/api/workspaces/current/activity", requireSignedIn, attachActiveWorkspa
   }
 });
 
+app.post("/api/alerts/dispatch", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(alertDispatchSchema), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const type = normalizeAlertDeliveryType(body.type);
+    const symbol = String(body.symbol || body.asset?.symbol || "").trim().toUpperCase();
+    const delivery = await dispatchAlertEmailToUser(req.auth.userId, {
+      type,
+      title: body.title,
+      body: body.body,
+      symbol,
+      severity: body.severity || "review",
+      workspaceName: req.workspace.workspace?.name || "Zenin workspace",
+      actionUrl: getFrontendAppUrl(`/app?section=${type === "watchlist_alert" ? "watchlist" : "research"}`)
+    }, {
+      requirePriceAlerts: type === "market_alert" || type === "watchlist_alert"
+    });
+
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "alert_email_dispatch_requested",
+      entityType: type,
+      entityId: symbol || body.source || body.title,
+      details: {
+        sent: Boolean(delivery.sent),
+        skipped: Boolean(delivery.skipped),
+        reason: delivery.reason || delivery.error?.message || null,
+        symbol: symbol || null
+      }
+    });
+
+    if (delivery.skipped) {
+      return res.status(409).json({
+        error: "Alert email was not sent.",
+        reason: delivery.reason,
+        delivery
+      });
+    }
+
+    if (!delivery.sent) {
+      return res.status(503).json({
+        error: "Alert email delivery failed. Check Resend configuration and sender domain.",
+        delivery
+      });
+    }
+
+    return res.json({ success: true, delivery });
+  } catch (error) {
+    return handleServerError(res, "Failed to dispatch alert email", error);
+  }
+});
+
 app.get("/api/workspaces/current/alerts", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -3917,7 +4082,20 @@ app.put("/api/workspaces/current/alerts", requireSignedIn, attachActiveWorkspace
       entityId: body.alertKey,
       details: { status: body.status || "open", assignedToUserId: body.assignedToUserId || null }
     });
-    return res.json({ item: result.rows[0] });
+
+    let emailDelivery = null;
+    if (body.assignedToUserId && body.status !== "archived") {
+      emailDelivery = await dispatchAlertEmailToUser(body.assignedToUserId, {
+        type: "workspace_assignment",
+        title: "Workspace alert assigned",
+        body: `An alert assignment needs attention in ${req.workspace.workspace?.name || "your Zenin workspace"}.\n\nAlert: ${body.alertKey}\nStatus: ${body.status || "open"}`,
+        severity: body.status === "snoozed" ? "info" : "review",
+        workspaceName: req.workspace.workspace?.name || "Zenin workspace",
+        actionUrl: getFrontendAppUrl("/app?section=watchlist")
+      });
+    }
+
+    return res.json({ item: result.rows[0], emailDelivery });
   } catch (error) {
     return handleServerError(res, "Failed to update workspace alert assignment", error);
   }
@@ -4361,6 +4539,7 @@ app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {
 
 app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(emailRequestSchema), async (req, res) => {
   try {
+    if (requireProductionEmailDeliveryReady(res)) return;
     const nextEmail = String(req.body?.newEmail || "").trim().toLowerCase();
     const currentPassword = String(req.body?.currentPassword || "");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
@@ -4388,11 +4567,33 @@ app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(em
       nextEmail,
       codeHash: hashToken(verificationCode)
     });
+    const verificationEmailDelivery = await sendVerificationEmail(nextEmail, verificationCode);
+    await logSecurityEvent(req, {
+      level: getEmailDeliverySent(verificationEmailDelivery) ? "info" : "warning",
+      message: getEmailDeliverySent(verificationEmailDelivery)
+        ? "Email-change verification email accepted by provider."
+        : "Email-change verification code created but email delivery failed.",
+      eventType: "email_change_verification_requested",
+      targetUserId: req.auth.userId,
+      context: {
+        emailHash: hashToken(nextEmail),
+        emailDeliveryResult: getEmailDeliveryLogContext(verificationEmailDelivery)
+      }
+    }).catch((error) => {
+      console.error("[Auth] Failed to log email-change verification delivery:", error?.message || error);
+    });
+
+    if (!getEmailDeliverySent(verificationEmailDelivery) && process.env.NODE_ENV === "production") {
+      return apiError(res, 503, emailDeliveryUnavailablePayload(verificationEmailDelivery, "Email-change verification could not be sent."));
+    }
 
     return res.json({
       success: true,
       user: sanitizeAuthUser(updated),
-      message: `Verification sent to ${nextEmail}.`,
+      message: getEmailDeliverySent(verificationEmailDelivery)
+        ? `Verification sent to ${nextEmail}.`
+        : `Verification created for ${nextEmail}, but email delivery is not configured or failed.`,
+      verificationEmailSent: getEmailDeliverySent(verificationEmailDelivery),
       ...(ALLOW_DEV_AUTH_DEBUG ? { devVerificationCode: verificationCode } : {})
     });
   } catch (error) {
@@ -5349,6 +5550,7 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
         retryable: false
       });
     }
+    if (requireProductionEmailDeliveryReady(res)) return;
     const existing = await userAuth.findUserByEmail(email);
     if (existing) {
       return apiError(res, 409, {
@@ -5386,6 +5588,9 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     }).catch((error) => {
       console.error("[Auth] Failed to log verification email delivery:", error?.message || error);
     });
+    if (!getEmailDeliverySent(verificationEmailDelivery) && process.env.NODE_ENV === "production") {
+      return apiError(res, 503, emailDeliveryUnavailablePayload(verificationEmailDelivery, "Verification email could not be sent."));
+    }
 
     const session = await issueSessionForUser(created.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
@@ -5416,10 +5621,10 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
 
     const user = await userAuth.findUserByEmail(email);
     if (!user) {
-      return apiError(res, 401, {
-        error: "Invalid email or password.",
-        message: "Check your credentials and try again.",
-        code: "INVALID_CREDENTIALS",
+      return apiError(res, 404, {
+        error: "Account not found.",
+        message: "No Zenin account exists for that email. Check the address, or create an account if this is your first time here.",
+        code: "ACCOUNT_NOT_FOUND",
         retryable: false
       });
     }
@@ -5451,6 +5656,18 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
 
     // Success - reset lockout
     await userAuth.resetFailedLogin(user.id);
+
+    if (!user.emailVerified) {
+      const rememberMe = req.body?.rememberMe !== false;
+      const session = await issueSessionForUser(user.id, req, { persistent: rememberMe });
+      setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+      return res.json({
+        expiresAt: session.expiresAt,
+        user: sanitizeAuthUser(user),
+        requiresVerification: true,
+        message: "Verify your email before opening your workspace."
+      });
+    }
 
     if (user.twoFactorEnabled) {
       const verificationCode = String(req.body?.verificationCode || "").trim();
@@ -5547,6 +5764,7 @@ app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(for
         retryable: false
       });
     }
+    if (requireProductionEmailDeliveryReady(res)) return;
 
     const user = await userAuth.findUserByEmail(email);
     const emailHash = hashToken(email);
@@ -5585,6 +5803,9 @@ app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(for
     }).catch((error) => {
       console.error("[Auth] Failed to log password reset request:", error?.message || error);
     });
+    if (user && !emailSent && process.env.NODE_ENV === "production") {
+      return apiError(res, 503, emailDeliveryUnavailablePayload(emailDelivery, "Password reset email could not be sent."));
+    }
 
     return res.json({
       success: true,
@@ -5691,10 +5912,7 @@ app.post("/api/auth/verify-email", async (req, res) => {
       });
     }
 
-    const [salt, storedHash] = user.emailVerificationCodeHash.split(":");
-    const { hash: inputHash } = derivePasswordHash(code, salt);
-    
-    if (inputHash !== user.emailVerificationCodeHash) {
+    if (!verifyPassword(code, user.emailVerificationCodeHash)) {
       return apiError(res, 400, {
         error: "Invalid verification code",
         message: "Check the code and try again.",
@@ -5728,6 +5946,7 @@ app.post("/api/auth/verify-email", async (req, res) => {
 
 app.post("/api/auth/resend-verification", async (req, res) => {
   try {
+    if (requireProductionEmailDeliveryReady(res)) return;
     const session = await resolveSessionFromRequest(req);
     if (!session) {
       return apiError(res, 401, {
@@ -5787,6 +6006,9 @@ app.post("/api/auth/resend-verification", async (req, res) => {
     }).catch((error) => {
       console.error("[Auth] Failed to log verification email delivery:", error?.message || error);
     });
+    if (!getEmailDeliverySent(verificationEmailDelivery) && process.env.NODE_ENV === "production") {
+      return apiError(res, 503, emailDeliveryUnavailablePayload(verificationEmailDelivery, "Verification email could not be sent."));
+    }
 
     return res.json({
       success: true,
@@ -6151,7 +6373,13 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
 
   if (provider === "google") {
     const clientId = process.env.GOOGLE_CLIENT_ID;
-    if (!clientId) return res.status(500).json({ error: "Google OAuth not configured." });
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({
+        error: "Google OAuth not configured.",
+        message: "Google sign-in is missing server OAuth credentials. Configure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET."
+      });
+    }
     
     const redirectUri = `${redirectUriBase}/api/auth/oauth/google/callback`;
     const client = new OAuth2Client(clientId);
@@ -6442,18 +6670,24 @@ function fetchHistoryFromYahoo(symbol, interval) {
 
 // Health check — used by Render and uptime monitors
 app.get("/", (req, res) => {
-  const frontendUrl = String(process.env.FRONTEND_URL || expectedOrigin || "http://localhost:5173").replace(/\/+$/, "");
-  const appUrl = `${frontendUrl}/app?guest=1`;
+  const configuredFrontendUrl = String(process.env.FRONTEND_URL || expectedOrigin || "http://localhost:5173").trim();
+  let frontendUrl = "/";
+  try {
+    const parsed = new URL(configuredFrontendUrl);
+    frontendUrl = `${parsed.origin}/`;
+  } catch {
+    frontendUrl = "/";
+  }
 
   if (req.accepts("html")) {
-    res.redirect(302, appUrl);
+    res.redirect(302, frontendUrl);
     return;
   }
 
   res.json({
     service: "Zenin Capital API",
     status: "ok",
-    frontend: appUrl,
+    frontend: frontendUrl,
     health: "/health",
     timestamp: new Date().toISOString(),
   });

@@ -49,6 +49,15 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     window.location.href = `${authUrl.pathname}${authUrl.search}`;
   };
 
+  const redirectToFullVerification = (email) => {
+    storePostAuthRedirect(returnTo, "/app");
+    const authUrl = new URL("/auth", window.location.origin);
+    authUrl.searchParams.set("mode", "verify");
+    authUrl.searchParams.set("next", returnTo || "/app");
+    if (email) authUrl.searchParams.set("email", email);
+    window.location.href = `${authUrl.pathname}${authUrl.search}`;
+  };
+
   const shouldUseFullMfaScreen = async () => {
     // Server-driven MFA handled by signin endpoint
     return false;
@@ -88,6 +97,10 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       if (!signinForm.password.trim()) throw new Error("Enter your password.");
       const payload = { email: signinForm.email.trim(), password: signinForm.password, rememberMe: true };
       const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload) });
+      if (data?.requiresVerification) {
+        redirectToFullVerification(signinForm.email.trim());
+        return;
+      }
       if (data?.requiresMfa) {
         redirectToFullMfa();
         return;
@@ -115,7 +128,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       const data = await zeninFetchJson("/api/auth/signup", { method: "POST", body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.fullName.trim() }) });
       if (data?.requiresVerification) {
         setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
-        setMode("signin");
+        redirectToFullVerification(signupForm.email.trim());
         return;
       }
       const me = await zeninFetchJson("/api/auth/me");

@@ -116,7 +116,7 @@ body.page-dark-theme #root {
 }
 
 /* ── Global Institutional Terminal Overrides ───────────────────────── */
-/* Matches Options section exactly: #0a0e1a bg, #14191f surfaces, 3px radius, #00d4ff accent */
+/* Matches the terminal system: black bg, neutral charcoal surfaces, 3px radius, #00d4ff accent */
 
 input:not([type="checkbox"]):not([type="radio"]),
 select,
@@ -191,7 +191,7 @@ select option {
 .journal-day-panel,
 .tax-v2-panel,
 .strategy-simulator-panel {
-  background: #14191f !important;
+  background: #0b0b0b !important;
   border-radius: 3px !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
   box-shadow: none !important;
@@ -357,7 +357,7 @@ select option {
 /* ── Toast / notification pop-ups ───────────────────────────────────── */
 .home-v3-toast {
   border-radius: 3px !important;
-  background: #14191f !important;
+  background: #0b0b0b !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
 }
@@ -386,7 +386,7 @@ select option {
 .sidebar,
 .main-sidebar,
 .app-sidebar {
-  background: #0e131b !important;
+  background: #080808 !important;
   border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
 
@@ -1991,7 +1991,7 @@ body.light-theme-active .user-icon {
   padding: 12px 14px;
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.05);
-  background: #14191f;
+  background: #0b0b0b;
   color: rgba(203, 213, 225, 0.72);
   font-size: 11px;
 }
@@ -2068,7 +2068,7 @@ body.light-theme-active .user-icon {
 }
 
 .analytics-card {
-  background: #14191f;
+  background: #0b0b0b;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 3px;
   box-shadow: none;
@@ -10912,9 +10912,9 @@ body.light-theme-active .user-icon {
 
 /* ── Options Executive Grid ─────────────────────────────────────── */
 .options-exec {
-  --options-exec-bg: #0a0e1a;
-  --options-exec-surface: #14191f;
-  --options-exec-surface-2: #0e131b;
+  --options-exec-bg: #000000;
+  --options-exec-surface: #0b0b0b;
+  --options-exec-surface-2: #111111;
   --options-exec-surface-3: rgba(0, 0, 0, 0.22);
   --options-exec-border: rgba(255, 255, 255, 0.07);
   --options-exec-border-strong: rgba(255, 255, 255, 0.12);
@@ -18849,7 +18849,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-rail-card,
 .home-exec-health-card,
 .home-exec-triage-card {
-  background: #14191f;
+  background: #0b0b0b;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 3px;
   box-shadow: none;
@@ -22921,8 +22921,8 @@ body.light-theme-active .tax-v2-global-total strong {
 }
 
 .home-exec {
-  --home-exec-surface:   #14191f;
-  --home-exec-surface-soft: rgba(20, 25, 31, 0.82);
+  --home-exec-surface:   #0b0b0b;
+  --home-exec-surface-soft: rgba(11, 11, 11, 0.86);
   --home-exec-border:    rgba(255, 255, 255, 0.05);
   --home-exec-text:      #f8fafc;
   --home-exec-muted:     rgba(203, 213, 225, 0.72);
@@ -23377,7 +23377,7 @@ body.light-theme-active .tax-v2-global-total strong {
   margin-left: -4px;
   border-radius: 999px;
   background: #67e8f9;
-  box-shadow: 0 0 0 2px #0a0e1a;
+  box-shadow: 0 0 0 2px #000000;
 }
 
 .home-exec-stat-rail {
@@ -24125,18 +24125,18 @@ html.page-dark-theme.portfolio-active,
 body.portfolio-active,
 html.portfolio-active,
 .portfolio-active #root {
-  background: #0a0e1a !important;
+  background: #000000 !important;
 }
 
 .view-container:has(.portfolio-exec-page),
 .portfolio-active .view-container {
-  background: #0a0e1a !important;
+  background: #000000 !important;
   padding: 0 !important;
 }
 
 .portfolio-exec-page {
-  --portfolio-exec-surface: #14191f;
-  --portfolio-exec-surface-soft: rgba(20, 25, 31, 0.82);
+  --portfolio-exec-surface: #0b0b0b;
+  --portfolio-exec-surface-soft: rgba(11, 11, 11, 0.86);
   --portfolio-exec-border: rgba(255, 255, 255, 0.05);
   --portfolio-exec-text: #e6eef7;
   --portfolio-exec-muted: #91a2b8;
@@ -24483,7 +24483,7 @@ html.portfolio-active,
   text-align: left;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 4px;
-  background: #14191f;
+  background: #0b0b0b;
   color: inherit;
   overflow: hidden;
   padding: 0;
@@ -26729,8 +26729,8 @@ body.light-theme-active .sidebar.premium-operator-console {
 
 /* Home Draft Fidelity Override */
 .view-container.home-dashboard.home-exec {
-  --home-draft-bg: #0a0e1a;
-  --home-draft-surface: #14191f;
+  --home-draft-bg: #000000;
+  --home-draft-surface: #0b0b0b;
   --home-draft-border: rgba(255, 255, 255, 0.05);
   --home-draft-border-strong: rgba(255, 255, 255, 0.08);
   --home-draft-text: rgba(255, 255, 255, 0.9);
@@ -28692,12 +28692,33 @@ body.light-theme-active .home-exec-eyebrow,
 body.light-theme-active .home-exec-heading p,
 body.light-theme-active .home-exec-label,
 body.light-theme-active .home-exec-section-head p,
+body.light-theme-active .home-exec-header-meta,
+body.light-theme-active .home-exec-header-meta span,
+body.light-theme-active .home-exec-sync-block span,
+body.light-theme-active .home-exec-sync-block strong,
 body.light-theme-active .home-exec-command-subline,
+body.light-theme-active .home-exec-command-subline span,
 body.light-theme-active .home-exec-command-metric span,
+body.light-theme-active .home-exec-command-metric em,
+body.light-theme-active .home-exec-chart-stats span,
 body.light-theme-active .home-exec-monitor-row span,
 body.light-theme-active .home-exec-signal-meta,
 body.light-theme-active .home-exec-holding-meta,
+body.light-theme-active .home-exec-holding-meta span,
 body.light-theme-active .home-exec-log-stamp,
+body.light-theme-active .home-exec-health-card span,
+body.light-theme-active .home-exec-health-card em,
+body.light-theme-active .home-exec-donut-center span,
+body.light-theme-active .home-exec-legend-left,
+body.light-theme-active .home-exec-legend-left span,
+body.light-theme-active .home-exec-performance-legend,
+body.light-theme-active .home-exec-performance-legend span,
+body.light-theme-active .home-exec-market-preview-chip span,
+body.light-theme-active .home-exec-market-preview-head span,
+body.light-theme-active .home-exec-market-preview-symbol span,
+body.light-theme-active .home-exec-market-preview-macro-row span,
+body.light-theme-active .home-exec-market-preview-event span,
+body.light-theme-active .home-exec-market-preview-event em,
 body.light-theme-active .portfolio-exec-eyebrow,
 body.light-theme-active .portfolio-exec-heading p,
 body.light-theme-active .portfolio-exec-page p,
@@ -30736,9 +30757,9 @@ body.light-theme-active .tax-workbench-primary-btn {
 
 /* Analytics Research Matrix Overhaul */
 .analytics-layout {
-  --analytics-bg: #070a10;
-  --analytics-panel: #12171c;
-  --analytics-panel-2: #0d1118;
+  --analytics-bg: #000000;
+  --analytics-panel: #090909;
+  --analytics-panel-2: #050505;
   --analytics-line: rgba(148, 163, 184, 0.16);
   --analytics-line-strong: rgba(125, 211, 252, 0.32);
   --analytics-text: #eef4fb;
@@ -36021,9 +36042,9 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
 /* Research knowledge base workspace */
 
 .research-workspace {
-  --research-bg: #070a10;
-  --research-panel: #10151b;
-  --research-panel-soft: rgba(12, 14, 18, 0.86);
+  --research-bg: #000000;
+  --research-panel: #090909;
+  --research-panel-soft: rgba(10, 10, 10, 0.9);
   --research-line: rgba(255, 255, 255, 0.1);
   --research-line-strong: rgba(255, 255, 255, 0.18);
   --research-text: #f8fafc;
@@ -36035,8 +36056,8 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
   padding: 24px 28px 48px;
   color: var(--research-text);
   background:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
     var(--research-bg);
   background-size: 34px 34px;
 }
@@ -36061,7 +36082,7 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
   padding: 9px 12px;
   margin: 0 0 10px;
   border: 1px solid rgba(103, 232, 249, 0.18);
-  background: rgba(7, 23, 34, 0.72);
+  background: rgba(10, 10, 10, 0.92);
   border-radius: 4px;
 }
 
@@ -36141,7 +36162,7 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
 .research-view-subtabs button.active {
   color: var(--research-text);
   border-color: rgba(103, 232, 249, 0.38);
-  background: rgba(10, 24, 33, 0.9);
+  background: rgba(17, 17, 17, 0.96);
   box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.08);
 }
 
@@ -36170,7 +36191,7 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
 
 .research-panel {
   border: 1px solid var(--research-line);
-  background: linear-gradient(180deg, rgba(16, 19, 24, 0.9), rgba(8, 9, 11, 0.95));
+  background: linear-gradient(180deg, rgba(14, 14, 14, 0.96), rgba(8, 8, 8, 0.98));
   border-radius: 4px;
   padding: 12px;
   box-shadow: none;
@@ -36311,7 +36332,7 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
   display: grid;
   gap: 8px;
   border: 1px solid rgba(103, 232, 249, 0.16);
-  background: rgba(8, 13, 18, 0.76);
+  background: rgba(10, 10, 10, 0.88);
   border-radius: 4px;
   padding: 10px;
   margin-bottom: 10px;
@@ -36362,7 +36383,7 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
 
 .research-btn.primary {
   border-color: rgba(103, 232, 249, 0.35);
-  background: linear-gradient(135deg, rgba(14, 116, 144, 0.72), rgba(30, 64, 175, 0.62));
+  background: linear-gradient(135deg, rgba(20, 20, 20, 0.98), rgba(8, 8, 8, 0.98));
 }
 
 .research-btn.secondary.full {
@@ -36516,7 +36537,7 @@ body:not(.light-theme-active) .analytics-tab-pill:hover {
 
 .research-notice {
   border: 1px solid rgba(103, 232, 249, 0.22);
-  background: rgba(8, 47, 73, 0.34);
+  background: rgba(11, 11, 11, 0.92);
   color: #cffafe;
   padding: 10px 12px;
   margin: 12px 0;
@@ -37696,8 +37717,21 @@ body.light-theme-active .analytics-commodity-controls button {
   padding: 12px 14px;
   border: 1px solid rgba(34, 211, 238, 0.24);
   border-radius: 8px;
-  background: linear-gradient(135deg, rgba(8, 47, 73, 0.72), rgba(2, 6, 23, 0.84));
+  background: linear-gradient(135deg, rgba(11, 11, 11, 0.96), rgba(0, 0, 0, 0.92));
   color: rgba(226, 232, 240, 0.9);
+}
+
+.guest-action-feedback {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid rgba(34, 211, 238, 0.24);
+  border-radius: 8px;
+  background: rgba(11, 11, 11, 0.92);
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .guest-data-banner > div {
@@ -37741,7 +37775,7 @@ body.light-theme-active .analytics-commodity-controls button {
   min-height: 40px;
   border: 1px solid rgba(34, 211, 238, 0.34);
   border-radius: 8px;
-  background: rgba(8, 47, 73, 0.64);
+  background: rgba(11, 11, 11, 0.92);
   color: #e0f2fe;
   cursor: pointer;
   display: inline-flex;
@@ -37764,8 +37798,15 @@ body.light-theme-active .analytics-commodity-controls button {
 .guest-preview-actions a:hover,
 .guest-workflow-card button:hover {
   border-color: rgba(34, 211, 238, 0.72);
-  background: rgba(14, 116, 144, 0.58);
+  background: rgba(16, 16, 16, 0.98);
   transform: translateY(-1px);
+}
+
+.guest-data-banner button:disabled,
+.guest-data-banner button[aria-busy="true"] {
+  opacity: 0.72;
+  cursor: progress;
+  transform: none;
 }
 
 .guest-data-banner button:focus-visible,
@@ -39097,4 +39138,185 @@ body.light-theme-active .settings-ops-checklist strong {
     overflow-x: auto;
     flex-wrap: nowrap;
   }
+}
+
+/* Dark-mode neutralization: keep app surfaces black/charcoal instead of blue-slate. */
+html.page-dark-theme,
+body.page-dark-theme,
+body.page-dark-theme #root {
+  background: #000000 !important;
+}
+
+body.page-dark-theme {
+  --color-bg-base: #000000;
+  --color-surface-card: #080808;
+  --color-surface-card-strong: #0d0d0d;
+  --color-surface-panel: #090909;
+  --color-surface-elevated: #111111;
+  --color-surface-depth: #000000;
+  --options-exec-bg: #000000;
+  --options-exec-surface: #0b0b0b;
+  --options-exec-surface-2: #111111;
+  --home-exec-surface: #0b0b0b;
+  --home-exec-surface-soft: rgba(11, 11, 11, 0.86);
+  --portfolio-exec-surface: #0b0b0b;
+  --portfolio-exec-surface-soft: rgba(11, 11, 11, 0.86);
+  --home-draft-bg: #000000;
+  --home-draft-surface: #0b0b0b;
+}
+
+body.page-dark-theme .view-container,
+body.page-dark-theme .page-shell,
+body.page-dark-theme .main-content,
+body.page-dark-theme .main-content-home,
+body.page-dark-theme .app-layout,
+body.page-dark-theme .app-wrapper {
+  background: #000000 !important;
+}
+
+body.page-dark-theme .watchlist-panel,
+body.page-dark-theme .portfolio-panel,
+body.page-dark-theme .asset-card,
+body.page-dark-theme .portfolio-card,
+body.page-dark-theme .metric-card,
+body.page-dark-theme .glass,
+body.page-dark-theme .prediction-market-panel,
+body.page-dark-theme .prediction-whale-panel,
+body.page-dark-theme .whale-trades-panel,
+body.page-dark-theme .prediction-category-card,
+body.page-dark-theme .prediction-market-row,
+body.page-dark-theme .prediction-split-card,
+body.page-dark-theme .prediction-split-pane,
+body.page-dark-theme .prediction-column,
+body.page-dark-theme .journal-stat-card,
+body.page-dark-theme .trade-item,
+body.page-dark-theme .options-calculator-symbol-panel,
+body.page-dark-theme .options-calculator-strategy-panel,
+body.page-dark-theme .options-calculator-position-panel,
+body.page-dark-theme .options-calculator-pnl-panel,
+body.page-dark-theme .options-leg-card,
+body.page-dark-theme .modal-content,
+body.page-dark-theme .prediction-modal-window,
+body.page-dark-theme .watchlist-add-modal,
+body.page-dark-theme .settings-window,
+body.page-dark-theme .connect-account-window,
+body.page-dark-theme .payment-method-modal,
+body.page-dark-theme .settings-panel,
+body.page-dark-theme .settings-panel-header,
+body.page-dark-theme .settings-panel-body,
+body.page-dark-theme .connected-account-item,
+body.page-dark-theme .calendar-symbol-dropdown,
+body.page-dark-theme .journal-report-table-wrap,
+body.page-dark-theme .table-scroll,
+body.page-dark-theme .home-exec-panel,
+body.page-dark-theme .home-exec-hero-panel,
+body.page-dark-theme .home-exec-rail-card,
+body.page-dark-theme .home-exec-health-card,
+body.page-dark-theme .home-exec-triage-card,
+body.page-dark-theme .analytics-module-panel,
+body.page-dark-theme .journal-panel,
+body.page-dark-theme .journal-winrate-body,
+body.page-dark-theme .journal-day-panel,
+body.page-dark-theme .tax-v2-panel,
+body.page-dark-theme .strategy-simulator-panel,
+body.page-dark-theme .portfolio-command-summary,
+body.page-dark-theme .portfolio-command-analysis,
+body.page-dark-theme .portfolio-command-header,
+body.page-dark-theme .options-exec-header,
+body.page-dark-theme .tax-workbench-command-header,
+body.page-dark-theme .journal-debrief-head.compact-page-header,
+body.page-dark-theme .company-page-header,
+body.page-dark-theme .asset-modal-window,
+body.page-dark-theme .indicator-country-modal,
+body.page-dark-theme .settings-ops-card,
+body.page-dark-theme .settings-ops-checklist > div,
+body.page-dark-theme .guest-data-banner,
+body.page-dark-theme .guest-action-feedback,
+body.page-dark-theme .guest-contextual-signup,
+body.page-dark-theme .guest-workspace-hero,
+body.page-dark-theme .guest-onboarding-checklist,
+body.page-dark-theme .guest-workflow-card,
+body.page-dark-theme .guest-preview-card,
+body.page-dark-theme .guest-preview-card.focused,
+body.page-dark-theme .guest-preview-table,
+body.page-dark-theme .guest-preview-table div,
+body.page-dark-theme .guest-preview-metrics,
+body.page-dark-theme .guest-mission-bar,
+body.page-dark-theme .guest-mission-steps button,
+body.page-dark-theme .guest-mission-steps button.active,
+body.page-dark-theme .watchlist-intent-panel,
+body.page-dark-theme .watchlist-action-btn,
+body.page-dark-theme .watchlist-intent-actions button,
+body.page-dark-theme .journal-decision-layer,
+body.page-dark-theme .journal-decision-score,
+body.page-dark-theme .journal-decision-templates button,
+body.page-dark-theme .tax-scenario-workbench,
+body.page-dark-theme .tax-scenario-controls select,
+body.page-dark-theme .tax-scenario-delta > div,
+body.page-dark-theme .research-workspace,
+body.page-dark-theme .research-panel,
+body.page-dark-theme .research-source-card,
+body.page-dark-theme .research-compose,
+body.page-dark-theme .research-source-row,
+body.page-dark-theme .research-doc-table-wrap,
+body.page-dark-theme .research-document-detail pre,
+body.page-dark-theme .research-guidance-banner,
+body.page-dark-theme .research-view-subtabs,
+body.page-dark-theme .research-view-tabs button,
+body.page-dark-theme .research-view-subtabs button,
+body.page-dark-theme .research-view-tabs button.active,
+body.page-dark-theme .research-view-subtabs button.active,
+body.page-dark-theme .research-brief-preview,
+body.page-dark-theme .research-brief-section,
+body.page-dark-theme .research-timeline-row,
+body.page-dark-theme .research-inbox-card,
+body.page-dark-theme .research-mini-row,
+body.page-dark-theme .research-dossier-card,
+body.page-dark-theme .research-dossier-surface,
+body.page-dark-theme .research-ticker-list-panel,
+body.page-dark-theme .analytics-research-hero,
+body.page-dark-theme .analytics-research-panel,
+body.page-dark-theme .analytics-research-metric,
+body.page-dark-theme .analytics-desk-panel,
+body.page-dark-theme .analytics-rail-card,
+body.page-dark-theme .analytics-equities-strip-card,
+body.page-dark-theme .analytics-macro-risk-card,
+body.page-dark-theme .analytics-options-greek-card,
+body.page-dark-theme .analytics-commodities-terminal .analytics-desk-panel {
+  background: #0b0b0b !important;
+  background-image: none !important;
+  border-color: rgba(255, 255, 255, 0.07) !important;
+  box-shadow: none !important;
+}
+
+body.page-dark-theme .guest-signup-cta,
+body.page-dark-theme .watchlist-intent-actions a,
+body.page-dark-theme .research-btn.primary {
+  background: linear-gradient(135deg, #67e8f9, #22d3ee) !important;
+  color: #000000 !important;
+  box-shadow: none !important;
+}
+
+body.page-dark-theme .guest-status-chip,
+body.page-dark-theme .guest-status-chip.preview,
+body.page-dark-theme .guest-status-chip.delayed {
+  background: #111111 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+body.page-dark-theme .sidebar,
+body.page-dark-theme .main-sidebar,
+body.page-dark-theme .app-sidebar,
+body.page-dark-theme .sidebar-overhaul-v2 {
+  background: #080808 !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+body.page-dark-theme input:not([type="checkbox"]):not([type="radio"]),
+body.page-dark-theme select,
+body.page-dark-theme textarea,
+body.page-dark-theme .search-controls,
+body.page-dark-theme .search-type-buttons {
+  background: #050505 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
 }

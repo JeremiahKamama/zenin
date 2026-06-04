@@ -181,6 +181,16 @@ const workspaceAlertAssignmentSchema = z.object({
   notes: z.record(z.any()).optional().nullable(),
 });
 
+const alertDispatchSchema = z.object({
+  type: z.enum(["market", "watchlist", "workspace_assignment"]).optional().default("market"),
+  symbol: z.string().min(1).max(32).trim().optional().nullable(),
+  title: z.string().min(1).max(140).trim(),
+  body: z.string().min(1).max(1200).trim(),
+  severity: z.enum(["info", "review", "warning", "critical"]).optional().default("review"),
+  source: z.string().max(80).trim().optional().nullable(),
+  asset: z.record(z.any()).optional().nullable(),
+});
+
 const watchlistBulkSchema = z.object({
   assets: z.array(watchlistAssetSchema),
 });
@@ -333,6 +343,7 @@ module.exports = {
   workspaceInviteSchema,
   workspaceMemberRoleSchema,
   workspaceAlertAssignmentSchema,
+  alertDispatchSchema,
   watchlistBulkSchema,
   tradeLogSchema,
   balanceChangeSchema,

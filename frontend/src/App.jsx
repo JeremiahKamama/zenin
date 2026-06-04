@@ -288,7 +288,7 @@ function redirectToAuthGate() {
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   storePostAuthRedirect(target, "/app");
   const authUrl = new URL("/auth", window.location.origin);
-  authUrl.searchParams.set("mode", "signup");
+  authUrl.searchParams.set("mode", "signin");
   authUrl.searchParams.set("next", target);
   window.location.replace(`${authUrl.pathname}${authUrl.search}${authUrl.hash}`);
 }
@@ -367,7 +367,7 @@ function GuestStatusChip({ status }) {
   return <span className={`guest-status-chip ${normalized}`}>{labelMap[normalized] || "Preview"}</span>;
 }
 
-function GuestSavedDataBanner({ activeSection, lastUpdated, liveStreamStatus, watchlistNotice, onRetryLiveData }) {
+function GuestSavedDataBanner({ activeSection, lastUpdated, liveStreamStatus, watchlistNotice, retryingLiveData = false, onRetryLiveData }) {
   const status = liveStreamStatus === "connected" ? "live" : watchlistNotice ? "cached" : "saved";
   const signupHref = getGuestSignupHref(activeSection);
   return (
@@ -381,8 +381,8 @@ function GuestSavedDataBanner({ activeSection, lastUpdated, liveStreamStatus, wa
         <a className="guest-signup-cta" href={signupHref}>
           Create free account
         </a>
-        <button type="button" onClick={onRetryLiveData}>
-          Retry live data
+        <button type="button" onClick={onRetryLiveData} disabled={retryingLiveData} aria-busy={retryingLiveData}>
+          {retryingLiveData ? "Checking feed..." : "Retry live data"}
         </button>
       </div>
     </section>
@@ -420,7 +420,7 @@ function GuestMissionBar({ activeSection, onOpenSection }) {
   );
 }
 
-function GuestPreviewCard({ module, isFocused = false, onOpenSection }) {
+function GuestPreviewCard({ module, isFocused = false, onOpenSection, onShareSection }) {
   const href = `/app?guest=1&section=${getGuestSectionSlug(module.section)}`;
   return (
     <article className={`guest-preview-card ${isFocused ? "focused" : ""}`}>
@@ -454,7 +454,16 @@ function GuestPreviewCard({ module, isFocused = false, onOpenSection }) {
         <button type="button" onClick={() => onOpenSection(module.section)}>
           Open preview
         </button>
-        <a href={href}>Share link</a>
+        <a
+          href={href}
+          onClick={(event) => {
+            if (!onShareSection) return;
+            event.preventDefault();
+            onShareSection(module.section);
+          }}
+        >
+          Share link
+        </a>
       </div>
     </article>
   );
@@ -542,10 +551,13 @@ function GuestContextualSignupNudge({ section, interaction }) {
 function GuestWorkspacePreview({
   activeSection,
   guestInteraction,
+  guestActionFeedback,
+  retryingLiveData,
   liveStreamStatus,
   lastLivePriceAt,
   watchlistNotice,
   onOpenSection,
+  onShareSection,
   onRetryLiveData
 }) {
   const focusedModule = GUEST_PREVIEW_BY_SECTION[activeSection] || null;
@@ -556,6 +568,7 @@ function GuestWorkspacePreview({
     ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
     : GUEST_DEMO_SNAPSHOT_LABEL;
   const signupHref = getGuestSignupHref(activeSection);
+  const continueTarget = getNextGuestSection(activeSection);
 
   return (
     <div className="view-container guest-workspace-preview">
@@ -564,8 +577,14 @@ function GuestWorkspacePreview({
         lastUpdated={lastUpdated}
         liveStreamStatus={liveStreamStatus}
         watchlistNotice={watchlistNotice}
+        retryingLiveData={retryingLiveData}
         onRetryLiveData={onRetryLiveData}
       />
+      {guestActionFeedback ? (
+        <div className="guest-action-feedback" role="status" aria-live="polite">
+          {guestActionFeedback}
+        </div>
+      ) : null}
       <GuestMissionBar activeSection={activeSection} onOpenSection={onOpenSection} />
       <section className="guest-workspace-hero">
         <div>
@@ -579,7 +598,7 @@ function GuestWorkspacePreview({
             <a className="guest-signup-cta" href={signupHref}>
               Save this workspace
             </a>
-            <button type="button" onClick={() => onOpenSection("Watchlist")}>
+            <button type="button" onClick={() => onOpenSection(continueTarget)}>
               Continue exploring
             </button>
           </div>
@@ -609,6 +628,7 @@ function GuestWorkspacePreview({
             module={module}
             isFocused={module.section === activeSection}
             onOpenSection={onOpenSection}
+            onShareSection={onShareSection}
           />
         ))}
       </section>
@@ -793,6 +813,13 @@ const GUEST_ONBOARDING_STEPS = [
 
 function getGuestSectionSlug(section) {
   return String(section || "Home").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "home";
+}
+
+function getNextGuestSection(section) {
+  const order = ["Watchlist", "Research", "Journal", "Analytics", "Portfolio", "Options", "Tax Estimator"];
+  const index = order.indexOf(section);
+  if (index === -1) return "Watchlist";
+  return order[(index + 1) % order.length];
 }
 
 function getGuestSignupHref(section) {
@@ -1744,14 +1771,38 @@ useEffect(() => {
     setActiveSection(section);
     if (isGuestQueryRequested() && section !== "Home") {
       setGuestInteraction(section);
+      setGuestActionFeedback(`${section} preview opened.`);
     }
     syncGuestSectionUrl(section);
   }, [routeState.type, syncGuestSectionUrl]);
 
   const retryLiveData = useCallback(() => {
+    setGuestRetryingLiveData(true);
     setWatchlistStale(false);
     setWatchlistNotice("Retrying live data. Saved rows stay visible while Zenin checks the feed.");
+    setGuestActionFeedback("Checking the live feed. Saved demo data stays visible while Zenin retries.");
     setWatchlistRetryNonce((value) => value + 1);
+    const timer = typeof window !== "undefined" ? window : globalThis;
+    timer.setTimeout(() => {
+      setGuestRetryingLiveData(false);
+    }, 1400);
+  }, []);
+
+  const shareGuestSection = useCallback(async (section) => {
+    if (typeof window === "undefined") return;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.pathname = "/app";
+    nextUrl.searchParams.set("guest", "1");
+    nextUrl.searchParams.set("section", getGuestSectionSlug(section));
+    const shareUrl = `${nextUrl.origin}${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+    try {
+      if (!navigator?.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(shareUrl);
+      setGuestActionFeedback(`${section} guest link copied.`);
+    } catch {
+      window.history.replaceState({ page: "app", section }, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+      setGuestActionFeedback(`${section} guest link is ready in the address bar.`);
+    }
   }, []);
 
   const openCompanyProfile = (asset) => {
@@ -3002,6 +3053,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     return sections.includes(savedSection) ? savedSection : "Home";
   });
   const [guestInteraction, setGuestInteraction] = useState("");
+  const [guestActionFeedback, setGuestActionFeedback] = useState("");
+  const [guestRetryingLiveData, setGuestRetryingLiveData] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
@@ -3074,6 +3127,53 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
   const [isGuestUser, setIsGuestUser] = useState(() => devFullAccess || allowGuestAccess);
   const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
+
+  const dispatchWatchlistAlertEmail = useCallback(async (asset, intent) => {
+    if (intent !== "alert") return;
+    if (isExplicitGuestMode || isGuestUser) {
+      setWatchlistNotice("Sign in with a verified email to dispatch watchlist alert emails.");
+      return;
+    }
+
+    const symbol = normalizeSymbolKey(asset?.symbol || "");
+    if (!symbol) {
+      setWatchlistNotice("Select an asset before dispatching a watchlist alert email.");
+      return;
+    }
+
+    const change = Number(asset?.priceChangePercent);
+    const hasChange = Number.isFinite(change);
+    const changeText = hasChange ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "needs review";
+    const assetName = asset?.name ? `${asset.name} (${symbol})` : symbol;
+
+    try {
+      const result = await zeninFetchJson("/api/alerts/dispatch", {
+        method: "POST",
+        body: JSON.stringify({
+          type: "watchlist",
+          symbol,
+          severity: hasChange && Math.abs(change) >= 5 ? "warning" : "review",
+          source: "watchlist",
+          title: `${symbol} watchlist alert`,
+          body: `${assetName} triggered a watchlist alert. Latest move: ${changeText}. Thesis: ${asset?.theme || asset?.category || "Unassigned"}.`,
+          asset: {
+            symbol,
+            name: asset?.name || "",
+            marketType: asset?.marketType || "",
+            type: asset?.type || "",
+            category: asset?.category || "",
+            theme: asset?.theme || "",
+            priceChangePercent: hasChange ? change : null
+          }
+        })
+      });
+      setWatchlistNotice(result?.delivery?.sent
+        ? `Watchlist alert email sent for ${symbol}.`
+        : `Watchlist alert email queued for ${symbol}.`);
+    } catch (error) {
+      setWatchlistNotice(error?.message || `Watchlist alert email could not be sent for ${symbol}.`);
+    }
+  }, [isExplicitGuestMode, isGuestUser]);
 
   const [themeMode, setThemeMode] = useState(() => {
     try {
@@ -3294,12 +3394,12 @@ const handleOptionTradeClosed = async (tradeId) => {
       }
 
       try {
-        let res = await zeninFetch("/auth/me");
+        let res = await zeninFetch("/auth/me", { timeoutMs: 3500 });
         let data = await res.json().catch(() => ({}));
-        if ((!res.ok || !data?.authenticated || !data?.user) && !allowGuestAccess) {
+        if (res.ok && (!data?.authenticated || !data?.user) && !allowGuestAccess) {
           const exchanged = await ensureZeninSessionFromSupabase();
           if (exchanged?.user) {
-            res = await zeninFetch("/auth/me");
+            res = await zeninFetch("/auth/me", { timeoutMs: 3500 });
             data = await res.json().catch(() => ({}));
           }
         }
@@ -5474,10 +5574,13 @@ const handleOptionTradeClosed = async (tradeId) => {
           <GuestWorkspacePreview
             activeSection={activeSection}
             guestInteraction={guestInteraction}
+            guestActionFeedback={guestActionFeedback}
+            retryingLiveData={guestRetryingLiveData}
             liveStreamStatus={liveStreamStatus}
             lastLivePriceAt={lastLivePriceAt}
             watchlistNotice={watchlistNotice}
             onOpenSection={openWorkspaceSection}
+            onShareSection={shareGuestSection}
             onRetryLiveData={retryLiveData}
           />
         )}
@@ -5541,8 +5644,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                   lastUpdated={lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}
                   liveStreamStatus={liveStreamStatus}
                   watchlistNotice={watchlistNotice}
+                  retryingLiveData={guestRetryingLiveData}
                   onRetryLiveData={retryLiveData}
                 />
+                {guestActionFeedback ? (
+                  <div className="guest-action-feedback" role="status" aria-live="polite">
+                    {guestActionFeedback}
+                  </div>
+                ) : null}
                 <GuestContextualSignupNudge section={activeSection} interaction={guestInteraction} />
               </>
             ) : null}
@@ -5607,7 +5716,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                   liveStatus={liveStreamStatus}
                   lastLivePriceAt={lastLivePriceAt}
                   isGuestMode={isExplicitGuestMode}
-                  onIntent={(asset, intent) => setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`)}
+                  onIntent={(asset, intent) => {
+                    if (intent === "alert") void dispatchWatchlistAlertEmail(asset, intent);
+                    setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
+                  }}
                 />
               </>
             ) : (
@@ -5737,6 +5849,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               lastLivePriceAt={lastLivePriceAt}
               isGuestMode={isExplicitGuestMode}
               onIntent={(asset, intent) => {
+                if (intent === "alert") void dispatchWatchlistAlertEmail(asset, intent);
                 if (isExplicitGuestMode) setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
               }}
             />

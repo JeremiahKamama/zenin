@@ -1,7 +1,6 @@
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
-import { getGuestWorkspacePath } from "./utils/authRedirect";
 
 function resolveEntry(pathname) {
   if (typeof window !== "undefined" && window.__ZENIN_ENTRY__) {
@@ -15,20 +14,7 @@ function resolveEntry(pathname) {
   return "public";
 }
 
-function redirectMisroutedGuestEntry(entry) {
-  if (typeof window === "undefined" || entry === "app") return false;
-  const params = new URLSearchParams(window.location.search);
-  const allowGuest = ["1", "true", "yes"].includes(String(params.get("guest") || "").trim().toLowerCase());
-  if (!allowGuest) return false;
-
-  const guestUrl = new URL(getGuestWorkspacePath(), window.location.origin);
-  guestUrl.searchParams.set("guest", "1");
-  window.location.replace(`${guestUrl.pathname}${guestUrl.search}${guestUrl.hash}`);
-  return true;
-}
-
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");
-const redirectedToGuestWorkspace = redirectMisroutedGuestEntry(entry);
 
 async function loadEntryComponent(currentEntry) {
   try {
@@ -73,14 +59,11 @@ function applyGlobalTheme() {
 
 applyGlobalTheme();
 
-const redirectedBeforeRender = redirectedToGuestWorkspace;
-const rootElement = redirectedBeforeRender ? null : document.getElementById("root");
+const rootElement = document.getElementById("root");
 const hasPrerenderedMarkup =
-  !redirectedBeforeRender &&
   entry === "public" &&
   rootElement?.dataset?.prerendered === "public";
 
-if (!redirectedBeforeRender) {
 loadEntryComponent(entry).then((RootComponent) => {
   const app = (
     <React.StrictMode>
@@ -110,4 +93,3 @@ loadEntryComponent(entry).then((RootComponent) => {
     `;
   }
 });
-}

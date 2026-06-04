@@ -72,10 +72,44 @@ async function ensureCsrfToken() {
     return fromCookie;
   }
   if (csrfTokenCache) return csrfTokenCache;
-  const response = await fetch(buildZeninUrl("/auth/csrf"), {
-    credentials: "include"
-  });
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+  let response;
+  try {
+    response = await fetch(buildZeninUrl("/auth/csrf"), {
+      credentials: "include",
+      signal: controller?.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new ZeninRequestError("Zenin's auth service is taking too long to respond. Please wait a moment and try again.", {
+        status: 0,
+        code: "AUTH_SERVICE_TIMEOUT",
+        error: "Auth service timeout",
+        retryable: true,
+        endpoint: buildZeninUrl("/auth/csrf"),
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
   const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const normalized = normalizeErrorPayload(payload, response.status);
+    throw new ZeninRequestError(
+      response.status >= 500
+        ? "Zenin's auth service is temporarily unavailable. Please wait a moment and try again."
+        : normalized.message,
+      {
+        ...normalized,
+        status: response.status,
+        data: payload,
+        endpoint: buildZeninUrl("/auth/csrf"),
+      }
+    );
+  }
   csrfTokenCache = payload?.csrfToken || readCookie("zenin_csrf") || "";
   return csrfTokenCache;
 }
@@ -138,7 +172,7 @@ export class ZeninRequestError extends Error {
 }
 
 export async function zeninFetch(endpoint, options = {}) {
-  const { skipSimulationHeaders = false, ...fetchOptions } = options;
+  const { skipSimulationHeaders = false, timeoutMs = 0, ...fetchOptions } = options;
   const url = buildZeninUrl(endpoint);
   const method = String(fetchOptions.method || "GET").toUpperCase();
 
@@ -163,13 +197,26 @@ export async function zeninFetch(endpoint, options = {}) {
     }
   }
 
-  const response = await fetch(url, {
-    ...fetchOptions,
-    credentials: fetchOptions.credentials || "include",
-    headers
-  });
+  let timeoutId = null;
+  let signal = fetchOptions.signal;
+  if (!signal && Number(timeoutMs) > 0 && typeof AbortController !== "undefined") {
+    const controller = new AbortController();
+    signal = controller.signal;
+    timeoutId = setTimeout(() => controller.abort(), Number(timeoutMs));
+  }
 
-  return response;
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      credentials: fetchOptions.credentials || "include",
+      headers,
+      signal
+    });
+
+    return response;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 export async function zeninFetchJson(endpoint, options = {}) {

@@ -470,9 +470,9 @@ useEffect(() => {
   };
 
   const getGuestSignupHref = () => {
-    if (typeof window === "undefined") return "/auth?mode=signup&next=%2Fapp%3Fguest%3D1%26section%3Dwatchlist";
+    if (typeof window === "undefined") return "/auth?mode=signup&next=%2Fapp%3Fsection%3Dwatchlist";
     const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    return `/auth?mode=signup&next=${encodeURIComponent(next || "/app?guest=1&section=watchlist")}`;
+    return `/auth?mode=signup&next=${encodeURIComponent(next || "/app?section=watchlist")}`;
   };
 
   const handleIntent = (asset, intent = "inspect") => {

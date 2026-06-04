@@ -232,19 +232,19 @@ export default function PublicHomepage() {
 
   useEffect(() => {
     let mounted = true;
-    zeninFetch("/auth/me")
-      .then((res) => res.json().catch(() => ({})))
-      .then(async (data) => {
-        if ((!data?.authenticated || !data?.user) && mounted) {
+    zeninFetch("/auth/me", { timeoutMs: 3500 })
+      .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
+      .then(async ({ ok, data }) => {
+        if (ok && (!data?.authenticated || !data?.user) && mounted) {
           const exchanged = await ensureZeninSessionFromSupabase();
           if (exchanged?.user) {
-            return zeninFetch("/auth/me")
-              .then((res) => res.json().catch(() => ({})));
+            return zeninFetch("/auth/me", { timeoutMs: 3500 })
+              .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }));
           }
         }
-        return data;
+        return { ok, data };
       })
-      .then((data) => {
+      .then(({ data }) => {
         if (!mounted) return;
         if (data?.authenticated && data?.user) {
           setAuthUser(data.user);
@@ -416,99 +416,64 @@ export default function PublicHomepage() {
             </div>
 
             <div className="hero-visual" id="screens">
-              <div className="dashboard-shell">
-                <div className="dashboard">
-                  <div className="dashboard-main">
-                    <div className="welcome-row">
-                      <div>
-                        <h3>Welcome back, Alex</h3>
-                        <p>Here’s your portfolio overview</p>
-                      </div>
-                      <div className="status-pill">● Markets Open</div>
+              <div className="product-proof-shell" aria-label="Current Zenin app modules preview">
+                <div className="product-proof-topbar">
+                  <div>
+                    <span>Zenin workspace</span>
+                    <strong>Current multi-desk app surface</strong>
+                  </div>
+                </div>
+
+                <div className="product-proof-workspace">
+                  <aside className="product-proof-nav" aria-hidden="true">
+                    {["WL", "PF", "EQ", "OP", "PM", "TX"].map((item, index) => (
+                      <span key={item} className={index === 1 ? "active" : ""}>{item}</span>
+                    ))}
+                  </aside>
+
+                  <div className="product-proof-main">
+                    <div className="product-proof-command">
+                      <span>Portfolio Module</span>
+                      <strong>$148,260</strong>
+                      <em>+2.8% today</em>
                     </div>
 
-                    <div className="stats-grid">
-                      <div className="stat-card">
-                        <small>Total Balance</small>
-                        <strong>$128,542.75</strong>
-                        <span className="up">+2.45% today</span>
-                      </div>
-                      <div className="stat-card">
-                        <small>Total Gain/Loss</small>
-                        <strong className="up">+11.10%</strong>
-                        <span className="up">+11.10%</span>
-                      </div>
-                      <div className="stat-card">
-                        <small>Day Change</small>
-                        <strong className="up">+0.98%</strong>
-                        <span className="up">+0.98%</span>
-                      </div>
+                    <div className="product-proof-chart" aria-hidden="true">
+                      <svg viewBox="0 0 320 132" preserveAspectRatio="none">
+                        <path d="M0 100 C36 88 56 102 84 72 C118 36 152 74 184 52 C222 26 246 42 274 20 C292 8 306 14 320 6" />
+                        <path className="fill" d="M0 100 C36 88 56 102 84 72 C118 36 152 74 184 52 C222 26 246 42 274 20 C292 8 306 14 320 6 L320 132 L0 132 Z" />
+                      </svg>
                     </div>
 
-                    <div className="main-panels">
-                      <div className="panel panel-performance">
-                        <div className="panel-head">
-                          <h4>Portfolio Performance</h4>
-                        </div>
-                        <div className="chart">
-                          <svg viewBox="0 0 700 260" preserveAspectRatio="none" aria-hidden="true">
-                            <defs>
-                              <linearGradient id="fillLine" x1="0" x2="0" y1="0" y2="1">
-                                <stop offset="0%" stopColor="rgba(46,108,255,0.45)" />
-                                <stop offset="100%" stopColor="rgba(46,108,255,0.03)" />
-                              </linearGradient>
-                            </defs>
-                            <path d="M0 198 C52 176, 88 145, 126 154 S204 210, 246 181 S330 116, 378 126 S478 95, 528 89 S620 70, 700 46 L700 260 L0 260 Z" fill="url(#fillLine)" />
-                            <path d="M0 198 C52 176, 88 145, 126 154 S204 210, 246 181 S330 116, 378 126 S478 95, 528 89 S620 70, 700 46" fill="none" stroke="#2e6cff" strokeWidth="5" strokeLinecap="round" />
-                          </svg>
-                        </div>
-                        <div className="axis-labels">
-                          <span>Mar</span><span>Apr</span><span>May</span><span>Jun</span>
-                        </div>
-                        <div className="company-summary-card">
-                          <div className="company-summary-head">
-                            <strong>Company Snapshot</strong>
-                            <span className="up">AAPL +2.15%</span>
-                          </div>
-                          <div className="company-summary-grid">
-                            <div><small>Market Cap</small><b>$2.94T</b></div>
-                            <div><small>P/E</small><b>31.4x</b></div>
-                            <div><small>EPS (TTM)</small><b>$6.57</b></div>
-                            <div><small>Revenue YoY</small><b className="up">+7.8%</b></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="table-panel">
-                        <div className="panel">
-                          <div className="panel-head">
-                            <h4>Top Positions</h4>
-                          </div>
-                          <div className="simple-table">
-                            <div className="simple-row"><strong>AAPL</strong><span className="up">+2.15%</span></div>
-                            <div className="simple-row"><strong>MSFT</strong><span className="up">+1.22%</span></div>
-                            <div className="simple-row"><strong>NVDA</strong><span className="up">+3.45%</span></div>
-                            <div className="simple-row"><strong>BTC</strong><span className="up">+2.86%</span></div>
-                            <div className="simple-row"><strong>GOOGL</strong><span className="down">-0.45%</span></div>
-                          </div>
-                        </div>
-
-                        <div className="panel">
-                          <div className="panel-head">
-                            <h4>Top Movers</h4>
-                            <span className="tab">Daily</span>
-                          </div>
-                          <div className="simple-table">
-                            <div className="simple-row"><strong>NVDA</strong><span className="up">+5.23%</span></div>
-                            <div className="simple-row"><strong>AMD</strong><span className="up">+4.31%</span></div>
-                            <div className="simple-row"><strong>SOL</strong><span className="up">+3.85%</span></div>
-                            <div className="simple-row"><strong>PDD</strong><span className="up">+3.12%</span></div>
-                            <div className="simple-row"><strong>META</strong><span className="up">+2.91%</span></div>
-                          </div>
-                        </div>
-                      </div>
+                    <div className="product-proof-module-grid">
+                      <article>
+                        <span>Watchlist</span>
+                        <strong>AAPL · NVDA · BTC</strong>
+                        <p>Theme tags, earnings context, and source-aware price states.</p>
+                      </article>
+                      <article>
+                        <span>Options</span>
+                        <strong>Flow + max pain</strong>
+                        <p>Chains, volatility, whale activity, and scenario presets.</p>
+                      </article>
+                      <article>
+                        <span>Prediction markets</span>
+                        <strong>Odds tape</strong>
+                        <p>Event prices, mark-to-entry pressure, and wallet activity.</p>
+                      </article>
+                      <article>
+                        <span>Tax desk</span>
+                        <strong>40+ jurisdictions</strong>
+                        <p>Realized gains, harvesting scenarios, and after-tax outcomes.</p>
+                      </article>
                     </div>
                   </div>
+                </div>
+
+                <div className="product-proof-rail">
+                  <div><span>Analytics</span><strong>Crypto, Options, Equities, Macro, Commodities</strong></div>
+                  <div><span>Research</span><strong>Company profile, catalysts, notes, journal</strong></div>
+                  <div><span>Account mode</span><strong>Auth, billing, workspace and security controls</strong></div>
                 </div>
               </div>
             </div>
@@ -517,20 +482,20 @@ export default function PublicHomepage() {
           <div className="container proof-bar">
             <div className="proof-grid">
               <div className="proof-item">
-                <div className="proof-badge">★</div>
-                <div><strong>Secure &amp; Private</strong><span>Bank-level security</span></div>
+                <div className="proof-badge">01</div>
+                <div><strong>Explicit guest previews</strong><span>No half-working locked modules</span></div>
               </div>
               <div className="proof-item">
-                <div className="proof-badge">☁</div>
-                <div><strong>Real-time Data</strong><span>Live market updates</span></div>
+                <div className="proof-badge">02</div>
+                <div><strong>Source-aware data</strong><span>Live, cached, delayed, or unavailable</span></div>
               </div>
               <div className="proof-item">
-                <div className="proof-badge">✓</div>
-                <div><strong>All-in-One Platform</strong><span>Powerful &amp; integrated</span></div>
+                <div className="proof-badge">03</div>
+                <div><strong>Unified desk language</strong><span>Portfolio, analytics, options, research</span></div>
               </div>
               <div className="proof-item">
-                <div className="proof-badge">🌐</div>
-                <div><strong>Global Coverage</strong><span>Markets worldwide</span></div>
+                <div className="proof-badge">04</div>
+                <div><strong>Decision workflow</strong><span>Track, research, model, journal</span></div>
               </div>
             </div>
           </div>
@@ -546,14 +511,14 @@ export default function PublicHomepage() {
             </div>
 
             <div className="cards-grid">
-              <article className="feature-card"><div className="feature-icon icon-watchlist">☆</div><h3>Watchlist</h3><p>Track assets, themes, earnings, and macro in one place.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-company">🏛</div><h3>Company Profile</h3><p>Deep stock research with news, insiders, earnings, and leadership context.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-portfolio">◔</div><h3>Portfolio</h3><p>Manage holdings, trades, performance, and live P&amp;L.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-options">◉</div><h3>Options</h3><p>Analyze chains, simulate strategies, and model payoffs.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-predictions">↗</div><h3>Predictions</h3><p>Track markets, whale activity, and position insights.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-journal">📘</div><h3>Journal</h3><p>Log trades, review execution, and keep performance notes.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-analytics">▥</div><h3>Analytics</h3><p>Measure results with P&amp;L, win rate, and risk metrics.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-tax">⌘</div><h3>Tax Estimator</h3><p>Estimate capital gains across 40+ countries with exports.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-watchlist">WL</div><h3>Watchlist</h3><p>Track assets, themes, earnings, and macro context before opening deeper work.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-company">CO</div><h3>Company Profile</h3><p>Inspect fundamentals, leadership, catalysts, news, and earnings context.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-portfolio">PF</div><h3>Portfolio</h3><p>Review allocation, cash, P/L, risk posture, and rebalance prompts.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-options">OP</div><h3>Options Risk Desk</h3><p>Analyze chains, volatility, max-pain, and flow-driven risk in one desk.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-predictions">PR</div><h3>Probability Desk</h3><p>Track event odds, whale activity, and mark-to-entry pressure.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-journal">JL</div><h3>Decision Ledger</h3><p>Capture the thesis, evidence, outcome, and review queue behind each move.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-analytics">AN</div><h3>Cross-market Analytics</h3><p>Move across Crypto, Options, Equities, Macro, and Commodities sibling desks.</p></article>
+              <article className="feature-card"><div className="feature-icon icon-tax">TX</div><h3>Tax Scenario Desk</h3><p>Model realized gains, jurisdictions, after-tax outcomes, and export-ready summaries.</p></article>
             </div>
 
             <section className="coverage-section" id="coverage">

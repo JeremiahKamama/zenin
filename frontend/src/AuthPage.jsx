@@ -11,7 +11,7 @@ function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
   const search = new URLSearchParams(window.location.search);
   const mode = String(search.get("mode") || "signup").toLowerCase();
-  return ["signup", "signin", "forgot"].includes(mode) ? mode : "signup";
+  return ["signup", "signin", "forgot", "verify"].includes(mode) ? mode : "signup";
 }
 
 function isValidEmail(value) {
@@ -39,6 +39,16 @@ function isRecoveryLinkActive() {
 function getRedirectUrl(path = "/auth?mode=signin") {
   if (typeof window === "undefined") return path;
   return `${window.location.origin}${path}`;
+}
+
+function getAuthActionErrorMessage(error) {
+  if (error?.code === "ACCOUNT_NOT_FOUND" || error?.status === 404) {
+    return "No Zenin account exists for that email. Check the address, or create an account if this is your first time here.";
+  }
+  if (error?.status === 503 || error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED") {
+    return "Zenin's auth service is temporarily unavailable or still waking up. Please wait a moment and try signing in again.";
+  }
+  return error?.message || "Authentication failed. Please try again.";
 }
 
 function EyeIcon() {
@@ -69,6 +79,7 @@ export default function AuthPage() {
   const [signupForm, setSignupForm] = useState({ email: "", password: "", displayName: "" });
   const [signinForm, setSigninForm] = useState({ email: "", password: "" });
   const [forgotForm, setForgotForm] = useState({ email: "", newPassword: "" });
+  const [verificationForm, setVerificationForm] = useState({ code: "" });
   const [mfaForm, setMfaForm] = useState({ code: "" });
   const [visiblePasswords, setVisiblePasswords] = useState({ signup: false, signin: false, reset: false });
   const [rememberMe, setRememberMe] = useState(true);
@@ -98,7 +109,7 @@ export default function AuthPage() {
     try {
       await action();
     } catch (actionError) {
-      setError(actionError?.message || "Authentication failed. Please try again.");
+      setError(getAuthActionErrorMessage(actionError));
     } finally {
       setLoading(false);
     }
@@ -110,7 +121,7 @@ export default function AuthPage() {
   };
 
   const finishSignedInSession = async () => {
-    const me = await zeninFetchJson("/api/auth/me");
+    const me = await zeninFetchJson("/api/auth/me", { timeoutMs: 3500 });
     if (!me?.authenticated || !me?.user) {
       throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
     }
@@ -148,6 +159,11 @@ export default function AuthPage() {
     if (next) {
       storePostAuthRedirect(next, "/app");
     }
+    const email = String(params.get("email") || "").trim().toLowerCase();
+    if (email && isValidEmail(email)) {
+      setSigninForm((prev) => ({ ...prev, email }));
+      setForgotForm((prev) => ({ ...prev, email }));
+    }
     const incomingError = String(params.get("error") || params.get("oauthError") || "").trim();
     if (incomingError) {
       setError(incomingError);
@@ -167,12 +183,14 @@ export default function AuthPage() {
     (async () => {
       if (!mounted) return;
       try {
-        const me = await zeninFetchJson("/api/auth/me");
+        const me = await zeninFetchJson("/api/auth/me", { timeoutMs: 3500 });
         if (mounted && me?.authenticated && !isRecoveryLinkActive()) {
           redirectToApp();
         }
       } catch (err) {
-        // ignore
+        if (mounted && (err?.status === 503 || err?.code === "NETWORK_ERROR" || err?.code === "REQUEST_ABORTED")) {
+          setMessage("Zenin's auth service is waking up. You can still enter your credentials; if sign-in fails, wait a moment and retry.");
+        }
       }
     })();
     return () => {
@@ -191,11 +209,11 @@ export default function AuthPage() {
       body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.displayName.trim() })
     });
     if (data?.requiresVerification) {
-      updateMode("signin");
+      updateMode("verify");
       setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
       setMessage(data?.verificationEmailSent === false
-        ? "Account created, but Zenin could not send the verification email. Check the Resend sender/API key configuration, then request a new code."
-        : "Check your inbox to confirm your email, then return to sign in.");
+        ? "Account created, but Zenin could not send the verification email. Try requesting a new code in a moment or contact support."
+        : "Check your inbox for the 6-digit verification code.");
       return;
     }
     await finishSignedInSession();
@@ -206,6 +224,11 @@ export default function AuthPage() {
     if (!signinForm.password.trim()) throw new Error("Enter your password.");
     const payload = { email: signinForm.email.trim(), password: signinForm.password, rememberMe };
     const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload) });
+    if (data?.requiresVerification) {
+      updateMode("verify");
+      setMessage(data?.message || "Verify your email before opening your workspace.");
+      return;
+    }
     if (data?.requiresMfa) {
       setMode("mfa");
       setMessage("Enter the code from your authenticator app to finish signing in.");
@@ -226,6 +249,21 @@ export default function AuthPage() {
     if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
     await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }) });
     setMessage("Reset instructions sent. Open the email link here to set a new password.");
+  });
+
+  const onVerifyEmail = () => runAction(async () => {
+    const code = String(verificationForm.code || "").trim();
+    if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit verification code.");
+    await zeninFetchJson("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ code }) });
+    setMessage("Email verified. Opening your workspace...");
+    await finishSignedInSession();
+  });
+
+  const onResendVerification = () => runAction(async () => {
+    const data = await zeninFetchJson("/api/auth/resend-verification", { method: "POST", body: JSON.stringify({}) });
+    setMessage(data?.verificationEmailSent === false
+      ? "Zenin created a new code, but email delivery is not configured or failed."
+      : "A new verification code was sent.");
   });
 
   const onResetPassword = () => runAction(async () => {
@@ -426,6 +464,39 @@ export default function AuthPage() {
               </div>
 
               <p className="auth-v2-bottom-link">Need an account? <button className="auth-v2-link-btn" onClick={() => updateMode("signup")}>Create one</button></p>
+            </>
+          ) : null}
+
+          {mode === "verify" ? (
+            <>
+              <h1>Verify your email</h1>
+              <p className="auth-v2-subtitle">
+                Enter the 6-digit code Zenin sent to {signinForm.email ? <strong>{signinForm.email}</strong> : "your inbox"}.
+              </p>
+
+              <label className="auth-v2-label" htmlFor="verification-code">Verification code</label>
+              <input
+                id="verification-code"
+                className="auth-v2-input auth-v2-code-input"
+                type="text"
+                inputMode="numeric"
+                value={verificationForm.code}
+                onChange={(e) => setVerificationForm({ code: e.target.value.replace(/\D/g, "").slice(0, 6) })}
+                placeholder="6-digit code"
+                autoComplete="one-time-code"
+              />
+
+              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading || !/^\d{6}$/.test(verificationForm.code)} onClick={onVerifyEmail}>
+                {loading ? "Verifying..." : "Verify and continue"}
+              </button>
+
+              <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-inline-secondary" disabled={loading} onClick={onResendVerification}>
+                Resend code
+              </button>
+
+              <p className="auth-v2-bottom-link">
+                Need another account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Back to sign in</button>
+              </p>
             </>
           ) : null}
 
