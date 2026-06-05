@@ -4,14 +4,28 @@ import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
 import { zeninFetchJson } from "./utils/zeninFetch";
-import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/supabaseAuth";
+import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/backendAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
 
 function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
+  if (window.location.pathname.toLowerCase().startsWith("/auth/oauth/")) return "signin";
   const search = new URLSearchParams(window.location.search);
   const mode = String(search.get("mode") || "signup").toLowerCase();
   return ["signup", "signin", "forgot", "verify"].includes(mode) ? mode : "signup";
+}
+
+function getOAuthCallbackContext() {
+  if (typeof window === "undefined") return null;
+  const path = window.location.pathname.toLowerCase();
+  if (!path.startsWith("/auth/oauth/google/callback")) return null;
+  const params = new URLSearchParams(window.location.search);
+  return {
+    provider: "google",
+    code: String(params.get("code") || "").trim(),
+    state: String(params.get("state") || "").trim(),
+    error: String(params.get("error") || params.get("oauthError") || "").trim()
+  };
 }
 
 function isValidEmail(value) {
@@ -36,11 +50,6 @@ function isRecoveryLinkActive() {
   return hasResetToken || isRecoveryType || isResetFlag;
 }
 
-function getRedirectUrl(path = "/auth?mode=signin") {
-  if (typeof window === "undefined") return path;
-  return `${window.location.origin}${path}`;
-}
-
 function getAuthActionErrorMessage(error) {
   if (error?.code === "ACCOUNT_NOT_FOUND" || error?.status === 404) {
     return "No Zenin account exists for that email. Check the address, or create an account if this is your first time here.";
@@ -50,6 +59,9 @@ function getAuthActionErrorMessage(error) {
   }
   if (error?.code === "VERIFICATION_CODE_STORAGE_FAILED") {
     return "Zenin could not create a fresh verification code. Please try again in a moment.";
+  }
+  if (error?.code === "AUTH_SERVICE_TIMEOUT") {
+    return "Zenin's auth service is still waking up. Please try again in a moment, or wait for the backend health check to recover.";
   }
   if (error?.status === 503 || error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED") {
     return "Zenin's auth service is temporarily unavailable or still waking up. Please wait a moment and try signing in again.";
@@ -79,6 +91,7 @@ function EyeOffIcon() {
 
 export default function AuthPage() {
   const [mode, setMode] = useState(getModeFromLocation);
+  const [oauthCallback, setOauthCallback] = useState(() => getOAuthCallbackContext());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -160,6 +173,7 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (oauthCallback) return;
     const params = new URLSearchParams(window.location.search);
     const next = params.get("next");
     if (next) {
@@ -178,7 +192,49 @@ export default function AuthPage() {
       setRecoveryReady(true);
       setMode("forgot");
     }
-  }, []);
+  }, [oauthCallback]);
+
+  useEffect(() => {
+    if (!oauthCallback) return;
+    let mounted = true;
+    setLoading(true);
+    setError("");
+    setMessage("Finishing Google sign-in...");
+
+    (async () => {
+      try {
+        if (oauthCallback.error) {
+          throw new Error(oauthCallback.error);
+        }
+        if (!oauthCallback.code || !oauthCallback.state) {
+          throw new Error("Google sign-in did not return the required callback parameters.");
+        }
+        const result = await zeninFetchJson("/api/auth/oauth/google/exchange", {
+          method: "POST",
+          body: JSON.stringify({ code: oauthCallback.code, state: oauthCallback.state }),
+          timeoutMs: 15000
+        });
+        if (!mounted) return;
+        const target = result?.returnTo || getSignedInWorkspacePath();
+        clearPostAuthRedirect();
+        window.location.replace(target);
+      } catch (callbackError) {
+        if (!mounted) return;
+        setError(getAuthActionErrorMessage(callbackError));
+        setMessage("Google redirected back to Zenin, but the backend could not finish the session.");
+        setLoading(false);
+        const url = new URL(window.location.href);
+        url.pathname = "/auth";
+        url.search = "?mode=signin";
+        window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+        setOauthCallback(null);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [oauthCallback]);
 
   useEffect(() => {
     // No client-side Supabase listener; handle recovery and sign-in via URL and backend session checks.
@@ -187,6 +243,7 @@ export default function AuthPage() {
   useEffect(() => {
     let mounted = true;
     (async () => {
+      if (oauthCallback) return;
       if (!mounted) return;
       try {
         const me = await zeninFetchJson("/api/auth/me", { timeoutMs: 3500 });
@@ -194,15 +251,14 @@ export default function AuthPage() {
           redirectToApp();
         }
       } catch (err) {
-        if (mounted && (err?.status === 503 || err?.code === "NETWORK_ERROR" || err?.code === "REQUEST_ABORTED")) {
-          setMessage("Zenin's auth service is waking up. You can still enter your credentials; if sign-in fails, wait a moment and retry.");
-        }
+        // Keep background session probes quiet. Explicit sign-in, sign-up, and
+        // OAuth actions surface backend wake/failure states through runAction.
       }
     })();
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [oauthCallback]);
 
   const onSignUp = () => runAction(async () => {
     if (!signupForm.displayName.trim()) throw new Error("Enter your display name.");
@@ -295,7 +351,9 @@ export default function AuthPage() {
 
   const onOAuth = (provider) => runAction(async () => {
     // Use backend OAuth start to avoid Supabase-hosted authorize URLs
-    const returnTo = getRedirectUrl("/auth?mode=signin");
+    const params = new URLSearchParams(window.location.search);
+    const next = String(params.get("next") || "/app").trim();
+    const returnTo = next.startsWith("/") && !next.startsWith("//") ? next : "/app";
     await import("./utils/backendOAuth").then(({ startOAuth }) => startOAuth(provider, { returnTo }));
   });
 

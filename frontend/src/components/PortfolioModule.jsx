@@ -58,6 +58,31 @@ function formatFeeSourceLabel(value) {
     .join(" ");
 }
 
+function formatVenueLabel(value) {
+  return String(value || "Connected platform")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatExecutionTimestamp(value) {
+  const timestamp = new Date(value || Date.now());
+  if (Number.isNaN(timestamp.getTime())) return "Unknown time";
+  return timestamp.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function formatExecutionQuantity(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "0";
+  return amount.toLocaleString(undefined, { maximumFractionDigits: amount < 1 ? 8 : 4 });
+}
+
 function readStoredJson(key, fallback) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "null");
@@ -88,6 +113,9 @@ function formatSavedTimestamp(value) {
 export function PortfolioModule({
   portfolio,
   trades = [],
+  apiTradeExecutions = [],
+  workspaceNotifications = [],
+  unreadNotificationCount = 0,
   balance = 0,
   accountMetrics = null,
   calculatePortfolioValue,
@@ -133,6 +161,8 @@ export function PortfolioModule({
   const [displayCurrency, setDisplayCurrency] = useState("USD");
   const [assetClassFilter, setAssetClassFilter] = useState("all");
   const [activePortfolioTab, setActivePortfolioTab] = useState("holdings");
+  const [historyFilters, setHistoryFilters] = useState({ platform: "all", side: "all", symbol: "" });
+  const [selectedExecution, setSelectedExecution] = useState(null);
   const [showPredictionGuide, setShowPredictionGuide] = useState(false);
   const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
   const [showConnectionsModal, setShowConnectionsModal] = useState(false);
@@ -178,6 +208,44 @@ export function PortfolioModule({
       return false;
     });
   }, [trades, assetClassFilter]);
+
+  const apiExecutionRows = useMemo(() => {
+    const rows = Array.isArray(apiTradeExecutions) ? apiTradeExecutions : [];
+    return rows
+      .filter((execution) => execution && execution.source === "api_connection")
+      .filter((execution) => String(execution.platform || "").trim())
+      .filter((execution) => {
+        if (assetClassFilter === "all") return true;
+        const marketType = String(execution.marketType || "").toLowerCase();
+        if (assetClassFilter === "equities") return ["stock", "equity", "etf"].includes(marketType);
+        if (assetClassFilter === "options") return marketType.includes("option");
+        if (assetClassFilter === "commodities") return ["commodity", "commodities", "future", "futures"].includes(marketType);
+        if (assetClassFilter === "crypto") return ["spot", "perp", "crypto"].includes(marketType);
+        return true;
+      })
+      .filter((execution) => historyFilters.platform === "all" || execution.platform === historyFilters.platform)
+      .filter((execution) => historyFilters.side === "all" || execution.side === historyFilters.side)
+      .filter((execution) => {
+        const symbol = String(historyFilters.symbol || "").trim().toUpperCase();
+        if (!symbol) return true;
+        return String(execution.symbol || "").toUpperCase().includes(symbol);
+      })
+      .sort((a, b) => new Date(b.executedAt || 0).getTime() - new Date(a.executedAt || 0).getTime());
+  }, [apiTradeExecutions, assetClassFilter, historyFilters]);
+
+  const executionPlatformOptions = useMemo(() => {
+    return [...new Set((Array.isArray(apiTradeExecutions) ? apiTradeExecutions : [])
+      .map((execution) => execution?.platform)
+      .filter(Boolean))]
+      .sort()
+      .map((platform) => ({ value: platform, label: formatVenueLabel(platform) }));
+  }, [apiTradeExecutions]);
+
+  const recentExecutionNotifications = useMemo(() => {
+    return (Array.isArray(workspaceNotifications) ? workspaceNotifications : [])
+      .filter((item) => String(item?.type || "").startsWith("trade_execution."))
+      .slice(0, 5);
+  }, [workspaceNotifications]);
 
   const filteredPortfolio = useMemo(() => {
     if (assetClassFilter === "all") return portfolio;
@@ -952,7 +1020,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         return {
           id: trade?.id || `${symbol}-${ts}`,
           symbol,
-          side: isSell ? "Sell" : "Buy",
+          side: isSell ? "Reduce" : "Increase",
           tone: isSell ? "sell" : "buy",
           ts,
           qty: Math.abs(qty),
@@ -1549,7 +1617,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const nextHistory = appendStoredRecord(PORTFOLIO_REBALANCE_HISTORY_KEY, {
       id: `portfolio-rebalance-history-${Date.now()}`,
       createdAt: new Date().toISOString(),
-      status: result?.mode || (result?.ok ? "executed" : "error"),
+      status: result?.mode || (result?.ok ? "saved" : "error"),
       summary: result?.summary || null,
       trades: Array.isArray(result?.trades) ? result.trades : []
     }, 30);
@@ -1562,7 +1630,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     if (!actionableRebalanceRows.length) {
       setFlowOutcome({
         title: "No rebalance needed",
-        message: "There are no actionable trades to submit right now.",
+        message: "There are no allocation changes to save right now.",
         tone: "warning"
       });
       setInsightFlowStep(5);
@@ -1579,7 +1647,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       }
       setFlowOutcome({
         title: "Guest preview only",
-        message: `No trades were executed. The preview was saved in ${getSaveTargetLabel()}; sign in to submit this rebalance through Zenin.`,
+        message: `The preview was saved in ${getSaveTargetLabel()}. Zenin now keeps this as a research plan, not an execution instruction.`,
         tone: "warning"
       });
       setInsightFlowStep(5);
@@ -1587,7 +1655,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     }
 
     setFlowBusy(true);
-    setFlowActionLabel("Submitting authenticated rebalance orders...");
+    setFlowActionLabel("Saving authenticated rebalance plan...");
 
     try {
       const result = await onExecuteRebalance(actionableRebalanceRows);
@@ -1595,14 +1663,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
       if (result?.ok) {
         setFlowOutcome({
-          title: "Rebalance executed",
-          message: `Submitted ${result?.summary?.tradeCount || actionableRebalanceRows.length} trades. Platform fees ${formatMoney(result?.summary?.fees || 0)} and slippage ${formatMoney(result?.summary?.slippage || 0)} were recorded in trade history.`,
+          title: "Rebalance plan saved",
+          message: `Saved ${result?.summary?.tradeCount || actionableRebalanceRows.length} allocation changes. Estimated fees ${formatMoney(result?.summary?.fees || 0)} and slippage ${formatMoney(result?.summary?.slippage || 0)} were recorded for research context.`,
           tone: "success"
         });
       } else if (result?.mode === "partial") {
         setFlowOutcome({
-          title: "Rebalance partially completed",
-          message: `${result?.trades?.length || 0} trades were filled before execution stopped. Your portfolio and trade history were refreshed from the latest saved state.`,
+          title: "Rebalance partially saved",
+          message: `${result?.trades?.length || 0} allocation changes were saved before the workflow stopped. Your portfolio context was refreshed from the latest saved state.`,
           tone: "warning"
         });
       } else {
@@ -1615,7 +1683,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     } catch (error) {
       setFlowOutcome({
         title: "Rebalance failed",
-        message: error?.message || "Zenin could not submit the rebalance.",
+          message: error?.message || "Zenin could not save the rebalance plan.",
         tone: "error"
       });
     } finally {
@@ -1913,10 +1981,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
       return;
     }
     if (kind === "history") {
-      openInsightFlow("rebalancing", payload?.trades?.[0] || actionableRebalanceRows[0] || null);
+      openInsightFlow("rebalancing", payload?.suggestions?.[0] || actionableRebalanceRows[0] || null);
       setFlowOutcome({
-        title: "Execution history loaded",
-        message: `${Number(payload?.summary?.tradeCount || payload?.trades?.length || 0)} trade${Number(payload?.summary?.tradeCount || payload?.trades?.length || 0) === 1 ? "" : "s"} were recorded with status ${String(payload?.status || "saved").toUpperCase()}.`,
+        title: "Plan history loaded",
+        message: `${Number(payload?.summary?.tradeCount || payload?.trades?.length || 0)} change${Number(payload?.summary?.tradeCount || payload?.trades?.length || 0) === 1 ? "" : "s"} were recorded with status ${String(payload?.status || "saved").toUpperCase()}.`,
         tone: "success"
       });
       setInsightFlowStep(5);
@@ -2067,20 +2135,143 @@ const isProfitable = currentAccountEquity >= initialBalance;
       );
     }
 
+    if (activePortfolioTab === "history") {
+      const latestExecution = apiExecutionRows[0] || null;
+      const totalNotional = apiExecutionRows.reduce((sum, execution) => sum + (Number(execution.notional) || 0), 0);
+      return (
+        <div className="portfolio-command-tab-panel">
+          <div className="portfolio-command-panel-head">
+            <div>
+              <h3>Execution History</h3>
+              <p>API-sourced fills from connected platforms only. Manual notes and simulated planning are excluded from this ledger.</p>
+            </div>
+            <div className="portfolio-command-inline-actions">
+              {unreadNotificationCount > 0 ? <span className="portfolio-command-beta-pill">{unreadNotificationCount} unread</span> : null}
+              <button type="button" className="portfolio-v2-link" onClick={handleOpenConnections}>Manage Connections</button>
+            </div>
+          </div>
+
+          <div className="portfolio-command-card-grid three">
+            <div className="portfolio-command-mini-card static">
+              <span>API Executions</span>
+              <strong>{apiExecutionRows.length}</strong>
+              <em>{executionPlatformOptions.length} connected venue bucket{executionPlatformOptions.length === 1 ? "" : "s"}</em>
+            </div>
+            <div className="portfolio-command-mini-card static">
+              <span>Matched Notional</span>
+              <strong>{formatMoney(totalNotional)}</strong>
+              <em>Filtered execution value</em>
+            </div>
+            <div className="portfolio-command-mini-card static">
+              <span>Latest Fill</span>
+              <strong>{latestExecution ? latestExecution.symbol : "No fills"}</strong>
+              <em>{latestExecution ? `${formatVenueLabel(latestExecution.platform)} · ${formatExecutionTimestamp(latestExecution.executedAt)}` : "Connect an API account"}</em>
+            </div>
+          </div>
+
+          <div className="portfolio-history-toolbar">
+            <select
+              value={historyFilters.platform}
+              onChange={(event) => setHistoryFilters((prev) => ({ ...prev, platform: event.target.value }))}
+              aria-label="Filter executions by platform"
+            >
+              <option value="all">All platforms</option>
+              {executionPlatformOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <select
+              value={historyFilters.side}
+              onChange={(event) => setHistoryFilters((prev) => ({ ...prev, side: event.target.value }))}
+              aria-label="Filter executions by side"
+            >
+              <option value="all">Buy and sell</option>
+              <option value="buy">Buys</option>
+              <option value="sell">Sells</option>
+            </select>
+            <input
+              value={historyFilters.symbol}
+              onChange={(event) => setHistoryFilters((prev) => ({ ...prev, symbol: event.target.value }))}
+              placeholder="Symbol"
+              aria-label="Filter executions by symbol"
+            />
+          </div>
+
+          <div className="portfolio-command-table-wrap portfolio-history-table-wrap">
+            <table className="portfolio-command-table compact portfolio-history-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Platform</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Quantity</th>
+                  <th>Price</th>
+                  <th>Fee</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {apiExecutionRows.slice(0, 100).map((execution) => (
+                  <tr key={`${execution.platform}-${execution.platformFillId || execution.id}`} onClick={() => setSelectedExecution(execution)}>
+                    <td>
+                      <strong>{formatExecutionTimestamp(execution.executedAt)}</strong>
+                      <span>{execution.platformFillId || "Fill ID pending"}</span>
+                    </td>
+                    <td>{formatVenueLabel(execution.platform)}</td>
+                    <td><strong>{execution.symbol}</strong><span>{execution.marketType}</span></td>
+                    <td className={execution.side === "buy" ? "positive" : "negative"}>{execution.side.toUpperCase()}</td>
+                    <td>{formatExecutionQuantity(execution.quantity)}</td>
+                    <td>{formatMoney(execution.price)}</td>
+                    <td>{execution.feeAmount ? `${formatExecutionQuantity(execution.feeAmount)} ${execution.feeCurrency}` : "N/A"}</td>
+                    <td><span>API connection</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!apiExecutionRows.length ? (
+              <div className="portfolio-command-empty">
+                <h3>No API executions yet</h3>
+                <p>Connect Binance, Bybit, Hyperliquid, or another supported account to import previous executions.</p>
+                <button type="button" className="portfolio-command-primary-cta subtle" onClick={handleOpenConnections}>Connect Account</button>
+              </div>
+            ) : null}
+          </div>
+
+          {recentExecutionNotifications.length ? (
+            <div className="portfolio-command-activity-list portfolio-history-pings">
+              {recentExecutionNotifications.map((notification) => (
+                <div key={notification.id} className="portfolio-command-activity-row">
+                  <div className="portfolio-command-activity-copy">
+                    <strong>{notification.title}</strong>
+                    <span>{notification.body}</span>
+                  </div>
+                  <div className="portfolio-command-activity-values">
+                    <strong>{notification.readAt ? "Read" : "New"}</strong>
+                    <span>{formatExecutionTimestamp(notification.createdAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
     if (activePortfolioTab === "fees") {
       return (
         <div className="portfolio-command-tab-panel">
           <div className="portfolio-command-panel-head">
             <div>
               <h3>Fees</h3>
-              <p>Execution costs across venues, benchmark comparison, and savings opportunities versus the cheapest avenue.</p>
+              <p>Portfolio activity costs across venues, benchmark comparison, and savings opportunities versus the cheapest avenue.</p>
             </div>
           </div>
           <div className="portfolio-command-card-grid three">
             <div className="portfolio-command-mini-card static">
               <span>Gross Fees Paid</span>
               <strong>{formatMoney(feeDashboard.estimatedUsd)}</strong>
-              <em>{feeDashboard.tradeCount} charged trades</em>
+              <em>{feeDashboard.tradeCount} charged activities</em>
             </div>
             <div className="portfolio-command-mini-card static">
               <span>Recorded Fills</span>
@@ -2104,14 +2295,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 </div>
                 <div className="portfolio-command-activity-values">
                   <strong>{formatMoney(row.estimatedUsd)}</strong>
-                  <span>{row.tradeCount} trades</span>
+                  <span>{row.tradeCount} activities</span>
                 </div>
               </div>
             ))}
             {!feeDashboard.platforms.length ? (
               <div className="portfolio-command-empty">
                 <h3>No recorded fees yet</h3>
-                <p>Connect venues or execute trades through Zenin to populate cost history.</p>
+                <p>Connect read-only venues to populate cost history.</p>
               </div>
             ) : null}
           </div>
@@ -2659,11 +2850,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const trimCount = actionableRebalanceRows.filter((s) => s.action === "Trim").length;
       const addCount = actionableRebalanceRows.filter((s) => s.action === "Add").length;
       const costStatusLabel = !isSignedIn
-        ? "Sign in to preview API execution costs."
+        ? "Sign in to preview API turnover costs."
         : rebalanceEstimateStatus === "loading"
-          ? "Fetching execution costs..."
+          ? "Fetching turnover costs..."
           : rebalanceEstimateStatus === "error"
-            ? "Execution cost preview unavailable."
+            ? "Turnover cost preview unavailable."
             : null;
 
       if (insightFlowStep === 1) {
@@ -2703,7 +2894,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <div className="portfolio-v2-flow-card">
             <div className="portfolio-v2-flow-headline">
               <h3>Rebalance Overview</h3>
-              <span>Analyze portfolio drift and trade impact</span>
+              <span>Analyze portfolio drift and allocation impact</span>
             </div>
 
             <div className="portfolio-v2-flow-two-col" style={{ alignItems: 'center' }}>
@@ -2721,7 +2912,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <strong style={{ fontSize: '18px', color: '#f59e0b' }}>{totalDrift.toFixed(1)}%</strong>
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
-                  <span style={{ fontSize: '10px' }}>Trades Required</span>
+                  <span style={{ fontSize: '10px' }}>Changes Required</span>
                   <strong style={{ fontSize: '18px' }}>{tradesRequired}</strong>
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
@@ -2738,12 +2929,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
             {costStatusLabel ? (
               <div className="portfolio-v2-flow-status-inline warning" style={{ marginTop: '14px' }}>
                 <span>!</span>
-                <div><strong>Execution cost preview</strong><small>{costStatusLabel}</small></div>
+                <div><strong>Turnover cost preview</strong><small>{costStatusLabel}</small></div>
               </div>
             ) : (
               <div className="portfolio-v2-flow-status-inline success" style={{ marginTop: '14px' }}>
                 <span>✓</span>
-                <div><strong>Total execution cost impact</strong><small>{formatMoney(estimatedCostImpact)} across {formatMoney(tradeVolume)} of turnover.</small></div>
+                <div><strong>Total turnover cost impact</strong><small>{formatMoney(estimatedCostImpact)} across {formatMoney(tradeVolume)} of turnover.</small></div>
               </div>
             )}
 
@@ -2758,7 +2949,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <div className="portfolio-v2-flow-card">
             <div className="portfolio-v2-flow-headline">
               <h3>Rebalance Plan</h3>
-              <span>Inspect individual trade suggestions</span>
+              <span>Inspect individual allocation changes</span>
             </div>
             <div className="portfolio-v2-flow-list stacked" style={{ maxHeight: '300px', overflowY: 'auto' }}>
               {actionableRebalanceRows.map((s) => (
@@ -2776,7 +2967,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       </div>
                    </div>
                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Sell" : "Buy"}</div>
+                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Reduce" : "Increase"}</div>
                       <div style={{ fontSize: '12px', color: 'var(--color-text-primary)' }}>{formatMoney(s.tradeValue)}</div>
                       <div style={{ fontSize: '11px', color: 'var(--color-text-secondary)' }}>{Number(s.tradeQuantity || 0).toFixed(6)} {s.symbol}</div>
                    </div>
@@ -2784,7 +2975,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               ))}
             </div>
             <div className="portfolio-v2-flow-actions">
-              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(4)}>Apply Plan</button>
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={() => setInsightFlowStep(4)}>Save Plan</button>
               <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(2)}>Back</button>
             </div>
           </div>
@@ -2793,14 +2984,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
         body = (
           <div className="portfolio-v2-flow-card">
             <div className="portfolio-v2-flow-headline">
-              <h3>Confirm Rebalance</h3>
+              <h3>Save Rebalance Plan</h3>
               <span>Review expected costs and drift reduction</span>
             </div>
             <div className="portfolio-v2-flow-list stacked">
                <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <div style={{ fontSize: '20px' }}>🛒</div>
-                    <div><strong>{tradesRequired} total trades</strong><span>{trimCount} Sell, {addCount} Buy</span></div>
+                    <div><strong>{tradesRequired} allocation changes</strong><span>{trimCount} reduce, {addCount} increase</span></div>
                   </div>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
@@ -2818,7 +3009,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                <div className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <div style={{ fontSize: '20px' }}>🎯</div>
-                    <div><strong>Total execution cost</strong><span>{formatMoney(estimatedCostImpact)}</span></div>
+                    <div><strong>Total turnover cost</strong><span>{formatMoney(estimatedCostImpact)}</span></div>
                   </div>
                </div>
             </div>
@@ -2829,7 +3020,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
             ) : null}
             <div className="portfolio-v2-flow-actions">
-              <button type="button" className="portfolio-v2-flow-btn primary" onClick={handleConfirmRebalance}>Confirm</button>
+              <button type="button" className="portfolio-v2-flow-btn primary" onClick={handleConfirmRebalance}>Save Plan</button>
               <button type="button" className="portfolio-v2-flow-btn ghost" onClick={() => setInsightFlowStep(3)}>Back</button>
             </div>
           </div>
@@ -2838,7 +3029,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         body = flowBusy ? (
           <div className="portfolio-v2-flow-status-card">
             <div className="portfolio-v2-flow-spinner" />
-            <h3>{flowActionLabel || "Executing trades..."}</h3>
+            <h3>{flowActionLabel || "Saving plan..."}</h3>
           </div>
         ) : (
           <div className="portfolio-v2-flow-card" style={{ alignItems: 'center', textAlign: 'center' }}>
@@ -2855,7 +3046,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <span>Projected Drift</span><strong className={flowOutcome.tone === "success" ? "positive" : ""}>{flowOutcome.tone === "success" ? "0.0%" : `${Number(totalDrift || 0).toFixed(1)}%`}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b' }}>{flowOutcome.tone === 'success' ? 'Executed' : 'Preview / Partial'}</strong>
+                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b' }}>{flowOutcome.tone === 'success' ? 'Saved' : 'Preview / Partial'}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
                   <span>Platform Fees</span><strong>{formatMoney(Number(rebalanceEstimate?.summary?.fees || 0))}</strong>
@@ -3076,21 +3267,21 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <div className="portfolio-command-impact-card">
             <div className="portfolio-command-panel-head">
               <div>
-                <h3>Execution Impact</h3>
+              <h3>Allocation Impact</h3>
                 <p>Estimated cost, readiness, and alignment improvement before you commit.</p>
               </div>
             </div>
             <div className="portfolio-command-impact-list">
-              <div><span>Trade Count</span><strong>{rebalanceMetrics.tradesRequired}</strong></div>
+              <div><span>Change Count</span><strong>{rebalanceMetrics.tradesRequired}</strong></div>
               <div><span>Est. Fees</span><strong>{formatMoney(rebalanceMetrics.estimatedFees)}</strong></div>
               <div><span>Est. Slippage</span><strong>{formatMoney(rebalanceMetrics.estimatedSlippage)}</strong></div>
               <div><span>Projected Alignment</span><strong>{projectedAlignment.before.toFixed(0)}% → {projectedAlignment.after.toFixed(0)}%</strong></div>
             </div>
             <div className="portfolio-command-readiness">
-              <span>Execution Readiness</span>
+              <span>Plan Readiness</span>
               <ul>
                 <li className={liveAvailableBalance > 0 ? "positive" : "negative"}>{liveAvailableBalance > 0 ? "Sufficient cash" : "Low available cash"}</li>
-                <li className={rebalanceMetrics.tradesRequired > 0 ? "positive" : "neutral"}>{rebalanceMetrics.tradesRequired > 0 ? "Actionable trade set" : "No trades required"}</li>
+                <li className={rebalanceMetrics.tradesRequired > 0 ? "positive" : "neutral"}>{rebalanceMetrics.tradesRequired > 0 ? "Actionable allocation set" : "No changes required"}</li>
                 <li className={feeDashboard.tradeCount > 0 ? "positive" : "neutral"}>{feeDashboard.tradeCount > 0 ? "Fee history available" : "Fee history still sparse"}</li>
               </ul>
             </div>
@@ -3107,6 +3298,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             { id: "holdings", label: "Holdings" },
             { id: "attribution", label: "Attribution" },
             { id: "exposure", label: "Exposure" },
+            { id: "history", label: "History" },
             { id: "fees", label: "Fees" },
             { id: "prediction", label: "Event Risk", beta: true },
           ].map((tab) => (
@@ -3162,7 +3354,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <div className="portfolio-command-panel-head">
                 <div>
                   <h3>Recent Activity</h3>
-                  <p>Most recent trades and fills across the portfolio.</p>
+                  <p>Most recent portfolio activity across connected sources.</p>
                 </div>
               </div>
               <div className="portfolio-command-activity-list">
@@ -3180,7 +3372,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 )) : (
                   <div className="portfolio-command-empty">
                     <h3>No recent activity</h3>
-                    <p>Trades will appear here once the portfolio starts moving.</p>
+                    <p>Portfolio activity will appear here once connected sources start syncing.</p>
                   </div>
                 )}
               </div>
@@ -3332,6 +3524,33 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         </div>
       ) : null}
+      {selectedExecution ? (
+        <div className="modal-overlay" onClick={() => setSelectedExecution(null)}>
+          <div className="modal-content portfolio-execution-detail-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="section-header" style={{ marginBottom: "12px" }}>
+              <div>
+                <h2 style={{ margin: 0 }}>{selectedExecution.symbol} Execution</h2>
+                <p style={{ margin: "6px 0 0", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                  Imported from {formatVenueLabel(selectedExecution.platform)} via API connection.
+                </p>
+              </div>
+              <button type="button" className="pagination-button" onClick={() => setSelectedExecution(null)}>Close</button>
+            </div>
+            <div className="portfolio-execution-detail-grid">
+              <div><span>Side</span><strong className={selectedExecution.side === "buy" ? "positive" : "negative"}>{selectedExecution.side.toUpperCase()}</strong></div>
+              <div><span>Quantity</span><strong>{formatExecutionQuantity(selectedExecution.quantity)}</strong></div>
+              <div><span>Price</span><strong>{formatMoney(selectedExecution.price)}</strong></div>
+              <div><span>Notional</span><strong>{formatMoney(selectedExecution.notional)}</strong></div>
+              <div><span>Fee</span><strong>{selectedExecution.feeAmount ? `${formatExecutionQuantity(selectedExecution.feeAmount)} ${selectedExecution.feeCurrency}` : "N/A"}</strong></div>
+              <div><span>Executed</span><strong>{formatExecutionTimestamp(selectedExecution.executedAt)}</strong></div>
+              <div><span>Platform Trade ID</span><strong>{selectedExecution.platformTradeId || "N/A"}</strong></div>
+              <div><span>Platform Fill ID</span><strong>{selectedExecution.platformFillId || "N/A"}</strong></div>
+              <div><span>Fee Source</span><strong>{formatFeeSourceLabel(selectedExecution.feeSource)}</strong></div>
+              <div><span>Market Type</span><strong>{selectedExecution.marketType}</strong></div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <PortfolioSavedWorkspaceDrawer
         open={showSavedWorkspaceDrawer}
         onClose={() => setShowSavedWorkspaceDrawer(false)}
@@ -3403,21 +3622,21 @@ function PortfolioSavedWorkspaceDrawer({
         <SavedWorkspaceRow
           key={item.id}
           title={`${item.context || "rebalance"} · ${Number(item.totalDrift || 0).toFixed(1)} drift`}
-          subtitle={`${Number(item.tradesRequired || 0)} trades · ${formatSavedTimestamp(item.createdAt)}`}
+          subtitle={`${Number(item.tradesRequired || 0)} changes · ${formatSavedTimestamp(item.createdAt)}`}
           actionLabel="Open"
           onAction={() => onReviewItem("rebalance", item)}
         />
       )
     },
     {
-      title: "Execution History",
+      title: "Plan History",
       rows: savedHistory,
-      empty: "No rebalance execution history yet.",
+      empty: "No rebalance plan history yet.",
       renderRow: (item) => (
         <SavedWorkspaceRow
           key={item.id}
           title={String(item.status || "saved").toUpperCase()}
-          subtitle={`${Number(item.summary?.tradeCount || item.trades?.length || 0)} trades · ${formatSavedTimestamp(item.createdAt)}`}
+          subtitle={`${Number(item.summary?.tradeCount || item.trades?.length || 0)} changes · ${formatSavedTimestamp(item.createdAt)}`}
           actionLabel="Open"
           onAction={() => onReviewItem("history", item)}
         />
@@ -3517,7 +3736,7 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnecti
                     <span>{account.username || "Workspace source"} · {String(account.venueType || "cex").toUpperCase()}</span>
                   </div>
                   <div className="saved-items-row-meta">
-                    <em>{account.canTrade ? "Trading-enabled" : "Read-only"}</em>
+                    <em>Read-only</em>
                     <span>{account.lastSyncAt ? `Synced ${formatSavedTimestamp(account.lastSyncAt)}` : "Sync pending"}</span>
                   </div>
                 </div>
@@ -3527,7 +3746,7 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnecti
             <section className="saved-items-section">
               <div className="saved-items-empty">
                 <strong>No exchanges connected</strong>
-                <span>Connect a venue to unlock portfolio sync, execution context, and shared desk monitoring.</span>
+                <span>Connect a venue to unlock portfolio sync, activity context, and shared desk monitoring.</span>
               </div>
             </section>
           )}

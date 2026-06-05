@@ -1,19 +1,16 @@
 import { zeninFetchJson } from "./zeninFetch";
 
-// This file is a compatibility shim that preserves the original `supabaseAuth` API
-// used across the frontend but forwards operations to the backend `/api/auth/*`
-// endpoints. As part of the migration away from Supabase we emulate the small
-// portion of the client surface the app uses.
+// Backend-managed auth facade. The exported names intentionally preserve the
+// older auth helper API used by the app while all operations go through
+// Zenin-owned `/api/auth/*` endpoints.
 
-const SESSION_HINT_KEY = "zenin_supabase_session_present";
+const SESSION_HINT_KEY = "zenin_backend_session_present";
 
 export function isSupabaseConfigured() {
-  // Treat backend-managed auth as "configured" for the frontend.
   return true;
 }
 
 export function getSupabaseClient() {
-  // Provide a minimal fake client with an `auth` surface that the app expects.
   return {
     auth: {
       async signUp({ email, password, options } = {}) {
@@ -23,7 +20,6 @@ export function getSupabaseClient() {
       },
       async signInWithPassword({ email, password } = {}) {
         const res = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify({ email, password, rememberMe: true }) });
-        // If the server requires MFA it will indicate that in the response.
         if (res?.requiresMfa) return { data: { session: null, requiresMfa: true }, error: null };
         return { data: { session: null, user: res?.user || null }, error: null };
       },
@@ -32,7 +28,6 @@ export function getSupabaseClient() {
         return { data: null, error: null };
       },
       async updateUser(attrs = {}) {
-        // Map updateUser(email/password) to appropriate backend endpoints.
         if (attrs.password) {
           await zeninFetchJson("/api/account/password", { method: "POST", body: JSON.stringify({ currentPassword: attrs.currentPassword || "", newPassword: attrs.password }) });
           return { data: null, error: null };
@@ -44,14 +39,11 @@ export function getSupabaseClient() {
         return { data: null, error: null };
       },
       onAuthStateChange(cb = () => {}) {
-        // Immediately invoke with current session state; no real-time updates.
         (async () => {
           try {
             const me = await zeninFetchJson("/api/auth/me");
             if (me?.authenticated) cb("SIGNED_IN", null);
-          } catch (_e) {
-            // ignore
-          }
+          } catch (_e) {}
         })();
         return { data: { subscription: { unsubscribe() {} } } };
       },
@@ -63,8 +55,12 @@ export function getSupabaseClient() {
         }
       },
       async getSession() {
-        const me = await zeninFetchJson("/api/auth/me");
-        return { data: { session: me?.authenticated ? { user: me.user } : null } };
+        try {
+          const me = await zeninFetchJson("/api/auth/me", { timeoutMs: 3500 });
+          return { data: { session: me?.authenticated ? { user: me.user } : null }, error: null };
+        } catch (error) {
+          return { data: { session: null }, error: error || null };
+        }
       }
     }
   };
@@ -109,7 +105,6 @@ export async function getSupabaseSession() {
 }
 
 export async function getSupabaseMfaState() {
-  // Map backend /api/auth/me into a lightweight MFA state the UI expects.
   try {
     const me = await zeninFetchJson("/api/auth/me");
     const user = me?.user || null;
@@ -124,10 +119,8 @@ export async function getSupabaseMfaState() {
 }
 
 export async function startSupabaseTotpEnrollment(opts = {}) {
-  // Backend returns { secret, qrCodeDataUrl };
   const resp = await zeninFetchJson("/api/auth/2fa/generate");
   return {
-    // Frontend previously used `factorId` presence as a flag; use secret as an id.
     factorId: resp.secret || "",
     secret: resp.secret || "",
     qrCode: resp.qrCodeDataUrl || ""
@@ -148,20 +141,15 @@ export async function unenrollSupabaseMfaFactor(_factorId) {
 }
 
 export async function verifySupabaseMfaCode(code) {
-  // Verify by re-calling signin with verificationCode where applicable.
   throw new Error("Use signin flow to verify MFA code.");
 }
 
 export async function getSupabaseLinkedIdentities() {
-  // If available, backend can provide linked identities via /api/auth/me
   const me = await zeninFetchJson("/api/auth/me");
-  // sanitize: backend currently doesn't expose full identities in `me.user` by default
-  // but if present, forward them; otherwise return an empty list.
   return me?.user?.identities || [];
 }
 
 export async function startSupabasePasskeyAuthentication() {
-  // Calls backend to get authentication options for WebAuthn
   return zeninFetchJson("/api/auth/passkeys/authenticate/generate-options");
 }
 
@@ -174,9 +162,7 @@ export async function verifySupabasePasskeyAuthentication({ response, challengeI
 }
 
 export async function linkSupabaseOAuthIdentity(provider, { redirectTo } = {}) {
-  // Start an OAuth link using the backend start flow
-  const start = await zeninFetchJson("/api/auth/oauth/start", { method: "POST", body: JSON.stringify({ provider, returnTo: redirectTo }) });
-  return start;
+  return zeninFetchJson("/api/auth/oauth/start", { method: "POST", body: JSON.stringify({ provider, returnTo: redirectTo }) });
 }
 
 export async function unlinkSupabaseOAuthIdentity(identity) {
@@ -184,12 +170,10 @@ export async function unlinkSupabaseOAuthIdentity(identity) {
 }
 
 export async function exchangeSupabaseSession() {
-  // No-op for backend-managed auth
   return null;
 }
 
 export async function ensureZeninSessionFromSupabase() {
-  // No-op shim — session is managed by backend cookies.
   try {
     const me = await zeninFetchJson("/api/auth/me");
     persistZeninAuth(me);
@@ -200,7 +184,6 @@ export async function ensureZeninSessionFromSupabase() {
 }
 
 export function subscribeToSupabaseAuth(onEvent = () => {}) {
-  // Minimal compatibility: call once with current state and return unsubscribe.
   (async () => {
     try {
       const me = await zeninFetchJson("/api/auth/me");

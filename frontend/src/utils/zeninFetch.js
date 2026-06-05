@@ -6,6 +6,8 @@
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const SIMULATED_PLAN_VALUES = new Set(["starter", "pro", "desk"]);
+const CSRF_FETCH_TIMEOUT_MS = 45000;
+const CSRF_FETCH_ATTEMPTS = 2;
 let csrfTokenCache = null;
 
 function readCookie(name) {
@@ -72,28 +74,39 @@ async function ensureCsrfToken() {
     return fromCookie;
   }
   if (csrfTokenCache) return csrfTokenCache;
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+
   let response;
-  try {
-    response = await fetch(buildZeninUrl("/auth/csrf"), {
-      credentials: "include",
-      signal: controller?.signal
-    });
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new ZeninRequestError("Zenin's auth service is taking too long to respond. Please wait a moment and try again.", {
-        status: 0,
-        code: "AUTH_SERVICE_TIMEOUT",
-        error: "Auth service timeout",
-        retryable: true,
-        endpoint: buildZeninUrl("/auth/csrf"),
-        cause: error,
+  let lastError = null;
+  for (let attempt = 1; attempt <= CSRF_FETCH_ATTEMPTS; attempt += 1) {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), CSRF_FETCH_TIMEOUT_MS) : null;
+    try {
+      response = await fetch(buildZeninUrl("/auth/csrf"), {
+        credentials: "include",
+        signal: controller?.signal
       });
+      break;
+    } catch (error) {
+      lastError = error;
+      if (error?.name !== "AbortError" || attempt === CSRF_FETCH_ATTEMPTS) {
+        if (error?.name === "AbortError") {
+          throw new ZeninRequestError("Zenin's auth service is taking too long to respond. Please wait a moment and try again.", {
+            status: 0,
+            code: "AUTH_SERVICE_TIMEOUT",
+            error: "Auth service timeout",
+            retryable: true,
+            endpoint: buildZeninUrl("/auth/csrf"),
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
-    throw error;
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+  }
+  if (!response && lastError) {
+    throw lastError;
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {

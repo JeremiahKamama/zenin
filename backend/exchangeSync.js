@@ -497,6 +497,100 @@ async function syncBinance(apiKey, apiSecret, context = {}) {
   return { holdings: [...spotHoldings, ...futHoldings], trades, tradeFills, cashBalance, currency: "USDT", syncContext: context };
 }
 
+async function verifyBinanceCredentialScope(apiKey, apiSecret) {
+  const fetch = await resolveFetch();
+  if (!apiKey || !apiSecret) throw new Error("Binance API Key and Secret are required");
+
+  let serverTimeOffset = 0;
+  try {
+    const timeData = await fetchJsonOrThrow(fetch, "https://api.binance.com/api/v3/time", undefined, "Binance time fetch failed");
+    serverTimeOffset = toNumber(timeData?.serverTime) - Date.now();
+  } catch (error) {
+    console.warn("[Binance] Failed to fetch server time for scope verification, using local clock.", error.message);
+  }
+
+  const account = await fetchBinanceSigned(fetch, "https://api.binance.com", "/api/v3/account", {
+    recvWindow: 10000,
+    timestamp: Date.now() + serverTimeOffset
+  }, apiKey, apiSecret);
+
+  const canTrade = account?.canTrade === true;
+  const canWithdraw = account?.canWithdraw === true;
+  const permissionScope = canTrade || canWithdraw ? "trade" : "read_only";
+  return {
+    permissionScope,
+    canTrade,
+    canWithdraw,
+    readOnlyVerified: permissionScope === "read_only",
+    providerMeta: {
+      canTrade,
+      canWithdraw,
+      canDeposit: account?.canDeposit === true,
+      permissions: Array.isArray(account?.permissions) ? account.permissions : []
+    }
+  };
+}
+
+async function verifyBybitCredentialScope(apiKey, apiSecret) {
+  const fetch = await resolveFetch();
+  if (!apiKey || !apiSecret) throw new Error("Bybit API Key and Secret are required");
+
+  const data = await fetchBybitSigned(fetch, "/v5/user/query-api", {}, apiKey, apiSecret);
+  const result = data?.result || {};
+  const readOnly = Number(result.readOnly) === 1;
+  return {
+    permissionScope: readOnly ? "read_only" : "trade",
+    canTrade: !readOnly,
+    readOnlyVerified: readOnly,
+    providerMeta: {
+      readOnly: result.readOnly,
+      permissions: result.permissions || {}
+    }
+  };
+}
+
+async function verifyExchangeCredentialScope(exchange, apiKey, apiSecret) {
+  const normalizedExchange = String(exchange || "").trim().toLowerCase();
+  if (normalizedExchange === "hyperliquid" && apiKey && !apiSecret) {
+    return {
+      permissionScope: "read_only",
+      canTrade: false,
+      readOnlyVerified: true,
+      verificationStatus: "verified_watch_only",
+      verificationMessage: "Public address connection verified as watch-only.",
+      providerMeta: { addressType: "public_wallet" }
+    };
+  }
+  if (normalizedExchange === "binance") {
+    const result = await verifyBinanceCredentialScope(apiKey, apiSecret);
+    return {
+      ...result,
+      verificationStatus: result.readOnlyVerified ? "verified_read_only" : "rejected_trading_enabled",
+      verificationMessage: result.readOnlyVerified
+        ? "Binance confirmed this API key has no trading or withdrawal permission."
+        : "Binance reports trading or withdrawal permission on this API key."
+    };
+  }
+  if (normalizedExchange === "bybit") {
+    const result = await verifyBybitCredentialScope(apiKey, apiSecret);
+    return {
+      ...result,
+      verificationStatus: result.readOnlyVerified ? "verified_read_only" : "rejected_trading_enabled",
+      verificationMessage: result.readOnlyVerified
+        ? "Bybit confirmed this API key is read-only."
+        : "Bybit reports this API key is read-write."
+    };
+  }
+  return {
+    permissionScope: "read_only",
+    canTrade: false,
+    readOnlyVerified: false,
+    verificationStatus: "provider_unverified",
+    verificationMessage: "Zenin requires read-only credentials, but this provider scope has not been verified server-side.",
+    providerMeta: {}
+  };
+}
+
 async function syncBybit(apiKey, apiSecret, context = {}) {
   const fetch = await resolveFetch();
   if (!apiKey || !apiSecret) throw new Error("Bybit API Key and Secret are required");
@@ -591,5 +685,6 @@ async function syncBybit(apiKey, apiSecret, context = {}) {
 module.exports = {
   syncHyperliquid,
   syncBinance,
-  syncBybit
+  syncBybit,
+  verifyExchangeCredentialScope
 };

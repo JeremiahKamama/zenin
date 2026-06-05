@@ -256,8 +256,6 @@ const FALLBACK_MACRO_INDICATORS = [
   { code: "PMI_MANUFACTURING", name: "Manufacturing PMI", category: "sentiment", unit: "idx" },
 ];
 
-const LOCAL_API_BASE_PATTERN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[0-1])\.|[^/]+\.local)(?::\d+)?\/api\/?$/i;
-
 function normalizeApiBaseUrl(value) {
   return String(value || "").replace(/\/+$/, "");
 }
@@ -267,9 +265,7 @@ function getApiBaseCandidates(baseUrl) {
   const hosted = normalizeApiBaseUrl(HOSTED_BACKEND_URL);
   const candidates = [];
   if (primary) candidates.push(primary);
-  if (primary && primary !== hosted && LOCAL_API_BASE_PATTERN.test(primary)) {
-    candidates.push(hosted);
-  }
+  if (hosted && hosted !== primary) candidates.push(hosted);
   return candidates.length ? candidates : [hosted];
 }
 

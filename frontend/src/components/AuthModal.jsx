@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getGuestWorkspacePath, getSignedInWorkspacePath, storePostAuthRedirect } from "../utils/authRedirect";
 import { zeninFetchJson } from "../utils/zeninFetch";
-import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "../utils/supabaseAuth";
+import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "../utils/backendAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
 
 const ENABLE_APPLE_OAUTH = false;

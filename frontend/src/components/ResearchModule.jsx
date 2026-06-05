@@ -110,8 +110,8 @@ const DOC_STATUS_OPTIONS = ["unread", "reviewed", "linked", "archived"];
 const THESIS_STAGE_OPTIONS = ["watching", "active thesis", "in portfolio", "invalidated", "archived"];
 const CATALYST_TYPES = ["earnings", "macro", "product", "filing", "token", "custom"];
 const CATALYST_STATUS_OPTIONS = ["upcoming", "watching", "complete"];
-const DECISION_ACTIONS = ["watch", "buy", "add", "trim", "pass", "exit", "invalidate"];
-const TRIGGER_ACTIONS = ["buy", "add", "trim", "sell", "review"];
+const DECISION_ACTIONS = ["watch", "increase", "add", "reduce", "pass", "exit", "invalidate"];
+const TRIGGER_ACTIONS = ["watch", "increase", "reduce", "review"];
 const TRIGGER_SCOPE_OPTIONS = ["asset", "portfolio"];
 const ENTITY_RECORD_STATES = ["active", "resolved", "archived"];
 const OWNER_OPTIONS = ["Desk", "PM", "Analyst", "Risk", "Ops"];
@@ -130,7 +130,7 @@ const TRIGGER_CONDITION_OPTIONS = [
   { value: "position_weight_above", label: "Position weight above", thresholdLabel: "Weight %", thresholdHint: "Trigger when a position exceeds its target weight." }
 ];
 const BRIEF_SECTION_ORDER = ["Thesis", "Catalysts", "Risks", "Position Context", "Recent Decisions", "Commentary"];
-const NEGATIVE_RESEARCH_KEYWORDS = ["risk", "warn", "delay", "miss", "cuts", "cut", "guide down", "weak", "pressure", "downgrade", "headwind", "sell"];
+const NEGATIVE_RESEARCH_KEYWORDS = ["risk", "warn", "delay", "miss", "cuts", "cut", "guide down", "weak", "pressure", "downgrade", "headwind"];
 
 const COMMON_SYMBOL_STOPWORDS = new Set([
   "A", "AI", "API", "CEO", "CFO", "USD", "US", "UK", "EU", "ETF", "GDP", "CPI", "PCE", "SEC", "FOMC", "EPS", "EBITDA",
@@ -693,7 +693,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     commentary: ""
   });
   const [obsidianConfig, setObsidianConfig] = useState(() => readLocalJson(OBSIDIAN_LOCAL_CONFIG_KEY, {
-    endpoint: "https://127.0.0.1:27124",
+    endpoint: "",
     token: ""
   }));
 
@@ -2805,7 +2805,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     return (
       <div className="research-view-grid research-view-grid-wide">
         <section className="research-panel">
-          <DensePanelHeader title="Trigger Desk" subtitle="Wire research into actionable rules for buy, add, trim, sell, and review." />
+          <DensePanelHeader title="Trigger Desk" subtitle="Wire research into review, increase, reduce, and risk-monitoring rules." />
           <div className="research-form-grid">
             <label>
               <span>Symbol</span>
@@ -3020,7 +3020,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
             <strong>Obsidian Local REST</strong>
             <label>
               <span>Endpoint</span>
-              <input value={obsidianConfig.endpoint} onChange={(event) => setObsidianConfig((prev) => ({ ...prev, endpoint: event.target.value }))} />
+              <input value={obsidianConfig.endpoint} onChange={(event) => setObsidianConfig((prev) => ({ ...prev, endpoint: event.target.value }))} placeholder="Paste your local endpoint" />
             </label>
             <label>
               <span>API key</span>
@@ -3287,7 +3287,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
               ))}
             </div>
           ) : (
-            <GuidedEmptyState eyebrow="Decision log" title="No desk decisions recorded" description="Log decisions here so research and execution stay connected over time." />
+            <GuidedEmptyState eyebrow="Decision log" title="No desk decisions recorded" description="Log decisions here so research and follow-up reviews stay connected over time." />
           )}
         </section>
       </div>

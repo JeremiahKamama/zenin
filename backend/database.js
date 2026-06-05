@@ -339,6 +339,22 @@ function mapTradeFillRow(row) {
   };
 }
 
+function mapNotificationEventRow(row) {
+  return {
+    id: Number(row.id),
+    userId: row.userId == null ? null : Number(row.userId || row.user_id),
+    workspaceId: row.workspaceId == null ? null : Number(row.workspaceId || row.workspace_id),
+    type: String(row.type || "").trim(),
+    title: String(row.title || "").trim(),
+    body: String(row.body || "").trim(),
+    entityType: row.entityType || row.entity_type || null,
+    entityId: row.entityId || row.entity_id || null,
+    metadata: parseJsonPayload(row.metadata || row.metadata_json, {}),
+    createdAt: toIsoString(row.createdAt || row.created_at),
+    readAt: toIsoString(row.readAt || row.read_at)
+  };
+}
+
 function normalizeMarketType(type, marketType) {
   const cleanType = String(type || "").trim().toLowerCase();
   if (marketType && String(marketType).trim()) {
@@ -1788,6 +1804,40 @@ async function initializeDatabase() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_user_workspace_trade_fills_workspace_lookup
       ON user_workspace_trade_fills (workspace_id, executed_at DESC, id DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_notification_events (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id TEXT,
+        metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        read_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE user_workspace_notification_events
+      ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+      ADD COLUMN IF NOT EXISTS type TEXT,
+      ADD COLUMN IF NOT EXISTS title TEXT,
+      ADD COLUMN IF NOT EXISTS body TEXT,
+      ADD COLUMN IF NOT EXISTS entity_type TEXT,
+      ADD COLUMN IF NOT EXISTS entity_id TEXT,
+      ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_workspace_notifications_workspace_lookup
+      ON user_workspace_notification_events (workspace_id, created_at DESC, id DESC);
     `);
 
     await client.query(`
@@ -5150,6 +5200,8 @@ const userWorkspace = {
     sync: async (userId, fills = [], workspaceId = null) => {
       const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const rows = Array.isArray(fills) ? fills : [];
+      const inserted = [];
+      const updated = [];
       for (const fill of rows) {
         const normalized = {
           tradeClientId: fill.tradeClientId || fill.trade_client_id || null,
@@ -5176,7 +5228,7 @@ const userWorkspace = {
 
         if (!normalized.platformFillId || !normalized.symbol) continue;
 
-        await pool.query(`
+        const result = await pool.query(`
           INSERT INTO user_workspace_trade_fills (
             user_id, workspace_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
             quantity, price, notional, fee_amount, fee_currency, fee_source, liquidity_role, executed_at,
@@ -5200,7 +5252,27 @@ const userWorkspace = {
             executed_at = COALESCE(EXCLUDED.executed_at, user_workspace_trade_fills.executed_at),
             reference_price = COALESCE(EXCLUDED.reference_price, user_workspace_trade_fills.reference_price),
             raw_payload_json = EXCLUDED.raw_payload_json,
-            updated_at = NOW();
+            updated_at = NOW()
+          RETURNING
+            (xmax = '0'::xid) AS "wasInserted",
+            id,
+            trade_client_id AS "tradeClientId",
+            platform,
+            platform_trade_id AS "platformTradeId",
+            platform_fill_id AS "platformFillId",
+            symbol,
+            side,
+            market_type AS "marketType",
+            quantity,
+            price,
+            notional,
+            fee_amount AS "feeAmount",
+            fee_currency AS "feeCurrency",
+            fee_source AS "feeSource",
+            liquidity_role AS "liquidityRole",
+            executed_at AS "executedAt",
+            reference_price AS "referencePrice",
+            raw_payload_json AS "rawPayload";
         `, [
           resolvedUserId,
           resolvedWorkspaceId,
@@ -5222,7 +5294,18 @@ const userWorkspace = {
           normalized.referencePrice,
           JSON.stringify(normalized.rawPayload || {})
         ]);
+        const saved = result.rows[0] ? mapTradeFillRow(result.rows[0]) : null;
+        if (!saved) continue;
+        if (result.rows[0].wasInserted) inserted.push(saved);
+        else updated.push(saved);
       }
+
+      return {
+        inserted,
+        updated,
+        insertedCount: inserted.length,
+        updatedCount: updated.length
+      };
     },
 
     getSummary: async (userId, workspaceId = null) => {
@@ -5254,6 +5337,64 @@ const userWorkspace = {
       return summarizeFeeBreakdown(result.rows);
     },
 
+    getExecutions: async (userId, filters = {}, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const safeLimit = Math.max(1, Math.min(500, Number(filters.limit) || 100));
+      const clauses = ["workspace_id = $1", "platform <> 'zenin'"];
+      const params = [resolvedWorkspaceId];
+      const addParam = (value) => {
+        params.push(value);
+        return `$${params.length}`;
+      };
+
+      const platform = normalizePlatformValue(filters.platform, "");
+      if (platform) clauses.push(`platform = ${addParam(platform)}`);
+
+      const symbol = String(filters.symbol || "").trim().toUpperCase();
+      if (symbol) clauses.push(`symbol = ${addParam(symbol)}`);
+
+      const side = String(filters.side || "").trim().toLowerCase();
+      if (["buy", "sell"].includes(side)) clauses.push(`side = ${addParam(side)}`);
+
+      const marketType = String(filters.marketType || filters.market_type || "").trim().toLowerCase();
+      if (marketType) clauses.push(`market_type = ${addParam(marketType)}`);
+
+      const from = filters.from ? new Date(filters.from) : null;
+      if (from && !Number.isNaN(from.getTime())) clauses.push(`COALESCE(executed_at, created_at) >= ${addParam(from.toISOString())}`);
+
+      const to = filters.to ? new Date(filters.to) : null;
+      if (to && !Number.isNaN(to.getTime())) clauses.push(`COALESCE(executed_at, created_at) <= ${addParam(to.toISOString())}`);
+
+      params.push(safeLimit);
+      const result = await pool.query(`
+        SELECT
+          id,
+          trade_client_id AS "tradeClientId",
+          platform,
+          platform_trade_id AS "platformTradeId",
+          platform_fill_id AS "platformFillId",
+          symbol,
+          side,
+          market_type AS "marketType",
+          quantity,
+          price,
+          notional,
+          fee_amount AS "feeAmount",
+          fee_currency AS "feeCurrency",
+          fee_source AS "feeSource",
+          liquidity_role AS "liquidityRole",
+          executed_at AS "executedAt",
+          reference_price AS "referencePrice",
+          raw_payload_json AS "rawPayload"
+        FROM user_workspace_trade_fills
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY COALESCE(executed_at, created_at) DESC, id DESC
+        LIMIT $${params.length};
+      `, params);
+
+      return result.rows.map(mapTradeFillRow);
+    },
+
     getKnownSymbols: async (userId, platform, workspaceId = null) => {
       const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const normalizedPlatform = normalizePlatformValue(platform, "");
@@ -5283,6 +5424,99 @@ const userWorkspace = {
         else buckets.spot.push(symbol);
       });
       return buckets;
+    }
+  },
+
+  notifications: {
+    create: async (userId, event = {}, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        INSERT INTO user_workspace_notification_events (
+          user_id, workspace_id, type, title, body, entity_type, entity_id, metadata_json
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING
+          id,
+          user_id AS "userId",
+          workspace_id AS "workspaceId",
+          type,
+          title,
+          body,
+          entity_type AS "entityType",
+          entity_id AS "entityId",
+          metadata_json AS "metadata",
+          created_at AS "createdAt",
+          read_at AS "readAt";
+      `, [
+        resolvedUserId,
+        resolvedWorkspaceId,
+        String(event.type || "workspace.event").trim(),
+        String(event.title || "Zenin update").trim(),
+        String(event.body || "").trim(),
+        event.entityType || event.entity_type || null,
+        event.entityId == null ? null : String(event.entityId),
+        JSON.stringify(parseJsonPayload(event.metadata || event.metadata_json, {}))
+      ]);
+      return mapNotificationEventRow(result.rows[0]);
+    },
+
+    getAll: async (userId, options = {}, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const safeLimit = Math.max(1, Math.min(200, Number(options.limit) || 50));
+      const unreadOnly = String(options.unreadOnly || options.unread_only || "").toLowerCase() === "true" || options.unreadOnly === true;
+      const result = await pool.query(`
+        SELECT
+          id,
+          user_id AS "userId",
+          workspace_id AS "workspaceId",
+          type,
+          title,
+          body,
+          entity_type AS "entityType",
+          entity_id AS "entityId",
+          metadata_json AS "metadata",
+          created_at AS "createdAt",
+          read_at AS "readAt"
+        FROM user_workspace_notification_events
+        WHERE workspace_id = $1
+          AND ($2::boolean IS FALSE OR read_at IS NULL)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3;
+      `, [resolvedWorkspaceId, unreadOnly, safeLimit]);
+      return result.rows.map(mapNotificationEventRow);
+    },
+
+    markRead: async (userId, notificationId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        UPDATE user_workspace_notification_events
+        SET read_at = COALESCE(read_at, NOW())
+        WHERE workspace_id = $1 AND id = $2
+        RETURNING
+          id,
+          user_id AS "userId",
+          workspace_id AS "workspaceId",
+          type,
+          title,
+          body,
+          entity_type AS "entityType",
+          entity_id AS "entityId",
+          metadata_json AS "metadata",
+          created_at AS "createdAt",
+          read_at AS "readAt";
+      `, [resolvedWorkspaceId, Number(notificationId)]);
+      return result.rows[0] ? mapNotificationEventRow(result.rows[0]) : null;
+    },
+
+    markAllRead: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        UPDATE user_workspace_notification_events
+        SET read_at = COALESCE(read_at, NOW())
+        WHERE workspace_id = $1 AND read_at IS NULL
+        RETURNING id;
+      `, [resolvedWorkspaceId]);
+      return { updatedCount: result.rowCount || 0 };
     }
   },
 

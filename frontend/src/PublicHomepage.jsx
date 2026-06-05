@@ -7,7 +7,7 @@ import { applySeo, buildAbsoluteUrl, SITE_URL } from "./utils/seo";
 import { clearPostAuthRedirect, getPostAuthRedirectPath, sanitizeInternalPath, storePostAuthRedirect } from "./utils/authRedirect";
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { getPublicRuntimeConfig } from "./config/runtimeConfigStore";
-import { ensureZeninSessionFromSupabase } from "./utils/supabaseAuth";
+import { ensureZeninSessionFromSupabase } from "./utils/backendAuth";
 import { updateAccountPlan } from "./utils/accountPlan";
 
 const HOME_URL = `${SITE_URL}/`;
@@ -21,15 +21,15 @@ const FAQ_ITEMS = [
   },
   {
     question: "Does Zenin support stocks, crypto, options, and prediction markets?",
-    answer: "Yes. The platform is designed for cross-market workflows so investors and traders can move from research to execution without switching tools."
+    answer: "Yes. The platform is designed for cross-market research workflows so investors and desks can move from context to decision review without switching tools."
   },
   {
     question: "Who is Zenin built for?",
-    answer: "Zenin is built for active investors, traders, and small desks that want deeper market context than a basic portfolio tracker without spreading their workflow across multiple apps."
+    answer: "Zenin is built for active investors, analysts, and small research desks that want deeper market context than a basic portfolio tracker without spreading their workflow across multiple apps."
   },
   {
     question: "How does Zenin help with tax workflows?",
-    answer: "Zenin includes a tax estimator that helps users review capital-gains exposure across multiple jurisdictions alongside portfolio and trade activity."
+    answer: "Zenin includes a tax estimator that helps users review capital-gains exposure across multiple jurisdictions alongside portfolio activity."
   }
 ];
 
@@ -526,9 +526,9 @@ export default function PublicHomepage() {
                 <div className="section-tag">Coverage</div>
                 <h2>Cross-market coverage for stocks, crypto, options, and prediction markets</h2>
                 <p>
-                  Zenin is built to let you move from macro to execution without context switching.
+                  Zenin is built to let you move from macro context to decision review without context switching.
                   Track equities, crypto, options, prediction markets, and tax workflows in one place so research,
-                  execution, and review stay connected.
+                  portfolio context, and review stay connected.
                 </p>
                 <div className="coverage-plan-refs">
                   {coveragePlanRefs.map((item) => (
@@ -639,7 +639,7 @@ export default function PublicHomepage() {
                     <h4>Pro</h4>
                     <span className="pricing-badge">Most popular</span>
                   </div>
-                  <p className="pricing-desc">Cross-market workflows for active investors and traders.</p>
+                  <p className="pricing-desc">Cross-market workflows for active investors and analysts.</p>
                   <div className="pricing-price">
                     <strong>{toMoney(getPlanPrice("pro", billingCycle).amount)}</strong>
                     <span>{getPlanPrice("pro", billingCycle).periodLabel}</span>
@@ -754,7 +754,7 @@ export default function PublicHomepage() {
             <section className="faq-section" id="faq" aria-labelledby="faq-title">
               <div className="about-head">
                 <div className="section-tag">FAQ</div>
-                <h2 id="faq-title">Questions investors and traders ask before switching platforms</h2>
+                <h2 id="faq-title">Questions investors and analysts ask before switching platforms</h2>
                 <p>
                   These are the most common questions around portfolio tracking, stock research, options analysis,
                   and tax workflows inside Zenin.

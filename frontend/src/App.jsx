@@ -35,7 +35,6 @@ import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
-import { buildDevFullAccessUser, isDevFullAccessEnabled } from "./utils/devAccess";
 import {
   ensureZeninSessionFromSupabase,
   getSupabaseClient,
@@ -49,7 +48,7 @@ import {
   unenrollSupabaseMfaFactor,
   unlinkSupabaseOAuthIdentity,
   verifySupabaseTotpEnrollment
-} from "./utils/supabaseAuth";
+} from "./utils/backendAuth";
 import { updateAccountPlan } from "./utils/accountPlan";
 import {
   formatRevenueCatError,
@@ -267,6 +266,27 @@ function isGuestAccessRequested() {
   if (isDevFullAccessEnabled()) return true;
   const params = new URLSearchParams(window.location.search);
   return GUEST_ACCESS_VALUES.has(String(params.get("guest") || "").trim().toLowerCase());
+}
+
+function isDevFullAccessEnabled() {
+  return Boolean(import.meta.env.DEV && String(import.meta.env.VITE_ZENIN_DEV_FULL_ACCESS || "").trim().toLowerCase() === "true");
+}
+
+function buildDevFullAccessUser() {
+  const now = new Date().toISOString();
+  return {
+    id: "dev-full-access",
+    email: "dev@zenin.test",
+    displayName: "Local Full Access",
+    currentPlan: "desk",
+    currentBillingCycle: "monthly",
+    isAdmin: true,
+    adminRole: "owner",
+    authProvider: "local-dev",
+    emailVerified: true,
+    createdAt: now,
+    updatedAt: now
+  };
 }
 
 function isGuestQueryRequested() {
@@ -517,7 +537,7 @@ const GUEST_CONTEXTUAL_SIGNUP_COPY = {
   Journal: {
     eyebrow: "Journal preview opened",
     title: "Save this decision record",
-    body: "Create an account to keep notes, trade theses, and reviews attached to your market work."
+    body: "Create an account to keep notes, decision theses, and reviews attached to your market work."
   },
   "Tax Estimator": {
     eyebrow: "Tax preview opened",
@@ -675,7 +695,7 @@ const SIDEBAR_SECTION_META = {
   Journal: {
     group: "Tools",
     eyebrow: "Journal",
-    description: "Capture notes, setups, and trade reviews."
+    description: "Capture notes, setups, and decision reviews."
   },
   "Tax Estimator": {
     group: "Tools",
@@ -757,7 +777,7 @@ const GUEST_PREVIEW_MODULES = [
     status: "saved",
     primaryMetric: "4 notes",
     secondaryMetric: "2 decisions",
-    bullets: ["Trade thesis", "Risk checklist", "Post-trade review"],
+    bullets: ["Decision thesis", "Risk checklist", "Post-decision review"],
     rows: [
       ["NVDA", "Wait for guide", "Logged"],
       ["BTC", "ETF inflow chase", "Avoid"],
@@ -988,6 +1008,36 @@ const normalizeTradeRecord = (trade, idx = 0) => {
   };
 };
 
+const normalizeApiExecutionRecord = (execution, idx = 0) => {
+  const quantity = Number(execution?.quantity);
+  const price = Number(execution?.price);
+  const notional = Number(execution?.notional);
+  const feeAmount = Number(execution?.feeAmount ?? execution?.fee_amount);
+  const side = String(execution?.side || "").toLowerCase() === "sell" ? "sell" : "buy";
+  const platform = String(execution?.platform || execution?.exchange || "").trim().toLowerCase();
+  return {
+    id: Number.isFinite(Number(execution?.id)) ? Number(execution.id) : `api-exec-${Date.now()}-${idx}`,
+    source: "api_connection",
+    tradeClientId: execution?.tradeClientId || execution?.trade_client_id || null,
+    platform,
+    platformTradeId: execution?.platformTradeId || execution?.platform_trade_id || null,
+    platformFillId: execution?.platformFillId || execution?.platform_fill_id || null,
+    symbol: String(execution?.symbol || execution?.asset || "UNKNOWN").trim().toUpperCase(),
+    side,
+    marketType: String(execution?.marketType || execution?.market_type || "spot").trim().toLowerCase(),
+    quantity: Number.isFinite(quantity) ? Math.abs(quantity) : 0,
+    price: Number.isFinite(price) ? price : 0,
+    notional: Number.isFinite(notional) ? Math.abs(notional) : 0,
+    feeAmount: Number.isFinite(feeAmount) ? Math.abs(feeAmount) : 0,
+    feeCurrency: String(execution?.feeCurrency || execution?.fee_currency || "USD").trim().toUpperCase(),
+    feeSource: normalizeFeeSourceValue(execution?.feeSource || execution?.fee_source, FEE_SOURCE_EXCHANGE_REPORTED),
+    liquidityRole: execution?.liquidityRole || execution?.liquidity_role || null,
+    executedAt: execution?.executedAt || execution?.executed_at || null,
+    referencePrice: Number.isFinite(Number(execution?.referencePrice ?? execution?.reference_price)) ? Number(execution?.referencePrice ?? execution?.reference_price) : null,
+    rawPayload: execution?.rawPayload || execution?.raw_payload_json || {}
+  };
+};
+
 const readStoredArray = (key) => {
   try {
     const raw = localStorage.getItem(key);
@@ -1079,13 +1129,13 @@ const mapOptionHoldingToTrade = (holding) => {
 function App() {
   useEffect(() => {
     applySeo({
-      title: "Zenin Capital App | Trading Dashboard",
-      description: "Zenin Capital app workspace for active market research, portfolio management, and trading workflows.",
+      title: "Zenin Capital App | Research Desk",
+      description: "Zenin Capital app workspace for active market research, portfolio management, and research workflows.",
       robots: "noindex, nofollow, noarchive",
       pathname: typeof window !== "undefined" ? window.location.pathname : "/app",
       canonicalPath: "/app",
-      ogTitle: "Zenin Capital App | Trading Dashboard",
-      ogDescription: "Authenticated Zenin workspace for portfolio management and trading workflows.",
+      ogTitle: "Zenin Capital App | Research Desk",
+      ogDescription: "Authenticated Zenin workspace for portfolio management and research workflows.",
       schema: []
     });
   }, []);
@@ -1153,6 +1203,9 @@ function App() {
       return [];
     }
   });
+  const [apiTradeExecutions, setApiTradeExecutions] = useState([]);
+  const [workspaceNotifications, setWorkspaceNotifications] = useState([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [homeMarketMovers, setHomeMarketMovers] = useState([]);
   const [homeMacroData, setHomeMacroData] = useState([]);
   const [error, setError] = useState(null);
@@ -2006,20 +2059,67 @@ useEffect(() => {
     }
   }, []);
 
+  const refreshWorkspaceNotifications = useCallback(async ({ toastNew = false } = {}) => {
+    if (!hasAuthToken()) return [];
+    try {
+      const res = await zeninFetch("/notifications?limit=50");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `Notifications refresh failed (${res.status})`);
+      }
+      const incoming = Array.isArray(data?.notifications) ? data.notifications : [];
+      setWorkspaceNotifications(incoming);
+      setUnreadNotificationCount(Number(data?.unreadCount || incoming.filter((item) => !item?.readAt).length || 0));
+      if (toastNew) {
+        const latestTradePing = incoming.find((item) => !item?.readAt && String(item?.type || "").startsWith("trade_execution."));
+        if (latestTradePing) {
+          showTradeToast(latestTradePing.title || "New trade execution synced", "success");
+        }
+      }
+      return incoming;
+    } catch (error) {
+      console.warn("Notifications refresh failed.", error);
+      return [];
+    }
+  }, []);
+
+  const refreshApiTradeExecutions = useCallback(async () => {
+    if (!hasAuthToken()) return [];
+    try {
+      const res = await zeninFetch("/db/trade-executions?limit=250");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `Execution history refresh failed (${res.status})`);
+      }
+      const incoming = Array.isArray(data?.executions)
+        ? data.executions.map((execution, idx) => normalizeApiExecutionRecord(execution, idx)).filter((execution) => execution.platform && execution.quantity > 0)
+        : [];
+      setApiTradeExecutions(incoming);
+      return incoming;
+    } catch (error) {
+      console.warn("API execution history refresh failed.", error);
+      return [];
+    }
+  }, []);
+
   const refreshTradingWorkspaceState = useCallback(async () => {
     if (!hasAuthToken()) return null;
-    const [cashRes, holdingsRes, tradesRes, feeSummaryRes] = await Promise.all([
+    const [cashRes, holdingsRes, tradesRes, feeSummaryRes, executionsRes, notificationsRes] = await Promise.all([
       zeninFetch("/db/cash"),
       zeninFetch("/db/portfolio"),
       zeninFetch("/db/trades?limit=1000"),
-      zeninFetch("/db/trade-fees/summary")
+      zeninFetch("/db/trade-fees/summary"),
+      zeninFetch("/db/trade-executions?limit=250"),
+      zeninFetch("/notifications?limit=50")
     ]);
 
-    const [cashData, holdingsData, tradesData, feeSummaryData] = await Promise.all([
+    const [cashData, holdingsData, tradesData, feeSummaryData, executionsData, notificationsData] = await Promise.all([
       cashRes.json().catch(() => ({})),
       holdingsRes.json().catch(() => ({})),
       tradesRes.json().catch(() => ({})),
-      feeSummaryRes.json().catch(() => ({}))
+      feeSummaryRes.json().catch(() => ({})),
+      executionsRes.json().catch(() => ({})),
+      notificationsRes.json().catch(() => ({}))
     ]);
 
     if (!cashRes.ok) {
@@ -2033,6 +2133,12 @@ useEffect(() => {
     }
     if (!feeSummaryRes.ok) {
       throw new Error(feeSummaryData?.error || `Trade fee summary refresh failed (${feeSummaryRes.status})`);
+    }
+    if (!executionsRes.ok) {
+      throw new Error(executionsData?.error || `Execution history refresh failed (${executionsRes.status})`);
+    }
+    if (!notificationsRes.ok) {
+      throw new Error(notificationsData?.error || `Notifications refresh failed (${notificationsRes.status})`);
     }
 
     const nextCashBalances = {};
@@ -2048,6 +2154,10 @@ useEffect(() => {
     const incomingTrades = Array.isArray(tradesData?.trades)
       ? tradesData.trades.map((trade, idx) => normalizeTradeRecord(trade, idx)).filter((trade) => trade.quantity > 0)
       : [];
+    const incomingApiExecutions = Array.isArray(executionsData?.executions)
+      ? executionsData.executions.map((execution, idx) => normalizeApiExecutionRecord(execution, idx)).filter((execution) => execution.platform && execution.quantity > 0)
+      : [];
+    const incomingNotifications = Array.isArray(notificationsData?.notifications) ? notificationsData.notifications : [];
 
     setCashBalances(nextCashBalances);
     if (nextCashBalances.USD != null) {
@@ -2061,13 +2171,18 @@ useEffect(() => {
         .filter(Boolean)
     );
     setTrades(incomingTrades);
+    setApiTradeExecutions(incomingApiExecutions);
     setTradeFeeSummary(feeSummaryData?.summary || null);
+    setWorkspaceNotifications(incomingNotifications);
+    setUnreadNotificationCount(Number(notificationsData?.unreadCount || incomingNotifications.filter((item) => !item?.readAt).length || 0));
 
     return {
       balances: nextCashBalances,
       holdings: incomingHoldings,
       trades: incomingTrades,
-      feeSummary: feeSummaryData?.summary || null
+      executions: incomingApiExecutions,
+      feeSummary: feeSummaryData?.summary || null,
+      notifications: incomingNotifications
     };
   }, []);
 
@@ -2126,75 +2241,24 @@ useEffect(() => {
       return {
         ok: false,
         mode: "empty",
-        message: "There are no actionable rebalance trades right now."
+        message: "There are no actionable rebalance changes right now."
       };
     }
 
-    if (!hasAuthToken()) {
-      return {
-        ok: false,
-        mode: "guest",
-        message: "Guest mode can only preview this rebalance. Sign in to place live trades through Zenin."
-      };
-    }
+    const summary = actionableRows.reduce((acc, row) => {
+      acc.tradeCount += 1;
+      acc.notional += Math.abs(Number(row?.tradeValue || 0));
+      return acc;
+    }, { tradeCount: 0, notional: 0, fees: 0, slippage: 0, totalCostImpact: 0 });
 
-    const orderedRows = [...actionableRows].sort((a, b) => {
-      if (a.action === b.action) return Math.abs(Number(b.tradeValue || 0)) - Math.abs(Number(a.tradeValue || 0));
-      return a.action === "Trim" ? -1 : 1;
-    });
-
-    const executedTrades = [];
-
-    try {
-      for (let index = 0; index < orderedRows.length; index += 1) {
-        const payload = buildRebalanceTradePayload(orderedRows[index], index);
-        const res = await zeninFetch("/db/execute-trade", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || `Rebalance trade failed for ${payload.symbol}`);
-        }
-        const savedTrade = data?.trade ? normalizeTradeRecord(data.trade, index) : null;
-        if (savedTrade) {
-          executedTrades.push(savedTrade);
-        }
-      }
-
-      const refreshed = await refreshTradingWorkspaceState();
-      const summary = executedTrades.reduce((acc, trade) => {
-        acc.tradeCount += 1;
-        acc.notional += Math.abs(Number(trade?.notional || 0));
-        acc.fees += Math.abs(Number(trade?.fee || 0));
-        acc.slippage += Math.abs(Number(trade?.slippage || 0));
-        return acc;
-      }, { tradeCount: 0, notional: 0, fees: 0, slippage: 0 });
-
-      return {
-        ok: true,
-        mode: "executed",
-        trades: executedTrades,
-        summary: {
-          ...summary,
-          totalCostImpact: Number((summary.fees + summary.slippage).toFixed(8))
-        },
-        refreshed
-      };
-    } catch (error) {
-      try {
-        await refreshTradingWorkspaceState();
-      } catch (refreshError) {
-        console.warn("Workspace refresh after rebalance failure did not complete.", refreshError);
-      }
-      return {
-        ok: false,
-        mode: executedTrades.length > 0 ? "partial" : "error",
-        trades: executedTrades,
-        message: error?.message || "Rebalance execution failed."
-      };
-    }
-  }, [buildRebalanceTradePayload, refreshTradingWorkspaceState]);
+    return {
+      ok: true,
+      mode: hasAuthToken() ? "saved" : "guest-preview",
+      trades: [],
+      summary,
+      message: "Rebalance plan saved for research review."
+    };
+  }, []);
 
 const addToPortfolio = async (asset, quantity = 1, orderType = "buy", options = {}) => {
   const { buyCurrency = "USD", notionalInBuyCurrency = null } = options;
@@ -3660,6 +3724,12 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [bootstrapError, categories.length, fallbackCategories]);
 
   useEffect(() => {
+    if (bootstrapLoading || bootstrapError || isGuestUser || !hasAuthToken()) return;
+    void refreshApiTradeExecutions();
+    void refreshWorkspaceNotifications();
+  }, [bootstrapError, bootstrapLoading, isGuestUser, refreshApiTradeExecutions, refreshWorkspaceNotifications]);
+
+  useEffect(() => {
     if (!isGuestUser) return;
     if (!categories.length) {
       setCategories(fallbackCategories);
@@ -3865,7 +3935,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (!granted || typeof Notification === "undefined") return;
 
     const notification = new Notification("Zenin alerts are ready", {
-      body: "Browser notifications are enabled for market alerts, order updates, and workspace reminders."
+      body: "Browser notifications are enabled for market alerts, research updates, and workspace reminders."
     });
     notification.onclick = () => {
       if (typeof window !== "undefined") {
@@ -4603,8 +4673,8 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     try {
       if (!isGuestUser) {
-        const permissionScope = "read_only";
         const submittedApiSecret = showApiSecretField ? accountForm.apiSecret.trim() : "";
+        const scopeVerificationStatus = providerId === "hyperliquid" && !submittedApiSecret ? "verified_watch_only" : "provider_unverified";
         const riskLevel = submittedApiSecret ? "sensitive" : "standard";
         // 1. Send the key to backend for encryption & storage
         const payload = {
@@ -4615,11 +4685,12 @@ const handleOptionTradeClosed = async (tradeId) => {
             username: connectionLabel,
             venueType: accountForm.venueType,
             providerLabel: accountForm.provider,
+            scopeVerificationStatus,
             ...(providerId === "hyperliquid" ? { address: accountForm.apiKey.trim() } : {})
           },
-          permissionScope,
+          permissionScope: "read_only",
           canTrade: false,
-          lastVerifiedScope: permissionScope,
+          lastVerifiedScope: scopeVerificationStatus === "verified_watch_only" ? "read_only" : "unknown",
           riskLevel
         };
 
@@ -4635,6 +4706,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         const addedKey = await res.json();
         const connectionCapability = addedKey.connectionCapability || buildClientConnectionCapability(accountForm.provider);
+        const verifiedScopeStatus = addedKey.extraData?.scopeVerificationStatus || scopeVerificationStatus;
 
         let syncPayload = { syncAvailable: false, message: "Connection saved." };
         if (canSyncProvider) {
@@ -4643,10 +4715,17 @@ const handleOptionTradeClosed = async (tradeId) => {
           if (!syncRes.ok) {
             throw new Error(syncPayload.error || "Failed to sync exchange data");
           }
+          if (Number(syncPayload?.newExecutionCount || 0) > 0) {
+            showTradeToast(`${Number(syncPayload.newExecutionCount)} new API execution${Number(syncPayload.newExecutionCount) === 1 ? "" : "s"} synced from ${connectionLabel}.`, "success");
+          }
         }
 
         // 3. Re-fetch workspace to update PortfolioContext
         await fetchWorkspace();
+        if (canSyncProvider) {
+          void refreshApiTradeExecutions();
+          void refreshWorkspaceNotifications({ toastNew: false });
+        }
         
         // 4. Update the local UI state for connected accounts
         const nextAccount = {
@@ -4655,10 +4734,11 @@ const handleOptionTradeClosed = async (tradeId) => {
           provider: accountForm.provider,
           username: connectionLabel,
           apiKeyMasked: addedKey.apiKey,
-          permissionScope: addedKey.permissionScope || permissionScope,
+          permissionScope: addedKey.permissionScope || "read_only",
           canTrade: false,
-          lastVerifiedScope: addedKey.lastVerifiedScope || permissionScope,
+          lastVerifiedScope: addedKey.lastVerifiedScope || "unknown",
           riskLevel: addedKey.riskLevel || riskLevel,
+          scopeVerificationStatus: verifiedScopeStatus,
           syncAvailable: canSyncProvider,
           connectionCapability,
           connectedAt: new Date().toISOString(),
@@ -4675,8 +4755,9 @@ const handleOptionTradeClosed = async (tradeId) => {
           syncAvailable: canSyncProvider,
           holdingsCount: Number(syncPayload?.holdingsCount || 0),
           tradesCount: Number(syncPayload?.tradesCount || 0),
+          newExecutionCount: Number(syncPayload?.newExecutionCount || 0),
           message: canSyncProvider
-            ? `Synced ${Number(syncPayload?.holdingsCount || 0)} holdings and ${Number(syncPayload?.tradesCount || 0)} fills.`
+            ? `Synced ${Number(syncPayload?.holdingsCount || 0)} holdings, ${Number(syncPayload?.tradesCount || 0)} fills, and ${Number(syncPayload?.newExecutionCount || 0)} new executions. Provider-side read-only scope ${verifiedScopeStatus === "provider_unverified" ? "is not verified for this provider." : "is verified."}`
             : connectionCapability.nextAction
         });
       } else {
@@ -4690,8 +4771,9 @@ const handleOptionTradeClosed = async (tradeId) => {
           apiKeyMasked: masked,
           permissionScope: "read_only",
           canTrade: false,
-          lastVerifiedScope: "read_only",
+          lastVerifiedScope: selectedProviderIsHyperliquid ? "read_only" : "unknown",
           riskLevel: "standard",
+          scopeVerificationStatus: selectedProviderIsHyperliquid ? "verified_watch_only" : "provider_unverified",
           syncAvailable: canSyncProvider,
           connectionCapability: buildClientConnectionCapability(accountForm.provider),
           connectedAt: new Date().toISOString(),
@@ -5868,6 +5950,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             <PortfolioModule
                 portfolio={portfolioWithEntry}
                 trades={trades}
+                apiTradeExecutions={apiTradeExecutions}
+                workspaceNotifications={workspaceNotifications}
+                unreadNotificationCount={unreadNotificationCount}
                 balance={balance}
                 accountMetrics={accountMetrics}
                 calculatePortfolioValue={calculatePortfolioValue}
@@ -5879,25 +5964,16 @@ const handleOptionTradeClosed = async (tradeId) => {
                 spotPrices={spotPrices}
                 isSignedIn={hasAuthToken()}
                 onEstimateRebalance={estimatePortfolioRebalance}
-                onExecuteRebalance={executePortfolioRebalance}
+                onExecuteRebalance={null}
                 onRemove={removeFromPortfolio}
                 onSelectAsset={(asset) => {
                   const enriched = {
                     ...asset,
-                    _forceSell: false,
                     marketType: String(asset.marketType || "spot").toLowerCase()
                   };
                   setSelectedAsset(enriched);
                 }}
-                onSellAsset={(asset) => {
-                  const enriched = {
-                    ...asset,
-                    _forceSell: true,
-                    price: asset.price ?? 0,
-                    marketType: String(asset.marketType || "spot").toLowerCase()
-                  };
-                  setSelectedAsset(enriched);
-                }}
+                onSellAsset={null}
                 onOpenPredictions={() => openWorkspaceSection("Predictions")}
                 onOpenJournal={() => openWorkspaceSection("Journal")}
                 onOpenMarketContext={() => {
@@ -5938,8 +6014,8 @@ const handleOptionTradeClosed = async (tradeId) => {
           <OptionsModule
             activeOptionsTrades={activeOptionsTrades}
             setActiveOptionsTrades={setActiveOptionsTrades}
-            onOptionTradeExecuted={handleOptionTradeExecuted}
-            onOptionTradeClosed={handleOptionTradeClosed}
+            onOptionTradeExecuted={null}
+            onOptionTradeClosed={null}
             balance={balance}
             spotPrices={spotPrices}
             showToast={showTradeToast}
@@ -5983,7 +6059,8 @@ const handleOptionTradeClosed = async (tradeId) => {
             <AssetModal
               asset={selectedAsset}
               onClose={() => setSelectedAsset(null)}
-              onConfirm={addToPortfolio}
+              onConfirm={null}
+              researchOnly
               isInWatchlist={isInWatchlist}
               onToggleStar={toggleWatchlistStar}
               onViewCompanyProfile={openCompanyProfile}
@@ -7117,6 +7194,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             <div className="connected-accounts-list">
                               {connectedAccounts.map((acc) => {
                                 const statusCopy = getConnectionStatusCopy(acc);
+                                const verifiedScope = acc.lastVerifiedScope === "read_only";
                                 return (
                                   <div key={acc.id} className="connected-account-item">
                                     <div>
@@ -7124,6 +7202,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                       <p>
                                         {acc.username} • {String(acc.venueType || "source").toUpperCase()} • {statusCopy.label}
                                         {acc.permissionScope ? ` • ${String(acc.permissionScope).replace(/_/g, " ").toUpperCase()}` : ""}
+                                        {verifiedScope ? " • VERIFIED" : " • SCOPE UNVERIFIED"}
                                       </p>
                                       <p>{statusCopy.detail}</p>
                                       <p>{statusCopy.action}</p>
@@ -7268,7 +7347,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           />
                         </label>
                         <label className="settings-toggle-row">
-                          <span>Order updates</span>
+                          <span>Research updates</span>
                           <input
                             type="checkbox"
                             checked={preferences.notifyOrderEvents}
@@ -7343,7 +7422,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <div className="connect-account-trust-card">
                           <span>Access model</span>
                           <strong>Read-only only</strong>
-                          <em>No trading permissions. No withdrawal permissions. Hyperliquid uses address watch only.</em>
+                          <em>No action permissions. No withdrawal permissions. Hyperliquid uses address watch only.</em>
                         </div>
                         <div className="connect-account-trust-card">
                           <span>Coverage</span>
@@ -7354,7 +7433,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <div className="connect-account-security-list">
                         <div>
                           <strong>Controlled access</strong>
-                          <span>Least-privilege credentials only. Zenin does not support execution rights here.</span>
+                          <span>Use least-privilege credentials. Zenin labels CEX keys read-only only after provider-side scope checks are clear.</span>
                         </div>
                         <div>
                           <strong>Encrypted storage</strong>
@@ -7406,7 +7485,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 <strong>{connectAccountSuccess.holdingsCount}</strong>
                               </div>
                               <div>
-                                <span>Fills</span>
+                                <span>Activity</span>
                                 <strong>{connectAccountSuccess.tradesCount}</strong>
                               </div>
                             </div>
@@ -7445,7 +7524,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <div className="connect-account-status-strip">
                           <div>
                             <span>Access</span>
-                            <strong>{selectedProviderIsHyperliquid ? "Watch-only public address" : "Read-only source record"}</strong>
+                            <strong>{selectedProviderIsHyperliquid ? "Verified watch-only address" : "Read-only required, scope unverified"}</strong>
                           </div>
                           <div>
                             <span>{selectedProviderSyncLabel}</span>
@@ -7562,7 +7641,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             {selectedProviderIsHyperliquid
                               ? "Hyperliquid connects from a public wallet address only. No API secret is needed."
                               : selectedProviderCanSync
-                                ? "Use read-only credentials only. After saving, Zenin imports supported portfolio data into your workspace."
+                                ? "Use read-only credentials only. Zenin verifies supported exchange scopes before saving live-sync keys."
                                 : "This provider is saved as metadata only. It will not import balances or fills until a provider adapter is available."}
                           </p>
                         )}

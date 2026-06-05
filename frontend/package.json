@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/prerender-homepage.mjs",
-    "build:spa": "vite build",
+    "build": "vite build && node scripts/prerender-homepage.mjs && node scripts/check-production-bundle.mjs",
+    "build:spa": "vite build && node scripts/check-production-bundle.mjs",
+    "check:production-bundle": "node scripts/check-production-bundle.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

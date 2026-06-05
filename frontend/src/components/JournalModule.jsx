@@ -999,14 +999,14 @@ export function JournalModule({
     { label: "Total Gain/Loss", value: analytics.totalGainLoss, currency: true },
     { label: "Realized PnL", value: analytics.realizedPnl, currency: true },
     { label: "Unrealized PnL", value: analytics.unrealizedPnl, currency: true },
-    { label: "Trade Expectancy", value: analytics.tradeExpectancy, currency: true },
+    { label: "Decision Expectancy", value: analytics.tradeExpectancy, currency: true },
     { label: "Avg Daily Gain", value: analytics.avgDailyGain, currency: true },
     { label: "Avg Daily Volume", value: analytics.avgDailyVolume, currency: true },
     { label: "Largest Gain", value: analytics.largestGain, currency: true },
-    { label: "Total Trades Volume", value: analytics.totalVolume, currency: true },
-    { label: "Avg # of Trades/day", value: analytics.avgTradesPerDay },
-    { label: "Avg Trade Win", value: analytics.avgTradeWin, currency: true },
-    { label: "Avg Trade Loss", value: analytics.avgTradeLoss, currency: true },
+    { label: "Total Decision Volume", value: analytics.totalVolume, currency: true },
+    { label: "Avg # of Decisions/day", value: analytics.avgTradesPerDay },
+    { label: "Avg Decision Win", value: analytics.avgTradeWin, currency: true },
+    { label: "Avg Decision Loss", value: analytics.avgTradeLoss, currency: true },
     { label: "Max Consecutive Win", value: analytics.maxConsecutiveWin },
     { label: "Max Consecutive Loss", value: analytics.maxConsecutiveLoss },
     { label: "Largest Losses", value: analytics.largestLoss, currency: true }
@@ -1228,16 +1228,16 @@ export function JournalModule({
         <head><meta charset="utf-8" /></head>
         <body>
           <table border="1">
-            <caption>Traded Assets Report - Generated ${generatedAt}</caption>
+            <caption>Decision Assets Report - Generated ${generatedAt}</caption>
             <thead>
               <tr>
                 <th>Symbol</th>
                 <th>Asset Class</th>
-                <th>Trade Count</th>
-                <th>Traded Notional</th>
+                <th>Decision Count</th>
+                <th>Decision Notional</th>
                 <th>Current Position</th>
                 <th>Win Rate</th>
-                <th>Trade Duration</th>
+                <th>Decision Duration</th>
                 <th>Avg Gain</th>
                 <th>Total Gain</th>
               </tr>
@@ -1593,12 +1593,12 @@ export function JournalModule({
   const exportAnalyticsReport = () => {
     const rows = [
       ["Section", "Metric", "Value"],
-      ["Summary", "Total Trades", analytics.totalTrades],
+      ["Summary", "Total Decisions", analytics.totalTrades],
       ["Summary", "Win Rate", `${analytics.winRate.toFixed(1)}%`],
       ["Summary", "Profit Factor", weeklyMonthlyReview.monthly.profitFactor.toFixed(2)],
       ["Summary", "Expectancy", analytics.tradeExpectancy.toFixed(2)],
       ...assetPnlRows.map((row) => ["Asset Class", `${row.name} P&L`, Number(row.pnl || 0).toFixed(2)]),
-      ...setupPnlRows.map((row) => ["Setup", row.setup, `${Number(row.pnl || 0).toFixed(2)} (${row.trades} trades)`])
+      ...setupPnlRows.map((row) => ["Setup", row.setup, `${Number(row.pnl || 0).toFixed(2)} (${row.trades} decisions)`])
     ];
     downloadCsv(rows, `journal-analytics-${new Date().toISOString().slice(0, 10)}.csv`);
     notify("Analytics report downloaded.", "success");
@@ -1607,7 +1607,7 @@ export function JournalModule({
   const exportReviewReport = () => {
     const rows = [
       ["Section", "Metric", "Value"],
-      ["Review", "Total Trades", analytics.totalTrades],
+      ["Review", "Total Decisions", analytics.totalTrades],
       ["Review", "Net P&L", Number(analytics.totalGainLoss || 0).toFixed(2)],
       ["Review", "Win Rate", `${analytics.winRate.toFixed(1)}%`],
       ["Review", "Review Note", reviewNote || "No review note captured"],
@@ -1621,7 +1621,7 @@ export function JournalModule({
     const bestSetup = [...setupPnlRows].sort((a, b) => Number(b.pnl) - Number(a.pnl))[0];
     saveJournalNoteEntry({
       title: "Analytics Insight",
-      body: `Best current setup: ${bestSetup?.setup || "Momentum"} with ${bestSetup ? formatValue(bestSetup.pnl, true) : "$0.00"} in P&L. Win rate is ${analytics.winRate.toFixed(1)}% across ${analytics.totalTrades} trades.`,
+      body: `Best current setup: ${bestSetup?.setup || "Momentum"} with ${bestSetup ? formatValue(bestSetup.pnl, true) : "$0.00"} in P&L. Win rate is ${analytics.winRate.toFixed(1)}% across ${analytics.totalTrades} decisions.`,
       learned: "Analytics insight snapshot saved from the Journal workspace."
     });
     notify("Analytics insight saved to Journal.", "success");
@@ -1728,9 +1728,9 @@ export function JournalModule({
   const mistakeActionMap = {
     "Entered late": "Wait for trigger confirmation",
     "Ignored stop": "Pre-place invalidation",
-    "Oversized position": "Reduce size before order entry",
+    "Oversized position": "Reduce size before acting",
     "Chased move": "Wait for pullback or invalidate",
-    "Took low-quality setup": "Filter harder before execution",
+    "Took low-quality setup": "Filter harder before acting",
     "Closed winner early": "Scale systematically instead of reacting",
   };
   const mistakeRows = ["Entered late", "Ignored stop", "Oversized position", "Chased move", "Took low-quality setup", "Closed winner early"].map((mistake) => {
@@ -1788,7 +1788,7 @@ export function JournalModule({
     } : null,
     strongestSetup ? {
       title: `${strongestSetup.setup} is leading`,
-      detail: `${strongestSetup.trades} trades with ${formatValue(strongestSetup.pnl, true)} total P&L.`,
+      detail: `${strongestSetup.trades} decisions with ${formatValue(strongestSetup.pnl, true)} total P&L.`,
       tone: strongestSetup.pnl >= 0 ? "positive" : "risk"
     } : null,
     todayNotes[0] ? {
@@ -1801,7 +1801,7 @@ export function JournalModule({
     {
       label: "Best setup",
       value: strongestSetup?.setup || "No clear leader",
-      helper: strongestSetup ? `${strongestSetup.trades} trades · ${formatValue(strongestSetup.pnl, true)}` : "Need more tagged trades",
+      helper: strongestSetup ? `${strongestSetup.trades} decisions · ${formatValue(strongestSetup.pnl, true)}` : "Need more tagged decisions",
       tone: strongestSetup && strongestSetup.pnl >= 0 ? "positive" : "neutral"
     },
     {
@@ -1813,13 +1813,13 @@ export function JournalModule({
     {
       label: "Emotional state",
       value: emotionalDiscipline == null ? "No session evidence" : `${emotionalDiscipline.toFixed(0)}% disciplined`,
-      helper: debriefRows.length ? `${disciplinePositiveCount}/${debriefRows.length} trades stayed composed` : "Log emotion on trades to unlock this signal",
+      helper: debriefRows.length ? `${disciplinePositiveCount}/${debriefRows.length} decisions stayed composed` : "Log emotion on decisions to unlock this signal",
       tone: emotionalDiscipline == null ? "neutral" : emotionalDiscipline >= 70 ? "positive" : emotionalDiscipline >= 55 ? "warning" : "risk"
     },
     {
       label: "Rule adherence",
       value: ruleAdherence == null ? "No session evidence" : `${ruleAdherence.toFixed(0)}%`,
-      helper: debriefRows.length ? `${Math.max(0, debriefRows.length - ruleBreakCount)} of ${debriefRows.length} trades logged without rule breaks` : "Tag broken rules on journal entries to populate this metric",
+      helper: debriefRows.length ? `${Math.max(0, debriefRows.length - ruleBreakCount)} of ${debriefRows.length} decisions logged without rule breaks` : "Tag broken rules on journal entries to populate this metric",
       tone: ruleAdherence == null ? "neutral" : ruleAdherence >= 75 ? "positive" : ruleAdherence >= 55 ? "warning" : "risk"
     }
   ];
@@ -1983,7 +1983,7 @@ function JournalDebriefHeader({
       className="journal-debrief-head"
       eyebrow="Journal"
       title="Decision Ledger"
-      description="A compact record of trade theses, evidence, outcomes, and follow-up reviews."
+      description="A compact record of decision theses, evidence, outcomes, and follow-up reviews."
       actions={(
         <div className="journal-debrief-head-actions">
           <div className="journal-debrief-sync-box" aria-label={`Sync state ${syncTimestampLabel}`}>
@@ -2036,7 +2036,7 @@ function JournalDecisionLayer({
     ].filter((value) => value != null).reduce((sum, value, _index, arr) => sum + value / arr.length, 0)
   );
   const templates = [
-    ["Trade", "Record entry, exit, thesis, and mistake tags."],
+    ["Decision", "Record thesis, outcome, and mistake tags."],
     ["Research note", "Save the catalyst, variant view, and invalidation."],
     ["Risk decision", "Log sizing, exposure, and what would change your mind."],
     ["Post-mortem", "Turn the outcome into one rule to repeat or remove."]
@@ -2166,8 +2166,8 @@ function JournalDebriefDashboard({
         <article className="journal-debrief-panel journal-debrief-evidence">
           <div className="journal-debrief-panel-head">
             <div>
-              <span className="journal-debrief-kicker">Execution Evidence</span>
-              <h3>Recent trade evidence</h3>
+              <span className="journal-debrief-kicker">Decision Evidence</span>
+              <h3>Recent decision evidence</h3>
             </div>
           </div>
           <div className="journal-debrief-table-wrap">
@@ -2176,7 +2176,7 @@ function JournalDebriefDashboard({
                 <tr>
                   <th>Symbol</th>
                   <th>Setup</th>
-                  <th>Side</th>
+                  <th>Decision</th>
                   <th>Confidence</th>
                   <th>Review</th>
                   <th className="numeric">P&amp;L</th>
@@ -2201,11 +2201,11 @@ function JournalDebriefDashboard({
                     <td colSpan={6}>
                       <GuidedEmptyState
                         eyebrow="Journal workflow"
-                        title="No execution evidence yet"
-                        description="The debrief fills in once you log trades or attach review notes to the session."
+                        title="No decision evidence yet"
+                        description="The debrief fills in once you log decisions or attach review notes to the session."
                         steps={[
-                          "Add a quick journal entry or trade note after the session.",
-                          "Return here to review execution evidence and recurring behavior.",
+                          "Add a quick journal entry or decision note after the session.",
+                          "Return here to review decision evidence and recurring behavior.",
                         ]}
                         cta="Quick Entry"
                         onAction={onNewEntry}
@@ -2334,7 +2334,7 @@ function JournalHeader({ search, onSearch, onNewEntry, exportMenuOpen, setExport
       className="journal-header compact"
       eyebrow="Journal"
       title="Journal"
-      description="Track trades, review performance, and turn repeat patterns into better decisions."
+      description="Track decisions, review performance, and turn repeat patterns into better research."
       actions={(
         <div className="journal-header-actions">
           <label className="journal-search">
@@ -2496,11 +2496,11 @@ function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilte
             </select>
           </label>
           <label>
-            <span>Side</span>
+            <span>Decision</span>
             <select value={filters.side} onChange={(event) => setFilters((prev) => ({ ...prev, side: event.target.value }))}>
               <option value="all">All</option>
-              <option value="buy">Buy</option>
-              <option value="sell">Sell</option>
+              <option value="buy">Increase</option>
+              <option value="sell">Reduce</option>
             </select>
           </label>
           <label>
@@ -2610,7 +2610,7 @@ function JournalSymbolCell({ row }) {
 
 function JournalSideChip({ side }) {
   const normalized = String(side || "").toUpperCase() === "SELL" ? "sell" : "buy";
-  return <span className={`journal-chip ${normalized}`}>{normalized === "buy" ? "+ BUY" : "- SELL"}</span>;
+  return <span className={`journal-chip ${normalized}`}>{normalized === "buy" ? "Increase" : "Reduce"}</span>;
 }
 
 function JournalStatusPill({ status }) {
@@ -2651,7 +2651,7 @@ function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendar
           </select>
           <select defaultValue="pnl" aria-label="Calendar metric">
             <option value="pnl">P&L</option>
-            <option value="trades">Trades</option>
+            <option value="trades">Decisions</option>
             <option value="winRate">Win Rate</option>
             <option value="mistakes">Mistakes</option>
           </select>
@@ -2674,26 +2674,26 @@ function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendar
                   onClick={() => onSelectDay(cell)}
                 >
                   <span>{cell.dayNum}</span>
-                  {cell.pnl != null ? <strong>{pnl >= 0 ? "+" : "-"}{formatValue(Math.abs(pnl), true)}</strong> : <small>No trades</small>}
+                  {cell.pnl != null ? <strong>{pnl >= 0 ? "+" : "-"}{formatValue(Math.abs(pnl), true)}</strong> : <small>No decisions</small>}
                 </button>
               );
             })}
           </div>
           <div className="journal-heat-legend">
-            {["Large loss", "Small loss", "No trades", "Small gain", "Large gain"].map((item) => <span key={item}>{item}</span>)}
+            {["Large loss", "Small loss", "No decisions", "Small gain", "Large gain"].map((item) => <span key={item}>{item}</span>)}
           </div>
         </div>
         <aside className="journal-selected-day">
           <h3>{selectedDay?.key || "Selected Day"}</h3>
           <strong className={Number(selectedDay?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatValue(selectedDay?.pnl || 0, true)}</strong>
-          <p>{selectedDayTrades.length} trades · {selectedDayTrades.filter((row) => Number(row.pnl) > 0).length} winners / {selectedDayTrades.filter((row) => Number(row.pnl) < 0).length} losers</p>
+          <p>{selectedDayTrades.length} decisions · {selectedDayTrades.filter((row) => Number(row.pnl) > 0).length} winners / {selectedDayTrades.filter((row) => Number(row.pnl) < 0).length} losers</p>
           <button
             type="button"
             className="journal-btn primary journal-btn-small"
             onClick={() => onViewTrades?.(selectedDay)}
             disabled={!selectedDay?.key}
           >
-            View trades
+            View decisions
           </button>
         </aside>
       </div>
@@ -2868,7 +2868,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `journal-trades-${dateKey}.csv`;
+    link.download = `journal-decisions-${dateKey}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -2879,8 +2879,8 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
     <section className="journal-day-view">
       <div className="journal-day-view-head">
         <div>
-          <div className="journal-breadcrumb">Journal <span>/</span> Calendar <span>/</span> View Trades</div>
-          <h3>Trades for {dateKey || "Selected Day"}</h3>
+          <div className="journal-breadcrumb">Journal <span>/</span> Calendar <span>/</span> View Decisions</div>
+          <h3>Decisions for {dateKey || "Selected Day"}</h3>
         </div>
         <div className="journal-day-view-actions">
           <button type="button" className="journal-btn secondary" onClick={exportDayCsv}>Export</button>
@@ -2938,7 +2938,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
           <strong className={totalPnl >= 0 ? "positive" : "negative"}>{formatValue(totalPnl, true)}</strong>
         </article>
         <article className="journal-card journal-day-stat-card">
-          <span className="journal-card-label">Trades</span>
+          <span className="journal-card-label">Decisions</span>
           <strong>{filteredRows.length}</strong>
         </article>
         <article className="journal-card journal-day-stat-card">
@@ -2959,7 +2959,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
         <div className="journal-day-main">
           <section className="journal-card journal-day-trade-log">
             <div className="journal-section-head">
-              <h3>Trade Log</h3>
+              <h3>Decision Log</h3>
               <div className="journal-inline-actions">
                 <label>
                   <span>Sort by</span>
@@ -2995,7 +2995,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
                           <span>{String(row.symbol || "A")[0]}</span>
                           <div>
                             <strong>{row.symbol}</strong>
-                            <small>{row.entry?.symbolName || row.assetType || "Trade"}</small>
+                            <small>{row.entry?.symbolName || row.assetType || "Decision"}</small>
                           </div>
                         </div>
                         <div className="journal-day-chip-row">
@@ -3014,7 +3014,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
                       </div>
 
                       <div className="journal-day-trade-footer">
-                        <p>{row.review || row.entry?.preThesis || "No notes captured for this trade yet."}</p>
+                        <p>{row.review || row.entry?.preThesis || "No notes captured for this decision yet."}</p>
                         <div className="journal-day-trade-actions">
                           <button type="button" className="journal-btn secondary" onClick={() => onOpenDetail(row)}>View</button>
                         </div>
@@ -3024,8 +3024,8 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
                 );
               }) : (
                 <JournalEmptyState
-                  title="No trades match these filters"
-                  description="Try adjusting the date filters or journal search to see more trades."
+                  title="No decisions match these filters"
+                  description="Try adjusting the date filters or journal search to see more decisions."
                 />
               )}
             </div>
@@ -3039,19 +3039,19 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
               <div><span>Gross Gains</span><strong className="positive">{formatValue(grossGains, true)}</strong></div>
               <div><span>Net P&amp;L</span><strong className={totalPnl >= 0 ? "positive" : "negative"}>{formatValue(totalPnl, true)}</strong></div>
               <div><span>Gross Losses</span><strong className="negative">{formatValue(grossLosses, true)}</strong></div>
-              <div><span>Best Trade</span><strong className="positive">{bestTrade ? `${formatValue(bestTrade.pnl, true)} (${bestTrade.symbol})` : "—"}</strong></div>
+              <div><span>Best Decision</span><strong className="positive">{bestTrade ? `${formatValue(bestTrade.pnl, true)} (${bestTrade.symbol})` : "—"}</strong></div>
               <div><span>Fees</span><strong>{formatValue(-fees, true)}</strong></div>
-              <div><span>Worst Trade</span><strong className="negative">{worstTrade ? `${formatValue(worstTrade.pnl, true)} (${worstTrade.symbol})` : "—"}</strong></div>
+              <div><span>Worst Decision</span><strong className="negative">{worstTrade ? `${formatValue(worstTrade.pnl, true)} (${worstTrade.symbol})` : "—"}</strong></div>
               <div><span>Avg Hold Time</span><strong>{avgHoldLabel}</strong></div>
             </div>
           </section>
 
           <section className="journal-card">
-            <div className="journal-section-head"><h3>Intraday P&amp;L by Trade</h3></div>
+            <div className="journal-section-head"><h3>Intraday P&amp;L by Decision</h3></div>
             {filteredRows.length ? (
               <Chart options={intradayOptions} series={intradaySeries} type="bar" height={220} />
             ) : (
-              <p className="journal-day-empty-copy">No trade chart data for this day.</p>
+              <p className="journal-day-empty-copy">No decision chart data for this day.</p>
             )}
           </section>
 
@@ -3111,7 +3111,7 @@ function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winner
         <div className="journal-bar-list">
           {assetPnlRows.map((row) => (
             <div key={row.name}>
-              <span>{row.name} · {row.count} trades</span>
+              <span>{row.name} · {row.count} decisions</span>
               <div><i className={Number(row.pnl) >= 0 ? "positive" : "negative"} style={{ width: `${Math.max(8, Math.abs(Number(row.pnl || 0)) / maxAbs * 100)}%` }} /></div>
               <strong className={Number(row.pnl) >= 0 ? "positive" : "negative"}>{formatValue(row.pnl, true)}</strong>
             </div>
@@ -3124,7 +3124,7 @@ function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winner
           {setupPnlRows.map((row) => (
             <div key={row.setup}>
               <span>{row.setup}</span>
-              <span>{row.trades} trades</span>
+              <span>{row.trades} decisions</span>
               <span>{row.trades ? ((row.wins / row.trades) * 100).toFixed(0) : 0}% win</span>
               <strong className={row.pnl >= 0 ? "positive" : "negative"}>{formatValue(row.pnl, true)}</strong>
             </div>
@@ -3142,7 +3142,7 @@ function JournalAnalyticsView({ analytics, winLossOptions, winLossSeries, winner
       </div>
       <div className="journal-card journal-insight-card">
         <span>What this means</span>
-        <p>Your strongest results came from momentum setups with high confidence. Losses are concentrated in options trades taken during volatile regimes.</p>
+        <p>Your strongest results came from momentum setups with high confidence. Losses are concentrated in options decisions taken during volatile regimes.</p>
         <div className="journal-inline-actions">
           <button type="button" className="journal-btn primary" onClick={onSaveInsight}>Save insight to Journal</button>
           <button type="button" className="journal-btn secondary" onClick={onExportAnalytics}>Export analytics</button>
@@ -3160,7 +3160,7 @@ function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, s
       <div className="journal-card">
         <div className="journal-section-head"><h3>Review Summary</h3><span>Last 30D</span></div>
         <div className="journal-review-summary">
-          <div><span>Total trades</span><strong>{analytics.totalTrades}</strong></div>
+          <div><span>Total decisions</span><strong>{analytics.totalTrades}</strong></div>
           <div><span>Net P&L</span><strong className={analytics.totalGainLoss >= 0 ? "positive" : "negative"}>{formatValue(analytics.totalGainLoss, true)}</strong></div>
           <div><span>Win rate</span><strong>{analytics.winRate.toFixed(1)}%</strong></div>
           <div><span>Largest mistake</span><strong>{mistakeRows[0]?.mistake}</strong></div>
@@ -3173,7 +3173,7 @@ function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, s
           <div><strong>What worked</strong><p>High-confidence momentum setups with clean invalidation.</p></div>
           <div><strong>What did not work</strong><p>Low-quality entries during volatile regimes.</p></div>
           <div><strong>What to repeat</strong><p>Wait for confirmation and scale around planned levels.</p></div>
-          <div><strong>What to avoid</strong><p>Trades without clear risk or post-trade review notes.</p></div>
+          <div><strong>What to avoid</strong><p>Decisions without clear risk or post-decision review notes.</p></div>
         </div>
       </div>
       <div className="journal-card">
@@ -3232,7 +3232,7 @@ function JournalQuickEntryPanel(props) {
   return (
     <div className="journal-card journal-quick-entry-card">
       <div className="journal-section-head">
-        <div><h3>Quick Entry</h3><p>Log a trade in under a minute.</p></div>
+        <div><h3>Quick Entry</h3><p>Log a decision in under a minute.</p></div>
       </div>
       <JournalQuickEntryForm {...props} />
       <div className="journal-today-notes">
@@ -3255,7 +3255,7 @@ function JournalQuickEntryDrawer({ open, onClose, ...props }) {
     <div className="journal-drawer-backdrop" onMouseDown={onClose}>
       <aside className="journal-mobile-entry-drawer" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="New journal entry">
         <div className="journal-drawer-head">
-          <div><h3>Quick Entry</h3><p>Log a trade in under a minute.</p></div>
+          <div><h3>Quick Entry</h3><p>Log a decision in under a minute.</p></div>
           <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close quick entry">×</button>
         </div>
         <JournalQuickEntryForm {...props} />
@@ -3278,10 +3278,10 @@ function JournalQuickEntryForm({ entryDraft, setEntryDraft, entryErrors, saveSta
       <JournalField label="Setup Tag">
         <input value={entryDraft.setupTag} onChange={(event) => setField("setupTag", event.target.value)} />
       </JournalField>
-      <JournalField label="Side" error={entryErrors.side}>
+      <JournalField label="Decision" error={entryErrors.side}>
         <div className="journal-side-toggle">
-          <button type="button" className={entryDraft.side === "BUY" ? "buy active" : ""} onClick={() => setField("side", "BUY")}>Buy</button>
-          <button type="button" className={entryDraft.side === "SELL" ? "sell active" : ""} onClick={() => setField("side", "SELL")}>Sell</button>
+          <button type="button" className={entryDraft.side === "BUY" ? "buy active" : ""} onClick={() => setField("side", "BUY")}>Increase</button>
+          <button type="button" className={entryDraft.side === "SELL" ? "sell active" : ""} onClick={() => setField("side", "SELL")}>Reduce</button>
         </div>
       </JournalField>
       <JournalField label="Timeframe"><select value={entryDraft.timeframe} onChange={(event) => setField("timeframe", event.target.value)}><option value="intraday">Intraday</option><option value="swing">Swing</option><option value="position">Position</option></select></JournalField>
@@ -3326,7 +3326,7 @@ function TradeDetailDrawer({ open, entry, drawerRef, onClose, onEdit, onDuplicat
   ];
   return (
     <div className="journal-drawer-backdrop" onMouseDown={onClose}>
-      <aside className="journal-detail-drawer" ref={drawerRef} tabIndex={-1} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${entry.symbol} trade detail`}>
+      <aside className="journal-detail-drawer" ref={drawerRef} tabIndex={-1} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${entry.symbol} decision detail`}>
         <div className="journal-drawer-head">
           <div>
             <span className="journal-card-label">{entry.assetType}</span>
@@ -3335,10 +3335,10 @@ function TradeDetailDrawer({ open, entry, drawerRef, onClose, onEdit, onDuplicat
           </div>
           <div>
             <strong className={Number(entry.pnl) >= 0 ? "positive" : "negative"}>{Number(entry.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(entry.pnl), true)}</strong>
-            <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close trade detail">×</button>
+            <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close decision detail">×</button>
           </div>
         </div>
-        <JournalDrawerSection title="Trade Summary" rows={summary} />
+        <JournalDrawerSection title="Decision Summary" rows={summary} />
         <JournalDrawerSection title="Context" rows={[["Regime", entry.regime], ["Timeframe", entry.entry?.timeframe || "—"], ["Market notes", entry.entry?.preThesis || "—"], ["Screenshot/link", entry.chartLink || "—"]]} />
         <JournalDrawerSection title="Psychology" rows={[["Emotion", entry.emotion], ["Confidence", `${entry.confidence}/5`], ["Mistake tags", entry.mistakeCategory || "—"], ["Rule followed?", entry.mistakeCategory ? "No" : "Yes"]]} />
         <JournalDrawerSection title="Review" rows={[["What went well?", entry.entry?.learned || "—"], ["What went wrong?", entry.mistakeCategory || "—"], ["Improve next time", entry.review || "—"]]} />
@@ -3371,7 +3371,7 @@ function JournalEmptyState({ title, description, cta, onAction }) {
       title={title}
       description={description}
       steps={[
-        "Capture the trade, thesis, or lesson that matters right now.",
+        "Capture the decision, thesis, or lesson that matters right now.",
         "Return to review patterns after a few entries are logged.",
       ]}
       cta={cta}

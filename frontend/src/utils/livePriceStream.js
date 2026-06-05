@@ -7,11 +7,12 @@ export function canUseWebSocket() {
 
 export function resolveZeninWsUrl(path = "/live") {
   const baseWithoutApi = String(ZENIN_API_BASE_URL || "").replace(/\/api\/?$/i, "");
+  const fallbackOrigin = typeof window !== "undefined" ? window.location.origin : "https://www.zenin.capital";
 
   // If baseWithoutApi is empty or a relative path, resolve it against the current origin.
   let baseForUrl = baseWithoutApi;
-  if (!baseForUrl) baseForUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-  else if (baseForUrl.startsWith("/")) baseForUrl = `${typeof window !== "undefined" ? window.location.origin : "http://localhost"}${baseForUrl}`;
+  if (!baseForUrl) baseForUrl = fallbackOrigin;
+  else if (baseForUrl.startsWith("/")) baseForUrl = `${fallbackOrigin}${baseForUrl}`;
 
   const url = new URL(baseForUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

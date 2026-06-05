@@ -35584,6 +35584,89 @@ body.light-theme-active .journal-review-mode-banner {
   font-size: 0.66rem;
 }
 
+.portfolio-history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(130px, 0.65fr) minmax(120px, 0.55fr);
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.portfolio-history-toolbar select,
+.portfolio-history-toolbar input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid rgba(126, 138, 153, 0.22);
+  border-radius: 6px;
+  background: rgba(5, 5, 5, 0.72);
+  color: rgba(245, 248, 255, 0.92);
+  font-size: 0.78rem;
+  font-weight: 720;
+  padding: 0 12px;
+}
+
+.portfolio-history-table tbody tr {
+  cursor: pointer;
+}
+
+.portfolio-history-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.portfolio-history-table .positive {
+  color: #7dd3a8;
+}
+
+.portfolio-history-table .negative {
+  color: #fca5a5;
+}
+
+.portfolio-history-pings {
+  border-top: 1px solid rgba(126, 138, 153, 0.14);
+}
+
+.portfolio-execution-detail-modal {
+  max-width: 760px;
+}
+
+.portfolio-execution-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.portfolio-execution-detail-grid > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(126, 138, 153, 0.16);
+  border-radius: 8px;
+  background: rgba(5, 5, 5, 0.58);
+}
+
+.portfolio-execution-detail-grid span {
+  color: rgba(148, 163, 184, 0.78);
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.portfolio-execution-detail-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 0.86rem;
+}
+
+.portfolio-execution-detail-grid strong.positive {
+  color: #7dd3a8;
+}
+
+.portfolio-execution-detail-grid strong.negative {
+  color: #fca5a5;
+}
+
 .portfolio-command-allocation-cell {
   display: grid;
   gap: 7px;
@@ -35740,6 +35823,11 @@ body.light-theme-active .journal-review-mode-banner {
 
   .portfolio-command-table {
     min-width: 720px;
+  }
+
+  .portfolio-history-toolbar,
+  .portfolio-execution-detail-grid {
+    grid-template-columns: 1fr;
   }
 
 .portfolio-command-attention-card,

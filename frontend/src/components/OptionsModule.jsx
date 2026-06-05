@@ -190,9 +190,9 @@ const StrategySimulatorCard = ({
     <div className="watchlist-panel glass strategy-simulator-panel options-exec-panel options-exec-strategy-panel">
       <div className="section-header options-exec-panel-head">
         <div className="header-left">
-          <h2>Strategy Simulator for {activeAsset}</h2>
+          <h2>Scenario Simulator for {activeAsset}</h2>
           <span className="asset-count">
-            Express your view → pick a play. Generated from {activeAsset} flow.
+            Express your view and save a research scenario from {activeAsset} flow.
           </span>
         </div>
         <div className="asset-dropdown-container">
@@ -219,11 +219,11 @@ const StrategySimulatorCard = ({
       <div className="strategy-simulator-body">
         {error ? (
           <GuidedEmptyState
-            eyebrow="Execution recovery"
-            title="Strategy execution needs attention"
+            eyebrow="Scenario review"
+            title="Scenario needs attention"
             description={error}
             steps={[
-              "Reduce notional or free up available balance before retrying.",
+              "Reduce notional or adjust sizing before retrying.",
               "Keep the chain synced so entry pricing reflects the latest market marks.",
             ]}
             cta="Retry after review"
@@ -453,10 +453,10 @@ const handleStrategyChosen = async (tradePayload) => {
       });
     }
 
-    // Balance Enforcement
+    // Research desk mode: never place or simulate an executable order.
     const totalCost = (entryPremium || 0) * (tradePayload.qty || 1);
     if (balance <= 0) {
-      setSimulatorError("Execution blocked: Your account balance is zero or negative.");
+      setSimulatorError("Scenario blocked: available balance is zero or negative.");
       setStrategySubmitting(false);
       return;
     }
@@ -483,20 +483,17 @@ const handleStrategyChosen = async (tradePayload) => {
       totalNotional: tradePayload.notional,
     };
 
-    if (onOptionTradeExecuted) {
-      await onOptionTradeExecuted(newTrade);
-    } else {
-      setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
-    }
+    setActiveOptionsTrades((prev) => [newTrade, ...(prev || [])]);
+    showToast?.(`Saved ${newTrade.strategy} scenario on ${newTrade.asset}.`, "success");
 
-    // Smooth scroll to the Active Trades card
+    // Smooth scroll to the saved scenarios card
     setTimeout(() => {
       activeTradesRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 100);
 
   } catch (err) {
-    console.error("Failed to execute strategy", err);
-    const errorMsg = err.message || "Strategy execution failed.";
+    console.error("Failed to save strategy scenario", err);
+    const errorMsg = err.message || "Strategy scenario failed.";
     if (showToast) {
        showToast(errorMsg, "error");
     } else {
@@ -554,7 +551,7 @@ useEffect(() => {
   }
 }, [externalSpotPrices]);
 
-  // Fetch chains for all open trade assets
+  // Fetch chains for all saved scenario assets
   useEffect(() => {
     if (!activeOptionsTrades || activeOptionsTrades.length === 0) return;
     
@@ -1130,24 +1127,24 @@ useEffect(() => {
   const whaleEmptyStateText = whaleSource === "telegram"
     ? (() => {
         if (telegramDebug?.status === "disabled") {
-          return "Telegram whale ingestion is disabled. Configure Telegram MTProto credentials on the backend to load channel trades.";
+          return "Telegram whale ingestion is disabled. Configure Telegram MTProto credentials on the backend to load channel flow.";
         }
         if (telegramDebug?.status === "error") {
           return telegramDebug?.error
             ? `Telegram whale ingestion failed: ${telegramDebug.error}`
-            : "Telegram whale ingestion failed before any trades could be parsed.";
+            : "Telegram whale ingestion failed before any flow could be parsed.";
         }
         if (telegramDebug?.status === "empty" && Number(telegramDebug?.messageCount) > 0) {
-          return `Parsed 0 whale trades from ${telegramDebug.messageCount} Telegram messages across ${telegramChannels.length || 1} channel${(telegramChannels.length || 1) === 1 ? "" : "s"}.`;
+          return `Parsed 0 whale-flow items from ${telegramDebug.messageCount} Telegram messages across ${telegramChannels.length || 1} channel${(telegramChannels.length || 1) === 1 ? "" : "s"}.`;
         }
         if (telegramDebug?.status === "partial") {
           return telegramDebug?.error
             ? `Telegram pulled some channels but others failed: ${telegramDebug.error}`
             : "Telegram whale ingestion returned a partial snapshot.";
         }
-        return `Waiting for Telegram whale options trades from ${telegramSourceLabel}...`;
+        return `Waiting for Telegram whale options flow from ${telegramSourceLabel}...`;
       })()
-    : "Waiting for Derive whale options trades...";
+    : "Waiting for Derive whale options flow...";
   const activeUsesRfq = marketStructure === "rfq" || rfqAssets.has(String(activeAsset || "").trim().toUpperCase());
   const activeSpot = Number(spotPrices?.[activeAsset] || 0);
   const filteredChain = useMemo(() => {
@@ -1468,8 +1465,8 @@ useEffect(() => {
           <h1>Options Risk Desk</h1>
           <p>
             {optionsMarketMode === "equity"
-              ? "Listed chains, surface context, and execution risk for equity underlyings."
-              : "Crypto volatility, flow, positions, and expiry pressure in one workstation."}
+              ? "Listed chains, surface context, and risk context for equity underlyings."
+              : "Crypto volatility, flow, exposure scenarios, and expiry pressure in one workstation."}
           </p>
         </div>
         <span className="options-exec-live-badge">
@@ -1553,11 +1550,11 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* NEW: Active Options Trades Card */}
+      {/* Saved Options Scenarios Card */}
       {activeOptionsTrades && activeOptionsTrades.length > 0 && (
         <div ref={activeTradesRef} className="watchlist-panel glass options-exec-panel" style={{ marginBottom: "16px", padding: "16px" }}>
           <div className="section-header options-exec-panel-head">
-            <h2>Active Options Trades</h2>
+            <h2>Saved Options Scenarios</h2>
           </div>
           <div className="active-trades-table-container scrollbar-thin">
             <table className="active-trades-table">
@@ -1567,12 +1564,12 @@ useEffect(() => {
                   <th>Asset</th>
                   <th>Qty</th>
                   <th>Expiry</th>
-                  <th>Entry Prem</th>
+                  <th>Scenario Prem</th>
                   <th>Live Mark</th>
                   <th>Delta</th>
                   <th>Theta</th>
                   <th>Unrealized PnL</th>
-                  <th>Action</th>
+                  <th>Manage</th>
                 </tr>
               </thead>
               <tbody>
@@ -1623,7 +1620,7 @@ useEffect(() => {
                           className="close-trade-btn"
                           onClick={() => closeOptionTrade(trade.id)}
                         >
-                          Close
+                          Remove
                         </button>
                       </td>
                     </tr>
@@ -1914,10 +1911,10 @@ useEffect(() => {
       <div className="watchlist-panel glass whale-trades-panel options-exec-panel options-exec-whale-panel" style={{ marginTop: "16px", padding: "16px" }}>
         <div className="section-header options-exec-panel-head" style={{ marginBottom: "10px" }}>
           <div className="header-left">
-            <h2>Whale Options Trades <span className="live-pill">Live</span></h2>
+            <h2>Whale Options Flow <span className="live-pill">Live</span></h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <div className="asset-count">BTC / ETH / SOL / HYPE</div>
-              <span className={`data-health-badge ${whaleLoading ? "loading" : whaleStale ? "hazard" : "ok"}`} title={whaleLoading ? "Refreshing whale trades" : whaleStale ? "Showing previous whale-trades snapshot" : "Whale trades are up to date"}>
+              <span className={`data-health-badge ${whaleLoading ? "loading" : whaleStale ? "hazard" : "ok"}`} title={whaleLoading ? "Refreshing whale flow" : whaleStale ? "Showing previous whale-flow snapshot" : "Whale flow is up to date"}>
                 <span className={`status-icon ${whaleLoading ? "spinner" : ""}`}>{whaleLoading ? "⟳" : whaleStale ? "⚠" : "✓"}</span>
                 Whale Flow
               </span>
@@ -1952,7 +1949,7 @@ useEffect(() => {
         ) : null}
 
         {whaleLoading && whaleTrades.length === 0 ? (
-          <div className="loading-state">Loading whale options trades...</div>
+          <div className="loading-state">Loading whale options flow...</div>
         ) : pagedWhaleTrades.length === 0 ? (
           <div className="loading-state">{whaleEmptyStateText}</div>
         ) : (
@@ -2098,14 +2095,14 @@ function OptionsSavedItemsDrawer({
           </section>
           <section style={{ display: "grid", gap: 10 }}>
             <div>
-              <strong style={{ display: "block", marginBottom: 4 }}>Active Trades</strong>
+              <strong style={{ display: "block", marginBottom: 4 }}>Saved Scenarios</strong>
               <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
-                {activeTrades.length ? `${activeTrades.length} live position${activeTrades.length === 1 ? "" : "s"}` : "No active options trades yet."}
+                {activeTrades.length ? `${activeTrades.length} saved scenario${activeTrades.length === 1 ? "" : "s"}` : "No saved options scenarios yet."}
               </span>
             </div>
             {activeTrades.length ? (
               <SavedOptionsRow
-                title="Open positions"
+                title="Saved scenarios"
                 subtitle={`${activeTrades.slice(0, 3).map((trade) => trade.asset).join(" / ")}${activeTrades.length > 3 ? "…" : ""}`}
                 actionLabel="Open"
                 onAction={onOpenActiveTrades}

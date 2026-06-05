@@ -78,13 +78,14 @@ function resolvePythonBinary() {
   return "python3";
 }
 const pythonBinary = resolvePythonBinary();
-const { syncBinance, syncHyperliquid, syncBybit } = require("./exchangeSync");
+const { syncBinance, syncHyperliquid, syncBybit, verifyExchangeCredentialScope } = require("./exchangeSync");
 
 const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid"]);
 
 const rpName = "Zenin Capital";
-const rpID = process.env.RP_ID || "localhost";
-const expectedOrigin = process.env.EXPECTED_ORIGIN || "http://localhost:5173";
+const DEFAULT_PUBLIC_APP_ORIGIN = "https://www.zenin.capital";
+const rpID = process.env.RP_ID || "www.zenin.capital";
+const expectedOrigin = process.env.EXPECTED_ORIGIN || DEFAULT_PUBLIC_APP_ORIGIN;
 const webAuthnChallenges = new Map();
 const WEBAUTHN_CHALLENGE_TTL_MS = 120_000; // 2 minutes
 
@@ -1223,6 +1224,37 @@ function sanitizeOAuthEntryPath(entryPath) {
   return "/auth";
 }
 
+function getDefaultFrontendOrigin() {
+  const configured = normalizeOrigin(process.env.PUBLIC_APP_ORIGIN || process.env.FRONTEND_URL || "");
+  if (configured) return configured;
+  const expected = normalizeOrigin(expectedOrigin);
+  if (IS_PRODUCTION && (!expected || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(expected))) {
+    return DEFAULT_PUBLIC_APP_ORIGIN;
+  }
+  return expected || DEFAULT_PUBLIC_APP_ORIGIN;
+}
+
+function sanitizeOAuthFrontendOrigin(originValue) {
+  const normalized = normalizeOrigin(originValue);
+  if (normalized && isAllowedOrigin(normalized)) return normalized;
+  const fallback = getDefaultFrontendOrigin();
+  return fallback || DEFAULT_PUBLIC_APP_ORIGIN;
+}
+
+function getOAuthRedirectUri(req, provider) {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (normalizedProvider === "google") {
+    const configuredGoogleRedirectUri = String(process.env.GOOGLE_REDIRECT_URI || "").trim();
+    if (configuredGoogleRedirectUri) return configuredGoogleRedirectUri;
+  }
+  const frontendCallbackOrigin = getDefaultFrontendOrigin();
+  if (frontendCallbackOrigin) {
+    return `${frontendCallbackOrigin.replace(/\/+$/, "")}/auth/oauth/${normalizedProvider}/callback`;
+  }
+  const redirectUriBase = process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host");
+  return `${String(redirectUriBase || "").replace(/\/+$/, "")}/api/auth/oauth/${normalizedProvider}/callback`;
+}
+
 function createOAuthStateToken(payload) {
   const encodedPayload = Buffer.from(JSON.stringify({
     ...payload,
@@ -1266,12 +1298,14 @@ function parseOAuthStateToken(token) {
     provider: String(payload?.provider || "").trim().toLowerCase(),
     returnTo: sanitizeInternalRedirectPath(payload?.returnTo, "/app"),
     entryPath: sanitizeOAuthEntryPath(payload?.entryPath),
-    authMode: sanitizeOAuthMode(payload?.authMode, "signin")
+    authMode: sanitizeOAuthMode(payload?.authMode, "signin"),
+    frontendOrigin: sanitizeOAuthFrontendOrigin(payload?.frontendOrigin)
   };
 }
 
-function buildFrontendRedirectUrl(pathname, params = {}) {
-  const url = new URL(pathname, expectedOrigin.endsWith("/") ? expectedOrigin : `${expectedOrigin}/`);
+function buildFrontendRedirectUrl(pathname, params = {}, frontendOrigin = null) {
+  const origin = sanitizeOAuthFrontendOrigin(frontendOrigin);
+  const url = new URL(pathname, origin.endsWith("/") ? origin : `${origin}/`);
   Object.entries(params).forEach(([key, value]) => {
     if (value == null || value === "") return;
     url.searchParams.set(key, String(value));
@@ -1279,7 +1313,7 @@ function buildFrontendRedirectUrl(pathname, params = {}) {
   return url.toString();
 }
 
-function buildOAuthFailureRedirect({ entryPath = "/auth", authMode = "signin", returnTo = "/app", errorMessage }) {
+function buildOAuthFailureRedirect({ entryPath = "/auth", authMode = "signin", returnTo = "/app", errorMessage, frontendOrigin = null }) {
   const sanitizedEntryPath = sanitizeOAuthEntryPath(entryPath);
   const sanitizedReturnTo = sanitizeInternalRedirectPath(returnTo, "/app");
   const sanitizedMode = sanitizeOAuthMode(authMode, "signin");
@@ -1288,17 +1322,17 @@ function buildOAuthFailureRedirect({ entryPath = "/auth", authMode = "signin", r
       auth: sanitizedMode,
       next: sanitizedReturnTo,
       oauthError: errorMessage || "Sign-in failed. Please try again."
-    });
+    }, frontendOrigin);
   }
   return buildFrontendRedirectUrl("/auth", {
     mode: sanitizedMode,
     next: sanitizedReturnTo,
     oauthError: errorMessage || "Sign-in failed. Please try again."
-  });
+  }, frontendOrigin);
 }
 
-function buildOAuthSuccessRedirect(returnTo) {
-  return buildFrontendRedirectUrl(sanitizeInternalRedirectPath(returnTo, "/app"));
+function buildOAuthSuccessRedirect(returnTo, frontendOrigin = null) {
+  return buildFrontendRedirectUrl(sanitizeInternalRedirectPath(returnTo, "/app"), {}, frontendOrigin);
 }
 
 // Encrypt/decrypt TOTP secrets at rest with AES-256-GCM (#2)
@@ -4227,16 +4261,59 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, attachActiv
 function buildConnectionCapability(exchange) {
   const normalizedExchange = String(exchange || "").trim().toLowerCase();
   const syncAvailable = SYNC_ENABLED_EXCHANGES.has(normalizedExchange);
+  const watchOnly = normalizedExchange === "hyperliquid";
   return {
-    accessMode: normalizedExchange === "hyperliquid" ? "watch_only" : "read_only_metadata",
+    accessMode: watchOnly ? "watch_only" : "read_only_metadata",
     syncAvailable,
     syncStatus: syncAvailable ? "sync_supported" : "metadata_only",
     nextAction: syncAvailable
       ? "Run sync to import holdings, balances, and fills."
       : "Saved for workspace context. Live sync is not available for this provider yet.",
     supportMessage: syncAvailable
-      ? "Zenin can import live portfolio data from this provider with read-only access."
+      ? (watchOnly
+          ? "Zenin can import live portfolio data from this public watch-only address."
+          : "Zenin can import live portfolio data after you provide provider-side read-only credentials.")
       : "Zenin stores this source as read-only metadata until a provider adapter is available."
+  };
+}
+
+async function buildCredentialScopeState(exchange, apiKey, apiSecret) {
+  const normalizedExchange = String(exchange || "").trim().toLowerCase();
+  if (normalizedExchange === "hyperliquid" && !apiSecret) {
+    return {
+      permissionScope: "read_only",
+      canTrade: false,
+      lastVerifiedScope: "read_only",
+      riskLevel: "standard",
+      scopeVerificationStatus: "verified_watch_only",
+      scopeVerificationMessage: "Public address connection verified as watch-only."
+    };
+  }
+  if (apiSecret && SYNC_ENABLED_EXCHANGES.has(normalizedExchange)) {
+    const verified = await verifyExchangeCredentialScope(normalizedExchange, apiKey, apiSecret);
+    if (verified.permissionScope === "trade" || verified.canTrade) {
+      const error = new Error(verified.verificationMessage || "Provider reported trading permission on this API key.");
+      error.code = "EXCHANGE_KEY_NOT_READ_ONLY";
+      error.scopeVerification = verified;
+      throw error;
+    }
+    return {
+      permissionScope: "read_only",
+      canTrade: false,
+      lastVerifiedScope: verified.readOnlyVerified ? "read_only" : "unknown",
+      riskLevel: "sensitive",
+      scopeVerificationStatus: verified.verificationStatus || (verified.readOnlyVerified ? "verified_read_only" : "provider_unverified"),
+      scopeVerificationMessage: verified.verificationMessage || "Provider scope check completed.",
+      providerMeta: verified.providerMeta || {}
+    };
+  }
+  return {
+    permissionScope: "read_only",
+    canTrade: false,
+    lastVerifiedScope: "unknown",
+    riskLevel: apiSecret ? "sensitive" : "standard",
+    scopeVerificationStatus: "provider_unverified",
+    scopeVerificationMessage: "Zenin requires read-only credentials, but this provider scope has not been verified server-side."
   };
 }
 
@@ -4286,19 +4363,23 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
   try {
     const { exchange, apiKey, apiSecret, extraData } = req.body;
     const normalizedExtraData = extraData && typeof extraData === "object" ? extraData : {};
-    const readOnlyPermissionScope = "read_only";
-    const readOnlyCanTrade = false;
-    const readOnlyRiskLevel = apiSecret ? "sensitive" : "standard";
+    const scopeState = await buildCredentialScopeState(exchange, apiKey, apiSecret);
+    const enrichedExtraData = {
+      ...normalizedExtraData,
+      scopeVerificationStatus: scopeState.scopeVerificationStatus,
+      scopeVerificationMessage: scopeState.scopeVerificationMessage,
+      providerScopeMeta: scopeState.providerMeta || {}
+    };
     // Encrypt sensitive data before storing (#EncryptionAtRest)
     const payload = {
       exchange,
       apiKey: workspaceSecretProvider.encryptSecret(apiKey),
       apiSecret: workspaceSecretProvider.encryptSecret(apiSecret),
-      extraData: normalizedExtraData ? workspaceSecretProvider.encryptSecret(JSON.stringify(normalizedExtraData)) : null,
-      permissionScope: readOnlyPermissionScope,
-      canTrade: readOnlyCanTrade,
-      lastVerifiedScope: readOnlyPermissionScope,
-      riskLevel: readOnlyRiskLevel
+      extraData: enrichedExtraData ? workspaceSecretProvider.encryptSecret(JSON.stringify(enrichedExtraData)) : null,
+      permissionScope: scopeState.permissionScope,
+      canTrade: scopeState.canTrade,
+      lastVerifiedScope: scopeState.lastVerifiedScope,
+      riskLevel: scopeState.riskLevel
     };
     const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload, req.workspace.workspace.id);
     const capability = buildConnectionCapability(key.exchange);
@@ -4314,7 +4395,8 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
         username: normalizedExtraData?.username || null,
         permissionScope: key.permissionScope,
         canTrade: !!key.canTrade,
-        riskLevel: key.riskLevel
+        riskLevel: key.riskLevel,
+        scopeVerificationStatus: scopeState.scopeVerificationStatus
       }
     });
     await logSecurityEvent(req, {
@@ -4326,7 +4408,9 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
         exchange: key.exchange,
         permissionScope: key.permissionScope,
         canTrade: !!key.canTrade,
-        riskLevel: key.riskLevel
+        riskLevel: key.riskLevel,
+        lastVerifiedScope: key.lastVerifiedScope,
+        scopeVerificationStatus: scopeState.scopeVerificationStatus
       }
     });
     res.json({
@@ -4339,13 +4423,20 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       riskLevel: key.riskLevel || "standard",
       syncAvailable: capability.syncAvailable,
       connectionCapability: capability,
-      extraData: normalizedExtraData,
+      extraData: enrichedExtraData,
       createdAt: key.createdAt || null,
       lastSyncAt: key.lastSyncAt || null,
       lastSyncStatus: key.lastSyncStatus || "idle",
       lastSyncMeta: key.lastSyncMeta || {}
     });
   } catch (err) {
+    if (err?.code === "EXCHANGE_KEY_NOT_READ_ONLY") {
+      return res.status(422).json({
+        error: "Use a read-only exchange API key. Zenin rejected this key because the provider reports trading or withdrawal permission.",
+        code: err.code,
+        scopeVerification: err.scopeVerification || null
+      });
+    }
     handleServerError(res, "Failed to add exchange key", err);
   }
 });
@@ -4373,6 +4464,77 @@ app.delete("/api/db/exchange-keys/:id", requireSignedIn, attachActiveWorkspace, 
     handleServerError(res, "Failed to remove exchange key", err);
   }
 });
+
+function formatExecutionQuantity(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "0";
+  return amount.toLocaleString(undefined, { maximumFractionDigits: amount < 1 ? 8 : 4 });
+}
+
+function formatExecutionPrice(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "$0.00";
+  return amount.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: amount >= 100 ? 2 : 4,
+    maximumFractionDigits: amount >= 100 ? 2 : 6
+  });
+}
+
+function titleCaseVenue(value) {
+  return String(value || "venue")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+async function createTradeExecutionNotifications({ userId, workspaceId, exchange, executions = [] }) {
+  const rows = Array.isArray(executions) ? executions.filter(Boolean) : [];
+  if (!rows.length) return [];
+  const venue = titleCaseVenue(exchange || rows[0]?.platform);
+  const notifications = [];
+
+  if (rows.length > 5) {
+    const symbols = [...new Set(rows.map((row) => row.symbol).filter(Boolean))].slice(0, 4);
+    notifications.push(await userWorkspace.notifications.create(userId, {
+      type: "trade_execution.batch_created",
+      title: `${rows.length} new executions synced`,
+      body: `${venue} imported ${rows.length} API-sourced fills${symbols.length ? ` across ${symbols.join(", ")}` : ""}.`,
+      entityType: "trade_execution_batch",
+      entityId: `${exchange || "exchange"}:${Date.now()}`,
+      metadata: {
+        exchange,
+        executionIds: rows.map((row) => row.id).filter(Boolean),
+        symbols
+      }
+    }, workspaceId));
+    return notifications;
+  }
+
+  for (const execution of rows) {
+    const side = String(execution.side || "trade").toLowerCase();
+    const symbol = execution.symbol || "asset";
+    const title = `New ${symbol} ${side} on ${venue}`;
+    const body = `${formatExecutionQuantity(execution.quantity)} ${symbol} at ${formatExecutionPrice(execution.price)}${execution.feeAmount ? ` · fee ${formatExecutionQuantity(execution.feeAmount)} ${execution.feeCurrency || ""}` : ""}`;
+    notifications.push(await userWorkspace.notifications.create(userId, {
+      type: "trade_execution.created",
+      title,
+      body,
+      entityType: "trade_execution",
+      entityId: execution.id,
+      metadata: {
+        exchange,
+        symbol,
+        side,
+        platformFillId: execution.platformFillId,
+        executedAt: execution.executedAt
+      }
+    }, workspaceId));
+  }
+  return notifications;
+}
 
 // Exchange Sync Trigger
 app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
@@ -4417,13 +4579,20 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
 
     if (result) {
       await userWorkspace.portfolio.sync(req.auth.userId, keyRecord.exchange, result.holdings, req.workspace.workspace.id);
+      let fillSyncResult = { inserted: [], updated: [], insertedCount: 0, updatedCount: 0 };
       if (Array.isArray(result.tradeFills) && result.tradeFills.length) {
-        await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills, req.workspace.workspace.id);
+        fillSyncResult = await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills, req.workspace.workspace.id);
       }
       await userWorkspace.trades.sync(req.auth.userId, result.trades, req.workspace.workspace.id);
       if (result.currency && result.cashBalance != null) {
         await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance, req.workspace.workspace.id);
       }
+      const notifications = await createTradeExecutionNotifications({
+        userId: req.auth.userId,
+        workspaceId: req.workspace.workspace.id,
+        exchange: keyRecord.exchange,
+        executions: fillSyncResult.inserted
+      });
       invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
       await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
         status: "success",
@@ -4432,6 +4601,8 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
           holdingsCount: result?.holdings?.length || 0,
           tradesCount: result?.trades?.length || 0,
           tradeFillCount: result?.tradeFills?.length || 0,
+          newExecutionCount: fillSyncResult.insertedCount || 0,
+          updatedExecutionCount: fillSyncResult.updatedCount || 0,
           currency: result?.currency || null
         }
       });
@@ -4444,9 +4615,12 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
         details: {
           exchange: keyRecord.exchange,
           holdingsCount: result?.holdings?.length || 0,
-          tradesCount: result?.trades?.length || 0
+          tradesCount: result?.trades?.length || 0,
+          newExecutionCount: fillSyncResult.insertedCount || 0
         }
       });
+      result.fillSyncResult = fillSyncResult;
+      result.notifications = notifications;
     }
 
     res.json({
@@ -4454,6 +4628,10 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       holdingsCount: result?.holdings?.length || 0,
       tradesCount: result?.trades?.length || 0,
       tradeFillCount: result?.tradeFills?.length || 0,
+      newExecutionCount: result?.fillSyncResult?.insertedCount || 0,
+      updatedExecutionCount: result?.fillSyncResult?.updatedCount || 0,
+      newExecutions: (result?.fillSyncResult?.inserted || []).slice(0, 10),
+      notifications: result?.notifications || [],
       cashBalance: result?.cashBalance,
       currency: result?.currency
     });
@@ -6379,10 +6557,9 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
     provider,
     returnTo,
     entryPath,
-    authMode
+    authMode,
+    frontendOrigin: sanitizeOAuthFrontendOrigin(req.body?.frontendOrigin || req.headers.origin || req.headers.referer)
   });
-  const redirectUriBase = process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host");
-
   if (provider === "google") {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
@@ -6393,7 +6570,7 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
       });
     }
     
-    const redirectUri = `${redirectUriBase}/api/auth/oauth/google/callback`;
+    const redirectUri = getOAuthRedirectUri(req, "google");
     const client = new OAuth2Client(clientId);
     const authUrl = client.generateAuthUrl({
       access_type: "offline",
@@ -6412,47 +6589,63 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
   });
 });
 
-app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
+async function completeGoogleOAuth(req, res, { code, state, json = false } = {}) {
   let oauthState;
-  try {
-    oauthState = parseOAuthStateToken(req.query.state);
-  } catch (error) {
-    return res.redirect(buildOAuthFailureRedirect({
+  const fail = (errorMessage, status = 400, stateFallback = oauthState) => {
+    const safeState = stateFallback || {
       entryPath: "/auth",
       authMode: "signin",
-      returnTo: "/app",
-      errorMessage: error.message || "Google sign-in session expired. Please try again."
+      returnTo: "/app"
+    };
+    if (json) {
+      return res.status(status).json({
+        success: false,
+        error: errorMessage || "Google sign-in failed. Please try again."
+      });
+    }
+    return res.redirect(buildOAuthFailureRedirect({
+      ...safeState,
+      errorMessage: errorMessage || "Google sign-in failed. Please try again."
     }));
+  };
+
+  try {
+    oauthState = parseOAuthStateToken(state);
+  } catch (error) {
+    return fail(error.message || "Google sign-in session expired. Please try again.", 400, {
+      entryPath: "/auth",
+      authMode: "signin",
+      returnTo: "/app"
+    });
   }
 
-  const code = String(req.query.code || "").trim();
-  if (!code) {
-    return res.redirect(buildOAuthFailureRedirect({
-      ...oauthState,
-      errorMessage: "Google sign-in did not return an authorization code."
-    }));
+  const cleanCode = String(code || "").trim();
+  if (!cleanCode) {
+    return fail("Google sign-in did not return an authorization code.", 400);
   }
   if (oauthState.provider !== "google") {
-    return res.redirect(buildOAuthFailureRedirect({
-      ...oauthState,
-      errorMessage: "Google sign-in session was invalid. Please try again."
-    }));
+    return fail("Google sign-in session was invalid. Please try again.", 400);
   }
 
   try {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUriBase = process.env.REDIRECT_URI_BASE || getRequestProtocol(req) + "://" + req.get("host");
-    const redirectUri = `${redirectUriBase}/api/auth/oauth/google/callback`;
+    if (!clientId || !clientSecret) {
+      return fail("Google sign-in is missing server OAuth credentials.", 503);
+    }
 
+    const redirectUri = getOAuthRedirectUri(req, "google");
     const client = new OAuth2Client(clientId, clientSecret, redirectUri);
-    const { tokens } = await client.getToken(code);
+    const { tokens } = await client.getToken(cleanCode);
     client.setCredentials(tokens);
 
     const userInfoRes = await client.request({
       url: "https://www.googleapis.com/oauth2/v3/userinfo"
     });
-    const { email, name, sub } = userInfoRes.data;
+    const { email, name } = userInfoRes.data || {};
+    if (!email) {
+      return fail("Google did not return an email address for this account.", 400);
+    }
 
     const user = await userAuth.upsertOAuthUser({
       email,
@@ -6463,14 +6656,38 @@ app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
     const session = await issueSessionForUser(user.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: true });
 
-    return res.redirect(buildOAuthSuccessRedirect(oauthState.returnTo));
+    if (json) {
+      return res.json({
+        success: true,
+        returnTo: sanitizeInternalRedirectPath(oauthState.returnTo, "/app"),
+        frontendOrigin: oauthState.frontendOrigin,
+        user: sanitizeAuthUser(user)
+      });
+    }
+    return res.redirect(buildOAuthSuccessRedirect(oauthState.returnTo, oauthState.frontendOrigin));
   } catch (error) {
     console.error("[Google OAuth] Callback failed:", error);
-    return res.redirect(buildOAuthFailureRedirect({
-      ...oauthState,
-      errorMessage: "Google sign-in failed. Please try again."
-    }));
+    const message = String(error?.message || "").toLowerCase().includes("redirect_uri_mismatch")
+      ? "Google sign-in is using a redirect URI that is not authorized for this OAuth client."
+      : "Google sign-in failed. Please try again.";
+    return fail(message, 400);
   }
+}
+
+app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
+  return completeGoogleOAuth(req, res, {
+    code: req.query.code,
+    state: req.query.state,
+    json: false
+  });
+});
+
+app.post("/api/auth/oauth/google/exchange", authLimiter, async (req, res) => {
+  return completeGoogleOAuth(req, res, {
+    code: req.body?.code,
+    state: req.body?.state,
+    json: true
+  });
 });
 
 app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ extended: true }), async (req, res) => {
@@ -6682,7 +6899,7 @@ function fetchHistoryFromYahoo(symbol, interval) {
 
 // Health check — used by Render and uptime monitors
 app.get("/", (req, res) => {
-  const configuredFrontendUrl = String(process.env.FRONTEND_URL || expectedOrigin || "http://localhost:5173").trim();
+  const configuredFrontendUrl = String(process.env.PUBLIC_APP_ORIGIN || process.env.FRONTEND_URL || expectedOrigin || DEFAULT_PUBLIC_APP_ORIGIN).trim();
   let frontendUrl = "/";
   try {
     const parsed = new URL(configuredFrontendUrl);
@@ -10845,12 +11062,54 @@ app.get("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorkspa
   }
 });
 
+app.get("/api/db/trade-executions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const executions = await userWorkspace.tradeFills.getExecutions(req.auth.userId, req.query || {}, req.workspace?.workspace?.id || null);
+    res.json({
+      executions,
+      source: "api_connections",
+      manualEntriesIncluded: false
+    });
+  } catch (error) {
+    handleServerError(res, "Trade execution history failed", error);
+  }
+});
+
 app.get("/api/db/trade-fees/summary", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const summary = await userWorkspace.tradeFills.getSummary(req.auth.userId, req.workspace?.workspace?.id || null);
     res.json({ summary });
   } catch (error) {
     handleServerError(res, "Trade fee summary failed", error);
+  }
+});
+
+app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const notifications = await userWorkspace.notifications.getAll(req.auth.userId, req.query || {}, req.workspace?.workspace?.id || null);
+    const unreadCount = notifications.filter((item) => !item.readAt).length;
+    res.json({ notifications, unreadCount });
+  } catch (error) {
+    handleServerError(res, "Notifications read failed", error);
+  }
+});
+
+app.post("/api/notifications/:id/read", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const notification = await userWorkspace.notifications.markRead(req.auth.userId, req.params.id, req.workspace?.workspace?.id || null);
+    if (!notification) return res.status(404).json({ error: "Notification not found" });
+    res.json({ notification });
+  } catch (error) {
+    handleServerError(res, "Notification update failed", error);
+  }
+});
+
+app.post("/api/notifications/read-all", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const result = await userWorkspace.notifications.markAllRead(req.auth.userId, req.workspace?.workspace?.id || null);
+    res.json(result);
+  } catch (error) {
+    handleServerError(res, "Notifications update failed", error);
   }
 });
 
@@ -14264,58 +14523,6 @@ app.get("/api/macro/correlation", async (req, res) => {
     res.json({ updatedAt: new Date().toISOString(), source: "World Bank + Yahoo Finance", stale: true, unavailable: true, stale_reason: error?.message || "macro_correlation_fetch_failed", rows: [] });
   }
 });
-
-app.get('/api/analytics/equities', async (req, res) => {
-  try {
-    const payload = await getEquitiesAnalyticsPayload();
-    res.json(payload);
-  } catch (error) {
-    console.error("[Analytics] Equities error:", error);
-    const stale = await readServiceSnapshot(
-      EQUITIES_ANALYTICS_SNAPSHOT_SCOPE,
-      EQUITIES_ANALYTICS_SNAPSHOT_PARAMS
-    );
-    if (stale?.payload) {
-      return res.json(stale.payload);
-    }
-    res.status(500).json({ error: "Failed to fetch equities analytics" });
-  }
-});
-
-app.post("/api/db/execute-trade", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(executeTradeSchema), async (req, res) => {
-  try {
-    const payload = req.body || {};
-    if (!payload.clientId || typeof payload.clientId !== "string" || payload.clientId.trim().length > 120) {
-      return res.status(400).json({ error: "clientId is required for idempotent execution." });
-    }
-    const result = await userWorkspace.trading.executeTrade(req.auth.userId, payload, req.workspace?.workspace?.id || null);
-    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
-    res.status(201).json(result);
-  } catch (error) {
-    if (error?.code === "INSUFFICIENT_BALANCE") {
-      return res.status(400).json({ error: "Insufficient balance" });
-    }
-    if (error?.code === "INVALID_CLIENT_ID") {
-      return res.status(400).json({ error: "clientId is required for idempotent execution." });
-    }
-    if (error?.code === "INSUFFICIENT_POSITION" || error?.code === "NO_POSITION") {
-      return res.status(400).json({ error: error.message });
-    }
-    handleServerError(res, "Atomic trade execution failed", error);
-  }
-});
-
-app.post("/api/db/execute-trade/estimate", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(tradeEstimateBatchSchema), async (req, res) => {
-  try {
-    const payloads = Array.isArray(req.body?.trades) ? req.body.trades : [];
-    const estimate = await userWorkspace.trading.estimateTrades(payloads);
-    res.json(estimate);
-  } catch (error) {
-    handleServerError(res, "Trade execution estimate failed", error);
-  }
-});
-
-
 
 function deterministicMacroOffset(seed, span = 1) {
   const str = String(seed || "");

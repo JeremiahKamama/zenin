@@ -6,7 +6,7 @@ services:
   - type: web
     name: portv1-backend
     runtime: docker
-    plan: free
+    plan: starter
     rootDir: backend
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health

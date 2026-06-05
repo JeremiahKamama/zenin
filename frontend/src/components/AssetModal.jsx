@@ -21,7 +21,8 @@ export function AssetModal({
   balance = 0,
   cashBalances = {},
   trades = [],
-  spotPrices = {}
+  spotPrices = {},
+  researchOnly = true
 }) {
   const intervals = Array.isArray(getAppRuntimeConfig()?.ui?.assetModalIntervals)
     ? getAppRuntimeConfig().ui.assetModalIntervals
@@ -68,7 +69,7 @@ export function AssetModal({
       ? "crypto"
       : asset?.type || normalizedAssetKind;
   const isStockResearchEligible = normalizedAssetKind === "stock";
-  const isTradeEligible = !isForexAsset && normalizedAssetKind !== "indicator";
+  const isTradeEligible = !researchOnly && !isForexAsset && normalizedAssetKind !== "indicator";
 
   const cleanAsset = useMemo(() => {
     if (!asset) return null;
@@ -622,7 +623,7 @@ export function AssetModal({
     const high52 = Number(earnings?.profile?.fiftyTwoWeekHigh ?? asset?.fiftyTwoWeekHigh ?? asset?.high52);
     const low52 = Number(earnings?.profile?.fiftyTwoWeekLow ?? asset?.fiftyTwoWeekLow ?? asset?.low52);
     return [
-      Number.isFinite(displayedPrice) && displayedPrice > 0 ? { id: "order", price: displayedPrice, title: orderType === "sell" ? "Sell" : "Buy", color: "#94a3b8" } : null,
+      Number.isFinite(displayedPrice) && displayedPrice > 0 ? { id: "current-price", price: displayedPrice, title: "Current price", color: "#94a3b8" } : null,
       Number.isFinite(averageEntryPrice) ? { id: "avg-entry", price: averageEntryPrice, title: "Avg entry", color: "#f59e0b" } : null,
       Number.isFinite(high52) && high52 > 0 ? { id: "52w-high", price: high52, title: "52W high", color: "rgba(34,197,94,0.72)" } : null,
       Number.isFinite(low52) && low52 > 0 ? { id: "52w-low", price: low52, title: "52W low", color: "rgba(239,68,68,0.72)" } : null
@@ -1009,8 +1010,12 @@ export function AssetModal({
 
           {isTradeEligible ? (
             <div className="order-type-toggle">
-              <button className={`buy-selector ${orderType === 'buy' ? 'active' : ''}`} onClick={() => setOrderType('buy')}>Buy</button>
-              <button className={`sell-selector ${orderType === 'sell' ? 'active' : ''}`} onClick={() => setOrderType('sell')}>Sell</button>
+              <button className={`buy-selector ${orderType === 'buy' ? 'active' : ''}`} onClick={() => setOrderType('buy')}>Increase</button>
+              <button className={`sell-selector ${orderType === 'sell' ? 'active' : ''}`} onClick={() => setOrderType('sell')}>Reduce</button>
+            </div>
+          ) : normalizedAssetKind !== "indicator" ? (
+            <div className="asset-modal-position-note">
+              Research-only view. Add this asset to a watchlist, review fundamentals, or open the company profile.
             </div>
           ) : null}
         </div>
@@ -1103,7 +1108,7 @@ export function AssetModal({
             </div>
           </div>
 	          <button className={`confirm-order-btn ${orderType}`} onClick={handleConfirmOrder} disabled={quantity <= 0 || isSubmitting}>
-	            {isSubmitting ? "Submitting..." : "Confirm Order"}
+	            {isSubmitting ? "Saving..." : "Save Plan"}
 	          </button>
 	        </footer>
         ) : null}

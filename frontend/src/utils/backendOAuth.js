@@ -5,6 +5,9 @@ export async function startOAuth(provider, { returnTo, entryPath, authMode } = {
   if (returnTo) body.returnTo = returnTo;
   if (entryPath) body.entryPath = entryPath;
   if (authMode) body.authMode = authMode;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    body.frontendOrigin = window.location.origin;
+  }
 
   const data = await zeninFetchJson("/api/auth/oauth/start", {
     method: "POST",
