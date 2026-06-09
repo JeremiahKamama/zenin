@@ -6,8 +6,8 @@
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const SIMULATED_PLAN_VALUES = new Set(["starter", "pro", "desk"]);
-const CSRF_FETCH_TIMEOUT_MS = 45000;
-const CSRF_FETCH_ATTEMPTS = 2;
+const CSRF_FETCH_TIMEOUT_MS = 12000;
+const CSRF_FETCH_ATTEMPTS = 1;
 let csrfTokenCache = null;
 
 function readCookie(name) {
@@ -79,7 +79,7 @@ async function ensureCsrfToken() {
   let lastError = null;
   for (let attempt = 1; attempt <= CSRF_FETCH_ATTEMPTS; attempt += 1) {
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const timeoutId = controller ? setTimeout(() => controller.abort(), CSRF_FETCH_TIMEOUT_MS) : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort("csrf-timeout"), CSRF_FETCH_TIMEOUT_MS) : null;
     try {
       response = await fetch(buildZeninUrl("/auth/csrf"), {
         credentials: "include",
@@ -211,11 +211,15 @@ export async function zeninFetch(endpoint, options = {}) {
   }
 
   let timeoutId = null;
+  let didTimeout = false;
   let signal = fetchOptions.signal;
   if (!signal && Number(timeoutMs) > 0 && typeof AbortController !== "undefined") {
     const controller = new AbortController();
     signal = controller.signal;
-    timeoutId = setTimeout(() => controller.abort(), Number(timeoutMs));
+    timeoutId = setTimeout(() => {
+      didTimeout = true;
+      controller.abort("request-timeout");
+    }, Number(timeoutMs));
   }
 
   try {
@@ -227,6 +231,18 @@ export async function zeninFetch(endpoint, options = {}) {
     });
 
     return response;
+  } catch (error) {
+    if (error?.name === "AbortError" && didTimeout) {
+      throw new ZeninRequestError("Zenin's backend is taking too long to respond. Please wait a moment and try again.", {
+        status: 0,
+        code: "REQUEST_TIMEOUT",
+        error: "Request timeout",
+        retryable: true,
+        endpoint: url,
+        cause: error,
+      });
+    }
+    throw error;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
@@ -254,11 +270,11 @@ export async function zeninFetchJson(endpoint, options = {}) {
     }
 
     if (error?.name === "AbortError") {
-      throw new ZeninRequestError("Request was cancelled before it completed.", {
+      throw new ZeninRequestError("Zenin's backend did not respond before the request was cancelled. Please wait a moment and try again.", {
         status: 0,
         code: "REQUEST_ABORTED",
         error: "Request aborted",
-        retryable: false,
+        retryable: true,
         details: null,
         endpoint: buildZeninUrl(endpoint),
         cause: error,

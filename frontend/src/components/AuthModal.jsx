@@ -21,6 +21,16 @@ function isStrongPassword(password) {
   return value.length >= 10 && /[a-z]/i.test(value) && /\d/.test(value) && /[^a-z0-9]/i.test(value);
 }
 
+function getAuthErrorMessage(error, fallback) {
+  if (error?.code === "AUTH_SERVICE_TIMEOUT" || error?.code === "REQUEST_TIMEOUT") {
+    return "Zenin's auth service is still waking up. Please try again in a moment, or wait for the backend health check to recover.";
+  }
+  if (error?.status === 503 || error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED") {
+    return "Zenin's auth service is temporarily unavailable or still waking up. Please wait a moment and try signing in again.";
+  }
+  return error?.message || fallback;
+}
+
 /**
  * AuthModal provides a Sign In / Sign Up flow as a modal.
  * Includes a "Continue as Guest" option.
@@ -109,7 +119,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       if (!me?.authenticated || !me?.user) throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
       redirectToApp();
     } catch (err) {
-      setError(err.message || "Failed to sign in");
+      setError(getAuthErrorMessage(err, "Failed to sign in"));
     } finally {
       setLoading(false);
     }
@@ -135,7 +145,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       if (!me?.authenticated || !me?.user) throw new Error("Signed up but Zenin could not start your workspace session.");
       redirectToApp();
     } catch (err) {
-      setError(err.message || "Failed to create account");
+      setError(getAuthErrorMessage(err, "Failed to create account"));
     } finally {
       setLoading(false);
     }
@@ -148,7 +158,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       const returnTo = getRedirectUrl("/auth?mode=signin");
       await import("../utils/backendOAuth").then(({ startOAuth }) => startOAuth(provider, { returnTo }));
     } catch (err) {
-      setError(err.message || "OAuth failed");
+      setError(getAuthErrorMessage(err, "OAuth failed"));
     } finally {
       setLoading(false);
     }
@@ -163,7 +173,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }) });
       setMode("forgot_success");
     } catch (err) {
-      setError(err.message || "Failed to send reset link");
+      setError(getAuthErrorMessage(err, "Failed to send reset link"));
     } finally {
       setLoading(false);
     }

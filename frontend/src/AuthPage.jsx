@@ -60,7 +60,7 @@ function getAuthActionErrorMessage(error) {
   if (error?.code === "VERIFICATION_CODE_STORAGE_FAILED") {
     return "Zenin could not create a fresh verification code. Please try again in a moment.";
   }
-  if (error?.code === "AUTH_SERVICE_TIMEOUT") {
+  if (error?.code === "AUTH_SERVICE_TIMEOUT" || error?.code === "REQUEST_TIMEOUT") {
     return "Zenin's auth service is still waking up. Please try again in a moment, or wait for the backend health check to recover.";
   }
   if (error?.status === 503 || error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED") {

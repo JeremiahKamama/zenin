@@ -38439,6 +38439,210 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   color: #f8fafc;
 }
 
+.watchlist-import-trigger,
+.watchlist-import-primary {
+  min-height: 40px;
+  padding: 0 13px;
+  border: 1px solid rgba(34, 211, 238, 0.42);
+  border-radius: 7px;
+  background: rgba(34, 211, 238, 0.12);
+  color: #dffbff;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.watchlist-import-trigger:hover,
+.watchlist-import-trigger:focus-visible,
+.watchlist-import-primary:hover:not(:disabled),
+.watchlist-import-primary:focus-visible:not(:disabled) {
+  border-color: rgba(34, 211, 238, 0.72);
+  background: rgba(34, 211, 238, 0.2);
+  color: #ffffff;
+}
+
+.watchlist-import-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.watchlist-import-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 13px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  background: rgba(2, 6, 23, 0.56);
+}
+
+.watchlist-import-head,
+.watchlist-import-actions,
+.watchlist-import-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.watchlist-import-head span,
+.watchlist-import-preview-head span,
+.watchlist-import-upload > span,
+.watchlist-import-textarea > span {
+  display: block;
+  color: #67e8f9;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.watchlist-import-head strong {
+  display: block;
+  margin-top: 4px;
+  color: #f8fafc;
+  font-size: 14px;
+}
+
+.watchlist-import-source-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.watchlist-import-source-grid button {
+  min-height: 82px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.58);
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.watchlist-import-source-grid button.active {
+  border-color: rgba(34, 211, 238, 0.62);
+  background: rgba(34, 211, 238, 0.12);
+}
+
+.watchlist-import-source-grid strong,
+.watchlist-import-preview-list strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 12px;
+}
+
+.watchlist-import-source-grid span,
+.watchlist-import-preview p,
+.watchlist-import-preview-list span,
+.watchlist-import-preview-list em,
+.watchlist-import-preview-list small,
+.watchlist-import-preview-head em {
+  display: block;
+  margin-top: 4px;
+  color: rgba(203, 213, 225, 0.72);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.watchlist-import-body {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.55fr) minmax(260px, 1fr) minmax(220px, 0.72fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.watchlist-import-upload,
+.watchlist-import-textarea,
+.watchlist-import-preview {
+  min-height: 144px;
+  padding: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.watchlist-import-upload {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.watchlist-import-upload input {
+  width: 100%;
+  color: rgba(226, 232, 240, 0.86);
+  font-size: 12px;
+}
+
+.watchlist-import-textarea {
+  display: grid;
+  gap: 8px;
+}
+
+.watchlist-import-textarea textarea {
+  width: 100%;
+  min-height: 104px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 6px;
+  background: rgba(2, 6, 23, 0.54);
+  color: #f8fafc;
+  padding: 10px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.watchlist-import-textarea textarea:focus-visible,
+.watchlist-import-source-grid button:focus-visible,
+.watchlist-import-upload input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(7, 11, 20, 0.94), 0 0 0 4px rgba(96, 165, 250, 0.85);
+}
+
+.watchlist-import-preview-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.watchlist-import-preview-list > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
+  background: rgba(2, 6, 23, 0.46);
+}
+
+.watchlist-import-preview-list em {
+  grid-column: 2;
+  margin-top: 0;
+}
+
+.watchlist-import-status {
+  padding: 9px 11px;
+  border: 1px solid rgba(34, 197, 94, 0.24);
+  border-radius: 6px;
+  background: rgba(34, 197, 94, 0.1);
+  color: #bbf7d0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.watchlist-import-status.error {
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(127, 29, 29, 0.18);
+  color: #fecaca;
+}
+
 .watchlist-alert-chip {
   display: inline-flex;
   justify-content: center;
@@ -39203,6 +39407,45 @@ body.light-theme-active .settings-ops-checklist > div {
   background: rgba(255, 255, 255, 0.96);
 }
 
+body.light-theme-active .watchlist-import-panel,
+body.light-theme-active .watchlist-import-upload,
+body.light-theme-active .watchlist-import-textarea,
+body.light-theme-active .watchlist-import-preview,
+body.light-theme-active .watchlist-import-source-grid button,
+body.light-theme-active .watchlist-import-preview-list > div {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(248, 250, 252, 0.92);
+}
+
+body.light-theme-active .watchlist-import-source-grid button.active,
+body.light-theme-active .watchlist-import-trigger,
+body.light-theme-active .watchlist-import-primary {
+  border-color: rgba(3, 105, 161, 0.32);
+  background: rgba(224, 242, 254, 0.92);
+  color: #075985;
+}
+
+body.light-theme-active .watchlist-import-head strong,
+body.light-theme-active .watchlist-import-source-grid strong,
+body.light-theme-active .watchlist-import-preview-list strong,
+body.light-theme-active .watchlist-import-textarea textarea {
+  color: #0f172a;
+}
+
+body.light-theme-active .watchlist-import-source-grid span,
+body.light-theme-active .watchlist-import-preview p,
+body.light-theme-active .watchlist-import-preview-list span,
+body.light-theme-active .watchlist-import-preview-list em,
+body.light-theme-active .watchlist-import-preview-list small,
+body.light-theme-active .watchlist-import-preview-head em {
+  color: rgba(51, 65, 85, 0.72);
+}
+
+body.light-theme-active .watchlist-import-textarea textarea {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+}
+
 body.light-theme-active .settings-ops-card span,
 body.light-theme-active .settings-ops-checklist strong {
   color: #0369a1;
@@ -39210,15 +39453,21 @@ body.light-theme-active .settings-ops-checklist strong {
 
 @media (max-width: 1200px) {
   .tax-scenario-workbench,
-  .settings-ops-grid {
+  .settings-ops-grid,
+  .watchlist-import-source-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .watchlist-import-body {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 760px) {
   .tax-scenario-workbench,
   .settings-ops-grid,
-  .settings-ops-checklist {
+  .settings-ops-checklist,
+  .watchlist-import-source-grid {
     grid-template-columns: 1fr;
   }
 

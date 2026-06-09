@@ -2964,6 +2964,61 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   };
 
+  const importWatchlistAssets = async (incomingAssets = [], meta = {}) => {
+    if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
+      const message = `Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to import into this shared watchlist.`;
+      setWatchlistNotice(message);
+      throw new Error(message);
+    }
+
+    const normalizedAssets = mergeWatchlistEntries([], incomingAssets)
+      .map((asset) => ({
+        symbol: normalizeSymbolKey(asset.symbol),
+        name: String(asset.name || asset.symbol || "").trim() || normalizeSymbolKey(asset.symbol),
+        type: normalizeAssetType(asset),
+        category: String(asset.category || activeCategory || "").trim().toLowerCase() || null,
+        theme: String(asset.theme || "").trim() || null,
+        marketType: resolveMarketType(asset),
+        date_added: asset.date_added || new Date().toISOString()
+      }))
+      .filter((asset) => asset.symbol);
+
+    if (!normalizedAssets.length) {
+      throw new Error("No valid watchlist rows were found in that import.");
+    }
+
+    const beforeKeys = new Set((Array.isArray(watchlistAssets) ? watchlistAssets : []).map((asset) => getAssetCatalogKey(asset)));
+    const nextAssets = mergeAssetPrices(mergeWatchlistEntries(watchlistAssets, normalizedAssets), watchlistAssets);
+    const importedCount = nextAssets.filter((asset) => !beforeKeys.has(getAssetCatalogKey(asset))).length;
+    setWatchlistAssets(nextAssets);
+    setWatchlistStale(false);
+    setWatchlistNotice(`${normalizedAssets.length} row${normalizedAssets.length === 1 ? "" : "s"} imported${meta?.source ? ` from ${meta.source}` : ""}.`);
+
+    if (!hasAuthToken() || isGuestUser) {
+      return { imported: normalizedAssets.length, saved: false };
+    }
+
+    try {
+      const res = await zeninFetch(`/db/watchlist/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets: normalizedAssets })
+      });
+      if (!res.ok) throw new Error(`Watchlist import failed: ${res.status}`);
+      const data = await res.json();
+      const savedAssets = Array.isArray(data?.assets) ? data.assets : [];
+      if (savedAssets.length) {
+        setWatchlistAssets((prev) => mergeAssetPrices(mergeWatchlistEntries(prev, savedAssets), prev));
+      }
+      return { imported: normalizedAssets.length, added: importedCount, saved: true };
+    } catch (error) {
+      console.warn("Watchlist import saved locally; backend sync failed.", error);
+      setWatchlistStale(true);
+      setWatchlistNotice("Imported locally. Zenin could not sync the batch to the backend yet.");
+      return { imported: normalizedAssets.length, added: importedCount, saved: false };
+    }
+  };
+
   const removeFromWatchlist = async ({ symbol, marketType, category = null, theme = null }) => {
     if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
       setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to manage this shared watchlist.`);
@@ -5798,6 +5853,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                     setWatchlistNotice(`Upgrade to ${lockedWatchlistPlanLabel} to manage this shared watchlist.`);
                     return "locked";
                   }}
+                  onImportAssets={() => {
+                    const message = `Upgrade to ${lockedWatchlistPlanLabel} to import into this shared watchlist.`;
+                    setWatchlistNotice(message);
+                    throw new Error(message);
+                  }}
                   onPageChange={handlePageChange}
                   liveStatus={liveStreamStatus}
                   lastLivePriceAt={lastLivePriceAt}
@@ -5930,6 +5990,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               stockThemes={stockThemes}
               isInWatchlist={isInWatchlist}
               onToggleStar={toggleWatchlistStar}
+              onImportAssets={importWatchlistAssets}
               onPageChange={handlePageChange}
               liveStatus={liveStreamStatus}
               lastLivePriceAt={lastLivePriceAt}
