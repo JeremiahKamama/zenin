@@ -112,8 +112,9 @@ export default function AuthPage() {
 
   const handleGuestEntry = () => {
     try {
-      localStorage.removeItem("zenin_auth_user");
-      localStorage.removeItem("zenin_auth_expires_at");
+      // Mark this browser as a guest full-access session so the app can
+      // treat the user like a dev/full-access user without backend auth.
+      localStorage.setItem("zenin_guest_full_access", "1");
     } catch {}
     const guestTarget = new URL(getGuestWorkspacePath(), window.location.origin);
     guestTarget.searchParams.set("guest", "1");

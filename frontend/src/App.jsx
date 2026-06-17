@@ -269,6 +269,9 @@ function isGuestAccessRequested() {
 }
 
 function isDevFullAccessEnabled() {
+  try {
+    if (typeof window !== "undefined" && localStorage.getItem("zenin_guest_full_access") === "1") return true;
+  } catch {}
   return Boolean(import.meta.env.DEV && String(import.meta.env.VITE_ZENIN_DEV_FULL_ACCESS || "").trim().toLowerCase() === "true");
 }
 
@@ -3244,7 +3247,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return "";
     }
   });
-  const [isGuestUser, setIsGuestUser] = useState(() => devFullAccess || allowGuestAccess);
+  const [isGuestUser, setIsGuestUser] = useState(() => (devFullAccess ? false : allowGuestAccess));
   const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
 
   const dispatchWatchlistAlertEmail = useCallback(async (asset, intent) => {
@@ -3490,13 +3493,15 @@ const handleOptionTradeClosed = async (tradeId) => {
     const hydrateRequiredAuth = async () => {
       if (devFullAccess) {
         const devUser = buildDevFullAccessUser();
-        localStorage.setItem("zenin_email", devUser.email);
-        localStorage.removeItem("zenin_auth_user");
-        localStorage.removeItem("zenin_auth_expires_at");
+        try {
+          localStorage.setItem("zenin_email", devUser.email);
+          localStorage.setItem("zenin_auth_user", JSON.stringify(devUser));
+        } catch {}
         if (!mounted) return;
         setUserEmail(devUser.email);
         setIsAdmin(true);
-        setIsGuestUser(true);
+        // Dev/full-access should behave like a signed-in admin user, not a guest.
+        setIsGuestUser(false);
         setAuthUserId(String(devUser.id));
         setAuthDisplayName(devUser.displayName);
         setCurrentPlan("desk");
@@ -3508,6 +3513,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         setWorkspaceInvites([]);
         setWorkspaceActivity([]);
         settingsSyncReadyRef.current = false;
+        clearGuestQueryFromAppUrl();
         setAccessCheckLoading(false);
         return;
       }
