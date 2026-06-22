@@ -198,8 +198,9 @@ export function AssetModal({
           priceChangePercent: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
           source: row?.source || data?.providers?.[0]?.source || null
         });
-      } catch {
+      } catch (error) {
         if (cancelled) return;
+        console.warn("[AssetModal] Live quote fetch failed:", error?.message || error);
       }
     };
 

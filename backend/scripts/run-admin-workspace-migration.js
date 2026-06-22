@@ -18,5 +18,7 @@ main()
   .finally(async () => {
     try {
       await closeDatabase();
-    } catch {}
+    } catch (error) {
+      console.warn("[Migration] Database close failed:", error?.message || error);
+    }
   });
