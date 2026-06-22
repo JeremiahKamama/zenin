@@ -11064,7 +11064,17 @@ app.get("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorkspa
 
 app.get("/api/db/trade-executions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const executions = await userWorkspace.tradeFills.getExecutions(req.auth.userId, req.query || {}, req.workspace?.workspace?.id || null);
+    const filters = req.query || {};
+    if (filters.limit != null && (!Number.isFinite(Number(filters.limit)) || Number(filters.limit) < 1)) {
+      return res.status(400).json({ error: "limit must be a positive integer." });
+    }
+    if (filters.from && Number.isNaN(new Date(filters.from).getTime())) {
+      return res.status(400).json({ error: "from must be a valid ISO date string." });
+    }
+    if (filters.to && Number.isNaN(new Date(filters.to).getTime())) {
+      return res.status(400).json({ error: "to must be a valid ISO date string." });
+    }
+    const executions = await userWorkspace.tradeFills.getExecutions(req.auth.userId, filters, req.workspace?.workspace?.id || null);
     res.json({
       executions,
       source: "api_connections",
@@ -11086,7 +11096,11 @@ app.get("/api/db/trade-fees/summary", requireSignedIn, attachActiveWorkspace, re
 
 app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const notifications = await userWorkspace.notifications.getAll(req.auth.userId, req.query || {}, req.workspace?.workspace?.id || null);
+    const options = req.query || {};
+    if (options.limit != null && (!Number.isFinite(Number(options.limit)) || Number(options.limit) < 1)) {
+      return res.status(400).json({ error: "limit must be a positive integer." });
+    }
+    const notifications = await userWorkspace.notifications.getAll(req.auth.userId, options, req.workspace?.workspace?.id || null);
     const unreadCount = notifications.filter((item) => !item.readAt).length;
     res.json({ notifications, unreadCount });
   } catch (error) {
@@ -11096,7 +11110,11 @@ app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWor
 
 app.post("/api/notifications/:id/read", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
-    const notification = await userWorkspace.notifications.markRead(req.auth.userId, req.params.id, req.workspace?.workspace?.id || null);
+    const notificationId = Number(req.params.id);
+    if (!Number.isFinite(notificationId) || notificationId < 1 || !Number.isInteger(notificationId)) {
+      return res.status(400).json({ error: "Notification id must be a positive integer." });
+    }
+    const notification = await userWorkspace.notifications.markRead(req.auth.userId, notificationId, req.workspace?.workspace?.id || null);
     if (!notification) return res.status(404).json({ error: "Notification not found" });
     res.json({ notification });
   } catch (error) {

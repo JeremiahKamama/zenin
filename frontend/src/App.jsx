@@ -269,10 +269,11 @@ function isGuestAccessRequested() {
 }
 
 function isDevFullAccessEnabled() {
+  if (!import.meta.env.DEV) return false;
   try {
     if (typeof window !== "undefined" && localStorage.getItem("zenin_guest_full_access") === "1") return true;
   } catch {}
-  return Boolean(import.meta.env.DEV && String(import.meta.env.VITE_ZENIN_DEV_FULL_ACCESS || "").trim().toLowerCase() === "true");
+  return Boolean(String(import.meta.env.VITE_ZENIN_DEV_FULL_ACCESS || "").trim().toLowerCase() === "true");
 }
 
 function buildDevFullAccessUser() {
@@ -3440,7 +3441,8 @@ const handleOptionTradeClosed = async (tradeId) => {
       "zenin_tax_audit_trail",
       "zenin_fx_rates",
       "zenin_pricing_billing_cycle",
-      "zenin_post_auth_next"
+      "zenin_post_auth_next",
+      "zenin_guest_full_access"
     ];
 
     try {

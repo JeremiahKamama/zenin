@@ -8,6 +8,9 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
+# Build output
+frontend/dist/
+
 # Local runtime artifacts
 backend/*.db
 backend/*.sqlite
