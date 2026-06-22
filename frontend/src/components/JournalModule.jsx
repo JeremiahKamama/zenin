@@ -349,8 +349,8 @@ export function JournalModule({
           if (!symbol || !Number.isFinite(price)) return;
           target[symbol] = price;
         });
-      } catch {
-        // keep best-effort behavior
+      } catch (error) {
+        console.warn("[Journal] Watchlist price enrichment failed:", error?.message || error);
       }
     };
 
@@ -367,7 +367,8 @@ export function JournalModule({
         if (!Number.isFinite(price)) return false;
         target[symbol] = price;
         return true;
-      } catch {
+      } catch (error) {
+        console.warn(`[Journal] Search price lookup failed for ${symbol}:`, error?.message || error);
         return false;
       }
     };

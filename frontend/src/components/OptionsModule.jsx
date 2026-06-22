@@ -1394,8 +1394,8 @@ useEffect(() => {
           if (Number.isFinite(resolvedIv) && resolvedIv > 0) {
             setTermIvByExpiry((prev) => ({ ...prev, [String(expiryTs)]: Number(resolvedIv) }));
           }
-        } catch {
-          // silent fallback to available data
+        } catch (error) {
+          console.warn("[Options] Term IV fetch failed for expiry", expiryTs, ":", error?.message || error);
         } finally {
           state.inFlight.delete(cacheKey);
         }

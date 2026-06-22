@@ -253,8 +253,8 @@ export function OptionsCalculator({   spotPrice = 0,
           };
         }));
       }
-    } catch {
-      // Silent fail — user values stay intact
+    } catch (error) {
+      console.warn("[OptionsCalc] Deribit Greeks fetch failed:", error?.message || error);
     } finally {
       setDeribitGreeksLoading(prev => ({ ...prev, [i]: false }));
     }

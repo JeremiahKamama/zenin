@@ -376,15 +376,15 @@ async function getRevenueCatCustomerSnapshot({ customerId = null, userId = null,
     revenueCatList(
       `/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(resolvedCustomerId)}/subscriptions`,
       { limit: 20 }
-    ).catch(() => []),
+    ).catch((error) => { console.warn("[RevenueCat] Subscriptions fetch failed:", error?.message || error); return []; }),
     revenueCatList(
       `/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(resolvedCustomerId)}/active_entitlements`,
       { limit: 20 }
-    ).catch(() => []),
+    ).catch((error) => { console.warn("[RevenueCat] Active entitlements fetch failed:", error?.message || error); return []; }),
     revenueCatList(
       `/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(resolvedCustomerId)}/invoices`,
       { limit: 12 }
-    ).catch(() => [])
+    ).catch((error) => { console.warn("[RevenueCat] Invoices fetch failed:", error?.message || error); return []; })
   ]);
 
   const mappedCustomer = mapRevenueCatCustomer(customer);

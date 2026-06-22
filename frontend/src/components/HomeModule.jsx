@@ -361,8 +361,8 @@ export function HomeModule({
           if (!perf) continue;
           moversPerfCacheRef.current.set(key, perf);
           nextByKey[key] = perf;
-        } catch {
-          // ignore per-symbol failures
+        } catch (error) {
+          console.warn(`[Home] Performance fetch failed for ${key}:`, error?.message || error);
         }
       }
     };
@@ -468,7 +468,8 @@ export function HomeModule({
             return `${symbol} earnings ${date ? `on ${date}` : "upcoming"}`;
           })
         });
-      } catch {
+      } catch (error) {
+        console.warn("[Home] Today view headlines fetch failed:", error?.message || error);
         if (!cancelled) {
           setTodayView((prev) => ({
             ...prev,

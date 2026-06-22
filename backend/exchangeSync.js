@@ -33,7 +33,8 @@ function uniqueValues(values = []) {
 async function safeJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    console.warn("[ExchangeSync] Failed to parse JSON response:", error?.message || error);
     return null;
   }
 }
@@ -176,7 +177,8 @@ function parseBybitExtraFees(extraFees) {
     try {
       const parsed = JSON.parse(extraFees);
       return Array.isArray(parsed) ? parsed : [];
-    } catch {
+    } catch (error) {
+      console.warn("[ExchangeSync] Failed to parse Bybit extra fees:", error?.message || error);
       return [];
     }
   }
@@ -362,7 +364,8 @@ async function syncBinance(apiKey, apiSecret, context = {}) {
         try {
           const oiData = await fetchJsonOrThrow(fetch, `https://fapi.binance.com/fapi/v1/openInterest?symbol=${position.symbol}`, undefined, `Binance OI fetch failed for ${position.symbol}`);
           openInterest = toNumber(oiData?.openInterest);
-        } catch {
+        } catch (error) {
+          console.warn(`[Binance] Open interest fetch failed for ${position.symbol}:`, error?.message || error);
           openInterest = null;
         }
         return {

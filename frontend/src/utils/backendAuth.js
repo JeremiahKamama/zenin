@@ -178,7 +178,8 @@ export async function ensureZeninSessionFromSupabase() {
     const me = await zeninFetchJson("/api/auth/me");
     persistZeninAuth(me);
     return me;
-  } catch {
+  } catch (error) {
+    console.warn("[Auth] ensureZeninSessionFromSupabase failed:", error?.message || error);
     return null;
   }
 }
