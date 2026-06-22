@@ -1522,7 +1522,7 @@ function sanitizeWorkspaceInvite(invite = null) {
 }
 
 function createVerificationCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 function createBackupCodes() {
@@ -2099,7 +2099,12 @@ function isSignedInAdmin(req) {
 function hasValidMigrationKey(req) {
   if (!ADMIN_MIGRATION_KEY) return false;
   const provided = String(req.headers["x-migration-key"] || "").trim();
-  return provided && provided === ADMIN_MIGRATION_KEY;
+  if (!provided) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_MIGRATION_KEY));
+  } catch {
+    return false;
+  }
 }
 
 function buildSecurityDiff(before = {}, after = {}) {
@@ -5747,7 +5752,7 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
       emailVerified: false
     });
 
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
     const { hash: codeHash } = derivePasswordHash(verificationCode);
     
     await userAuth.updateUserVerificationCode(created.id, codeHash);
@@ -5877,7 +5882,11 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
       } else {
         // sms or email
         const expectedHash = hashToken(`${user.twoFactorMethod}:${verificationCode}`);
-        mfaValid = (expectedHash === user.twoFactorSecretHash);
+        try {
+          mfaValid = crypto.timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(String(user.twoFactorSecretHash || ""), "hex"));
+        } catch {
+          mfaValid = false;
+        }
       }
 
       // If TOTP/SMS/Email code failed, check backup codes (#BackupCodeHashing)
@@ -6165,7 +6174,7 @@ app.post("/api/auth/resend-verification", async (req, res) => {
       }
     }
 
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
     const { hash: codeHash } = derivePasswordHash(verificationCode);
 
     try {

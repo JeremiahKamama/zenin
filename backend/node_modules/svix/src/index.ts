@@ -17,20 +17,20 @@ import { Streaming } from "./api/streaming";
 import { OperationalWebhookEndpoint } from "./api/operationalWebhookEndpoint";
 import type { SvixRequestContext } from "./request";
 
-export { PostOptions, ApiException } from "./util";
+export { type PostOptions, ApiException } from "./util";
 export { HTTPValidationError, HttpErrorOut, ValidationError } from "./HttpErrors";
 export * from "./webhook";
 export * from "./models/index";
 import type { XOR } from "./util";
 
-export { ApplicationListOptions } from "./api/application";
-export { BackgroundTaskListOptions } from "./api/backgroundTask";
-export { EndpointListOptions, EndpointGetStatsOptions } from "./api/endpoint";
-export { EventTypeListOptions } from "./api/eventType";
-export { IntegrationListOptions } from "./api/integration";
-export { MessageListOptions, messageInRaw } from "./api/message";
-export { MessageAttemptListByEndpointOptions } from "./api/messageAttempt";
-export { OperationalWebhookEndpointListOptions } from "./api/operationalWebhookEndpoint";
+export type { ApplicationListOptions } from "./api/application";
+export type { BackgroundTaskListOptions } from "./api/backgroundTask";
+export type { EndpointListOptions, EndpointGetStatsOptions } from "./api/endpoint";
+export type { EventTypeListOptions } from "./api/eventType";
+export type { IntegrationListOptions } from "./api/integration";
+export { type MessageListOptions, messageInRaw } from "./api/message";
+export type { MessageAttemptListByEndpointOptions } from "./api/messageAttempt";
+export type { OperationalWebhookEndpointListOptions } from "./api/operationalWebhookEndpoint";
 
 export type SvixOptions = {
   debug?: boolean;
@@ -65,7 +65,7 @@ const REGIONS = [
 ];
 
 export class Svix {
-  private readonly requestCtx: SvixRequestContext;
+  protected readonly requestCtx: SvixRequestContext;
 
   public constructor(token: string, options: SvixOptions = {}) {
     const regionalUrl = REGIONS.find((x) => x.region === token.split(".")[1])?.url;
@@ -163,3 +163,6 @@ export class Svix {
     return new OperationalWebhookEndpoint(this.requestCtx);
   }
 }
+
+// Last to avoid circular dependency
+export * from "./autoconfig";
