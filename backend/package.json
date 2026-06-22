@@ -13,7 +13,9 @@
     "telegram:session": "node scripts/telegram-session.js",
     "migrate:admin-workspace": "node scripts/run-admin-workspace-migration.js",
     "security:workspace-smoke": "node scripts/security-workspace-smoke.js",
-    "test:integration": "node --test test/integration/*.test.js"
+    "test:integration": "node --test test/integration/*.test.js",
+    "test:unit": "node --test test/unit/*.test.js",
+    "test": "node --test test/unit/*.test.js"
   },
   "dependencies": {
     "@simplewebauthn/server": "^9.0.3",
