@@ -689,5 +689,15 @@ module.exports = {
   syncHyperliquid,
   syncBinance,
   syncBybit,
-  verifyExchangeCredentialScope
+  verifyExchangeCredentialScope,
+  _internals: {
+    toNumber,
+    roundMoney,
+    toIsoString,
+    toDateString,
+    uniqueValues,
+    buildTradeAndFillRecord,
+    deriveBinanceSpotSymbols,
+    parseBybitExtraFees,
+  },
 };

@@ -217,5 +217,13 @@ async function fetchFarsideEtfFlows(fetchImpl) {
 
 module.exports = {
   FARSIDE_ETF_SOURCES,
-  fetchFarsideEtfFlows
+  fetchFarsideEtfFlows,
+  _internals: {
+    decodeHtmlEntities,
+    flattenFarsideHtml,
+    parseFarsideNumber,
+    toIsoDate,
+    extractLatestCompletedRow,
+    buildFlowRows,
+  },
 };
