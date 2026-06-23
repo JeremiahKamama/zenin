@@ -191,6 +191,75 @@ const alertDispatchSchema = z.object({
   asset: z.record(z.any()).optional().nullable(),
 });
 
+const decisionThreadCreateSchema = z.object({
+  title: z.string().min(1).max(200).trim(),
+  symbol: z.string().max(32).trim().optional().nullable(),
+  assetType: z.enum(["equity", "crypto", "option", "prediction", "macro"]).optional().nullable(),
+  sourceType: z.enum(["daily_briefing", "alert", "trade_execution", "research", "manual"]).optional().default("manual"),
+  sourceId: z.string().max(120).optional().nullable(),
+  status: z.enum(["new", "triaged", "researching", "journaled", "review_due", "reviewed", "archived"]).optional().default("new"),
+  priority: z.enum(["low", "medium", "high"]).optional().default("medium"),
+  dueAt: z.string().datetime().optional().nullable(),
+  linkedAlertKey: z.string().max(120).optional().nullable(),
+  linkedResearchId: z.string().max(120).optional().nullable(),
+  linkedJournalId: z.string().max(120).optional().nullable(),
+  linkedTradeExecutionId: z.string().max(120).optional().nullable(),
+});
+
+const decisionThreadUpdateSchema = z.object({
+  title: z.string().min(1).max(200).trim().optional(),
+  symbol: z.string().max(32).trim().optional().nullable(),
+  assetType: z.enum(["equity", "crypto", "option", "prediction", "macro"]).optional().nullable(),
+  sourceType: z.enum(["daily_briefing", "alert", "trade_execution", "research", "manual"]).optional(),
+  sourceId: z.string().max(120).optional().nullable(),
+  status: z.enum(["new", "triaged", "researching", "journaled", "review_due", "reviewed", "archived"]).optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+  dueAt: z.string().datetime().optional().nullable(),
+  linkedAlertKey: z.string().max(120).optional().nullable(),
+  linkedResearchId: z.string().max(120).optional().nullable(),
+  linkedJournalId: z.string().max(120).optional().nullable(),
+  linkedTradeExecutionId: z.string().max(120).optional().nullable(),
+  outcome: z.record(z.any()).optional(),
+});
+
+const decisionThreadReviewSchema = z.object({
+  result: z.enum(["win", "loss", "breakeven", "avoided", "missed", "reviewed"]),
+  pnl: z.number().optional().nullable(),
+  lesson: z.string().max(1200).optional().nullable(),
+  mistakeTag: z.string().max(80).optional().nullable(),
+});
+
+const decisionThreadLinkResearchSchema = z.object({
+  researchId: z.string().min(1).max(120).trim(),
+});
+
+const decisionThreadJournalSchema = z.object({
+  id: z.string().max(120).optional().nullable(),
+  sourceTradeKey: z.string().max(120).optional().nullable(),
+  symbol: z.string().max(32).optional().nullable(),
+  tradeDate: z.string().max(20).optional().nullable(),
+  side: z.string().max(16).optional().nullable(),
+  quantity: z.number().optional().nullable(),
+  price: z.number().optional().nullable(),
+  notional: z.number().optional().nullable(),
+  marketType: z.string().max(32).optional().nullable(),
+  strategy: z.string().max(80).optional().nullable(),
+  setupTag: z.string().max(80).optional().nullable(),
+  marketRegime: z.string().max(80).optional().nullable(),
+  timeframe: z.string().max(32).optional().nullable(),
+  emotion: z.string().max(40).optional().nullable(),
+  confidence: z.number().optional().nullable(),
+  preThesis: z.string().max(1200).optional().nullable(),
+  postReview: z.string().max(1200).optional().nullable(),
+  mistakeCategory: z.string().max(80).optional().nullable(),
+  learned: z.string().max(1200).optional().nullable(),
+  chartLink: z.string().max(500).optional().nullable(),
+});
+
+const dailyBriefingGenerateSchema = z.object({
+  date: z.string().max(20).optional().nullable(),
+});
+
 const watchlistBulkSchema = z.object({
   assets: z.array(watchlistAssetSchema),
 });
@@ -288,11 +357,7 @@ const exchangeKeySchema = z.object({
   exchange: z.preprocess(normalizeExchangeId, z.enum(supportedExchangeIds)),
   apiKey: z.string().min(1).max(255),
   apiSecret: z.string().max(255).optional().nullable(),
-  extraData: z.record(z.any()).optional().nullable(),
-  permissionScope: z.enum(["unknown", "read_only", "trade"]).optional().default("unknown"),
-  canTrade: z.boolean().optional().default(false),
-  lastVerifiedScope: z.enum(["unknown", "read_only", "trade"]).optional().default("unknown"),
-  riskLevel: z.enum(["standard", "sensitive", "trading"]).optional().default("standard"),
+  extraData: z.record(z.any()).optional().nullable()
 });
 
 const validate = (schema, source = "body") => (req, res, next) => {
@@ -353,4 +418,10 @@ module.exports = {
   cryptoOptionsSchema,
   equityOptionsQuerySchema,
   exchangeKeySchema,
+  decisionThreadCreateSchema,
+  decisionThreadUpdateSchema,
+  decisionThreadReviewSchema,
+  decisionThreadLinkResearchSchema,
+  decisionThreadJournalSchema,
+  dailyBriefingGenerateSchema,
 };

@@ -2727,7 +2727,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   </div>
 
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <table className="analytics-inline-table">
                       <thead>
                         <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                           <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Instrument</th>
@@ -2799,7 +2799,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   </div>
 
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <table className="analytics-inline-table">
                       <thead>
                         <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                           <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Asset</th>
@@ -4384,7 +4384,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 </div>
 
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <table className="analytics-inline-table">
                     <thead>
                       <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                         <th style={{ padding: "8px 16px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Indicator</th>
@@ -5011,7 +5011,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     {/* Left: Custom flow ledger */}
                     <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
                       <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Flow Ledger</div>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <table className="analytics-inline-table">
                         <thead>
                           <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                             <th style={{ padding: "6px 4px" }}>Date</th>
@@ -5216,7 +5216,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     {/* Left: Interactive Curve Ladder */}
                     <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
                       <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Curve Ladder</div>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <table className="analytics-inline-table">
                         <thead>
                           <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                             <th style={{ padding: "6px 4px" }}>Contract</th>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
+import { Sparkline } from "./Sparkline";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
@@ -3709,6 +3710,18 @@ function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction }) {
 function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnection }) {
   if (!open) return null;
 
+  const renderScopeBadge = (account) => {
+    const trust = account?.providerTrust;
+    const status = String(trust?.scopeStatus || "scope_unverified").trim().toLowerCase();
+    let label = "Scope unverified";
+    let tone = "unverified";
+    if (status === "verified_read_only") { label = "Verified read-only"; tone = "verified"; }
+    else if (status === "verified_watch_only") { label = "Watch-only"; tone = "verified"; }
+    else if (status === "rejected_trade_enabled") { label = "Trading key rejected"; tone = "rejected"; }
+    else if (status === "sync_failed") { label = "Sync failed"; tone = "unverified"; }
+    return <span className={`provider-trust-pill provider-trust-pill-${tone}`}>{label}</span>;
+  };
+
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
@@ -3729,18 +3742,26 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnecti
         <div className="saved-items-drawer-content">
           {accounts.length ? (
             <section className="saved-items-section">
-              {accounts.map((account) => (
-                <div key={account.id || `${account.exchange}-${account.username}`} className="saved-items-row connection-row">
-                  <div className="saved-items-row-copy">
-                    <strong>{account.provider || account.exchange || "Connected venue"}</strong>
-                    <span>{account.username || "Workspace source"} · {String(account.venueType || "cex").toUpperCase()}</span>
+              {accounts.map((account) => {
+                const trust = account?.providerTrust;
+                const cannotTrade = trust ? trust.cannotTrade : true;
+                const cannotWithdraw = trust ? trust.cannotWithdraw : true;
+                return (
+                  <div key={account.id || `${account.exchange}-${account.username}`} className="saved-items-row connection-row">
+                    <div className="saved-items-row-copy">
+                      <strong>{account.provider || account.exchange || "Connected venue"}</strong>
+                      <span>{account.username || "Workspace source"} · {String(account.venueType || "cex").toUpperCase()}</span>
+                      {cannotTrade && cannotWithdraw ? (
+                        <span className="connection-row-trust-note">Zenin cannot trade or withdraw from this account.</span>
+                      ) : null}
+                    </div>
+                    <div className="saved-items-row-meta">
+                      {renderScopeBadge(account)}
+                      <span>{account.lastSyncAt ? `Synced ${formatSavedTimestamp(account.lastSyncAt)}` : "Sync pending"}</span>
+                    </div>
                   </div>
-                  <div className="saved-items-row-meta">
-                    <em>Read-only</em>
-                    <span>{account.lastSyncAt ? `Synced ${formatSavedTimestamp(account.lastSyncAt)}` : "Sync pending"}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </section>
           ) : (
             <section className="saved-items-section">

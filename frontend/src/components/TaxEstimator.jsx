@@ -2135,6 +2135,30 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
                 className="tax-guided-empty"
               />
             )}
+            {results.length > 1 ? (
+              <div
+                className="tax-workbench-liability-bar"
+                role="img"
+                aria-label={`Liability by jurisdiction chart. ${results.length} jurisdictions. Lowest is ${Math.min(...results.map((r) => r.liabilityUSD)).toLocaleString(undefined, { style: "currency", currency: "USD" })}; highest is ${Math.max(...results.map((r) => r.liabilityUSD)).toLocaleString(undefined, { style: "currency", currency: "USD" })}.`}
+              >
+                <div className="zenin-eyebrow">Liability by jurisdiction (USD)</div>
+                {(() => {
+                  const maxLiability = Math.max(...results.map((r) => r.liabilityUSD), 1);
+                  return results.map((row) => {
+                    const pct = (row.liabilityUSD / maxLiability) * 100;
+                    return (
+                      <div key={row.jurisdictionKey} className="tax-workbench-liability-row">
+                        <span className="tax-workbench-liability-label">{countryFlag(row.jurisdictionKey)} {row.jurisdiction}</span>
+                        <span className="tax-workbench-liability-track" aria-hidden="true">
+                          <i style={{ width: `${Math.max(2, pct).toFixed(2)}%` }} />
+                        </span>
+                        <strong className="tax-workbench-liability-value">{formatMoney(row.liabilityUSD, "USD")}</strong>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            ) : null}
           </section>
         </div>
         ) : (
@@ -2153,19 +2177,36 @@ export function TaxEstimator({ trades = [], portfolio = [], spotPrices = {} }) {
           <section className="tax-workbench-panel tax-workbench-ideas">
             <DensePanelHeader
               title="Jurisdiction Ideas"
-              subtitle="Lower-liability alternatives based on the current gains mix."
+              subtitle="Lower-liability alternatives based on the current gains mix. Click Apply to add a jurisdiction to the ledger."
             />
             <div className="tax-workbench-idea-grid">
-              {jurisdictionRecommendations.map((row) => (
-                <article key={row.key} className="tax-workbench-idea-card">
-                  <strong>{countryFlag(row.key)} {row.name}</strong>
-                  <span>{row.logic}</span>
-                  <div>
-                    <em>Potential saving</em>
-                    <strong>{formatMoney(row.saving, advanced.currency || "USD")}</strong>
-                  </div>
-                </article>
-              ))}
+              {jurisdictionRecommendations.map((row) => {
+                const isApplied = jurisdictions.includes(row.key);
+                return (
+                  <article key={row.key} className={`tax-workbench-idea-card ${isApplied ? "is-applied" : ""}`}>
+                    <strong>{countryFlag(row.key)} {row.name}</strong>
+                    <span>{row.logic}</span>
+                    <div>
+                      <em>Potential saving</em>
+                      <strong>{formatMoney(row.saving, advanced.currency || "USD")}</strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="tax-workbench-idea-apply"
+                      onClick={() => {
+                        if (isApplied) {
+                          setJurisdictions((prev) => prev.filter((item) => item !== row.key));
+                        } else {
+                          setJurisdictions((prev) => (prev.includes(row.key) ? prev : [...prev, row.key]));
+                        }
+                      }}
+                      aria-pressed={isApplied}
+                    >
+                      {isApplied ? "Remove" : "Apply"}
+                    </button>
+                  </article>
+                );
+              })}
             </div>
           </section>
         ) : null}

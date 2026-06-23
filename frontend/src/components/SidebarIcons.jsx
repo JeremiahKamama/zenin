@@ -98,6 +98,25 @@ export function JournalIcon() {
   );
 }
 
+export function BriefingIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M4.5 6.5h12.5a2 2 0 0 1 2 2v9.5H8.5a4 4 0 0 0-4 4z" {...strokeProps} />
+      <path d="M8 10h7M8 13h5" {...strokeProps} />
+      <path d="M16.5 6.5 14.5 4.3 9 4.8" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function DecisionsIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M5 12.5 8.5 16 19 5.5" {...strokeProps} />
+      <path d="M9.5 6.5h11M9.5 17.5h5" {...strokeProps} />
+    </svg>
+  );
+}
+
 export function TaxIcon() {
   return (
     <svg {...iconProps}>

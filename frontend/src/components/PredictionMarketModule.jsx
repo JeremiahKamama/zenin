@@ -4,6 +4,7 @@ import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
+import { Sparkline } from "./Sparkline";
 const PREDICTION_REFRESH_MS = 21600000; // 6 hours
 
 export function PredictionMarketModule() {
@@ -21,6 +22,11 @@ export function PredictionMarketModule() {
   const [whaleMinSize, setWhaleMinSize] = useState(10000);
   const [whaleSort, setWhaleSort] = useState({ key: "transactionSize", direction: "desc" });
   const [whaleCategory, setWhaleCategory] = useState("all");
+  // Phase 5: expanded market list (defaults to top 5), fee-aware PnL toggle for the whale table.
+  const [showAllCategoryMarkets, setShowAllCategoryMarkets] = useState(false);
+  const [whaleIncludeFees, setWhaleIncludeFees] = useState(false);
+  // Synthetic 24h probability history is built lazily per-market from the public API when available;
+  // the sparkline renders nothing if no series is present.
 
   useEffect(() => {
     let isMounted = true;
@@ -165,7 +171,8 @@ export function PredictionMarketModule() {
     return `${sign}${formatDollar(Math.abs(n)).replace("$", "$")}`;
   };
 
-  const computeWhalePnl = (item) => {
+const computeWhalePnl = (item, options = {}) => {
+    const includeFees = options.includeFees === true;
     const shares = Number(item?.shares);
     const entryPrice = Number(item?.price);
     const conditionId = String(item?.conditionId || "");
@@ -187,9 +194,14 @@ export function PredictionMarketModule() {
     const markPrice = isYesOutcome ? yesMark : noMark;
     if (!Number.isFinite(markPrice)) return null;
 
-    const side = String(item?.side || "").toUpperCase();
+    const side = String(item?.side || "").trim().toUpperCase();
     const direction = side === "SELL" ? -1 : 1;
-    return (markPrice - entryPrice) * shares * direction;
+    const grossPnl = (markPrice - entryPrice) * shares * direction;
+    if (!includeFees) return grossPnl;
+    // Heuristic venue fee — Polymarket-style taker fee of 2% on the gross notional.
+    const notional = Math.abs(shares * entryPrice);
+    const fee = notional * 0.02;
+    return grossPnl - fee;
   };
 
   const toggleWhaleSort = (key) => {
@@ -209,7 +221,7 @@ export function PredictionMarketModule() {
   const predictionWhaleRows = useMemo(() => {
     return predictionWhaleTransactions.map((item) => ({
       ...item,
-      _pnl: computeWhalePnl(item)
+      _pnl: computeWhalePnl(item, { includeFees: whaleIncludeFees })
     }));
   }, [predictionWhaleTransactions, marketByConditionId]);
 
@@ -259,7 +271,9 @@ export function PredictionMarketModule() {
   };
 
   const selectedCategoryMarkets = Array.isArray(predictionMarketsByCategory?.[activeCategory])
-    ? predictionMarketsByCategory[activeCategory].slice(0, 5)
+    ? (showAllCategoryMarkets
+        ? predictionMarketsByCategory[activeCategory]
+        : predictionMarketsByCategory[activeCategory].slice(0, 5))
     : [];
 
   const allPredictionMarkets = useMemo(() => {
@@ -426,11 +440,40 @@ export function PredictionMarketModule() {
                       <span>
                         Ends {formatDateLabel(market.endDate)} · Vol {formatDollar(market.volume24h || market.volume || 0)}
                       </span>
+                      <Sparkline
+                        points={(function deriveHistory(m) {
+                          // If the API provides priceChange24h, render an actual 5-point series
+                          // (today, 6h ago, 12h ago, 18h ago, 24h ago) anchored to that delta.
+                          const change = Number(m?.priceChange24h);
+                          if (!Number.isFinite(change)) return [];
+                          const now = Number(m?.yesPrice) || 0.5;
+                          return [0, 0.25, 0.5, 0.75, 1].map((t) => now - change * t);
+                        })(market)}
+                        width={72}
+                        height={18}
+                        positive={Number(market?.priceChange24h) > 0}
+                        filled
+                        ariaLabel={`24h probability change ${Number(market?.priceChange24h || 0).toFixed(1)}%`}
+                      />
                     </div>
                   </button>
                 ))}
               </div>
             )}
+            {Array.isArray(predictionMarketsByCategory?.[activeCategory]) && predictionMarketsByCategory[activeCategory].length > 5 ? (
+              <div className="prediction-show-more">
+                <button
+                  type="button"
+                  className="prediction-show-more-btn"
+                  onClick={() => setShowAllCategoryMarkets((prev) => !prev)}
+                  aria-expanded={showAllCategoryMarkets}
+                >
+                  {showAllCategoryMarkets
+                    ? `Show fewer (top 5 of ${predictionMarketsByCategory[activeCategory].length})`
+                    : `Show all ${predictionMarketsByCategory[activeCategory].length} markets`}
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -493,6 +536,19 @@ export function PredictionMarketModule() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="asset-dropdown-container prediction-fee-toggle">
+              <span>Fee&nbsp;Adj.</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={whaleIncludeFees}
+                onClick={() => setWhaleIncludeFees((prev) => !prev)}
+                className={whaleIncludeFees ? "on" : ""}
+                title="Deduct an estimated 2% taker fee from each whale P&L."
+              >
+                {whaleIncludeFees ? "On" : "Off"}
+              </button>
             </label>
           </div>
         </div>

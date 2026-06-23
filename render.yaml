@@ -80,3 +80,32 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+
+  # ── Perps Benchmark Runner (Background Worker) ────────────────────────────
+  # Measures perps order submission latency across venues. In dry_run mode
+  # (default), probes venue HTTP endpoints for network-floor baseline — no
+  # funded accounts needed. Set PERPS_BENCH_MODE=live and enable venues via
+  # the admin toggle endpoint to submit real post-only orders.
+  - type: worker
+    name: portv1-perps-bench
+    runtime: docker
+    plan: starter
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerCommand: node perps-bench-runner.js
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: PGSSLMODE
+        value: require
+      - key: PGSSL_REJECT_UNAUTHORIZED
+        value: "true"
+      - key: PERPS_BENCH_ENABLED
+        value: "true"
+      - key: PERPS_BENCH_MODE
+        value: dry_run
+      - key: PERPS_BENCH_RATE_MS
+        value: "60000"

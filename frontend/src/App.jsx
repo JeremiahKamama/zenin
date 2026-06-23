@@ -7,6 +7,8 @@ import { ZeninLogo } from "./components/Branding";
 import {
   AccountIcon,
   AnalyticsIcon,
+  BriefingIcon,
+  DecisionsIcon,
   HomeIcon,
   JournalIcon,
   LiveRailIcon,
@@ -31,6 +33,9 @@ import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
+import { useMediaQuery, useViewportWidth } from "./hooks/useMediaQuery";
+import { usePlanGate } from "./hooks/usePlanGate";
+import { CommandPalette, useCommandPaletteLauncher } from "./components/CommandPalette";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
@@ -114,6 +119,18 @@ const HomeModule = lazyWithReloadRetry(
   () => import("./components/HomeModule").then((mod) => ({ default: mod.HomeModule })),
   "zenin_lazy_retry_home"
 );
+const BriefingModule = lazyWithReloadRetry(
+  () => import("./components/BriefingModule").then((mod) => ({ default: mod.BriefingModule })),
+  "zenin_lazy_retry_briefing"
+);
+const DecisionThreadModule = lazyWithReloadRetry(
+  () => import("./components/DecisionThreadModule").then((mod) => ({ default: mod.DecisionThreadModule })),
+  "zenin_lazy_retry_decisions"
+);
+const PersonaOnboardingModal = lazyWithReloadRetry(
+  () => import("./components/PersonaOnboardingModal").then((mod) => ({ default: mod.PersonaOnboardingModal })),
+  "zenin_lazy_retry_persona"
+);
 const PortfolioModule = lazyWithReloadRetry(
   () => import("./components/PortfolioModule").then((mod) => ({ default: mod.PortfolioModule })),
   "zenin_lazy_retry_portfolio"
@@ -141,6 +158,10 @@ const PredictionMarketModule = lazyWithReloadRetry(
 const TaxEstimator = lazyWithReloadRetry(
   () => import("./components/TaxEstimator").then((mod) => ({ default: mod.TaxEstimator })),
   "zenin_lazy_retry_tax"
+);
+const PerpsCalculator = lazyWithReloadRetry(
+  () => import("./components/PerpsCalculator").then((mod) => ({ default: mod.PerpsCalculator })),
+  "zenin_lazy_retry_perps_calc"
 );
 const FullMetricsPage = lazyWithReloadRetry(
   () => import("./components/FullMetricsPage").then((mod) => ({ default: mod.FullMetricsPage })),
@@ -261,6 +282,75 @@ function getConnectionStatusCopy(account) {
   };
 }
 
+const SCOPE_BADGE_COPY = {
+  verified_read_only: { label: "Verified read-only", tone: "verified" },
+  verified_watch_only: { label: "Watch-only", tone: "verified" },
+  scope_unverified: { label: "Scope unverified", tone: "unverified" },
+  provider_unverified: { label: "Scope unverified", tone: "unverified" },
+  rejected_trade_enabled: { label: "Trading key rejected", tone: "rejected" },
+  sync_failed: { label: "Sync failed", tone: "unverified" }
+};
+
+function getScopeBadge(account) {
+  const trust = account?.providerTrust;
+  const status = String(trust?.scopeStatus || account?.scopeVerificationStatus || "scope_unverified").trim().toLowerCase();
+  return SCOPE_BADGE_COPY[status] || SCOPE_BADGE_COPY.scope_unverified;
+}
+
+function formatRelativeTime(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const diffMs = Date.now() - then;
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function formatDateShort(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function getProviderTrustForAccount(account) {
+  if (account?.providerTrust && typeof account.providerTrust === "object") {
+    return account.providerTrust;
+  }
+  // Fallback for legacy/guest rows without a server-provided providerTrust
+  const provider = String(account?.exchange || account?.provider || "").trim().toLowerCase();
+  const scopeStatus = String(account?.scopeVerificationStatus || (provider === "hyperliquid" ? "verified_watch_only" : "scope_unverified")).trim().toLowerCase();
+  const canTrade = false;
+  const canWithdraw = false;
+  const isWatchOnly = provider === "hyperliquid";
+  return {
+    provider,
+    providerLabel: account?.provider || account?.exchange || "Unknown provider",
+    scopeStatus,
+    lastVerifiedAt: null,
+    lastSyncedAt: account?.lastSyncAt || null,
+    lastSyncStatus: account?.lastSyncStatus || "never",
+    permissionsDetected: {
+      canReadBalances: false,
+      canReadTrades: false,
+      canReadOrders: false,
+      canTrade,
+      canWithdraw,
+      isWatchOnly
+    },
+    proofItems: [],
+    cannotTrade: !canTrade,
+    cannotWithdraw: !canWithdraw,
+    message: account?.providerTrust?.message || "Provider scope has not been verified server-side."
+  };
+}
+
 function isGuestAccessRequested() {
   if (typeof window === "undefined") return false;
   if (isDevFullAccessEnabled()) return true;
@@ -371,6 +461,17 @@ function resolveEffectivePlan(userPlan, workspacePlan) {
 
 function getConnectPromptSessionKey(userId) {
   return `zenin_connect_prompt_seen_${String(userId || "guest")}`;
+}
+
+function getPersonaPromptSessionKey(userId) {
+  return `zenin_persona_prompt_seen_${String(userId || "guest")}`;
+}
+
+function getPersonaSectionOrder(personaKey) {
+  if (personaKey === "casual_investor") return ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Journal"];
+  if (personaKey === "active_trader") return ["Briefing", "Watchlist", "Portfolio", "Decisions", "Journal", "Analytics"];
+  if (personaKey === "small_team") return ["Briefing", "Research", "Watchlist", "Decisions", "Journal", "Analytics"];
+  return null;
 }
 
 const getFallbackAssetsForCategory = (category) =>
@@ -665,6 +766,11 @@ const SIDEBAR_SECTION_META = {
     eyebrow: "Home",
     description: "Open your daily snapshot and market pulse."
   },
+  Briefing: {
+    group: "Core",
+    eyebrow: "Briefing",
+    description: "Today's briefing: portfolio, alerts, decisions, and executions in one loop."
+  },
   Portfolio: {
     group: "Core",
     eyebrow: "Portfolio",
@@ -694,6 +800,11 @@ const SIDEBAR_SECTION_META = {
     group: "Research",
     eyebrow: "Predictions",
     description: "Monitor prediction markets and event odds."
+  },
+  Decisions: {
+    group: "Tools",
+    eyebrow: "Decisions",
+    description: "Decision threads: briefing → alert → research → journal → review."
   },
   Journal: {
     group: "Tools",
@@ -1238,6 +1349,7 @@ function App() {
   const [tradeToast, setTradeToast] = useState(null);
   const searchSectionRef = useRef(null);
   const searchTypeSelectRef = useRef(null);
+  const [journalThreadContext, setJournalThreadContext] = useState(null);
   const priceCacheRef = useRef(new Map());
   const portfolioRef = useRef([]);
   const searchRequestSeqRef = useRef(0);
@@ -1819,11 +1931,14 @@ useEffect(() => {
     window.history.replaceState({ page: "app", section }, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
   }, []);
 
-  const openWorkspaceSection = useCallback((section) => {
-    const appSections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const openWorkspaceSection = useCallback((section, payload = null) => {
+    const appSections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Decisions", "Journal", "Tax Estimator"];
     if (!appSections.includes(section)) return;
     if (routeState.type === "company") navigateToAppRoute();
     if (section === "Home") setHomeSubview(null);
+    if (section === "Journal" && payload) {
+      setJournalThreadContext(payload);
+    }
     setActiveSection(section);
     if (isGuestQueryRequested() && section !== "Home") {
       setGuestInteraction(section);
@@ -3164,26 +3279,68 @@ const handleOptionTradeClosed = async (tradeId) => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const sections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Decisions", "Journal", "Tax Estimator"];
   const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
   const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
+  const [taxSubView, setTaxSubView] = useState(() => {
+    if (typeof window === "undefined") return "tax";
+    return localStorage.getItem("zenin_tax_subview") || "tax";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("zenin_tax_subview", taxSubView);
+  }, [taxSubView]);
   const [activeSection, setActiveSection] = useState(() => {
     if (typeof window !== "undefined" && isGuestQueryRequested()) {
       const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
       if (requestedSection) return requestedSection;
     }
+    // New users land on the daily briefing; returning users keep their saved section.
     return sections.includes(savedSection) ? savedSection : "Home";
   });
   const [guestInteraction, setGuestInteraction] = useState("");
   const [guestActionFeedback, setGuestActionFeedback] = useState("");
   const [guestRetryingLiveData, setGuestRetryingLiveData] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 960);
+  // Derived visual collapse state for readability across the component.
+  const isSidebarVisuallyCollapsed = isSidebarCollapsed;
+  // Live viewport metrics drive auto-collapse on resize + hamburger visibility on every render.
+  const viewportWidth = useViewportWidth();
+  const isDesktopWideEnoughForExpandedRail = useMediaQuery("(min-width: 1100px)");
+  // Auto-collapse on laptop/tablet without losing the user's manual override:
+  //   * If the viewport shrinks below the breakpoint, force the rail collapsed.
+  //   * If it grows back above the breakpoint, automatically expand again,
+  //     unless the user's last manual action was to collapse it (we track that intent).
+  const sidebarManualCollapseRef = useRef(false);
+  useEffect(() => {
+    if (!isDesktopWideEnoughForExpandedRail && !isSidebarCollapsed) {
+      setIsSidebarCollapsed(true);
+    } else if (isDesktopWideEnoughForExpandedRail && isSidebarCollapsed && !sidebarManualCollapseRef.current) {
+      setIsSidebarCollapsed(false);
+    }
+  }, [isDesktopWideEnoughForExpandedRail]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleSidebarCollapse = useCallback(() => {
+    sidebarManualCollapseRef.current = true;
+    setIsSidebarCollapsed((prev) => !prev);
+  }, []);
+  // Escape-closes the sidebar drawer on mobile (≤960).
+  
+
+  useEffect(() => {
+    if (isSidebarVisuallyCollapsed || viewportWidth > 960) return undefined;
+    const handler = (event) => {
+      if (event.key === "Escape") setIsSidebarCollapsed(true);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isSidebarVisuallyCollapsed, viewportWidth]);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
   const devFullAccess = useMemo(() => isDevFullAccessEnabled(), []);
   const explicitGuestAccess = useMemo(() => isGuestQueryRequested(), []);
   const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
+  const [bootPhase, setBootPhase] = useState("checking_session");
+  const [showDetailedBootPhase, setShowDetailedBootPhase] = useState(false);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
@@ -3250,6 +3407,9 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [isGuestUser, setIsGuestUser] = useState(() => (devFullAccess ? false : allowGuestAccess));
   const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
 
+  // Active workspace object for workspace-scoped data.
+  
+
   const dispatchWatchlistAlertEmail = useCallback(async (asset, intent) => {
     if (intent !== "alert") return;
     if (isExplicitGuestMode || isGuestUser) {
@@ -3297,6 +3457,97 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   }, [isExplicitGuestMode, isGuestUser]);
 
+  const [workspaceAlertAssignments, setWorkspaceAlertAssignments] = useState([]);
+  const [workspaceAlertsLoading, setWorkspaceAlertsLoading] = useState(false);
+  const loadWorkspaceAlertAssignments = useCallback(async () => {
+    if (isExplicitGuestMode || isGuestUser) return;
+    setWorkspaceAlertsLoading(true);
+    try {
+      const data = await zeninFetchJson("/api/workspaces/current/alerts");
+      setWorkspaceAlertAssignments(Array.isArray(data?.items) ? data.items : []);
+    } catch (error) {
+      console.warn("Failed to load workspace alert assignments:", error?.message);
+      setWorkspaceAlertAssignments([]);
+    } finally {
+      setWorkspaceAlertsLoading(false);
+    }
+  }, [isExplicitGuestMode, isGuestUser]);
+  const updateWorkspaceAlertAssignment = useCallback(async (asset, update) => {
+    if (isExplicitGuestMode || isGuestUser) {
+      setWatchlistNotice("Sign in to manage workspace alert assignments.");
+      return null;
+    }
+    const symbol = normalizeSymbolKey(asset?.symbol || "");
+    if (!symbol) {
+      setWatchlistNotice("Select an asset before updating its alert assignment.");
+      return null;
+    }
+    const alertKey = `watchlist:${symbol}:${asset?.marketType || "spot"}:${asset?.category || activeCategory || "watchlist"}:${asset?.theme || "default"}`;
+    const payload = {
+      alertKey,
+      status: update.status || "open",
+      assignedToUserId: update.assignedToUserId ?? null,
+      snoozedUntil: update.snoozedUntil || null,
+      notes: {
+        symbol,
+        name: asset?.name || symbol,
+        marketType: asset?.marketType || "",
+        category: asset?.category || "",
+        theme: asset?.theme || "",
+        action: update.action || "manual"
+      }
+    };
+    try {
+      const result = await zeninFetchJson("/api/workspaces/current/alerts", {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      await loadWorkspaceAlertAssignments();
+      setWatchlistNotice(`${symbol} alert ${update.action || "updated"}.`);
+      return result?.item || null;
+    } catch (error) {
+      setWatchlistNotice(error?.message || `Could not update alert assignment for ${symbol}.`);
+      return null;
+    }
+  }, [isExplicitGuestMode, isGuestUser, activeCategory, loadWorkspaceAlertAssignments]);
+
+  const promoteResearchToDecisionThread = useCallback(async ({ docId, title, symbol, summary, sourceType, sourceName }) => {
+    if (isExplicitGuestMode || isGuestUser) {
+      throw new Error("Sign in to promote research to a decision thread.");
+    }
+    const payload = {
+      title: title || `${symbol || "Research"} decision thread`,
+      symbol: symbol || null,
+      sourceType: "research",
+      sourceId: docId || null,
+      linkedResearchId: docId || null,
+      priority: "medium",
+      status: "new"
+    };
+    const res = await zeninFetchJson("/api/decision-threads", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    if (!res?.thread) throw new Error(res?.error || "Failed to create decision thread.");
+    // Optionally seed a journal entry so the research summary is preserved.
+    if (summary) {
+      try {
+        await zeninFetchJson(`/api/decision-threads/${res.thread.id}/create-journal-entry`, {
+          method: "POST",
+          body: JSON.stringify({
+            content: summary,
+            source: sourceName || "Research",
+            sourceType: "research"
+          })
+        });
+      } catch (journalError) {
+        console.warn("Could not seed journal entry from research promotion:", journalError?.message);
+      }
+    }
+    openWorkspaceSection("Decisions");
+    return res.thread;
+  }, [isExplicitGuestMode, isGuestUser]);
+
   const [themeMode, setThemeMode] = useState(() => {
     try {
       const saved = String(localStorage.getItem("zenin_global_theme") || "").trim().toLowerCase();
@@ -3322,6 +3573,20 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const toggleTheme = () => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const settingsPanelRef = useRef(null);
+  useEffect(() => {
+    if (!isSettingsOpen) return undefined;
+    const handler = (event) => {
+      if (event.key !== "Escape") return;
+      // Only react when nothing inside the modal has already captured Escape (e.g. an inline form).
+      const panel = settingsPanelRef.current;
+      if (panel && !panel.contains(event.target)) return;
+      event.preventDefault();
+      setIsSettingsOpen(false);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [isSettingsOpen]);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
     "profile-email": false,
@@ -3399,11 +3664,40 @@ const handleOptionTradeClosed = async (tradeId) => {
       };
     }
   });
+  // Live density mapping: the Layout preset now drives html[data-density].
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const densityMap = { compact: "compact", cozy: "cozy", default: "cozy", comfortable: "comfortable", expanded: "comfortable", focus: "compact" };
+    const density = densityMap[preferences?.layoutPreset] || "cozy";
+    document.documentElement.setAttribute("data-density", density);
+  }, [preferences?.layoutPreset]);
 
-  const accessibleSections = useMemo(
-    () => isGuestUser ? sections : sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section)),
-    [sections, currentPlan, isAdmin, isGuestUser]
-  );
+  // Workspace-aware plan gate. Pass-through today; will replace the per-section
+  // accessibleSections memo as we wire each section's lock UI in Phase 3+.
+  // Active workspace object for workspace-scoped data (declared before derived values).
+  const [activeWorkspace, setActiveWorkspace] = useState(null);
+  const [isPersonaOnboardingOpen, setIsPersonaOnboardingOpen] = useState(false);
+  const [personaSectionOrder, setPersonaSectionOrder] = useState(null);
+  
+  const planGate = usePlanGate({
+    userPlan: currentPlan,
+    workspacePlan: activeWorkspace?.currentPlan,
+    isAdmin
+  });
+
+  const accessibleSections = useMemo(() => {
+    const base = isGuestUser ? sections : sections.filter((section) => hasSectionAccessForUser(currentPlan, isAdmin, section));
+    if (!personaSectionOrder || !Array.isArray(personaSectionOrder) || personaSectionOrder.length === 0) return base;
+    const orderIndex = new Map(personaSectionOrder.map((s, i) => [s, i]));
+    const ordered = [];
+    for (const s of personaSectionOrder) {
+      if (base.includes(s)) ordered.push(s);
+    }
+    for (const s of base) {
+      if (!ordered.includes(s)) ordered.push(s);
+    }
+    return ordered;
+  }, [sections, currentPlan, isAdmin, isGuestUser, personaSectionOrder]);
   const sidebarNavigationGroups = useMemo(() => {
     const hiddenRailSections = new Set(devFullAccess ? [] : isSidebarCollapsed ? ["Predictions"] : []);
     const visibleSections = accessibleSections.filter((section) => !hiddenRailSections.has(section));
@@ -3472,6 +3766,36 @@ const handleOptionTradeClosed = async (tradeId) => {
     enabled: !accessCheckLoading && !isGuestUser,
     tradeLimit: 1000
   });
+
+  // Route-aware boot phase tracker: shows exact step copy when loading exceeds 2s.
+  useEffect(() => {
+    if (!accessCheckLoading) {
+      setShowDetailedBootPhase(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowDetailedBootPhase(true), 2000);
+    return () => clearTimeout(timer);
+  }, [accessCheckLoading]);
+
+  useEffect(() => {
+    if (accessCheckLoading) {
+      setBootPhase(isGuestQueryRequested() ? "opening_demo_mode" : "checking_session");
+    } else if (bootstrapLoading) {
+      setBootPhase("loading_workspace");
+    } else if (bootstrapData && !bootstrapError) {
+      setBootPhase("syncing_market_data");
+    }
+  }, [accessCheckLoading, bootstrapLoading, bootstrapData, bootstrapError]);
+
+  const bootPhaseCopy = (() => {
+    switch (bootPhase) {
+      case "opening_demo_mode": return "Opening demo workspace";
+      case "loading_workspace": return "Loading workspace";
+      case "syncing_market_data": return "Syncing market data";
+      case "checking_session":
+      default: return "Checking session";
+    }
+  })();
 
   useEffect(() => {
     if (!bootstrapData?.appConfig) return;
@@ -3724,6 +4048,8 @@ const handleOptionTradeClosed = async (tradeId) => {
       setWorkspaceMembers(Array.isArray(bootstrapData?.workspaceMembers) ? bootstrapData.workspaceMembers : []);
       setWorkspaceInvites(Array.isArray(bootstrapData?.workspaceInvites) ? bootstrapData.workspaceInvites : []);
       setWorkspaceActivity(Array.isArray(bootstrapData?.workspaceActivity) ? bootstrapData.workspaceActivity : []);
+      setTodayBriefing(bootstrapData?.todayBriefing || null);
+      setDecisionThreads(Array.isArray(bootstrapData?.decisionThreads) ? bootstrapData.decisionThreads : []);
       setWorkspaceForm({
         name: String(bootstrapData?.activeWorkspace?.name || "").trim(),
         slug: String(bootstrapData?.activeWorkspace?.slug || "").trim()
@@ -3736,10 +4062,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           username: account.extraData?.username || account.extraData?.address || "Workspace source",
           venueType: account.extraData?.venueType || "cex",
           apiKeyMasked: "Workspace managed",
-          permissionScope: account.permissionScope || "unknown",
-          canTrade: !!account.canTrade,
-          lastVerifiedScope: account.lastVerifiedScope || "unknown",
-          riskLevel: account.riskLevel || "standard",
+          providerTrust: account.providerTrust || null,
           syncAvailable: account.syncAvailable !== false,
           connectionCapability: account.connectionCapability || buildClientConnectionCapability(account.extraData?.providerLabel || account.exchange),
           connectedAt: account.createdAt || null,
@@ -3811,7 +4134,9 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [connectAccountFeedback, setConnectAccountFeedback] = useState("");
   const [connectAccountSuccess, setConnectAccountSuccess] = useState(null);
   const [connectedAccountsHydrated, setConnectedAccountsHydrated] = useState(false);
-  const [activeWorkspace, setActiveWorkspace] = useState(null);
+  const [todayBriefing, setTodayBriefing] = useState(null);
+  const [decisionThreads, setDecisionThreads] = useState([]);
+  
   const [workspaceMembers, setWorkspaceMembers] = useState([]);
   const [workspaceInvites, setWorkspaceInvites] = useState([]);
   const [workspaceActivity, setWorkspaceActivity] = useState([]);
@@ -4614,6 +4939,22 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   }, [isGuestUser]);
 
+  const refreshBriefingAndThreads = useCallback(async () => {
+    if (isGuestUser) return;
+    try {
+      const [briefingRes, threadsRes] = await Promise.all([
+        zeninFetch("/daily-briefing"),
+        zeninFetch("/decision-threads")
+      ]);
+      const briefingData = await briefingRes.json().catch(() => ({}));
+      const threadsData = await threadsRes.json().catch(() => ({}));
+      if (briefingRes.ok) setTodayBriefing(briefingData?.briefing || null);
+      if (threadsRes.ok) setDecisionThreads(Array.isArray(threadsData?.items) ? threadsData.items : []);
+    } catch {
+      // no-op
+    }
+  }, [isGuestUser]);
+
   const saveWorkspaceSettings = useCallback(async () => {
     if (isGuestUser || !activeWorkspace) return;
     setWorkspaceBusy(true);
@@ -4722,6 +5063,39 @@ const handleOptionTradeClosed = async (tradeId) => {
     openConnectWindow("onboarding");
   }, [accessCheckLoading, authUserId, bootstrapLoading, connectedAccounts.length, connectedAccountsHydrated, isGuestUser, openConnectWindow]);
 
+  // Persona-based onboarding: show once per signed-in user, before the connect prompt.
+  useEffect(() => {
+    if (accessCheckLoading || bootstrapLoading || isGuestUser || !authUserId) return;
+    if (typeof sessionStorage === "undefined") return;
+    const sessionKey = getPersonaPromptSessionKey(authUserId);
+    if (sessionStorage.getItem(sessionKey) === "1") return;
+    sessionStorage.setItem(sessionKey, "1");
+    setIsPersonaOnboardingOpen(true);
+  }, [accessCheckLoading, authUserId, bootstrapLoading, isGuestUser]);
+
+  // Load saved persona section order from settings:preferences on first workspace load.
+  useEffect(() => {
+    if (accessCheckLoading || bootstrapLoading || isGuestUser || !authUserId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await zeninFetch("/db/workspace/docs/settings:preferences");
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const prefs = data?.doc && typeof data.doc === "object" ? data.doc : {};
+        if (Array.isArray(prefs?.sectionOrder) && prefs.sectionOrder.length) {
+          setPersonaSectionOrder(prefs.sectionOrder);
+        } else if (prefs?.persona) {
+          const order = getPersonaSectionOrder(prefs.persona);
+          if (order) setPersonaSectionOrder(order);
+        }
+      } catch {
+        // no-op
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accessCheckLoading, authUserId, bootstrapLoading, isGuestUser]);
+
   const connectAccount = async () => {
     if (!accountForm.apiKey.trim()) return;
     const providerId = normalizeProviderId(accountForm.provider);
@@ -4735,8 +5109,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       if (!isGuestUser) {
         const submittedApiSecret = showApiSecretField ? accountForm.apiSecret.trim() : "";
-        const scopeVerificationStatus = providerId === "hyperliquid" && !submittedApiSecret ? "verified_watch_only" : "provider_unverified";
-        const riskLevel = submittedApiSecret ? "sensitive" : "standard";
         // 1. Send the key to backend for encryption & storage
         const payload = {
           exchange: providerId,
@@ -4746,20 +5118,15 @@ const handleOptionTradeClosed = async (tradeId) => {
             username: connectionLabel,
             venueType: accountForm.venueType,
             providerLabel: accountForm.provider,
-            scopeVerificationStatus,
             ...(providerId === "hyperliquid" ? { address: accountForm.apiKey.trim() } : {})
-          },
-          permissionScope: "read_only",
-          canTrade: false,
-          lastVerifiedScope: scopeVerificationStatus === "verified_watch_only" ? "read_only" : "unknown",
-          riskLevel
+          }
         };
 
         const res = await zeninFetch("/db/exchange-keys", {
           method: "POST",
           body: JSON.stringify(payload)
         });
-        
+
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           throw new Error(errData.error || "Failed to add exchange key");
@@ -4767,7 +5134,8 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         const addedKey = await res.json();
         const connectionCapability = addedKey.connectionCapability || buildClientConnectionCapability(accountForm.provider);
-        const verifiedScopeStatus = addedKey.extraData?.scopeVerificationStatus || scopeVerificationStatus;
+        const providerTrust = addedKey.providerTrust || null;
+        const verifiedScopeStatus = providerTrust?.scopeStatus || (providerId === "hyperliquid" ? "verified_watch_only" : "scope_unverified");
 
         let syncPayload = { syncAvailable: false, message: "Connection saved." };
         if (canSyncProvider) {
@@ -4787,19 +5155,16 @@ const handleOptionTradeClosed = async (tradeId) => {
           void refreshApiTradeExecutions();
           void refreshWorkspaceNotifications({ toastNew: false });
         }
-        
+
         // 4. Update the local UI state for connected accounts
         const nextAccount = {
           id: addedKey.id,
           venueType: accountForm.venueType,
           provider: accountForm.provider,
+          exchange: providerId,
           username: connectionLabel,
           apiKeyMasked: addedKey.apiKey,
-          permissionScope: addedKey.permissionScope || "read_only",
-          canTrade: false,
-          lastVerifiedScope: addedKey.lastVerifiedScope || "unknown",
-          riskLevel: addedKey.riskLevel || riskLevel,
-          scopeVerificationStatus: verifiedScopeStatus,
+          providerTrust: syncPayload?.providerTrust || providerTrust,
           syncAvailable: canSyncProvider,
           connectionCapability,
           connectedAt: new Date().toISOString(),
@@ -4818,23 +5183,43 @@ const handleOptionTradeClosed = async (tradeId) => {
           tradesCount: Number(syncPayload?.tradesCount || 0),
           newExecutionCount: Number(syncPayload?.newExecutionCount || 0),
           message: canSyncProvider
-            ? `Synced ${Number(syncPayload?.holdingsCount || 0)} holdings, ${Number(syncPayload?.tradesCount || 0)} fills, and ${Number(syncPayload?.newExecutionCount || 0)} new executions. Provider-side read-only scope ${verifiedScopeStatus === "provider_unverified" ? "is not verified for this provider." : "is verified."}`
+            ? `Synced ${Number(syncPayload?.holdingsCount || 0)} holdings, ${Number(syncPayload?.tradesCount || 0)} fills, and ${Number(syncPayload?.newExecutionCount || 0)} new executions. Provider-side read-only scope ${verifiedScopeStatus === "scope_unverified" || verifiedScopeStatus === "provider_unverified" ? "is not verified for this provider." : "is verified."}`
             : connectionCapability.nextAction
         });
       } else {
         // Guest user fallback (localStorage)
         const masked = `${accountForm.apiKey.trim().slice(0, 4)}••••${accountForm.apiKey.trim().slice(-4)}`;
+        const guestScopeStatus = selectedProviderIsHyperliquid ? "verified_watch_only" : "scope_unverified";
+        const guestTrust = {
+          provider: providerId,
+          providerLabel: accountForm.provider,
+          scopeStatus: guestScopeStatus,
+          lastVerifiedAt: null,
+          lastSyncedAt: null,
+          lastSyncStatus: "never",
+          permissionsDetected: {
+            canReadBalances: false,
+            canReadTrades: false,
+            canReadOrders: false,
+            canTrade: false,
+            canWithdraw: false,
+            isWatchOnly: selectedProviderIsHyperliquid
+          },
+          proofItems: [],
+          cannotTrade: true,
+          cannotWithdraw: true,
+          message: selectedProviderIsHyperliquid
+            ? "Public watch-only address. Zenin cannot trade or withdraw."
+            : "Provider scope has not been verified server-side. Zenin cannot trade or withdraw."
+        };
         const nextAccount = {
           id: Date.now(),
           venueType: accountForm.venueType,
           provider: accountForm.provider,
+          exchange: providerId,
           username: connectionLabel,
           apiKeyMasked: masked,
-          permissionScope: "read_only",
-          canTrade: false,
-          lastVerifiedScope: selectedProviderIsHyperliquid ? "read_only" : "unknown",
-          riskLevel: "standard",
-          scopeVerificationStatus: selectedProviderIsHyperliquid ? "verified_watch_only" : "provider_unverified",
+          providerTrust: guestTrust,
           syncAvailable: canSyncProvider,
           connectionCapability: buildClientConnectionCapability(accountForm.provider),
           connectedAt: new Date().toISOString(),
@@ -4860,6 +5245,98 @@ const handleOptionTradeClosed = async (tradeId) => {
       setIsSyncingAccount(false);
     }
   };
+
+  const syncingAccountIds = useRef(new Set());
+  const [syncingAccountIdsState, setSyncingAccountIdsState] = useState({});
+
+  const handleAccountSync = async (acc) => {
+    if (!acc?.id || isGuestUser) return;
+    if (syncingAccountIds.current.has(acc.id)) return;
+    syncingAccountIds.current.add(acc.id);
+    setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: "syncing" }));
+    try {
+      const syncRes = await zeninFetch(`/db/exchange-sync/${acc.id}`, { method: "POST" });
+      const syncPayload = await syncRes.json().catch(() => ({}));
+      if (!syncRes.ok) {
+        throw new Error(syncPayload.error || "Failed to sync exchange data");
+      }
+      setConnectedAccounts((prev) => prev.map((a) => a.id === acc.id ? {
+        ...a,
+        providerTrust: syncPayload?.providerTrust || a.providerTrust,
+        lastSyncAt: new Date().toISOString(),
+        lastSyncStatus: "success",
+        lastSyncMeta: syncPayload
+      } : a));
+      void fetchWorkspace();
+      void refreshApiTradeExecutions();
+      void refreshWorkspaceNotifications({ toastNew: false });
+      setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: null }));
+    } catch (error) {
+      setConnectedAccounts((prev) => prev.map((a) => a.id === acc.id ? {
+        ...a,
+        lastSyncAt: new Date().toISOString(),
+        lastSyncStatus: "error",
+        lastSyncMeta: { error: error.message || "Exchange sync failed" }
+      } : a));
+      setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: "error" }));
+    } finally {
+      syncingAccountIds.current.delete(acc.id);
+    }
+  };
+
+  const handleAccountVerifyScope = async (acc) => {
+    if (!acc?.id || isGuestUser) return;
+    if (syncingAccountIds.current.has(acc.id)) return;
+    syncingAccountIds.current.add(acc.id);
+    setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: "verifying" }));
+    try {
+      const res = await zeninFetch(`/db/exchange-keys/${acc.id}/verify-scope`, { method: "POST" });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload.error || "Failed to verify scope");
+      }
+      setConnectedAccounts((prev) => prev.map((a) => a.id === acc.id ? {
+        ...a,
+        providerTrust: payload?.providerTrust || a.providerTrust
+      } : a));
+      setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: null }));
+    } catch (error) {
+      if (error?.message && /read-only|rejected|trading/i.test(error.message)) {
+        setConnectedAccounts((prev) => prev.map((a) => a.id === acc.id ? {
+          ...a,
+          providerTrust: a.providerTrust ? {
+            ...a.providerTrust,
+            scopeStatus: "rejected_trade_enabled",
+            message: error.message
+          } : a.providerTrust
+        } : a));
+      }
+      setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: "error" }));
+    } finally {
+      syncingAccountIds.current.delete(acc.id);
+    }
+  };
+
+  const handleAccountRemove = async (acc) => {
+    if (!acc?.id) return;
+    if (isGuestUser) {
+      setConnectedAccounts((prev) => prev.filter((a) => a.id !== acc.id));
+      return;
+    }
+    try {
+      const res = await zeninFetch(`/db/exchange-keys/${acc.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to remove account");
+      }
+      setConnectedAccounts((prev) => prev.filter((a) => a.id !== acc.id));
+      void fetchWorkspace();
+      void refreshWorkspacePanel();
+    } catch (error) {
+      setConnectAccountFeedback(error.message || "Failed to remove account.");
+    }
+  };
+
   const createBackupCodes = () =>
     Array.from({ length: 8 }, () => Math.random().toString(36).slice(2, 6).toUpperCase());
 
@@ -5457,6 +5934,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const sidebarIconMap = {
     Home: HomeIcon,
+    Briefing: BriefingIcon,
     Portfolio: PortfolioIcon,
     Watchlist: WatchlistIcon,
     Research: ResearchIcon,
@@ -5464,6 +5942,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     Metrics: MetricsIcon,
     Options: OptionsIcon,
     Predictions: PredictionsIcon,
+    Decisions: DecisionsIcon,
     Journal: JournalIcon,
     "Tax Estimator": TaxIcon
   };
@@ -5473,7 +5952,45 @@ const handleOptionTradeClosed = async (tradeId) => {
     return <Icon />;
   };
 
-  const isSidebarVisuallyCollapsed = isSidebarCollapsed;
+  // Command palette (⌘/Ctrl+K)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteLauncher();
+  const paletteCommands = useMemo(() => {
+    const jump = (section) => () => openWorkspaceSection(section);
+    const sectionCommands = accessibleSections
+      .filter((section) => sections.includes(section))
+      .map((section) => ({
+        id: `nav-${section}`,
+        group: "Jump to section",
+        label: section,
+        hint: SIDEBAR_SECTION_META?.[section]?.description || "",
+        keywords: SIDEBAR_SECTION_META?.[section]?.eyebrow || "",
+        shortcut: `g ${section.charAt(0).toLowerCase()}`,
+        run: jump(section)
+      }));
+    const actionCommands = [
+      {
+        id: "open-settings",
+        group: "Actions",
+        label: "Open Settings (Control Bay)",
+        hint: "Profile, workspace, preferences",
+        shortcut: "Ctrl ,",
+        run: () => setIsSettingsOpen(true)
+      },
+      {
+        id: "toggle-sidebar",
+        group: "Actions",
+        label: isSidebarVisuallyCollapsed ? "Expand sidebar" : "Collapse sidebar",
+        run: toggleSidebarCollapse
+      },
+      {
+        id: "toggle-theme",
+        group: "Actions",
+        label: "Switch theme",
+        run: () => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"))
+      }
+    ];
+    return [...sectionCommands, ...actionCommands];
+  }, [accessibleSections, isSidebarVisuallyCollapsed]); // eslint-disable-line react-hooks/exhaustive-deps
   const usesWorkspaceShell = routeState.type !== "company";
   const shouldRenderGuestPreview = isExplicitGuestMode && (activeSection === "Home" || Boolean(GUEST_PREVIEW_BY_SECTION[activeSection]));
   const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
@@ -5511,23 +6028,35 @@ const handleOptionTradeClosed = async (tradeId) => {
   if (accessCheckLoading) {
     return (
       <div className="app-auth-loading" role="status" aria-live="polite">
-        <div className="loading-state module-loading-state">Loading workspace...</div>
+        <div className="loading-state module-loading-state">
+          {showDetailedBootPhase ? bootPhaseCopy : "Loading workspace..."}
+        </div>
       </div>
     );
   }
 
   return (
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
-      {isSidebarVisuallyCollapsed && typeof window !== 'undefined' && window.innerWidth <= 960 && (
+      {isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <button
           className="mobile-hamburger-btn"
           onClick={() => setIsSidebarCollapsed(false)}
           aria-label="Open Menu"
+          aria-expanded={!isSidebarVisuallyCollapsed}
+          aria-controls="zenin-primary-sidebar"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       )}
-      <aside className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
+      {!isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
+        <div
+          className="sidebar-scrim"
+          role="presentation"
+          aria-hidden="true"
+          onClick={() => setIsSidebarCollapsed(true)}
+        />
+      )}
+      <aside id="zenin-primary-sidebar" className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header sidebar-brand-row">
           {!isSidebarVisuallyCollapsed ? (
             <div className="sidebar-console-topbar">
@@ -5536,7 +6065,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               <span className="sidebar-console-plan">{accountPlanLabel}</span>
               <button
                 className="sidebar-toggle-btn mobile-close-btn"
-                onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+                onClick={toggleSidebarCollapse}
                 aria-label="Collapse sidebar"
                 title="Collapse sidebar"
               >
@@ -5547,7 +6076,7 @@ const handleOptionTradeClosed = async (tradeId) => {
             <div className="sidebar-collapsed-brand">
               <button
                 className="sidebar-collapsed-mark"
-                onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+                onClick={toggleSidebarCollapse}
                 aria-label="Expand sidebar"
                 title="Expand sidebar"
               >
@@ -5782,6 +6311,24 @@ const handleOptionTradeClosed = async (tradeId) => {
           </>
         )}
 
+        {activeSection === "Briefing" && !shouldRenderGuestPreview && (
+          <div className="view-container">
+            <BriefingModule
+              briefing={todayBriefing}
+              decisionThreads={decisionThreads}
+              isGuestUser={isGuestUser}
+              spotPrices={spotPrices}
+              onGenerate={(briefing) => setTodayBriefing(briefing)}
+              onMarkRead={(briefing) => setTodayBriefing(briefing)}
+              onMarkCompleted={(briefing) => setTodayBriefing(briefing)}
+              onCreateThread={() => {
+                void refreshBriefingAndThreads();
+              }}
+              onOpenSection={openWorkspaceSection}
+            />
+          </div>
+        )}
+
         {activeSection === "Watchlist" && (
           <div className="view-container">
             {isExplicitGuestMode ? (
@@ -5872,6 +6419,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                     if (intent === "alert") void dispatchWatchlistAlertEmail(asset, intent);
                     setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
                   }}
+                  alertAssignments={workspaceAlertAssignments}
+                  alertsLoading={workspaceAlertsLoading}
+                  onLoadAlertAssignments={loadWorkspaceAlertAssignments}
+                  onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
+                  currentUserId={authUserId}
                 />
               </>
             ) : (
@@ -6005,6 +6557,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                 if (intent === "alert") void dispatchWatchlistAlertEmail(asset, intent);
                 if (isExplicitGuestMode) setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
               }}
+              alertAssignments={workspaceAlertAssignments}
+              alertsLoading={workspaceAlertsLoading}
+              onLoadAlertAssignments={loadWorkspaceAlertAssignments}
+              onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
+              currentUserId={authUserId}
             />
               </>
             )}
@@ -6073,6 +6630,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               watchlistAssets={watchlistAssets}
               onOpenWatchlist={() => openWorkspaceSection("Watchlist")}
               onOpenPortfolio={() => openWorkspaceSection("Portfolio")}
+              onPromoteToDecisionThread={promoteResearchToDecisionThread}
             />
           </div>
         )}
@@ -6093,6 +6651,17 @@ const handleOptionTradeClosed = async (tradeId) => {
           <PredictionMarketModule />
         )}
 
+        {activeSection === "Decisions" && !shouldRenderGuestPreview && (
+          <div className="view-container">
+            <DecisionThreadModule
+              decisionThreads={decisionThreads}
+              isGuestUser={isGuestUser}
+              onThreadsChanged={(next) => setDecisionThreads(next || [])}
+              onOpenSection={openWorkspaceSection}
+            />
+          </div>
+        )}
+
         {activeSection === "Journal" && !shouldRenderGuestPreview && (
           <JournalModule
             trades={trades}
@@ -6102,11 +6671,32 @@ const handleOptionTradeClosed = async (tradeId) => {
             activeOptionsTrades={activeOptionsTrades}
             multiChainCache={multiChainCache}
             spotPrices={spotPrices}
+            journalThreadContext={journalThreadContext}
           />
         )}
 
         {activeSection === "Tax Estimator" && !shouldRenderGuestPreview && (
-          <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} />
+          <div className="tax-subview-wrap">
+            <div className="tax-subview-tabs">
+              <button
+                className={`tax-subview-tab ${taxSubView === "tax" ? "active" : ""}`}
+                onClick={() => setTaxSubView("tax")}
+              >
+                Tax Estimator
+              </button>
+              <button
+                className={`tax-subview-tab ${taxSubView === "calculator" ? "active" : ""}`}
+                onClick={() => setTaxSubView("calculator")}
+              >
+                Calculator
+              </button>
+            </div>
+            {taxSubView === "tax" ? (
+              <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} />
+            ) : (
+              <PerpsCalculator />
+            )}
+          </div>
         )}
             </Suspense>
           </GenericErrorBoundary>
@@ -6225,8 +6815,20 @@ const handleOptionTradeClosed = async (tradeId) => {
       )}
 
       {isSettingsOpen && (
-        <div className="settings-overlay" onClick={() => setIsSettingsOpen(false)}>
-          <div className="settings-window" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="settings-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Workspace settings"
+          onClick={() => setIsSettingsOpen(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setIsSettingsOpen(false);
+            }
+          }}
+        >
+          <div className="settings-window" ref={settingsPanelRef} onClick={(e) => e.stopPropagation()}>
             <div className="settings-window-header">
               <div className="settings-title-block">
                 <span>CONTROL BAY</span>
@@ -6242,11 +6844,15 @@ const handleOptionTradeClosed = async (tradeId) => {
             </div>
 
             <div className="settings-window-body">
-              <aside className="settings-categories">
+              <aside className="settings-categories" role="tablist" aria-label="Settings categories">
                 <div className="settings-nav-kicker">Settings Index</div>
                 {settingsCategories.map((category) => (
                   <button
                     key={category}
+                    role="tab"
+                    id={`settings-tab-${category.replace(/\s+/g, "-").toLowerCase()}`}
+                    aria-selected={activeSettingsCategory === category}
+                    aria-controls="settings-content-panel"
                     className={`settings-category-btn ${activeSettingsCategory === category ? "active" : ""}`}
                     onClick={() => handleSettingsCategorySelect(category)}
                   >
@@ -6255,7 +6861,12 @@ const handleOptionTradeClosed = async (tradeId) => {
                 ))}
               </aside>
 
-              <section className="settings-content">
+              <section
+                id="settings-content-panel"
+                role="tabpanel"
+                aria-labelledby={`settings-tab-${activeSettingsCategory.replace(/\s+/g, "-").toLowerCase()}`}
+                className="settings-content"
+              >
                 {activeSettingsCategory === "Profile" && (
                   <>
                     <div className="settings-preview-note">{settingsPreviewNote}</div>
@@ -7260,21 +7871,80 @@ const handleOptionTradeClosed = async (tradeId) => {
                           ) : (
                             <div className="connected-accounts-list">
                               {connectedAccounts.map((acc) => {
+                                const trust = getProviderTrustForAccount(acc);
+                                const badge = getScopeBadge(acc);
+                                const lastSyncedRel = formatRelativeTime(trust.lastSyncedAt);
+                                const lastVerifiedDate = formatDateShort(trust.lastVerifiedAt);
+                                const perms = trust.permissionsDetected || {};
+                                const actionState = syncingAccountIdsState[acc.id];
                                 const statusCopy = getConnectionStatusCopy(acc);
-                                const verifiedScope = acc.lastVerifiedScope === "read_only";
                                 return (
-                                  <div key={acc.id} className="connected-account-item">
-                                    <div>
-                                      <strong>{acc.provider}</strong>
-                                      <p>
-                                        {acc.username} • {String(acc.venueType || "source").toUpperCase()} • {statusCopy.label}
-                                        {acc.permissionScope ? ` • ${String(acc.permissionScope).replace(/_/g, " ").toUpperCase()}` : ""}
-                                        {verifiedScope ? " • VERIFIED" : " • SCOPE UNVERIFIED"}
-                                      </p>
-                                      <p>{statusCopy.detail}</p>
-                                      <p>{statusCopy.action}</p>
+                                  <div key={acc.id} className="connected-account-item connected-account-trust-item">
+                                    <div className="connected-account-trust-head">
+                                      <div className="connected-account-trust-title">
+                                        <strong>{trust.providerLabel || acc.provider}</strong>
+                                        <span className={`provider-trust-pill provider-trust-pill-${badge.tone}`}>{badge.label}</span>
+                                      </div>
+                                      <div className="connected-account-trust-actions">
+                                        {acc.syncAvailable !== false && (
+                                          <button
+                                            type="button"
+                                            className="settings-mini-btn"
+                                            disabled={actionState === "syncing"}
+                                            onClick={() => handleAccountSync(acc)}
+                                          >
+                                            {actionState === "syncing" ? "Syncing…" : "Sync now"}
+                                          </button>
+                                        )}
+                                        {!isGuestUser && (
+                                          <button
+                                            type="button"
+                                            className="settings-mini-btn"
+                                            disabled={actionState === "verifying"}
+                                            onClick={() => handleAccountVerifyScope(acc)}
+                                          >
+                                            {actionState === "verifying" ? "Verifying…" : "Re-verify scope"}
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          className="settings-mini-btn settings-mini-btn-danger"
+                                          onClick={() => handleAccountRemove(acc)}
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
                                     </div>
-                                    <span>{acc.lastSyncAt ? new Date(acc.lastSyncAt).toLocaleString() : acc.apiKeyMasked}</span>
+                                    <p className="connected-account-trust-meta">
+                                      {acc.username} · {String(acc.venueType || "source").toUpperCase()}
+                                      {lastSyncedRel ? ` · Last synced ${lastSyncedRel}` : ""}
+                                      {lastVerifiedDate ? ` · Scope verified ${lastVerifiedDate}` : " · Scope not yet verified"}
+                                    </p>
+                                    <div className="connected-account-permissions">
+                                      <span className="connected-account-permissions-label">Detected permissions:</span>
+                                      <ul className="connected-account-permissions-list">
+                                        <li className={perms.canReadBalances ? "perm-ok" : "perm-no"}>
+                                          {perms.canReadBalances ? "✓" : "✕"} Read balances
+                                        </li>
+                                        <li className={perms.canReadTrades ? "perm-ok" : "perm-no"}>
+                                          {perms.canReadTrades ? "✓" : "✕"} Read trade history
+                                        </li>
+                                        <li className={perms.canTrade ? "perm-warn" : "perm-ok"}>
+                                          {perms.canTrade ? "✓" : "✕"} Place trades
+                                        </li>
+                                        <li className={perms.canWithdraw ? "perm-warn" : "perm-ok"}>
+                                          {perms.canWithdraw ? "✓" : "✕"} Withdraw funds
+                                        </li>
+                                      </ul>
+                                    </div>
+                                    <div className="connected-account-proof">
+                                      <p className="connected-account-proof-head">
+                                        {trust.cannotTrade && trust.cannotWithdraw
+                                          ? "Zenin cannot trade or withdraw from this account."
+                                          : "Zenin may be able to trade or withdraw from this account."}
+                                      </p>
+                                      <p className="connected-account-proof-detail">{trust.message || statusCopy.detail}</p>
+                                    </div>
                                   </div>
                                 );
                               })}
@@ -7474,6 +8144,21 @@ const handleOptionTradeClosed = async (tradeId) => {
                 )}
               </section>
             </div>
+
+            {isPersonaOnboardingOpen && (
+              <Suspense fallback={null}>
+                <PersonaOnboardingModal
+                  open={isPersonaOnboardingOpen}
+                  isGuestUser={isGuestUser}
+                  onClose={() => setIsPersonaOnboardingOpen(false)}
+                  onSelect={({ sectionOrder }) => {
+                    if (Array.isArray(sectionOrder) && sectionOrder.length) {
+                      setPersonaSectionOrder(sectionOrder);
+                    }
+                  }}
+                />
+              </Suspense>
+            )}
 
             {isConnectWindowOpen && (
               <div className="connect-account-overlay" onClick={() => setIsConnectWindowOpen(false)}>
@@ -7740,6 +8425,11 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         </div>
       )}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        commands={paletteCommands}
+      />
       <Suspense fallback={null}>
         <SpeedInsights />
         <Analytics />

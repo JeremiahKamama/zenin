@@ -194,15 +194,43 @@ export function Watchlist({
   lastLivePriceAt = null,
   isGuestMode = false,
   onIntent,
+  alertAssignments = [],
+  alertsLoading = false,
+  onLoadAlertAssignments,
+  onUpdateAlertAssignment,
+  currentUserId = "",
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("list"); // "grid" or "list"
   const [selectedIntentAsset, setSelectedIntentAsset] = useState(null);
+  const [alertActionBusy, setAlertActionBusy] = useState({});
   const [earningsItems, setEarningsItems] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [earningsStale, setEarningsStale] = useState(false);
   const [earningsNotice, setEarningsNotice] = useState("");
   const [isEarningsOpen, setIsEarningsOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth > 1100 : true));
+  // Column sort — drives the header click affordance and ordering of the asset blotter.
+  const [sortColumn, setSortColumn] = useState(null);
+  const [sortDirection, setSortDirection] = useState("asc");
+  const toggleColumnSort = (column) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+  // Configurable alert threshold (in % absolute) — exposes the previously hardcoded |change| >= 2.
+  const [alertThresholdPct, setAlertThresholdPct] = useState(() => {
+    if (typeof window === "undefined") return 2;
+    const raw = localStorage.getItem("zenin_watchlist_alert_threshold_pct");
+    const num = Number(raw);
+    return Number.isFinite(num) ? num : 2;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("zenin_watchlist_alert_threshold_pct", String(alertThresholdPct));
+  }, [alertThresholdPct]);
   const [indicatorCountry, setIndicatorCountry] = useState("");
   const [macroSnapshot, setMacroSnapshot] = useState(null);
   const [macroLoading, setMacroLoading] = useState(false);
@@ -307,6 +335,12 @@ export function Watchlist({
   }, [activeCategory, activeTheme]);
 
   useEffect(() => {
+    if (typeof onLoadAlertAssignments !== "function") return;
+    onLoadAlertAssignments();
+    // Refresh alert assignments when the visible page changes so status badges stay current.
+  }, [activeCategory, currentPage, alertThresholdPct]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const handleResize = () => {
       if (window.innerWidth <= 1100) {
@@ -398,6 +432,30 @@ export function Watchlist({
           (a) => normalizeTheme(a.theme) === normalizeTheme(activeTheme)
         )
       : starredAssets;
+  // Apply the active column sort (memoized so it only re-runs when assets or sort change).
+  const sortedAssets = useMemo(() => {
+    if (!sortColumn) return displayedAssets;
+    const sorted = [...displayedAssets].sort((a, b) => {
+      let left = a?.[sortColumn];
+      let right = b?.[sortColumn];
+      // Symbol/name fall through to string compare; numeric columns parse safely.
+      if (sortColumn === "last" || sortColumn === "priceChangePercent") {
+        left = Number(a?.price ?? a?.last);
+        right = Number(b?.price ?? b?.last);
+        if (sortColumn === "priceChangePercent") {
+          left = Number(a?.priceChangePercent);
+          right = Number(b?.priceChangePercent);
+        }
+      }
+      if (typeof left === "string" || typeof right === "string") {
+        return String(left || "").localeCompare(String(right || ""));
+      }
+      if (!Number.isFinite(left)) left = 0;
+      if (!Number.isFinite(right)) right = 0;
+      return left - right;
+    });
+    return sortDirection === "desc" ? sorted.reverse() : sorted;
+  }, [displayedAssets, sortColumn, sortDirection]);
   const emptyStateTitle = activeTheme && activeTheme !== "All"
     ? `No ${activeTheme} names in this cut`
     : `No ${String(activeCategory || "watchlist")} rows yet`;
@@ -426,8 +484,8 @@ export function Watchlist({
   }, [watchlistAssets]);
 
   const itemsPerPage = 10;
-  const totalPages = Math.max(1, Math.ceil(displayedAssets.length / itemsPerPage));
-  const pagedAssets = displayedAssets.slice(
+  const totalPages = Math.max(1, Math.ceil(sortedAssets.length / itemsPerPage));
+  const pagedAssets = sortedAssets.slice(
   (currentPage - 1) * itemsPerPage,
   currentPage * itemsPerPage
 );
@@ -646,6 +704,65 @@ useEffect(() => {
     onIntent?.(asset, intent);
     if (intent === "inspect") onAdd?.(asset);
   };
+
+  const buildAlertKey = (asset) => {
+    const symbol = normalizeSymbol(asset?.symbol || "");
+    return `watchlist:${symbol}:${asset?.marketType || "spot"}:${asset?.category || activeCategory || "watchlist"}:${asset?.theme || "default"}`;
+  };
+  const alertAssignmentMap = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(alertAssignments) ? alertAssignments : []).forEach((assignment) => {
+      if (assignment?.alertKey) map.set(assignment.alertKey, assignment);
+    });
+    return map;
+  }, [alertAssignments]);
+  const getAlertAssignment = (asset) => alertAssignmentMap.get(buildAlertKey(asset)) || null;
+
+  const handleAlertAction = async (asset, action) => {
+    if (typeof onUpdateAlertAssignment !== "function") return;
+    const key = buildAlertKey(asset);
+    const symbol = normalizeSymbol(asset?.symbol || "");
+    setAlertActionBusy((prev) => ({ ...prev, [key]: action }));
+    try {
+      const existing = getAlertAssignment(asset);
+      const base = {
+        action,
+        status: "open",
+        assignedToUserId: null,
+        snoozedUntil: null
+      };
+      if (action === "assign") {
+        base.assignedToUserId = currentUserId ? Number(currentUserId) || null : null;
+        base.status = "open";
+      } else if (action === "snooze") {
+        const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        base.status = "snoozed";
+        base.snoozedUntil = until;
+      } else if (action === "archive") {
+        base.status = "archived";
+      } else if (action === "reopen") {
+        base.status = "open";
+      } else if (action === "alert") {
+        // Keep existing assignment state; just dispatch the email via parent intent.
+        await onUpdateAlertAssignment(asset, { ...base, action: "email_dispatched" });
+        onIntent?.(asset, "alert");
+        return;
+      }
+      const payload = existing
+        ? { ...base, assignedToUserId: base.assignedToUserId ?? existing.assignedToUserId ?? null }
+        : base;
+      await onUpdateAlertAssignment(asset, payload);
+    } catch (err) {
+      console.warn(`Alert action ${action} failed for ${symbol}:`, err?.message);
+    } finally {
+      setAlertActionBusy((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const isAlertTriggered = (asset) => {
+    const change = Number(asset?.priceChangePercent);
+    return Number.isFinite(change) && Math.abs(change) >= alertThresholdPct && asset?.isMarketOpen !== false;
+  };
   const selectedImportSource = WATCHLIST_IMPORT_SOURCES.find((source) => source.key === importSource) || WATCHLIST_IMPORT_SOURCES[0];
   const handleImportFile = async (event) => {
     const file = event.target.files?.[0];
@@ -731,6 +848,21 @@ useEffect(() => {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
               </button>
             </InlineControlGroup>
+            <label className="watchlist-alert-threshold" title="Day change (%) above which a name flags as a Review alert.">
+              <span>Alert&nbsp;≥</span>
+              <input
+                type="number"
+                step="0.5"
+                min="0.1"
+                value={alertThresholdPct}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (Number.isFinite(next) && next > 0) setAlertThresholdPct(next);
+                }}
+                aria-label="Alert threshold (percent absolute day change)"
+              />
+              <span>%</span>
+            </label>
           </div>
         ) : null}
       </header>
@@ -922,9 +1054,23 @@ useEffect(() => {
                       <table className="watchlist-table">
                         <thead>
                           <tr>
-                            <th>Symbol</th>
-                            <th className="numeric">Last</th>
-                            <th className="numeric">% Chg</th>
+                            <th
+                              aria-sort={sortColumn === "symbol" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+                            >
+                              <button type="button" className="watchlist-sort-btn" onClick={() => toggleColumnSort("symbol")}>
+                                Symbol{sortColumn === "symbol" ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
+                              </button>
+                            </th>
+                            <th className="numeric" aria-sort={sortColumn === "last" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" className="watchlist-sort-btn" onClick={() => toggleColumnSort("last")}>
+                                Last{sortColumn === "last" ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
+                              </button>
+                            </th>
+                            <th className="numeric" aria-sort={sortColumn === "priceChangePercent" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" className="watchlist-sort-btn" onClick={() => toggleColumnSort("priceChangePercent")}>
+                                % Chg{sortColumn === "priceChangePercent" ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
+                              </button>
+                            </th>
                             <th>Thesis</th>
                             <th>Alert</th>
                             <th>Last catalyst</th>
@@ -953,22 +1099,91 @@ useEffect(() => {
                                   {hasChange ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "—"}
                                 </td>
                                 <td>{asset.theme || asset.category || "Unassigned"}</td>
-                                <td><span className={hasChange && Math.abs(change) >= 2 ? "watchlist-alert-chip active" : "watchlist-alert-chip"}>{hasChange && Math.abs(change) >= 2 ? "Review" : "Quiet"}</span></td>
+                                {(() => {
+                                  const triggered = isAlertTriggered(asset);
+                                  const assignment = getAlertAssignment(asset);
+                                  const status = assignment?.status || (triggered ? "open" : "quiet");
+                                  const assignedToMe = assignment?.assignedToUserId && String(assignment.assignedToUserId) === String(currentUserId);
+                                  return (
+                                    <td>
+                                      <span className={`watchlist-alert-chip ${triggered ? "active" : ""} ${status === "snoozed" ? "snoozed" : ""} ${status === "archived" ? "archived" : ""}`}>
+                                        {status === "snoozed" ? "Snoozed" : status === "archived" ? "Archived" : triggered ? "Review" : "Quiet"}
+                                        {assignedToMe ? " · You" : null}
+                                      </span>
+                                    </td>
+                                  );
+                                })()}
                                 <td>{getCatalystLabel(asset)}</td>
                                 <td>{getSessionLabel(asset)}</td>
                                 <td className="numeric watchlist-row-actions">
-                                  <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "inspect")}>Open</button>
-                                  <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "journal")}>Journal</button>
-                                  <button
-                                    className={`star-button compact ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      onToggleStar(asset);
-                                    }}
-                                    title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
-                                  >
-                                    ★
-                                  </button>
+                                  {(() => {
+                                    const assignment = getAlertAssignment(asset);
+                                    const isOpen = !assignment || assignment.status === "open";
+                                    const key = buildAlertKey(asset);
+                                    const busy = alertActionBusy[key];
+                                    return (
+                                      <>
+                                        <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "inspect")}>Open</button>
+                                        <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "journal")}>Journal</button>
+                                        {isAlertTriggered(asset) ? (
+                                          <>
+                                            {isOpen ? (
+                                              <button
+                                                type="button"
+                                                className="watchlist-action-btn primary"
+                                                disabled={busy || alertsLoading}
+                                                onClick={() => handleAlertAction(asset, "assign")}
+                                                title="Assign this alert to me"
+                                              >
+                                                {busy === "assign" ? "…" : "Assign"}
+                                              </button>
+                                            ) : null}
+                                            {assignment?.status === "open" || assignment?.status === "snoozed" ? (
+                                              <button
+                                                type="button"
+                                                className="watchlist-action-btn"
+                                                disabled={busy || alertsLoading}
+                                                onClick={() => handleAlertAction(asset, assignment?.status === "snoozed" ? "reopen" : "snooze")}
+                                                title={assignment?.status === "snoozed" ? "Reopen alert" : "Snooze for 24h"}
+                                              >
+                                                {busy === "snooze" || busy === "reopen" ? "…" : assignment?.status === "snoozed" ? "Reopen" : "Snooze"}
+                                              </button>
+                                            ) : null}
+                                            {assignment?.status && assignment.status !== "archived" ? (
+                                              <button
+                                                type="button"
+                                                className="watchlist-action-btn"
+                                                disabled={busy || alertsLoading}
+                                                onClick={() => handleAlertAction(asset, "archive")}
+                                                title="Archive alert"
+                                              >
+                                                {busy === "archive" ? "…" : "Archive"}
+                                              </button>
+                                            ) : null}
+                                            <button
+                                              type="button"
+                                              className="watchlist-action-btn"
+                                              disabled={busy || alertsLoading}
+                                              onClick={() => handleAlertAction(asset, "alert")}
+                                              title="Send watchlist alert email"
+                                            >
+                                              {busy === "alert" ? "…" : "Email"}
+                                            </button>
+                                          </>
+                                        ) : null}
+                                        <button
+                                          className={`star-button compact ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            onToggleStar(asset);
+                                          }}
+                                          title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
+                                        >
+                                          ★
+                                        </button>
+                                      </>
+                                    );
+                                  })()}
                                 </td>
                               </tr>
                             );

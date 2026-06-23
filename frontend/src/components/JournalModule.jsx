@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
@@ -47,7 +47,8 @@ export function JournalModule({
   accountEquity = null,
   activeOptionsTrades = [],
   multiChainCache = {},
-  spotPrices = {}
+  spotPrices = {},
+  journalThreadContext = null
 }) {
   const [reportPage, setReportPage] = useState(1);
   const [recentPage, setRecentPage] = useState(1);
@@ -92,7 +93,8 @@ export function JournalModule({
     postReview: "",
     mistakeCategory: "",
     learned: "",
-    chartLink: ""
+    chartLink: "",
+    decisionThreadId: null
   });
   const [journalPage, setJournalPage] = useState("entry");
   const [editingEntryId, setEditingEntryId] = useState(null);
@@ -131,6 +133,44 @@ export function JournalModule({
     });
   };
 
+  const refreshJournalEntries = useCallback(async () => {
+    if (isQuickEntryOpen || saveStatus === "saving") return;
+    try {
+      const entriesResult = await loadWorkspaceCollection("journal:entries", []);
+      if (!Array.isArray(entriesResult?.items)) return;
+      setJournalEntries((prev) => {
+        const localById = new Map((prev || []).map((e) => [e?.id, e]));
+        const merged = [];
+        // Start with server items; preserve any local-only items not yet synced.
+        for (const serverEntry of entriesResult.items) {
+          const local = localById.get(serverEntry?.id);
+          if (!local) {
+            merged.push(serverEntry);
+          } else {
+            // Prefer local if it has unsaved edits (no updatedAt or newer updatedAt).
+            const localUpdated = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+            const serverUpdated = serverEntry?.updatedAt ? new Date(serverEntry.updatedAt).getTime() : 0;
+            if (localUpdated > serverUpdated) {
+              merged.push(local);
+            } else {
+              merged.push(serverEntry);
+            }
+          }
+        }
+        // Append local-only entries that are not on the server.
+        const serverIds = new Set(entriesResult.items.map((e) => e?.id));
+        for (const localEntry of prev || []) {
+          if (!serverIds.has(localEntry?.id)) {
+            merged.push(localEntry);
+          }
+        }
+        return merged.slice(0, 2000);
+      });
+    } catch (error) {
+      console.warn("Journal refresh from workspace failed.", error);
+    }
+  }, [isQuickEntryOpen, saveStatus]);
+
   useEffect(() => {
     const intervalId = setInterval(() => setNowTs(Date.now()), 60 * 1000);
     return () => clearInterval(intervalId);
@@ -151,7 +191,7 @@ export function JournalModule({
         ]);
         if (cancelled) return;
         if (Array.isArray(entriesResult?.items) && entriesResult.items.length) {
-          setJournalEntries(entriesResult.items);
+          setJournalEntries(entriesResult.items.slice(0, 2000));
         }
         if (typeof reviewNoteResult?.document === "string") {
           setReviewNote(reviewNoteResult.document);
@@ -175,9 +215,51 @@ export function JournalModule({
   }, []);
 
   useEffect(() => {
+    if (!journalThreadContext) return;
+    setEntryDraft((prev) => ({
+      ...prev,
+      symbol: String(journalThreadContext.symbol || prev.symbol || "").toUpperCase(),
+      preThesis: journalThreadContext.preThesis || prev.preThesis || "",
+      decisionThreadId: journalThreadContext.decisionThreadId || prev.decisionThreadId || null
+    }));
+    setJournalPage("entry");
+    setIsQuickEntryOpen(true);
+  }, [journalThreadContext]);
+
+  useEffect(() => {
     localStorage.setItem("zenin_journal_entries", JSON.stringify(journalEntries.slice(0, 300)));
     if (journalSyncReadyRef.current) {
-      syncJournalCollection("journal:entries", journalEntries.slice(0, 500), 500);
+      // Merge with the server collection before overwriting it, so entries
+      // created server-side (e.g. from a decision thread) are not lost.
+      const doSave = async () => {
+        try {
+          const result = await loadWorkspaceCollection("journal:entries", []);
+          const serverItems = Array.isArray(result?.items) ? result.items : [];
+          const localById = new Map(journalEntries.map((e) => [e?.id, e]));
+          const serverById = new Map(serverItems.map((e) => [e?.id, e]));
+          const merged = [];
+          for (const serverEntry of serverItems) {
+            const local = localById.get(serverEntry?.id);
+            if (!local) {
+              merged.push(serverEntry);
+            } else {
+              const localUpdated = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+              const serverUpdated = serverEntry?.updatedAt ? new Date(serverEntry.updatedAt).getTime() : 0;
+              merged.push(localUpdated > serverUpdated ? local : serverEntry);
+            }
+          }
+          for (const localEntry of journalEntries) {
+            if (!serverById.has(localEntry?.id)) {
+              merged.push(localEntry);
+            }
+          }
+          syncJournalCollection("journal:entries", merged.slice(0, 2000), 2000);
+        } catch {
+          // Fallback: save local list as before if the server read fails.
+          syncJournalCollection("journal:entries", journalEntries.slice(0, 2000), 2000);
+        }
+      };
+      doSave();
     }
   }, [journalEntries]);
 
@@ -259,13 +341,20 @@ export function JournalModule({
         setIsExportMenuOpen(false);
       }
     };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void refreshJournalEntries();
+      }
+    };
     document.addEventListener("mousedown", handlePointerDown);
     document.addEventListener("keydown", handleEscape);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [refreshJournalEntries]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -470,7 +559,8 @@ export function JournalModule({
       postReview: "",
       mistakeCategory: "",
       learned: "",
-      chartLink: ""
+      chartLink: "",
+      decisionThreadId: null
     });
     setEntryErrors({});
   };
@@ -493,7 +583,8 @@ export function JournalModule({
       price: Number(entryDraft.price) || 0,
       notional: Number(entryDraft.notional) || 0,
       status: entryDraft.status || "Open",
-      tradeDate: entryDraft.tradeDate || new Date().toISOString()
+      tradeDate: entryDraft.tradeDate || new Date().toISOString(),
+      decisionThreadId: entryDraft.decisionThreadId || null
     };
     if (editingEntryId) {
       setJournalEntries((prev) =>
@@ -508,6 +599,7 @@ export function JournalModule({
       const newEntry = {
         id: `jrnl-${Date.now()}`,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         ...normalized
       };
       setJournalEntries((prev) => [newEntry, ...prev]);
@@ -1428,6 +1520,28 @@ export function JournalModule({
   const breakevenDays = calendarPnlValues.filter((v) => Math.abs(v) < 1e-8).length;
   const avgDayPnL = calendarPnlValues.length ? monthPnL / calendarPnlValues.length : 0;
 
+  // Percentile-based heatmap thresholds (replaces the old hardcoded $300 / -$300 buckets).
+  // The scale auto-adapts to the user's actual monthly volatility — a $30 gain for a 401k trader
+  // is a "big" day, but for a 0DTE options desk it's noise.
+  const heatmapScale = useMemo(() => {
+    const sortedAbs = calendarPnlValues
+      .map((v) => Math.abs(v))
+      .filter((v) => Number.isFinite(v) && v > 0)
+      .sort((a, b) => a - b);
+    if (sortedAbs.length === 0) return { small: 0, large: 0 };
+    const quantile = (p) => sortedAbs[Math.min(sortedAbs.length - 1, Math.max(0, Math.floor(p * sortedAbs.length)))];
+    return { small: quantile(0.5), large: quantile(0.85) };
+  }, [calendarPnlValues]);
+  const resolveHeatTone = useCallback(
+    (pnl) => {
+      if (!Number.isFinite(pnl) || Math.abs(pnl) < 1e-8) return "neutral";
+      const abs = Math.abs(pnl);
+      if (pnl > 0) return abs >= heatmapScale.large ? "large-gain" : "small-gain";
+      return abs >= heatmapScale.large ? "large-loss" : "small-loss";
+    },
+    [heatmapScale]
+  );
+
   const realizedTrades = Array.isArray(analytics?.realizedTrades) ? analytics.realizedTrades : [];
   const winnersCount = realizedTrades.filter((t) => Number(t?.pnl || 0) > 0).length;
   const losersCount = realizedTrades.filter((t) => Number(t?.pnl || 0) < 0).length;
@@ -1893,11 +2007,13 @@ export function JournalModule({
             calendarMonthLabel={calendarMonthLabel}
             monthDateRangeLabel={monthDateRangeLabel}
             calendarCells={calendarCells}
+            resolveHeatTone={resolveHeatTone}
             selectedDay={selectedDay}
             monthPnL={monthPnL}
             bestDay={bestDay}
             worstDay={worstDay}
             avgDayPnL={avgDayPnL}
+            heatmapScale={heatmapScale}
             formatValue={formatValue}
             onSelectDay={setSelectedCalendarDay}
             onMoveMonth={moveCalendarMonth}
@@ -2069,39 +2185,42 @@ function JournalDecisionLayer({
   );
 }
 
-function JournalDebriefDashboard({
-  dateKey,
-  syncTimestampLabel,
-  debriefPnl,
-  debriefWinRate,
-  ruleAdherence,
-  emotionalDiscipline,
-  primaryLesson,
-  reviewQueueItems,
-  executionRows,
-  behaviorPatterns,
-  calendarMonthLabel,
-  monthDateRangeLabel,
-  calendarCells,
-  selectedDay,
-  monthPnL,
-  bestDay,
-  worstDay,
-  avgDayPnL,
-  formatValue,
-  onSelectDay,
-  onMoveMonth,
-  onOpenDay,
-  onOpenTrade,
-  lessonRows,
-  reviewNote,
-  setReviewNote,
-  reviewComposerRef,
-  onSaveReview,
-  onAddToJournal,
-  onNewEntry,
-  reviewModeActive = false
-}) {
+function JournalDebriefDashboard(props) {
+  const {
+    dateKey,
+    syncTimestampLabel,
+    debriefPnl,
+    debriefWinRate,
+    ruleAdherence,
+    emotionalDiscipline,
+    primaryLesson,
+    reviewQueueItems,
+    executionRows,
+    behaviorPatterns,
+    calendarMonthLabel,
+    monthDateRangeLabel,
+    calendarCells,
+    selectedDay,
+    monthPnL,
+    bestDay,
+    worstDay,
+    avgDayPnL,
+    heatmapScale,
+    formatValue,
+    resolveHeatTone,
+    onSelectDay,
+    onMoveMonth,
+    onOpenDay,
+    onOpenTrade,
+    lessonRows,
+    reviewNote,
+    setReviewNote,
+    reviewComposerRef,
+    onSaveReview,
+    onAddToJournal,
+    onNewEntry,
+    reviewModeActive = false
+  } = props || {};
   const safeRuleAdherence = ruleAdherence == null ? "—" : `${ruleAdherence.toFixed(0)}%`;
   const safeDiscipline = emotionalDiscipline == null ? "—" : `${emotionalDiscipline.toFixed(0)}%`;
   return (
@@ -2255,7 +2374,7 @@ function JournalDebriefDashboard({
             {calendarCells.map((cell) => {
               if (cell.type === "blank") return <div key={cell.key} className="journal-debrief-heat-cell blank" />;
               const pnl = Number(cell.pnl || 0);
-              const tone = pnl > 300 ? "large-gain" : pnl > 0 ? "small-gain" : pnl < -300 ? "large-loss" : pnl < 0 ? "small-loss" : "neutral";
+              const tone = resolveHeatTone ? resolveHeatTone(pnl) : "neutral";
               return (
                 <button
                   key={cell.key}
@@ -2276,6 +2395,12 @@ function JournalDebriefDashboard({
             <div><span>Best Day</span><strong className="positive">{formatValue(bestDay, true)}</strong></div>
             <div><span>Worst Day</span><strong className="negative">{formatValue(worstDay, true)}</strong></div>
             <div><span>Avg Day</span><strong>{formatValue(avgDayPnL, true)}</strong></div>
+          </div>
+          <div className="journal-debrief-heat-legend" title="Heatmap intensity auto-scales to the 50th and 85th percentile of this month's absolute P&L. Hover any day to see its value.">
+            <span className="zenin-eyebrow">Scale</span>
+            <span>small {heatmapScale.small ? formatValue(heatmapScale.small, true) : "—"}</span>
+            <i className="journal-debrief-heat-legend-bar" aria-hidden="true" />
+            <span>large {heatmapScale.large ? formatValue(heatmapScale.large, true) : "—"}</span>
           </div>
         </article>
 

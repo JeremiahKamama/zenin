@@ -1842,7 +1842,7 @@ useEffect(() => {
               className="guided-empty-state--compact options-guided-empty"
             />
           ) : (
-            <div className="table-scroll options-chain-scroll options-exec-table-scroll" style={{ maxHeight: "320px", overflowY: "auto", scrollBehavior: "smooth" }} ref={chainScrollRef}>
+            <div className="table-scroll options-chain-scroll options-exec-table-scroll" style={{ maxHeight: "min(60vh, 540px)", minHeight: "260px", overflowY: "auto", scrollBehavior: "smooth" }} ref={chainScrollRef}>
               <table className="option-chain-table">
                 <thead>
                   <tr>

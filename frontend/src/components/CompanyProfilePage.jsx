@@ -75,6 +75,20 @@ function formatLabel(value) {
     .join(" ");
 }
 
+// Phase 5: parse display strings like "−1.2%", "(2.3)", "1.2M" into a tone
+// without relying on brittle `.includes('-')` checks (which miss "(1.2%)"
+// or "N/A"). Returns "positive" | "negative" | "".
+function numericTone(value) {
+  if (value == null) return "";
+  const raw = String(value).trim();
+  if (!raw || raw === "N/A" || raw === "—") return "";
+  // Strip parentheses (used for negatives), currency symbols, and trailing %.
+  const cleaned = raw.replace(/[()$,\s]/g, "").replace(/%$/, "");
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n === 0) return "";
+  return n > 0 ? "positive" : "negative";
+}
+
 function formatDecimal(value, digits = 1) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toFixed(digits) : "Not available";
@@ -1282,7 +1296,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
             {finvizEntries.map(([label, value]) => (
               <div key={label} className="company-finviz-cell">
                 <span className="finviz-label">{label}</span>
-                <span className="finviz-value" style={{ color: value?.includes('-') ? '#f87171' : value?.includes('%') && parseFloat(value) > 0 ? '#4ade80' : 'var(--color-text-primary)' }}>{value}</span>
+                <span className={`finviz-value ${numericTone(value)}`}>{value}</span>
               </div>
             ))}
           </div>
@@ -1354,7 +1368,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                       {filteredFinvizSummary.slice(0, 16).map(([label, value]) => (
                         <div key={label} className="intel-summary-card">
                           <span className="summary-label">{label}</span>
-                          <span className={`summary-value ${value?.includes('-') ? 'negative' : (value?.includes('%') && parseFloat(value) > 0) ? 'positive' : ''}`}>
+                          <span className={`summary-value ${numericTone(value)}`}>
                             {value}
                           </span>
                         </div>
@@ -1366,7 +1380,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 {/* Analyst Ratings */}
                 <section className="intel-section">
                   <h3 className="intel-title">Analyst Ratings</h3>
-                  <div className="intel-table-wrap">
+                  <div className="intel-table-wrap table-scroll">
                     <table className="intel-table analyst-ratings-table">
                       <thead>
                         <tr>
@@ -1402,8 +1416,8 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 {/* Insider Trading */}
                 <section className="intel-section">
                   <h3 className="intel-title">Insider Trading</h3>
-                  <div className="intel-table-wrap">
-                    <table className="intel-table">
+<div className="intel-table-wrap table-scroll">
+                  <table className="intel-table">
                       <thead>
                         <tr>
                           <th>Owner</th>
@@ -1502,7 +1516,7 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
           <div className="company-earnings-head">
             <h2>Recent earnings performance</h2>
           </div>
-          <div className="company-earnings-table-wrap" style={{ maxHeight: "400px", overflowY: "auto" }}>
+          <div className="company-earnings-table-wrap table-scroll" style={{ maxHeight: "400px", overflowY: "auto" }}>
             <table className="company-earnings-table">
               <thead>
                 <tr>

@@ -25,9 +25,9 @@ body.page-dark-theme #root {
   --text: #eef4ff;
   --muted: #9eb0d5;
   --muted-2: #7f91b7;
-  --primary: #2e6cff;
-  --primary-2: #6fa0ff;
-  --primary-soft: rgba(46, 108, 255, 0.14);
+  --primary: #00d4ff;
+  --primary-2: #38e0ff;
+  --primary-soft: rgba(0, 212, 255, 0.14);
   --green: #2bd67b;
   --red: #f15d6a;
   --shadow: 0 28px 80px rgba(0, 0, 0, 0.45);

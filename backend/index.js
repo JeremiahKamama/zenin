@@ -62,6 +62,12 @@ const {
   equityOptionsQuerySchema,
   tradeLogSchema,
   watchlistBulkSchema,
+  decisionThreadCreateSchema,
+  decisionThreadUpdateSchema,
+  decisionThreadReviewSchema,
+  decisionThreadLinkResearchSchema,
+  decisionThreadJournalSchema,
+  dailyBriefingGenerateSchema,
 } = require("./validation");
 
 /**
@@ -112,8 +118,18 @@ const {
   trading,
   admin,
   analytics,
+  perpsBench,
   describeDatabaseConfig
 } = require("./database");
+const {
+  listCryptoVenues,
+  listStockBrokers,
+  getVenueById,
+  computeBasisCarry,
+  computePerpArb,
+  computeCryptoFees,
+  computeStockBrokerFees
+} = require("./perpsCalculator");
 const { REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
 const { fetchFarsideEtfFlows: fetchLatestFarsideEtfFlows } = require("./farsideEtf");
 const { buildPublicRuntimeConfig, buildAppRuntimeConfig } = require("./runtimeConfig");
@@ -1137,6 +1153,22 @@ const optionsChainLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many options-chain requests. Please slow down." }
+});
+
+const briefingGenerateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Briefing generation limit reached. Try again in a few minutes." }
+});
+
+const verifyScopeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Scope verification limit reached. Try again in a few minutes." }
 });
 
 
@@ -3685,6 +3717,15 @@ async function buildUserBootstrapPayload(userId, options = {}) {
       ])
     : [[], [], [], []];
 
+  // Daily briefing + decision threads for the daily decision loop
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const [todayBriefing, decisionThreads] = activeWorkspace?.workspace
+    ? await Promise.all([
+        userWorkspace.dailyBriefings.getByDate(userId, todayDate, activeWorkspace.workspace.id).catch(() => null),
+        userWorkspace.decisionThreads.list(userId, activeWorkspace.workspace.id).catch(() => [])
+      ])
+    : [null, []];
+
   const normalizedBalances = Array.isArray(balances) ? balances.slice() : [];
   if (!normalizedBalances.some((row) => row?.currency === "USD")) {
     normalizedBalances.unshift({
@@ -3719,10 +3760,7 @@ async function buildUserBootstrapPayload(userId, options = {}) {
         id: item.id,
         exchange: item.exchange,
         createdAt: item.createdAt || null,
-        permissionScope: item.permissionScope || "unknown",
-        canTrade: !!item.canTrade,
-        lastVerifiedScope: item.lastVerifiedScope || "unknown",
-        riskLevel: item.riskLevel || "standard",
+        providerTrust: buildProviderTrust(item, parsedExtra?.providerScopeMeta),
         syncAvailable: capability.syncAvailable,
         connectionCapability: capability,
         extraData: parsedExtra,
@@ -3731,6 +3769,8 @@ async function buildUserBootstrapPayload(userId, options = {}) {
         lastSyncMeta: item.lastSyncMeta || {}
       };
     }) : [],
+    todayBriefing: todayBriefing || null,
+    decisionThreads: Array.isArray(decisionThreads) ? decisionThreads : [],
     appConfig: buildAppRuntimeConfig(),
     updatedAt: new Date().toISOString()
   };
@@ -4135,6 +4175,348 @@ app.put("/api/workspaces/current/alerts", requireSignedIn, attachActiveWorkspace
   }
 });
 
+// ---------------------------------------------------------------------------
+// Daily Briefing & Decision Threads
+// ---------------------------------------------------------------------------
+async function generateDailyBriefingPayload(userId, workspaceId, dateStr) {
+  const [holdings, watchlistAssets, openAlerts, threads, recentTrades] = await Promise.all([
+    userWorkspace.portfolio.getAll(userId, workspaceId).catch(() => []),
+    userWorkspace.watchlist.getAll(userId, workspaceId).catch(() => []),
+    pool.query(`
+      SELECT alert_key AS "alertKey", status, created_at AS "createdAt", updated_at AS "updatedAt"
+      FROM workspace_alert_assignments
+      WHERE workspace_id = $1 AND status = 'open'
+      ORDER BY updated_at DESC LIMIT 20;
+    `, [workspaceId]).then((r) => r.rows).catch(() => []),
+    userWorkspace.decisionThreads.list(userId, workspaceId).catch(() => []),
+    userWorkspace.trades.getAll(userId, 25, workspaceId).catch(() => [])
+  ]);
+
+  const reviewDueThreads = Array.isArray(threads)
+    ? threads.filter((t) => t.status === "review_due" && t.dueAt && new Date(t.dueAt).getTime() <= Date.now())
+    : [];
+  const openThreads = Array.isArray(threads)
+    ? threads.filter((t) => ["new", "triaged", "researching", "journaled", "review_due"].includes(t.status))
+    : [];
+
+  const sections = [];
+  const metrics = {};
+
+  // Portfolio snapshot
+  const holdingsCount = Array.isArray(holdings) ? holdings.length : 0;
+  const portfolioValue = Array.isArray(holdings)
+    ? holdings.reduce((sum, h) => {
+        const qty = Number(h?.quantity) || 0;
+        const price = Number(h?.price) || Number(h?.entryPrice) || 0;
+        return sum + qty * price;
+      }, 0)
+    : 0;
+  metrics.portfolioValue = portfolioValue;
+  metrics.holdingsCount = holdingsCount;
+  sections.push({
+    type: "portfolio",
+    title: "Portfolio snapshot",
+    items: (Array.isArray(holdings) ? holdings.slice(0, 5) : []).map((h) => ({
+      symbol: h?.symbol || null,
+      quantity: Number(h?.quantity) || 0,
+      price: Number(h?.price) || Number(h?.entryPrice) || 0,
+      name: h?.name || h?.symbol || null
+    })),
+    insight: holdingsCount
+      ? `${holdingsCount} holding${holdingsCount === 1 ? "" : "s"} tracked. Portfolio value ≈ $${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`
+      : "No holdings tracked yet. Connect a read-only source to import positions."
+  });
+
+  // Watchlist movers (symbol list — price data would require live feed)
+  const watchlistCount = Array.isArray(watchlistAssets) ? watchlistAssets.length : 0;
+  metrics.watchlistCount = watchlistCount;
+  sections.push({
+    type: "watchlist",
+    title: "Watchlist",
+    items: (Array.isArray(watchlistAssets) ? watchlistAssets.slice(0, 8) : []).map((w) => ({
+      symbol: w?.symbol || null,
+      name: w?.name || w?.symbol || null,
+      type: w?.type || null
+    })),
+    insight: watchlistCount
+      ? `${watchlistCount} asset${watchlistCount === 1 ? "" : "s"} on your watchlist.`
+      : "Your watchlist is empty. Add an asset to start tracking."
+  });
+
+  // Open alerts
+  metrics.openAlertCount = Array.isArray(openAlerts) ? openAlerts.length : 0;
+  sections.push({
+    type: "alerts",
+    title: "Open alerts",
+    items: (Array.isArray(openAlerts) ? openAlerts : []).map((a) => ({
+      alertKey: a.alertKey,
+      status: a.status,
+      updatedAt: a.updatedAt
+    })),
+    insight: Array.isArray(openAlerts) && openAlerts.length
+      ? `${openAlerts.length} open alert${openAlerts.length === 1 ? "" : "s"} need attention.`
+      : "No open alerts. You're clear to focus on research and execution."
+  });
+
+  // Decision queue
+  metrics.openThreadCount = openThreads.length;
+  metrics.reviewDueCount = reviewDueThreads.length;
+  sections.push({
+    type: "decision_queue",
+    title: "Decision queue",
+    items: openThreads.slice(0, 8).map((t) => ({
+      id: t.id,
+      title: t.title,
+      symbol: t.symbol,
+      status: t.status,
+      priority: t.priority,
+      dueAt: t.dueAt
+    })),
+    insight: reviewDueThreads.length
+      ? `${reviewDueThreads.length} decision${reviewDueThreads.length === 1 ? "" : "s"} are due for review.`
+      : (openThreads.length ? `${openThreads.length} open decision${openThreads.length === 1 ? "" : "s"} in your queue.` : "No open decisions. Start one from an alert or research note.")
+  });
+
+  // Recent executions
+  const tradesCount = Array.isArray(recentTrades) ? recentTrades.length : 0;
+  metrics.recentTradeCount = tradesCount;
+  sections.push({
+    type: "executions",
+    title: "Recent executions",
+    items: (Array.isArray(recentTrades) ? recentTrades.slice(0, 5) : []).map((t) => ({
+      symbol: t?.asset || t?.symbol || null,
+      side: t?.side || null,
+      quantity: Number(t?.quantity) || 0,
+      price: Number(t?.price) || 0,
+      executedAt: t?.executedAt || t?.date || null
+    })),
+    insight: tradesCount
+      ? `${tradesCount} recent execution${tradesCount === 1 ? "" : "s"}. Journal the outcomes to build a reviewable history.`
+      : "No recent executions synced. Connect an exchange to import fills."
+  });
+
+  // Derive market regime + risk level from simple rules
+  const alertPressure = metrics.openAlertCount + metrics.reviewDueCount;
+  let riskLevel = "normal";
+  if (alertPressure >= 5) riskLevel = "elevated";
+  else if (alertPressure >= 2) riskLevel = "moderate";
+  let marketRegime = "stable";
+  if (reviewDueThreads.length >= 3) marketRegime = "review_pressure";
+  else if (metrics.openAlertCount >= 3) marketRegime = "alert_pressure";
+
+  const summary = `Daily briefing for ${dateStr}. ${metrics.openAlertCount} open alert${metrics.openAlertCount === 1 ? "" : "s"}, ${openThreads.length} open decision${openThreads.length === 1 ? "" : "s"}, ${reviewDueThreads.length} due for review. Portfolio value ≈ $${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })} across ${holdingsCount} holding${holdingsCount === 1 ? "" : "s"}.`;
+
+  return {
+    status: "ready",
+    summary,
+    marketRegime,
+    riskLevel,
+    sections,
+    metrics
+  };
+}
+
+app.get("/api/daily-briefing", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const requestedDate = req.query.date
+      ? String(req.query.date).trim()
+      : new Date().toISOString().slice(0, 10);
+    const dateStr = (requestedDate === "today" || !requestedDate)
+      ? new Date().toISOString().slice(0, 10)
+      : requestedDate.slice(0, 10);
+    const briefing = await userWorkspace.dailyBriefings.getByDate(req.auth.userId, dateStr, req.workspace.workspace.id);
+    res.json({ briefing });
+  } catch (err) {
+    handleServerError(res, "Failed to load daily briefing", err);
+  }
+});
+
+app.post("/api/daily-briefing/generate", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, briefingGenerateLimiter, async (req, res) => {
+  try {
+    const requestedDate = req.query.date || req.body?.date
+      ? String(req.query.date || req.body?.date).trim()
+      : new Date().toISOString().slice(0, 10);
+    const dateStr = (requestedDate === "today" || !requestedDate)
+      ? new Date().toISOString().slice(0, 10)
+      : requestedDate.slice(0, 10);
+    const payload = await generateDailyBriefingPayload(req.auth.userId, req.workspace.workspace.id, dateStr);
+    const briefing = await userWorkspace.dailyBriefings.upsert(req.auth.userId, dateStr, payload, req.workspace.workspace.id);
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "daily_briefing_generated",
+      entityType: "daily_briefing",
+      entityId: briefing?.id || null,
+      details: { date: dateStr, riskLevel: payload.riskLevel, marketRegime: payload.marketRegime }
+    });
+    res.json({ briefing });
+  } catch (err) {
+    handleServerError(res, "Failed to generate daily briefing", err);
+  }
+});
+
+app.post("/api/daily-briefing/:id/read", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const briefing = await userWorkspace.dailyBriefings.markRead(req.auth.userId, req.params.id, req.workspace.workspace.id);
+    if (!briefing) return res.status(404).json({ error: "Briefing not found" });
+    res.json({ briefing });
+  } catch (err) {
+    handleServerError(res, "Failed to mark briefing read", err);
+  }
+});
+
+app.post("/api/daily-briefing/:id/complete", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const briefing = await userWorkspace.dailyBriefings.markCompleted(req.auth.userId, req.params.id, req.workspace.workspace.id);
+    if (!briefing) return res.status(404).json({ error: "Briefing not found" });
+    res.json({ briefing });
+  } catch (err) {
+    handleServerError(res, "Failed to mark briefing complete", err);
+  }
+});
+
+app.get("/api/decision-threads", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const filters = {};
+    if (req.query.status) filters.status = String(req.query.status).trim().toLowerCase();
+    if (req.query.priority) filters.priority = String(req.query.priority).trim().toLowerCase();
+    if (req.query.sourceType) filters.sourceType = String(req.query.sourceType).trim().toLowerCase();
+    filters.page = Number(req.query.page) || 1;
+    filters.pageSize = Number(req.query.pageSize) || 100;
+    const threads = await userWorkspace.decisionThreads.list(req.auth.userId, req.workspace.workspace.id, filters);
+    res.json({ items: threads, page: filters.page, pageSize: filters.pageSize });
+  } catch (err) {
+    handleServerError(res, "Failed to list decision threads", err);
+  }
+});
+
+app.post("/api/decision-threads", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(decisionThreadCreateSchema), async (req, res) => {
+  try {
+    const thread = await userWorkspace.decisionThreads.create(req.auth.userId, req.body, req.workspace.workspace.id);
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "decision_thread_created",
+      entityType: "decision_thread",
+      entityId: thread?.id || null,
+      details: { title: thread?.title, sourceType: thread?.sourceType, priority: thread?.priority }
+    });
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    res.json({ thread });
+  } catch (err) {
+    handleServerError(res, "Failed to create decision thread", err);
+  }
+});
+
+app.get("/api/decision-threads/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const thread = await userWorkspace.decisionThreads.getById(req.auth.userId, req.params.id, req.workspace.workspace.id);
+    if (!thread) return res.status(404).json({ error: "Decision thread not found" });
+    res.json({ thread });
+  } catch (err) {
+    handleServerError(res, "Failed to load decision thread", err);
+  }
+});
+
+app.patch("/api/decision-threads/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(decisionThreadUpdateSchema), async (req, res) => {
+  try {
+    const thread = await userWorkspace.decisionThreads.update(req.auth.userId, req.params.id, req.body, req.workspace.workspace.id);
+    if (!thread) return res.status(404).json({ error: "Decision thread not found" });
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "decision_thread_updated",
+      entityType: "decision_thread",
+      entityId: thread.id,
+      details: { status: thread.status, priority: thread.priority }
+    });
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    res.json({ thread });
+  } catch (err) {
+    handleServerError(res, "Failed to update decision thread", err);
+  }
+});
+
+app.post("/api/decision-threads/:id/link-research", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(decisionThreadLinkResearchSchema), async (req, res) => {
+  try {
+    const thread = await userWorkspace.decisionThreads.linkResearch(req.auth.userId, req.params.id, req.body.researchId, req.workspace.workspace.id);
+    if (!thread) return res.status(404).json({ error: "Decision thread not found" });
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "decision_thread_linked_research",
+      entityType: "decision_thread",
+      entityId: thread.id,
+      details: { researchId: req.body.researchId }
+    });
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    res.json({ thread });
+  } catch (err) {
+    handleServerError(res, "Failed to link research", err);
+  }
+});
+
+app.post("/api/decision-threads/:id/create-journal-entry", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(decisionThreadJournalSchema), async (req, res) => {
+  try {
+    const result = await userWorkspace.decisionThreads.createJournalEntry(req.auth.userId, req.params.id, req.body, req.workspace.workspace.id);
+    if (!result) return res.status(404).json({ error: "Decision thread not found" });
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "decision_thread_journaled",
+      entityType: "decision_thread",
+      entityId: result.thread?.id || null,
+      details: { journalEntryId: result.journalEntry?.id || null, reviewDueAt: result.thread?.dueAt || null }
+    });
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    res.json({ thread: result.thread, journalEntry: result.journalEntry });
+  } catch (err) {
+    handleServerError(res, "Failed to create journal entry", err);
+  }
+});
+
+app.post("/api/decision-threads/:id/mark-reviewed", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(decisionThreadReviewSchema), async (req, res) => {
+  try {
+    const thread = await userWorkspace.decisionThreads.markReviewed(req.auth.userId, req.params.id, req.body, req.workspace.workspace.id);
+    if (!thread) return res.status(404).json({ error: "Decision thread not found" });
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "decision_thread_reviewed",
+      entityType: "decision_thread",
+      entityId: thread.id,
+      details: { result: thread.outcome?.result || "reviewed", pnl: thread.outcome?.pnl ?? null }
+    });
+    invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
+    res.json({ thread });
+  } catch (err) {
+    handleServerError(res, "Failed to mark decision reviewed", err);
+  }
+});
+
+app.get("/api/decision-threads/outcomes", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const filters = {};
+    if (req.query.sourceType) filters.sourceType = String(req.query.sourceType).trim().toLowerCase();
+    if (req.query.result) filters.result = String(req.query.result).trim().toLowerCase();
+    if (req.query.limit) filters.limit = Number(req.query.limit) || 100;
+    const items = await userWorkspace.decisionThreads.listOutcomes(req.auth.userId, req.workspace.workspace.id, filters);
+    const aggregated = items.reduce((acc, thread) => {
+      const resultKey = thread?.outcome?.result || "reviewed";
+      acc.byResult[resultKey] = (acc.byResult[resultKey] || 0) + 1;
+      const pnl = typeof thread?.outcome?.pnl === "number" ? thread.outcome.pnl : 0;
+      acc.totalPnl += pnl;
+      if (pnl > 0) acc.winCount += 1;
+      if (pnl < 0) acc.lossCount += 1;
+      return acc;
+    }, { byResult: {}, totalPnl: 0, winCount: 0, lossCount: 0, total: items.length });
+    res.json({ items, aggregated });
+  } catch (err) {
+    handleServerError(res, "Failed to load decision outcomes", err);
+  }
+});
+
 app.get("/api/db/balance", requireSignedIn, async (req, res) => {
   try {
     const current = await userWorkspace.balance.get(req.auth.userId);
@@ -4258,6 +4640,119 @@ app.put("/api/db/workspace/collections/:namespace", requireSignedIn, attachActiv
 // ---------------------------------------------------------------------------
 // Exchange Keys Management
 // ---------------------------------------------------------------------------
+const PROVIDER_LABELS = {
+  binance: "Binance",
+  bybit: "Bybit",
+  hyperliquid: "Hyperliquid",
+  coinbase_advanced: "Coinbase Advanced",
+  kraken: "Kraken",
+  okx: "OKX",
+  dydx: "dYdX",
+  aevo: "Aevo",
+  lyra: "Lyra",
+  derive: "Derive",
+  interactive_brokers: "Interactive Brokers",
+  alpaca: "Alpaca",
+  tradier: "Tradier",
+  schwab: "Schwab",
+  robinhood: "Robinhood",
+  polymarket: "Polymarket",
+  kalshi: "Kalshi"
+};
+
+function getProviderLabel(exchange) {
+  const normalized = String(exchange || "").trim().toLowerCase();
+  return PROVIDER_LABELS[normalized] || exchange || "Unknown provider";
+}
+
+function normalizeScopeStatus(status) {
+  const value = String(status || "provider_unverified").trim().toLowerCase();
+  const allowed = new Set([
+    "verified_read_only",
+    "verified_watch_only",
+    "scope_unverified",
+    "rejected_trade_enabled",
+    "sync_failed",
+    "provider_unverified"
+  ]);
+  if (allowed.has(value)) return value;
+  // Backwards-compat: treat legacy "provider_unverified" and any unknown as scope_unverified
+  // for external consumers, but keep provider_unverified internally.
+  return allowed.has(value) ? value : "scope_unverified";
+}
+
+function buildPermissionsDetected(keyRow, fallbackMeta = {}) {
+  const meta = keyRow?.detectedPermissions || fallbackMeta || {};
+  const detected = meta.permissionsDetected || {};
+  const canTrade = Boolean(detected.canTrade ?? keyRow?.canTrade ?? meta.canTrade ?? false);
+  const canWithdraw = Boolean(detected.canWithdraw ?? meta.canWithdraw ?? false);
+  const isWatchOnly = Boolean(detected.isWatchOnly ?? (keyRow?.exchange === "hyperliquid"));
+  return {
+    canReadBalances: Boolean(detected.canReadBalances ?? false),
+    canReadTrades: Boolean(detected.canReadTrades ?? false),
+    canReadOrders: Boolean(detected.canReadOrders ?? false),
+    canTrade,
+    canWithdraw,
+    isWatchOnly
+  };
+}
+
+function buildProviderTrust(keyRow, fallbackMeta = {}) {
+  if (!keyRow) return null;
+  const provider = String(keyRow.exchange || "").trim().toLowerCase();
+  const providerLabel = getProviderLabel(keyRow.exchange);
+  const scopeStatus = normalizeScopeStatus(keyRow.scopeVerificationStatus);
+  const permissions = buildPermissionsDetected(keyRow, fallbackMeta);
+  const cannotTrade = !permissions.canTrade;
+  const cannotWithdraw = !permissions.canWithdraw;
+  const proofItems = [];
+  if (permissions.canReadBalances) proofItems.push("Read balances verified");
+  if (permissions.canReadTrades) proofItems.push("Read trade history verified");
+  if (permissions.isWatchOnly) proofItems.push("Public watch-only address confirmed");
+  proofItems.push(permissions.canTrade ? "Place trades permitted by provider" : "Place trades not permitted");
+  proofItems.push(permissions.canWithdraw ? "Withdraw funds permitted by provider" : "Withdraw funds not permitted");
+  const lastSyncStatus = normalizeLastSyncStatus(keyRow.lastSyncStatus);
+  return {
+    provider,
+    providerLabel,
+    scopeStatus,
+    lastVerifiedAt: keyRow.scopeVerifiedAt || null,
+    lastSyncedAt: keyRow.lastSyncAt || null,
+    lastSyncStatus,
+    permissionsDetected: permissions,
+    proofItems,
+    cannotTrade,
+    cannotWithdraw,
+    message: keyRow.scopeVerificationMessage || buildProviderTrustMessage(scopeStatus, providerLabel)
+  };
+}
+
+function buildProviderTrustMessage(scopeStatus, providerLabel) {
+  switch (scopeStatus) {
+    case "verified_read_only":
+      return `${providerLabel} confirmed this key is read-only. Zenin cannot trade or withdraw.`;
+    case "verified_watch_only":
+      return `${providerLabel} connected as a public watch-only address. Zenin cannot trade or withdraw.`;
+    case "rejected_trade_enabled":
+      return `${providerLabel} reported trading or withdrawal permission. Zenin rejected this key.`;
+    case "sync_failed":
+      return `Zenin could not verify ${providerLabel} scope during the last sync.`;
+    case "scope_unverified":
+    case "provider_unverified":
+    default:
+      return `${providerLabel} scope has not been verified server-side. Zenin cannot trade or withdraw.`;
+  }
+}
+
+function normalizeLastSyncStatus(status) {
+  const value = String(status || "").trim().toLowerCase();
+  if (value === "success") return "success";
+  if (value === "error") return "failed";
+  if (value === "sync_unavailable") return "pending";
+  if (value === "idle" || !value) return "never";
+  return value;
+}
+
 function buildConnectionCapability(exchange) {
   const normalizedExchange = String(exchange || "").trim().toLowerCase();
   const syncAvailable = SYNC_ENABLED_EXCHANGES.has(normalizedExchange);
@@ -4336,14 +4831,12 @@ app.get("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, require
         console.warn("Failed to process extraData for key", k.id);
       }
       const capability = buildConnectionCapability(k.exchange);
+      const providerTrust = buildProviderTrust(k, parsedExtra?.providerScopeMeta);
       return {
         id: k.id,
         exchange: k.exchange,
         apiKey: maskedKey,
-        permissionScope: k.permissionScope || "unknown",
-        canTrade: !!k.canTrade,
-        lastVerifiedScope: k.lastVerifiedScope || "unknown",
-        riskLevel: k.riskLevel || "standard",
+        providerTrust,
         syncAvailable: capability.syncAvailable,
         connectionCapability: capability,
         extraData: parsedExtra,
@@ -4364,6 +4857,7 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
     const { exchange, apiKey, apiSecret, extraData } = req.body;
     const normalizedExtraData = extraData && typeof extraData === "object" ? extraData : {};
     const scopeState = await buildCredentialScopeState(exchange, apiKey, apiSecret);
+    const detectedPermissions = scopeState.providerMeta?.permissionsDetected || {};
     const enrichedExtraData = {
       ...normalizedExtraData,
       scopeVerificationStatus: scopeState.scopeVerificationStatus,
@@ -4379,7 +4873,11 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       permissionScope: scopeState.permissionScope,
       canTrade: scopeState.canTrade,
       lastVerifiedScope: scopeState.lastVerifiedScope,
-      riskLevel: scopeState.riskLevel
+      riskLevel: scopeState.riskLevel,
+      scopeVerificationStatus: scopeState.scopeVerificationStatus,
+      scopeVerifiedAt: new Date().toISOString(),
+      detectedPermissions: scopeState.providerMeta || {},
+      scopeVerificationMessage: scopeState.scopeVerificationMessage
     };
     const key = await userWorkspace.exchangeKeys.add(req.auth.userId, payload, req.workspace.workspace.id);
     const capability = buildConnectionCapability(key.exchange);
@@ -4410,17 +4908,15 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
         canTrade: !!key.canTrade,
         riskLevel: key.riskLevel,
         lastVerifiedScope: key.lastVerifiedScope,
-        scopeVerificationStatus: scopeState.scopeVerificationStatus
+        scopeVerificationStatus: scopeState.scopeVerificationStatus,
+        detectedPermissions
       }
     });
     res.json({
       id: key.id,
       exchange: key.exchange,
       apiKey: maskApiKey(key.apiKey),
-      permissionScope: key.permissionScope || "unknown",
-      canTrade: !!key.canTrade,
-      lastVerifiedScope: key.lastVerifiedScope || "unknown",
-      riskLevel: key.riskLevel || "standard",
+      providerTrust: buildProviderTrust(key, enrichedExtraData.providerScopeMeta),
       syncAvailable: capability.syncAvailable,
       connectionCapability: capability,
       extraData: enrichedExtraData,
@@ -4594,7 +5090,7 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
         executions: fillSyncResult.inserted
       });
       invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
-      await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
+      const updatedKey = await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
         status: "success",
         syncedAt: new Date().toISOString(),
         meta: {
@@ -4604,7 +5100,8 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
           newExecutionCount: fillSyncResult.insertedCount || 0,
           updatedExecutionCount: fillSyncResult.updatedCount || 0,
           currency: result?.currency || null
-        }
+        },
+        reverified: true
       });
       await workspaces.recordActivity({
         workspaceId: req.workspace.workspace.id,
@@ -4621,6 +5118,7 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       });
       result.fillSyncResult = fillSyncResult;
       result.notifications = notifications;
+      result.updatedKey = updatedKey;
     }
 
     res.json({
@@ -4633,7 +5131,8 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       newExecutions: (result?.fillSyncResult?.inserted || []).slice(0, 10),
       notifications: result?.notifications || [],
       cashBalance: result?.cashBalance,
-      currency: result?.currency
+      currency: result?.currency,
+      providerTrust: result?.updatedKey ? buildProviderTrust(result.updatedKey) : null
     });
   } catch (err) {
     if (req.workspace?.workspace?.id && req.params?.id) {
@@ -4642,6 +5141,10 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
           status: "error",
           syncedAt: new Date().toISOString(),
           meta: { error: err?.message || "Exchange sync failed" }
+        });
+        // Mark scope as sync-failed when verification can no longer be confirmed
+        await userWorkspace.exchangeKeys.updateScopeVerification(req.workspace.workspace.id, parseInt(req.params.id), {
+          status: "sync_failed"
         });
       } catch {
         // no-op
@@ -4662,6 +5165,72 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       }).catch(() => {});
     }
     handleServerError(res, "Exchange sync failed", err);
+  }
+});
+
+app.post("/api/db/exchange-keys/:id/verify-scope", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, verifyScopeLimiter, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const keyRecord = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id), req.workspace.workspace.id);
+    if (!keyRecord) return res.status(404).json({ error: "Exchange key not found" });
+
+    const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.apiKey);
+    const apiSecret = workspaceSecretProvider.decryptSecret(keyRecord.apiSecret);
+    const verified = await verifyExchangeCredentialScope(keyRecord.exchange, apiKey, apiSecret);
+
+    if (verified.permissionScope === "trade" || verified.canTrade) {
+      await userWorkspace.exchangeKeys.updateScopeVerification(req.workspace.workspace.id, parseInt(id), {
+        status: "rejected_trade_enabled",
+        verifiedAt: new Date().toISOString(),
+        message: verified.verificationMessage,
+        detectedPermissions: verified.providerMeta || {},
+        permissionScope: "trade",
+        canTrade: true,
+        lastVerifiedScope: "trade",
+        riskLevel: "trading"
+      });
+      await logSecurityEvent(req, {
+        level: "warning",
+        message: "Exchange key re-verification rejected: provider reports trading permission.",
+        eventType: "exchange_key_scope_rejected",
+        workspaceId: req.workspace.workspace.id,
+        context: { exchange: keyRecord.exchange, keyId: Number(id), scope: verified.permissionScope }
+      }).catch(() => {});
+      return res.status(422).json({
+        success: false,
+        error: "Use a read-only exchange API key. Zenin rejected this key because the provider reports trading or withdrawal permission.",
+        code: "EXCHANGE_KEY_NOT_READ_ONLY",
+        providerTrust: buildProviderTrust({
+          ...keyRecord,
+          scopeVerificationStatus: "rejected_trade_enabled",
+          scopeVerifiedAt: new Date().toISOString(),
+          scopeVerificationMessage: verified.verificationMessage,
+          detectedPermissions: verified.providerMeta || {}
+        }, verified.providerMeta)
+      });
+    }
+
+    const updated = await userWorkspace.exchangeKeys.updateScopeVerification(req.workspace.workspace.id, parseInt(id), {
+      status: verified.verificationStatus || (verified.readOnlyVerified ? "verified_read_only" : "scope_unverified"),
+      verifiedAt: new Date().toISOString(),
+      message: verified.verificationMessage,
+      detectedPermissions: verified.providerMeta || {},
+      permissionScope: "read_only",
+      canTrade: false,
+      lastVerifiedScope: verified.readOnlyVerified ? "read_only" : "unknown",
+      riskLevel: keyRecord.riskLevel || "sensitive"
+    });
+    await workspaces.recordActivity({
+      workspaceId: req.workspace.workspace.id,
+      actorUserId: req.auth.userId,
+      eventType: "account_scope_verified",
+      entityType: "exchange_key",
+      entityId: id,
+      details: { exchange: keyRecord.exchange, scopeStatus: verified.verificationStatus }
+    });
+    res.json({ success: true, providerTrust: buildProviderTrust(updated, verified.providerMeta) });
+  } catch (err) {
+    handleServerError(res, "Failed to verify exchange scope", err);
   }
 });
 
@@ -10957,6 +11526,387 @@ app.post("/api/db/options-calculations", requireSignedIn, writeLimiter, validate
   }
 });
 
+// ---------------------------------------------------------------------------
+// Perps Calculator — Venues, Funding, Latency, Calc engines, Persistence
+// ---------------------------------------------------------------------------
+
+// Unified funding aggregator (Phase 2) — fetches funding/mark price across venues
+// Returns a map keyed by venue id: { [venueId]: { fundingRate, markPrice, openInterestUsd, latencyP95Ms } }
+async function fetchFundingByVenue(symbols = ["BTC", "ETH", "SOL"]) {
+  const fetch = await resolveFetch();
+  const safeJson = async (url, options = undefined) => {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`${url} responded with ${response.status}`);
+      return await response.json();
+    } catch (err) {
+      console.warn(`[PerpsFunding] ${url} failed:`, err?.message || err);
+      return null;
+    }
+  };
+
+  const normalizeSymbol = (value) =>
+    String(value || "").toUpperCase().replace(/\/USDC?$/i, "").replace(/USDC?-PERP$/i, "")
+      .replace(/-PERP$/i, "").replace(/USDC?$/i, "").replace(/-USD$/i, "").replace(/[_\s]/g, "").trim();
+
+  const fundingByVenue = {};
+
+  // ── Hyperliquid ──
+  try {
+    const hlResult = await postHyperliquidInfo({ type: "metaAndAssetCtxs" });
+    if (Array.isArray(hlResult)) {
+      const [meta, contexts] = hlResult;
+      const universe = Array.isArray(meta?.universe) ? meta.universe : [];
+      const ctxs = Array.isArray(contexts) ? contexts : [];
+      const hlMap = {};
+      universe.forEach((item, index) => {
+        const symbol = normalizeSymbol(item?.name);
+        if (!symbols.includes(symbol) || !ctxs[index]) return;
+        const markPx = firstFiniteNumber(ctxs[index]?.markPx, ctxs[index]?.midPx, 0) || 0;
+        const funding = firstFiniteNumber(ctxs[index]?.funding, ctxs[index]?.fundingRate, ctxs[index]?.funding_rate, 0) || 0;
+        const oi = firstFiniteNumber(ctxs[index]?.openInterest, ctxs[index]?.open_interest, 0) || 0;
+        hlMap[symbol] = { fundingRate: funding, markPrice: markPx, openInterestUsd: oi * markPx };
+      });
+      fundingByVenue.hyperliquid = hlMap;
+    }
+  } catch (err) {
+    console.warn("[PerpsFunding] Hyperliquid failed:", err?.message || err);
+  }
+
+  // ── Lighter ──
+  try {
+    const [fundingPayload, orderBooksPayload, detailsPayload] = await Promise.all([
+      safeJson("https://mainnet.zklighter.elliot.ai/api/v1/funding-rates"),
+      safeJson("https://mainnet.zklighter.elliot.ai/api/v1/orderBooks"),
+      safeJson("https://mainnet.zklighter.elliot.ai/api/v1/orderBookDetails")
+    ]);
+    const fundingRows = Array.isArray(fundingPayload) ? fundingPayload
+      : Array.isArray(fundingPayload?.funding_rates) ? fundingPayload.funding_rates
+      : Array.isArray(fundingPayload?.data) ? fundingPayload.data : [];
+    const detailRows = Array.isArray(detailsPayload?.order_book_details) ? detailsPayload.order_book_details : [];
+    const lighterMap = {};
+    symbols.forEach((symbol) => {
+      const fundingItem = fundingRows.find((row) => normalizeSymbol(row?.symbol || row?.market || row?.name) === symbol);
+      const detail = detailRows.find((row) =>
+        String(row?.market_type || "").toLowerCase() === "perp" &&
+        normalizeSymbol(row?.symbol || row?.name) === symbol
+      );
+      const markPx = firstFiniteNumber(detail?.last_trade_price, detail?.mark_price, 0) || 0;
+      const funding = firstFiniteNumber(fundingItem?.rate, fundingItem?.funding_rate, fundingItem?.current_funding_rate, fundingItem?.fundingRate, 0) || 0;
+      const oi = firstFiniteNumber(detail?.open_interest, detail?.openInterest, 0) || 0;
+      lighterMap[symbol] = { fundingRate: funding, markPrice: markPx, openInterestUsd: oi * markPx };
+    });
+    fundingByVenue.lighter = lighterMap;
+  } catch (err) {
+    console.warn("[PerpsFunding] Lighter failed:", err?.message || err);
+  }
+
+  // ── Binance (public, no auth) ──
+  try {
+    const binanceMap = {};
+    await Promise.all(symbols.map(async (symbol) => {
+      const data = await safeJson(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}USDT`);
+      if (data && data.symbol) {
+        binanceMap[symbol] = {
+          fundingRate: firstFiniteNumber(data.lastFundingRate, data.fundingRate, 0) || 0,
+          markPrice: firstFiniteNumber(data.markPrice, 0) || 0,
+          openInterestUsd: 0
+        };
+      }
+    }));
+    fundingByVenue.binance = binanceMap;
+  } catch (err) {
+    console.warn("[PerpsFunding] Binance failed:", err?.message || err);
+  }
+
+  // ── Bybit (public, no auth) ──
+  try {
+    const bybitMap = {};
+    await Promise.all(symbols.map(async (symbol) => {
+      const data = await safeJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}USDT`);
+      const ticker = Array.isArray(data?.result?.list) ? data.result.list[0] : null;
+      if (ticker) {
+        bybitMap[symbol] = {
+          fundingRate: firstFiniteNumber(ticker.fundingRate, 0) || 0,
+          markPrice: firstFiniteNumber(ticker.markPrice, ticker.lastPrice, 0) || 0,
+          openInterestUsd: 0
+        };
+      }
+    }));
+    fundingByVenue.bybit = bybitMap;
+  } catch (err) {
+    console.warn("[PerpsFunding] Bybit failed:", err?.message || err);
+  }
+
+  // ── dYdX v4 (public indexer) ──
+  try {
+    const dydxMap = {};
+    await Promise.all(symbols.map(async (symbol) => {
+      // dYdX v4 uses BTC-USD ticker format
+      const tickerSymbol = `${symbol}-USD`;
+      const data = await safeJson(`https://api.dydx.exchange/v3/perpetuals/${tickerSymbol}`);
+      const perp = data?.perpetual;
+      if (perp) {
+        dydxMap[symbol] = {
+          fundingRate: firstFiniteNumber(perp.currentFundingRate, perp.fundingRate, 0) || 0,
+          markPrice: firstFiniteNumber(perp.midMarketPrice, perp.markPrice, 0) || 0,
+          openInterestUsd: 0
+        };
+      }
+    }));
+    fundingByVenue.dydx_v4 = dydxMap;
+  } catch (err) {
+    console.warn("[PerpsFunding] dYdX v4 failed:", err?.message || err);
+  }
+
+  // ── Aster ──
+  try {
+    const asterMap = {};
+    await Promise.all(symbols.map(async (symbol) => {
+      const data = await safeJson(`https://fapi.asterdex.com/fapi/v1/premiumIndex?symbol=${symbol}USDT`);
+      if (data && data.symbol) {
+        asterMap[symbol] = {
+          fundingRate: firstFiniteNumber(data.lastFundingRate, data.fundingRate, 0) || 0,
+          markPrice: firstFiniteNumber(data.markPrice, 0) || 0,
+          openInterestUsd: 0
+        };
+      }
+    }));
+    fundingByVenue.aster = asterMap;
+  } catch (err) {
+    console.warn("[PerpsFunding] Aster failed:", err?.message || err);
+  }
+
+  return fundingByVenue;
+}
+
+// Build the funding context object for a single symbol, keyed by venue id
+async function buildFundingContextForSymbol(symbol) {
+  const allFunding = await fetchFundingByVenue([String(symbol || "BTC").toUpperCase()]);
+  const fundingByVenue = {};
+  Object.entries(allFunding).forEach(([venueId, symbolMap]) => {
+    const entry = symbolMap[String(symbol).toUpperCase()];
+    if (entry && Number.isFinite(entry.fundingRate)) {
+      fundingByVenue[venueId] = entry;
+    }
+  });
+  return fundingByVenue;
+}
+
+// Venue metadata
+app.get("/api/perps/venues", async (req, res) => {
+  try {
+    // Ensure runner state rows exist so admin can toggle venues before runner deploys
+    const { ensureRunnerStates } = require("./perpsRunner");
+    await ensureRunnerStates().catch(() => {});
+    const runnerStates = await perpsBench.getRunnerState();
+    const stateByVenue = {};
+    (runnerStates || []).forEach((s) => { stateByVenue[s.venue_id] = s; });
+    const cryptoVenues = listCryptoVenues({ includeDisabled: true }).map((v) => ({
+      ...v,
+      runnerEnabled: Boolean(stateByVenue[v.id]?.is_enabled),
+      ordersToday: Number(stateByVenue[v.id]?.orders_today || 0),
+      dailyBudget: Number(stateByVenue[v.id]?.daily_order_budget || 0)
+    }));
+    res.json({
+      crypto: cryptoVenues,
+      stockBrokers: listStockBrokers(),
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    // Fallback to static venue list if DB unavailable
+    res.json({
+      crypto: listCryptoVenues({ includeDisabled: true }),
+      stockBrokers: listStockBrokers(),
+      updatedAt: new Date().toISOString()
+    });
+  }
+});
+
+// Funding aggregator
+app.get("/api/perps/funding", async (req, res) => {
+  const symbol = String(req.query.symbol || "BTC").toUpperCase().trim();
+  try {
+    const fundingByVenue = await buildFundingContextForSymbol(symbol);
+    res.json({
+      symbol,
+      fundingByVenue,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    handleServerError(res, "Perps funding fetch failed", error);
+  }
+});
+
+// Latency data — reads from perps_latency_samples (populated by perps-bench-runner)
+app.get("/api/perps/latency", async (req, res) => {
+  try {
+    // Ensure runner state rows exist
+    const { ensureRunnerStates } = require("./perpsRunner");
+    await ensureRunnerStates().catch(() => {});
+
+    const windowHours = Number(req.query.window) || 24;
+    const scenario = String(req.query.scenario || "post_only").toLowerCase();
+    const windowNum = /^\d+$/.test(String(windowHours)) ? Number(windowHours) : 24;
+
+    const [venueStats, runnerStates] = await Promise.all([
+      perpsBench.getVenueStats(scenario, windowNum),
+      perpsBench.getRunnerState()
+    ]);
+
+    const { CRYPTO_VENUES } = require("./perpsCalculator");
+    const venueMeta = {};
+    CRYPTO_VENUES.forEach((v) => { venueMeta[v.id] = v; });
+
+    // Merge venue stats with runner state (include venues with no samples yet)
+    const venuesWithStats = new Set(venueStats.map((s) => s.venue_id));
+    const allVenueIds = new Set([...venuesWithStats, ...runnerStates.map((s) => s.venue_id), ...Object.keys(venueMeta)]);
+
+    const venues = Array.from(allVenueIds).map((venueId) => {
+      const stat = venueStats.find((s) => s.venue_id === venueId) || {};
+      const meta = venueMeta[venueId] || {};
+      const state = runnerStates.find((s) => s.venue_id === venueId);
+      return {
+        id: venueId,
+        name: meta.name || venueId,
+        kind: meta.kind || "unknown",
+        samples: stat.sample_count || 0,
+        okPct: stat.sample_count > 0 ? Math.round((stat.ok_count / stat.sample_count) * 100) : 0,
+        p50: stat.p50 || null,
+        p95: stat.p95 || null,
+        p99: stat.p99 || null,
+        cancelP50: stat.cancel_p50 || null,
+        cancelP95: stat.cancel_p95 || null,
+        avgNetworkFloor: stat.avg_network_floor || null,
+        lastSampleAt: stat.last_sample_at || null,
+        lastError: stat.last_error || null,
+        enabled: Boolean(state?.is_enabled),
+        ordersToday: Number(state?.orders_today || 0),
+        dailyBudget: Number(state?.daily_order_budget || 0)
+      };
+    });
+
+    const runnerDeployed = runnerStates.some((s) => s.is_enabled);
+    res.json({
+      window: `${windowNum}h`,
+      scenario,
+      venues,
+      runnerDeployed,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    handleServerError(res, "Latency data fetch failed", error);
+  }
+});
+
+// Admin: toggle per-venue runner enable state (Desk/admin only)
+app.post("/api/perps/runner/toggle", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const { venueId, enabled } = req.body || {};
+    if (!venueId) return res.status(400).json({ error: "venueId required" });
+    const state = await perpsBench.upsertRunnerState(venueId, { isEnabled: Boolean(enabled) });
+    res.json(state);
+  } catch (error) {
+    handleServerError(res, "Runner toggle failed", error);
+  }
+});
+
+// Admin: get runner state for all venues
+app.get("/api/perps/runner/state", requireSignedIn, async (req, res) => {
+  try {
+    const states = await perpsBench.getRunnerState();
+    res.json({ states });
+  } catch (error) {
+    handleServerError(res, "Runner state fetch failed", error);
+  }
+});
+
+// Calculator: Basis Carry
+app.post("/api/calculator/basis", async (req, res) => {
+  try {
+    const inputs = req.body || {};
+    let context = {};
+    if (inputs.fundingMode !== "custom" && inputs.fundingMode !== "avg") {
+      context.fundingByVenue = await buildFundingContextForSymbol(inputs.symbol || "BTC");
+    }
+    const result = computeBasisCarry(inputs, context);
+    if (result.error) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (error) {
+    handleServerError(res, "Basis carry calc failed", error);
+  }
+});
+
+// Calculator: Perp Arbitrage
+app.post("/api/calculator/perp-arb", async (req, res) => {
+  try {
+    const inputs = req.body || {};
+    const context = { fundingByVenue: await buildFundingContextForSymbol(inputs.symbol || "BTC") };
+    const result = computePerpArb(inputs, context);
+    if (result.error) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (error) {
+    handleServerError(res, "Perp arb calc failed", error);
+  }
+});
+
+// Calculator: Fee Comparator (crypto + stock brokers)
+app.post("/api/calculator/fees", async (req, res) => {
+  try {
+    const inputs = req.body || {};
+    const mode = String(inputs.mode || "crypto").toLowerCase();
+    if (mode === "broker") {
+      return res.json(computeStockBrokerFees(inputs));
+    }
+    const context = {};
+    if (inputs.asset) {
+      context.fundingByVenue = await buildFundingContextForSymbol(inputs.asset);
+    }
+    res.json(computeCryptoFees(inputs, context));
+  } catch (error) {
+    handleServerError(res, "Fee comparator calc failed", error);
+  }
+});
+
+// Perps calculator persistence
+app.get("/api/db/perps-calculations", requireSignedIn, async (req, res) => {
+  try {
+    const { limit = 20, calcType } = req.query;
+    const records = await userWorkspace.perpsCalculations.getRecent(req.auth.userId, limit, calcType || null);
+    res.json({ calculations: records });
+  } catch (error) {
+    handleServerError(res, "Perps calculations read failed", error);
+  }
+});
+
+app.post("/api/db/perps-calculations", requireSignedIn, writeLimiter, async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const record = await userWorkspace.perpsCalculations.add(req.auth.userId, {
+      calcType: payload.calcType,
+      label: payload.label,
+      inputs: payload.inputs,
+      results: payload.results
+    });
+    res.status(201).json(record);
+  } catch (error) {
+    handleServerError(res, "Perps calculation write failed", error);
+  }
+});
+
+app.delete("/api/db/perps-calculations/:id", requireSignedIn, async (req, res) => {
+  try {
+    await userWorkspace.perpsCalculations.delete(req.auth.userId, req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    handleServerError(res, "Perps calculation delete failed", error);
+  }
+});
+
 app.get("/api/crypto-market", async (req, res) => {
   const snapshotParams = { category: "crypto-market" };
   const cached = await readServiceSnapshot("crypto-market", snapshotParams);
@@ -13522,7 +14472,17 @@ const http = require("http");
 const WebSocket = require("ws");
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+
+// Bind WebSocket server explicitly to the `/api/live` upgrade path so
+// client connections targeting `/api/live` are accepted reliably.
+const wss = new WebSocket.Server({ server, path: "/api/live" });
+
+// Helpful debug logging for HTTP upgrade requests during development.
+server.on("upgrade", (request, socket, head) => {
+  try {
+    console.log("HTTP upgrade request for:", request.url, request.headers?.upgrade);
+  } catch {}
+});
 
 let subscribers = new Map();
 // key: socket -> { kind, currency, expiry, symbols, quoteType, contracts }
@@ -14077,40 +15037,8 @@ async function startServer() {
       server.removeListener("error", reject);
       console.log(`Portfolio manager backend (with WS) listening on port ${port}`);
 
-      // Start the Farside sync scheduler (runs every weekday at 9am UTC)
-      function startFarsideScheduler() {
-        const syncScript = path.join(__dirname, 'scripts', 'sync-farside-etf.js');
-        const runSync = () => {
-          console.log("[Scheduler] Triggering Farside ETF sync...");
-          const { exec } = require('child_process');
-          exec(`node "${syncScript}"`, (error, stdout, stderr) => {
-            if (error) console.error(`[Scheduler] Farside sync error: ${error.message}`);
-            if (stderr) console.error(`[Scheduler] Farside sync stderr: ${stderr}`);
-            console.log(`[Scheduler] Farside sync output: ${stdout}`);
-          });
-        };
-
-        const scheduleNext = () => {
-          const now = new Date();
-          const next9am = new Date();
-          next9am.setUTCHours(9, 0, 0, 0);
-          if (now >= next9am) next9am.setUTCDate(next9am.getUTCDate() + 1);
-          
-          // Weekend check: if Saturday (6) or Sunday (0), move to Monday (1)
-          const day = next9am.getUTCDay();
-          if (day === 6) next9am.setUTCDate(next9am.getUTCDate() + 2);
-          else if (day === 0) next9am.setUTCDate(next9am.getUTCDate() + 1);
-
-          const delay = next9am.getTime() - now.getTime();
-          console.log(`[Scheduler] Next Farside sync scheduled for ${next9am.toISOString()} (in ${Math.round(delay/1000/60)} minutes)`);
-          setTimeout(() => {
-            runSync();
-            scheduleNext();
-          }, delay);
-        };
-        scheduleNext();
-      }
-      startFarsideScheduler();
+      // Farside sync scheduler disabled — removed per request.
+      console.log('[Scheduler] Farside sync scheduler disabled.');
 
       resolve();
     });

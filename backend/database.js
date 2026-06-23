@@ -176,6 +176,10 @@ function mapExchangeKeyRow(row) {
     permissionScope: String(row.permissionScope || row.permission_scope || "unknown").trim().toLowerCase(),
     lastVerifiedScope: String(row.lastVerifiedScope || row.last_verified_scope || "unknown").trim().toLowerCase(),
     riskLevel: String(row.riskLevel || row.risk_level || "standard").trim().toLowerCase(),
+    scopeVerificationStatus: String(row.scopeVerificationStatus || row.scope_verification_status || "provider_unverified").trim().toLowerCase(),
+    scopeVerifiedAt: row.scopeVerifiedAt || row.scope_verified_at || null,
+    detectedPermissions: parseJsonPayload(row.detectedPermissions ?? row.detected_permissions, {}),
+    scopeVerificationMessage: row.scopeVerificationMessage || row.scope_verification_message || null
   };
 }
 
@@ -906,6 +910,11 @@ async function initializeDatabase() {
   try {
     await client.query("BEGIN");
 
+    // Ensure pgcrypto is available for gen_random_uuid(), which is used by
+    // decision_threads and daily_briefings. Idempotent and safe on all
+    // supported Postgres versions (pgcrypto ships with Postgres 9.4+).
+    await client.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS portfolio_holdings (
         id SERIAL PRIMARY KEY,
@@ -1534,6 +1543,59 @@ async function initializeDatabase() {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS user_workspace_perps_calculations (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        calc_type TEXT NOT NULL,
+        label TEXT,
+        inputs_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        results_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_workspace_perps_calculations_user
+      ON user_workspace_perps_calculations(user_id, created_at DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS perps_latency_samples (
+        id SERIAL PRIMARY KEY,
+        venue_id TEXT NOT NULL,
+        scenario TEXT NOT NULL DEFAULT 'post_only',
+        run_id TEXT NOT NULL,
+        submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        confirm_ms DOUBLE PRECISION,
+        cancel_ms DOUBLE PRECISION,
+        network_floor_ms DOUBLE PRECISION,
+        error TEXT,
+        mode TEXT NOT NULL DEFAULT 'dry_run',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_perps_latency_samples_venue_time
+      ON perps_latency_samples(venue_id, scenario, submitted_at DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS perps_runner_state (
+        venue_id TEXT PRIMARY KEY,
+        is_running BOOLEAN NOT NULL DEFAULT false,
+        is_enabled BOOLEAN NOT NULL DEFAULT false,
+        orders_today INTEGER NOT NULL DEFAULT 0,
+        daily_order_budget INTEGER NOT NULL DEFAULT 100,
+        last_sample_at TIMESTAMPTZ,
+        last_error TEXT,
+        last_reset_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
       ALTER TABLE user_workspace_trades
       ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
       ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'zenin',
@@ -1924,7 +1986,23 @@ async function initializeDatabase() {
       ADD COLUMN IF NOT EXISTS permission_scope TEXT NOT NULL DEFAULT 'unknown',
       ADD COLUMN IF NOT EXISTS can_trade BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS last_verified_scope TEXT NOT NULL DEFAULT 'unknown',
-      ADD COLUMN IF NOT EXISTS risk_level TEXT NOT NULL DEFAULT 'standard';
+      ADD COLUMN IF NOT EXISTS risk_level TEXT NOT NULL DEFAULT 'standard',
+      ADD COLUMN IF NOT EXISTS scope_verification_status TEXT NOT NULL DEFAULT 'provider_unverified',
+      ADD COLUMN IF NOT EXISTS scope_verified_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS detected_permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS scope_verification_message TEXT;
+    `);
+
+    // One-time backfill: lift scope verification metadata out of extra_data JSONB
+    // into the new top-level columns for rows that already have them.
+    // We intentionally do NOT fabricate scope_verified_at from updated_at;
+    // a row is only "verified" when the verify-scope endpoint actually probes it.
+    await client.query(`
+      UPDATE user_exchange_keys
+      SET scope_verification_status = COALESCE(NULLIF(extra_data->>'scopeVerificationStatus', ''), 'provider_unverified'),
+          scope_verification_message = extra_data->>'scopeVerificationMessage',
+          detected_permissions = COALESCE(extra_data->'providerScopeMeta', '{}'::jsonb)
+      WHERE extra_data ? 'scopeVerificationStatus';
     `);
 
     await client.query(`
@@ -1934,6 +2012,52 @@ async function initializeDatabase() {
       WHERE k.user_id = u.id
         AND u.active_workspace_id IS NOT NULL
         AND k.workspace_id IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS daily_briefings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        briefing_date DATE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ready',
+        summary TEXT,
+        market_regime TEXT,
+        risk_level TEXT,
+        sections JSONB NOT NULL DEFAULT '[]'::jsonb,
+        metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+        generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        read_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        UNIQUE (workspace_id, user_id, briefing_date)
+      );
+
+      CREATE TABLE IF NOT EXISTS decision_threads (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        symbol TEXT,
+        asset_type TEXT,
+        source_type TEXT NOT NULL,
+        source_id TEXT,
+        status TEXT NOT NULL DEFAULT 'new',
+        priority TEXT NOT NULL DEFAULT 'medium',
+        due_at TIMESTAMPTZ,
+        linked_alert_key TEXT,
+        linked_research_id TEXT,
+        linked_journal_id TEXT,
+        linked_trade_execution_id TEXT,
+        outcome JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_decision_threads_workspace_user
+      ON decision_threads (workspace_id, user_id, status, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_daily_briefings_workspace_user_date
+      ON daily_briefings (workspace_id, user_id, briefing_date DESC);
     `);
 
     await client.query(`
@@ -4703,6 +4827,10 @@ const userWorkspace = {
           can_trade AS "canTrade",
           last_verified_scope AS "lastVerifiedScope",
           risk_level AS "riskLevel",
+          scope_verification_status AS "scopeVerificationStatus",
+          scope_verified_at AS "scopeVerifiedAt",
+          detected_permissions AS "detectedPermissions",
+          scope_verification_message AS "scopeVerificationMessage",
           created_at AS "createdAt",
           last_sync_at AS "lastSyncAt",
           last_sync_status AS "lastSyncStatus",
@@ -4723,7 +4851,11 @@ const userWorkspace = {
         permissionScope = "unknown",
         canTrade = false,
         lastVerifiedScope = "unknown",
-        riskLevel = "standard"
+        riskLevel = "standard",
+        scopeVerificationStatus = "provider_unverified",
+        scopeVerifiedAt = null,
+        detectedPermissions = {},
+        scopeVerificationMessage = null
       } = payload;
       const result = await pool.query(`
         INSERT INTO user_exchange_keys (
@@ -4736,9 +4868,13 @@ const userWorkspace = {
           permission_scope,
           can_trade,
           last_verified_scope,
-          risk_level
+          risk_level,
+          scope_verification_status,
+          scope_verified_at,
+          detected_permissions,
+          scope_verification_message
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING
           id,
           exchange,
@@ -4748,6 +4884,10 @@ const userWorkspace = {
           can_trade AS "canTrade",
           last_verified_scope AS "lastVerifiedScope",
           risk_level AS "riskLevel",
+          scope_verification_status AS "scopeVerificationStatus",
+          scope_verified_at AS "scopeVerifiedAt",
+          detected_permissions AS "detectedPermissions",
+          scope_verification_message AS "scopeVerificationMessage",
           created_at AS "createdAt",
           last_sync_at AS "lastSyncAt",
           last_sync_status AS "lastSyncStatus",
@@ -4762,7 +4902,11 @@ const userWorkspace = {
         permissionScope,
         Boolean(canTrade),
         lastVerifiedScope,
-        riskLevel
+        riskLevel,
+        scopeVerificationStatus,
+        scopeVerifiedAt,
+        JSON.stringify(detectedPermissions || {}),
+        scopeVerificationMessage
       ]);
       return mapExchangeKeyRow(result.rows[0]);
     },
@@ -4786,6 +4930,10 @@ const userWorkspace = {
           can_trade AS "canTrade",
           last_verified_scope AS "lastVerifiedScope",
           risk_level AS "riskLevel",
+          scope_verification_status AS "scopeVerificationStatus",
+          scope_verified_at AS "scopeVerifiedAt",
+          detected_permissions AS "detectedPermissions",
+          scope_verification_message AS "scopeVerificationMessage",
           last_sync_at AS "lastSyncAt",
           last_sync_status AS "lastSyncStatus",
           last_sync_meta AS "lastSyncMeta"
@@ -4794,10 +4942,14 @@ const userWorkspace = {
       `, [id, Number(resolvedWorkspaceId)]);
       return mapExchangeKeyRow(result.rows[0]);
     },
-    updateSyncStatus: async (workspaceId, id, { status = "unknown", syncedAt = new Date().toISOString(), meta = {} } = {}) => {
+    updateSyncStatus: async (workspaceId, id, { status = "unknown", syncedAt = new Date().toISOString(), meta = {}, reverified = false } = {}) => {
       const result = await pool.query(`
         UPDATE user_exchange_keys
-        SET last_sync_at = $3, last_sync_status = $4, last_sync_meta = $5::jsonb, updated_at = NOW()
+        SET last_sync_at = $3,
+            last_sync_status = $4,
+            last_sync_meta = $5::jsonb,
+            ${reverified ? "scope_verified_at = NOW()," : ""}
+            updated_at = NOW()
         WHERE workspace_id = $1 AND id = $2
         RETURNING
           id,
@@ -4808,11 +4960,64 @@ const userWorkspace = {
           can_trade AS "canTrade",
           last_verified_scope AS "lastVerifiedScope",
           risk_level AS "riskLevel",
+          scope_verification_status AS "scopeVerificationStatus",
+          scope_verified_at AS "scopeVerifiedAt",
+          detected_permissions AS "detectedPermissions",
+          scope_verification_message AS "scopeVerificationMessage",
           created_at AS "createdAt",
           last_sync_at AS "lastSyncAt",
           last_sync_status AS "lastSyncStatus",
           last_sync_meta AS "lastSyncMeta";
       `, [Number(workspaceId), Number(id), syncedAt, String(status || "unknown").trim().toLowerCase(), JSON.stringify(meta || {})]);
+      return mapExchangeKeyRow(result.rows[0]) || null;
+    },
+    updateScopeVerification: async (workspaceId, id, {
+      status, verifiedAt, message, detectedPermissions,
+      permissionScope, canTrade, lastVerifiedScope, riskLevel
+    } = {}) => {
+      const sets = [];
+      const values = [];
+      let idx = 1;
+      values.push(Number(workspaceId), Number(id));
+      idx = 3;
+      const pushSet = (column, value, transform = (v) => v) => {
+        if (value === undefined) return;
+        sets.push(`${column} = $${idx}`);
+        values.push(transform(value));
+        idx += 1;
+      };
+      pushSet("scope_verification_status", status, (v) => String(v || "provider_unverified").trim().toLowerCase());
+      pushSet("scope_verified_at", verifiedAt);
+      pushSet("scope_verification_message", message);
+      pushSet("detected_permissions", detectedPermissions, (v) => JSON.stringify(v || {}));
+      pushSet("permission_scope", permissionScope, (v) => String(v || "unknown").trim().toLowerCase());
+      pushSet("can_trade", canTrade, (v) => Boolean(v));
+      pushSet("last_verified_scope", lastVerifiedScope, (v) => String(v || "unknown").trim().toLowerCase());
+      pushSet("risk_level", riskLevel, (v) => String(v || "standard").trim().toLowerCase());
+      if (sets.length === 0) return null;
+      sets.push("updated_at = NOW()");
+      const result = await pool.query(`
+        UPDATE user_exchange_keys
+        SET ${sets.join(", ")}
+        WHERE workspace_id = $1 AND id = $2
+        RETURNING
+          id,
+          exchange,
+          api_key AS "apiKey",
+          extra_data AS "extraData",
+          permission_scope AS "permissionScope",
+          can_trade AS "canTrade",
+          last_verified_scope AS "lastVerifiedScope",
+          risk_level AS "riskLevel",
+          scope_verification_status AS "scopeVerificationStatus",
+          scope_verified_at AS "scopeVerifiedAt",
+          detected_permissions AS "detectedPermissions",
+          scope_verification_message AS "scopeVerificationMessage",
+          created_at AS "createdAt",
+          last_sync_at AS "lastSyncAt",
+          last_sync_status AS "lastSyncStatus",
+          last_sync_meta AS "lastSyncMeta";
+      `, values);
       return mapExchangeKeyRow(result.rows[0]) || null;
     }
   },
@@ -5957,6 +6162,82 @@ const userWorkspace = {
     }
   },
 
+  perpsCalculations: {
+    add: async (userId, payload) => {
+      const {
+        calcType = "basis",
+        label = null,
+        inputs = {},
+        results = {}
+      } = payload;
+      const validCalcType = ["basis", "perp_arb", "fees_crypto", "fees_broker"].includes(String(calcType).toLowerCase())
+        ? String(calcType).toLowerCase()
+        : "basis";
+      const result = await pool.query(`
+        INSERT INTO user_workspace_perps_calculations (
+          user_id, calc_type, label, inputs_json, results_json
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *;
+      `, [
+        toUserId(userId),
+        validCalcType,
+        label ? String(label).trim().slice(0, 120) : null,
+        JSON.stringify(inputs || {}),
+        JSON.stringify(results || {})
+      ]);
+      const row = result.rows[0];
+      return {
+        ...row,
+        inputs: parseJsonPayload(row.inputs_json, {}),
+        results: parseJsonPayload(row.results_json, {}),
+        created_at: toIsoString(row.created_at),
+        updated_at: toIsoString(row.updated_at)
+      };
+    },
+
+    getRecent: async (userId, limit = 20, calcType = null) => {
+      const safeLimit = Math.max(1, Math.min(200, Number(limit) || 20));
+      const resolvedUserId = toUserId(userId);
+      if (calcType) {
+        const result = await pool.query(`
+          SELECT * FROM user_workspace_perps_calculations
+          WHERE user_id = $1 AND calc_type = $2
+          ORDER BY created_at DESC, id DESC
+          LIMIT $3;
+        `, [resolvedUserId, String(calcType).toLowerCase(), safeLimit]);
+        return result.rows.map((row) => ({
+          ...row,
+          inputs: parseJsonPayload(row.inputs_json, {}),
+          results: parseJsonPayload(row.results_json, {}),
+          created_at: toIsoString(row.created_at),
+          updated_at: toIsoString(row.updated_at)
+        }));
+      }
+      const result = await pool.query(`
+        SELECT * FROM user_workspace_perps_calculations
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2;
+      `, [resolvedUserId, safeLimit]);
+      return result.rows.map((row) => ({
+        ...row,
+        inputs: parseJsonPayload(row.inputs_json, {}),
+        results: parseJsonPayload(row.results_json, {}),
+        created_at: toIsoString(row.created_at),
+        updated_at: toIsoString(row.updated_at)
+      }));
+    },
+
+    delete: async (userId, id) => {
+      await pool.query(`
+        DELETE FROM user_workspace_perps_calculations
+        WHERE user_id = $1 AND id = $2;
+      `, [toUserId(userId), Number(id)]);
+      return { success: true };
+    }
+  },
+
   docs: {
     get: async (userId, namespace, fallback = null, workspaceId = null) => {
       const resolvedNamespace = String(namespace || "").trim();
@@ -6530,8 +6811,428 @@ const userWorkspace = {
         client.release();
       }
     }
+  },
+
+  decisionThreads: {
+    list: async (userId, workspaceId = null, { status, priority, sourceType, page = 1, pageSize = 500 } = {}) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const filters = [`workspace_id = $1`, `user_id = $2`];
+      const values = [resolvedWorkspaceId, resolvedUserId];
+      let idx = 3;
+      if (status) { filters.push(`status = $${idx}`); values.push(String(status).trim().toLowerCase()); idx += 1; }
+      if (priority) { filters.push(`priority = $${idx}`); values.push(String(priority).trim().toLowerCase()); idx += 1; }
+      if (sourceType) { filters.push(`source_type = $${idx}`); values.push(String(sourceType).trim().toLowerCase()); idx += 1; }
+      const safePageSize = Math.min(Math.max(Number(pageSize) || 500, 1), 500);
+      const safePage = Math.max(Number(page) || 1, 1);
+      const offset = (safePage - 1) * safePageSize;
+      values.push(safePageSize, offset);
+      const result = await pool.query(`
+        SELECT
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          title,
+          symbol,
+          asset_type AS "assetType",
+          source_type AS "sourceType",
+          source_id AS "sourceId",
+          status,
+          priority,
+          due_at AS "dueAt",
+          linked_alert_key AS "linkedAlertKey",
+          linked_research_id AS "linkedResearchId",
+          linked_journal_id AS "linkedJournalId",
+          linked_trade_execution_id AS "linkedTradeExecutionId",
+          outcome,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM decision_threads
+        WHERE ${filters.join(" AND ")}
+        ORDER BY updated_at DESC
+        LIMIT $${idx} OFFSET $${idx + 1};
+      `, values);
+      return result.rows.map(mapDecisionThreadRow);
+    },
+    getById: async (userId, id, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        SELECT
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          title,
+          symbol,
+          asset_type AS "assetType",
+          source_type AS "sourceType",
+          source_id AS "sourceId",
+          status,
+          priority,
+          due_at AS "dueAt",
+          linked_alert_key AS "linkedAlertKey",
+          linked_research_id AS "linkedResearchId",
+          linked_journal_id AS "linkedJournalId",
+          linked_trade_execution_id AS "linkedTradeExecutionId",
+          outcome,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM decision_threads
+        WHERE id = $1 AND workspace_id = $2 AND user_id = $3;
+      `, [String(id), resolvedWorkspaceId, resolvedUserId]);
+      return mapDecisionThreadRow(result.rows[0]);
+    },
+    create: async (userId, payload, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const title = String(payload.title || "").trim();
+      const symbol = payload.symbol ? String(payload.symbol).trim().toUpperCase() : null;
+      const assetType = payload.assetType ? String(payload.assetType).trim().toLowerCase() : null;
+      const sourceType = String(payload.sourceType || "manual").trim().toLowerCase();
+      const sourceId = payload.sourceId ? String(payload.sourceId) : null;
+      const status = String(payload.status || "new").trim().toLowerCase();
+      const priority = String(payload.priority || "medium").trim().toLowerCase();
+      const dueAt = payload.dueAt || null;
+      const linkedAlertKey = payload.linkedAlertKey ? String(payload.linkedAlertKey) : null;
+      const linkedResearchId = payload.linkedResearchId ? String(payload.linkedResearchId) : null;
+      const linkedJournalId = payload.linkedJournalId ? String(payload.linkedJournalId) : null;
+      const linkedTradeExecutionId = payload.linkedTradeExecutionId ? String(payload.linkedTradeExecutionId) : null;
+      const result = await pool.query(`
+        INSERT INTO decision_threads (
+          workspace_id, user_id, title, symbol, asset_type, source_type, source_id,
+          status, priority, due_at,
+          linked_alert_key, linked_research_id, linked_journal_id, linked_trade_execution_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          title, symbol, asset_type AS "assetType",
+          source_type AS "sourceType", source_id AS "sourceId",
+          status, priority, due_at AS "dueAt",
+          linked_alert_key AS "linkedAlertKey",
+          linked_research_id AS "linkedResearchId",
+          linked_journal_id AS "linkedJournalId",
+          linked_trade_execution_id AS "linkedTradeExecutionId",
+          outcome,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt";
+      `, [
+        resolvedWorkspaceId, resolvedUserId, title, symbol, assetType, sourceType, sourceId,
+        status, priority, dueAt,
+        linkedAlertKey, linkedResearchId, linkedJournalId, linkedTradeExecutionId
+      ]);
+      return mapDecisionThreadRow(result.rows[0]);
+    },
+    update: async (userId, id, patch, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const sets = [];
+      const values = [];
+      let idx = 1;
+      values.push(String(id), resolvedWorkspaceId, resolvedUserId);
+      idx = 4;
+      const pushSet = (column, value, transform = (v) => v) => {
+        if (value === undefined) return;
+        sets.push(`${column} = $${idx}`);
+        values.push(transform(value));
+        idx += 1;
+      };
+      pushSet("title", patch.title, (v) => String(v).trim());
+      pushSet("symbol", patch.symbol, (v) => String(v).trim().toUpperCase());
+      pushSet("asset_type", patch.assetType, (v) => String(v).trim().toLowerCase());
+      pushSet("source_type", patch.sourceType, (v) => String(v).trim().toLowerCase());
+      pushSet("source_id", patch.sourceId, (v) => (v == null ? null : String(v)));
+      pushSet("status", patch.status, (v) => String(v).trim().toLowerCase());
+      pushSet("priority", patch.priority, (v) => String(v).trim().toLowerCase());
+      pushSet("due_at", patch.dueAt);
+      pushSet("linked_alert_key", patch.linkedAlertKey, (v) => (v == null ? null : String(v)));
+      pushSet("linked_research_id", patch.linkedResearchId, (v) => (v == null ? null : String(v)));
+      pushSet("linked_journal_id", patch.linkedJournalId, (v) => (v == null ? null : String(v)));
+      pushSet("linked_trade_execution_id", patch.linkedTradeExecutionId, (v) => (v == null ? null : String(v)));
+      if (patch.outcome !== undefined) {
+        sets.push(`outcome = $${idx}`);
+        values.push(JSON.stringify(patch.outcome || {}));
+        idx += 1;
+      }
+      if (sets.length === 0) return null;
+      sets.push("updated_at = NOW()");
+      const result = await pool.query(`
+        UPDATE decision_threads
+        SET ${sets.join(", ")}
+        WHERE id = $1 AND workspace_id = $2 AND user_id = $3
+        RETURNING
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          title, symbol, asset_type AS "assetType",
+          source_type AS "sourceType", source_id AS "sourceId",
+          status, priority, due_at AS "dueAt",
+          linked_alert_key AS "linkedAlertKey",
+          linked_research_id AS "linkedResearchId",
+          linked_journal_id AS "linkedJournalId",
+          linked_trade_execution_id AS "linkedTradeExecutionId",
+          outcome,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt";
+      `, values);
+      return mapDecisionThreadRow(result.rows[0]);
+    },
+    listOutcomes: async (userId, workspaceId = null, { limit = 100, sourceType, result } = {}) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const filters = [`workspace_id = $1`, `user_id = $2`, `status = 'reviewed'`];
+      const values = [resolvedWorkspaceId, resolvedUserId];
+      let idx = 3;
+      if (sourceType) { filters.push(`source_type = $${idx}`); values.push(String(sourceType).trim().toLowerCase()); idx += 1; }
+      if (result) { filters.push(`outcome->>'result' = $${idx}`); values.push(String(result).trim().toLowerCase()); idx += 1; }
+      values.push(Number(limit) > 0 ? Math.min(Number(limit), 500) : 100);
+      const resultSet = await pool.query(`
+        SELECT
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          title,
+          symbol,
+          asset_type AS "assetType",
+          source_type AS "sourceType",
+          source_id AS "sourceId",
+          status,
+          priority,
+          due_at AS "dueAt",
+          linked_alert_key AS "linkedAlertKey",
+          linked_research_id AS "linkedResearchId",
+          linked_journal_id AS "linkedJournalId",
+          linked_trade_execution_id AS "linkedTradeExecutionId",
+          outcome,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM decision_threads
+        WHERE ${filters.join(" AND ")}
+        ORDER BY (outcome->>'reviewedAt')::timestamptz DESC NULLS LAST, updated_at DESC
+        LIMIT $${idx};
+      `, values);
+      return resultSet.rows.map(mapDecisionThreadRow);
+    },
+    markReviewed: async (userId, id, outcome, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const normalizedOutcome = {
+        result: String(outcome?.result || "reviewed").trim().toLowerCase(),
+        pnl: typeof outcome?.pnl === "number" ? outcome.pnl : null,
+        lesson: outcome?.lesson ? String(outcome.lesson) : null,
+        mistakeTag: outcome?.mistakeTag ? String(outcome.mistakeTag) : null,
+        reviewedAt: new Date().toISOString()
+      };
+      const result = await pool.query(`
+        UPDATE decision_threads
+        SET status = 'reviewed',
+            outcome = $4::jsonb,
+            due_at = NULL,
+            updated_at = NOW()
+        WHERE id = $1 AND workspace_id = $2 AND user_id = $3
+        RETURNING
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          title, symbol, asset_type AS "assetType",
+          source_type AS "sourceType", source_id AS "sourceId",
+          status, priority, due_at AS "dueAt",
+          linked_alert_key AS "linkedAlertKey",
+          linked_research_id AS "linkedResearchId",
+          linked_journal_id AS "linkedJournalId",
+          linked_trade_execution_id AS "linkedTradeExecutionId",
+          outcome,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt";
+      `, [String(id), resolvedWorkspaceId, resolvedUserId, JSON.stringify(normalizedOutcome)]);
+      return mapDecisionThreadRow(result.rows[0]);
+    },
+    linkResearch: async (userId, id, researchId, workspaceId = null) => {
+      return await userWorkspace.decisionThreads.update(userId, id, {
+        linkedResearchId: researchId,
+        status: "researching"
+      }, workspaceId);
+    },
+    createJournalEntry: async (userId, id, entryPayload, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const thread = await userWorkspace.decisionThreads.getById(userId, id, workspaceId);
+      if (!thread) return null;
+      const collection = await userWorkspace.collections.get(userId, "journal:entries", [], workspaceId);
+      const items = Array.isArray(collection.items) ? collection.items : [];
+      const newEntry = {
+        id: entryPayload.id || `journal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sourceTradeKey: entryPayload.sourceTradeKey || thread.linkedTradeExecutionId || null,
+        symbol: entryPayload.symbol || thread.symbol || "",
+        tradeDate: entryPayload.tradeDate || new Date().toISOString().slice(0, 10),
+        side: entryPayload.side || "",
+        quantity: entryPayload.quantity || null,
+        price: entryPayload.price || null,
+        notional: entryPayload.notional || null,
+        marketType: entryPayload.marketType || "",
+        status: "open",
+        strategy: entryPayload.strategy || "",
+        setupTag: entryPayload.setupTag || "",
+        marketRegime: entryPayload.marketRegime || "",
+        timeframe: entryPayload.timeframe || "",
+        emotion: entryPayload.emotion || "",
+        confidence: entryPayload.confidence || null,
+        preThesis: entryPayload.preThesis || thread.title || "",
+        postReview: entryPayload.postReview || "",
+        mistakeCategory: entryPayload.mistakeCategory || "",
+        learned: entryPayload.learned || "",
+        chartLink: entryPayload.chartLink || "",
+        decisionThreadId: thread.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const nextItems = [newEntry, ...items].slice(0, 2000);
+      await userWorkspace.collections.set(userId, "journal:entries", nextItems, 2000, workspaceId);
+      // Link the journal entry and auto-create a review due date (7 days out)
+      const reviewDueAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const updated = await userWorkspace.decisionThreads.update(userId, id, {
+        linkedJournalId: newEntry.id,
+        status: "review_due",
+        dueAt: reviewDueAt
+      }, workspaceId);
+      return { thread: updated, journalEntry: newEntry };
+    }
+  },
+
+  dailyBriefings: {
+    getByDate: async (userId, date, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const dateStr = toDateString(date);
+      const result = await pool.query(`
+        SELECT
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          briefing_date AS "briefingDate",
+          status,
+          summary,
+          market_regime AS "marketRegime",
+          risk_level AS "riskLevel",
+          sections,
+          metrics,
+          generated_at AS "generatedAt",
+          read_at AS "readAt",
+          completed_at AS "completedAt"
+        FROM daily_briefings
+        WHERE workspace_id = $1 AND user_id = $2 AND briefing_date = $3;
+      `, [resolvedWorkspaceId, resolvedUserId, dateStr]);
+      return mapDailyBriefingRow(result.rows[0]);
+    },
+    upsert: async (userId, date, payload, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const dateStr = toDateString(date);
+      const result = await pool.query(`
+        INSERT INTO daily_briefings (
+          workspace_id, user_id, briefing_date, status, summary, market_regime, risk_level, sections, metrics, generated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, NOW())
+        ON CONFLICT (workspace_id, user_id, briefing_date)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          summary = EXCLUDED.summary,
+          market_regime = EXCLUDED.market_regime,
+          risk_level = EXCLUDED.risk_level,
+          sections = EXCLUDED.sections,
+          metrics = EXCLUDED.metrics,
+          generated_at = NOW(),
+          completed_at = NULL,
+          read_at = NULL
+        RETURNING
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          briefing_date AS "briefingDate",
+          status,
+          summary,
+          market_regime AS "marketRegime",
+          risk_level AS "riskLevel",
+          sections,
+          metrics,
+          generated_at AS "generatedAt",
+          read_at AS "readAt",
+          completed_at AS "completedAt";
+      `, [
+        resolvedWorkspaceId, resolvedUserId, dateStr,
+        String(payload.status || "ready").trim().toLowerCase(),
+        payload.summary || null,
+        payload.marketRegime || null,
+        payload.riskLevel || null,
+        JSON.stringify(payload.sections || []),
+        JSON.stringify(payload.metrics || {})
+      ]);
+      return mapDailyBriefingRow(result.rows[0]);
+    },
+    markRead: async (userId, id, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        UPDATE daily_briefings
+        SET read_at = NOW()
+        WHERE id = $1 AND workspace_id = $2 AND user_id = $3
+        RETURNING
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          briefing_date AS "briefingDate",
+          status,
+          summary,
+          market_regime AS "marketRegime",
+          risk_level AS "riskLevel",
+          sections,
+          metrics,
+          generated_at AS "generatedAt",
+          read_at AS "readAt",
+          completed_at AS "completedAt";
+      `, [String(id), resolvedWorkspaceId, resolvedUserId]);
+      return mapDailyBriefingRow(result.rows[0]);
+    },
+    markCompleted: async (userId, id, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        UPDATE daily_briefings
+        SET completed_at = NOW(), status = 'completed'
+        WHERE id = $1 AND workspace_id = $2 AND user_id = $3
+        RETURNING
+          id,
+          workspace_id AS "workspaceId",
+          user_id AS "userId",
+          briefing_date AS "briefingDate",
+          status,
+          summary,
+          market_regime AS "marketRegime",
+          risk_level AS "riskLevel",
+          sections,
+          metrics,
+          generated_at AS "generatedAt",
+          read_at AS "readAt",
+          completed_at AS "completedAt";
+      `, [String(id), resolvedWorkspaceId, resolvedUserId]);
+      return mapDailyBriefingRow(result.rows[0]);
+    }
   }
 };
+
+function mapDecisionThreadRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    id: String(row.id),
+    outcome: parseJsonPayload(row.outcome, {})
+  };
+}
+
+function mapDailyBriefingRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    id: String(row.id),
+    sections: parseJsonPayload(row.sections, []),
+    metrics: parseJsonPayload(row.metrics, {}),
+    briefingDate: toDateString(row.briefingDate),
+    generatedAt: toIsoString(row.generatedAt),
+    readAt: toIsoString(row.readAt),
+    completedAt: toIsoString(row.completedAt)
+  };
+}
 
 async function clearAllData() {
   await pool.query("DELETE FROM portfolio_holdings");
@@ -7935,9 +8636,131 @@ const admin = {
     return {
       users: users.slice(0, 5),
       audit: audit.rows.slice(0, 5),
-      logs: logs.rows.slice(0, 5),
+      logs: logs.slice(0, 5),
       tables: tables.rows.map((row) => ({ name: row.name, rows: Number(row.rows || 0) }))
     };
+  }
+};
+
+const perpsBench = {
+  insertSample: async ({ venueId, scenario = "post_only", runId, confirmMs, cancelMs, networkFloorMs, error, mode = "dry_run" }) => {
+    const result = await pool.query(`
+      INSERT INTO perps_latency_samples (venue_id, scenario, run_id, confirm_ms, cancel_ms, network_floor_ms, error, mode)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *;
+    `, [
+      String(venueId || "").trim().toLowerCase(),
+      String(scenario || "post_only").trim().toLowerCase(),
+      String(runId || `zenin-probe-${Date.now()}`).trim(),
+      Number.isFinite(Number(confirmMs)) ? Number(confirmMs) : null,
+      Number.isFinite(Number(cancelMs)) ? Number(cancelMs) : null,
+      Number.isFinite(Number(networkFloorMs)) ? Number(networkFloorMs) : null,
+      error ? String(error).slice(0, 500) : null,
+      String(mode || "dry_run").trim().toLowerCase()
+    ]);
+    return result.rows[0];
+  },
+
+  getRecentSamples: async (venueId = null, scenario = "post_only", windowHours = 24, limit = 2000) => {
+    const safeLimit = Math.max(1, Math.min(10000, Number(limit) || 2000));
+    const safeWindow = Math.max(1, Math.min(720, Number(windowHours) || 24));
+    if (venueId) {
+      const result = await pool.query(`
+        SELECT * FROM perps_latency_samples
+        WHERE venue_id = $1 AND scenario = $2 AND submitted_at >= NOW() - ($3 || ' hours')::INTERVAL
+        ORDER BY submitted_at DESC
+        LIMIT $4;
+      `, [String(venueId).toLowerCase(), scenario, String(safeWindow), safeLimit]);
+      return result.rows;
+    }
+    const result = await pool.query(`
+      SELECT * FROM perps_latency_samples
+      WHERE scenario = $1 AND submitted_at >= NOW() - ($2 || ' hours')::INTERVAL
+      ORDER BY submitted_at DESC
+      LIMIT $3;
+    `, [scenario, String(safeWindow), safeLimit]);
+    return result.rows;
+  },
+
+  getVenueStats: async (scenario = "post_only", windowHours = 24) => {
+    const safeWindow = Math.max(1, Math.min(720, Number(windowHours) || 24));
+    const result = await pool.query(`
+      SELECT
+        venue_id,
+        COUNT(*) AS sample_count,
+        COUNT(*) FILTER (WHERE error IS NULL) AS ok_count,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY confirm_ms) AS p50,
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY confirm_ms) AS p95,
+        PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY confirm_ms) AS p99,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY cancel_ms) AS cancel_p50,
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY cancel_ms) AS cancel_p95,
+        AVG(network_floor_ms) AS avg_network_floor,
+        MAX(submitted_at) AS last_sample_at,
+        MAX(error) FILTER (WHERE error IS NOT NULL) AS last_error
+      FROM perps_latency_samples
+      WHERE scenario = $1 AND submitted_at >= NOW() - ($2 || ' hours')::INTERVAL
+      GROUP BY venue_id
+      ORDER BY p95 ASC NULLS LAST;
+    `, [scenario, String(safeWindow)]);
+    return result.rows.map((row) => ({
+      ...row,
+      sample_count: Number(row.sample_count || 0),
+      ok_count: Number(row.ok_count || 0),
+      p50: row.p50 != null ? Number(row.p50) : null,
+      p95: row.p95 != null ? Number(row.p95) : null,
+      p99: row.p99 != null ? Number(row.p99) : null,
+      cancel_p50: row.cancel_p50 != null ? Number(row.cancel_p50) : null,
+      cancel_p95: row.cancel_p95 != null ? Number(row.cancel_p95) : null,
+      avg_network_floor: row.avg_network_floor != null ? Number(row.avg_network_floor) : null,
+      last_sample_at: toIsoString(row.last_sample_at)
+    }));
+  },
+
+  getRunnerState: async (venueId = null) => {
+    if (venueId) {
+      const result = await pool.query(`SELECT * FROM perps_runner_state WHERE venue_id = $1`, [String(venueId).toLowerCase()]);
+      return result.rows[0] || null;
+    }
+    const result = await pool.query(`SELECT * FROM perps_runner_state ORDER BY venue_id`);
+    return result.rows;
+  },
+
+  upsertRunnerState: async (venueId, { isEnabled, isRunning, ordersToday, dailyOrderBudget, lastError } = {}) => {
+    const result = await pool.query(`
+      INSERT INTO perps_runner_state (venue_id, is_enabled, is_running, orders_today, daily_order_budget, last_error, last_reset_date, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, NOW())
+      ON CONFLICT (venue_id) DO UPDATE SET
+        is_enabled = COALESCE($2, perps_runner_state.is_enabled),
+        is_running = COALESCE($3, perps_runner_state.is_running),
+        orders_today = COALESCE($4, perps_runner_state.orders_today),
+        daily_order_budget = COALESCE($5, perps_runner_state.daily_order_budget),
+        last_error = COALESCE($6, perps_runner_state.last_error),
+        last_reset_date = CASE WHEN perps_runner_state.last_reset_date < CURRENT_DATE THEN CURRENT_DATE ELSE perps_runner_state.last_reset_date END,
+        orders_today = CASE WHEN perps_runner_state.last_reset_date < CURRENT_DATE THEN 0 ELSE COALESCE($4, perps_runner_state.orders_today) END,
+        updated_at = NOW()
+      RETURNING *;
+    `, [
+      String(venueId).toLowerCase(),
+      isEnabled != null ? Boolean(isEnabled) : null,
+      isRunning != null ? Boolean(isRunning) : null,
+      Number.isFinite(ordersToday) ? Number(ordersToday) : null,
+      Number.isFinite(dailyOrderBudget) ? Number(dailyOrderBudget) : null,
+      lastError != null ? String(lastError).slice(0, 500) : null
+    ]);
+    return result.rows[0];
+  },
+
+  incrementOrderCount: async (venueId) => {
+    const result = await pool.query(`
+      UPDATE perps_runner_state
+      SET orders_today = CASE WHEN last_reset_date < CURRENT_DATE THEN 1 ELSE orders_today + 1 END,
+          last_reset_date = CASE WHEN last_reset_date < CURRENT_DATE THEN CURRENT_DATE ELSE last_reset_date END,
+          last_sample_at = NOW(),
+          updated_at = NOW()
+      WHERE venue_id = $1
+      RETURNING *;
+    `, [String(venueId).toLowerCase()]);
+    return result.rows[0];
   }
 };
 
@@ -7957,6 +8780,7 @@ module.exports = {
   trading,
   admin,
   analytics,
+  perpsBench,
   clearAllData,
   closeDatabase,
   describeDatabaseConfig

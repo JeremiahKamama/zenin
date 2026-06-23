@@ -218,6 +218,30 @@ function toSlugLabel(value) {
     .join(" ");
 }
 
+const CONVICTION_LEVELS = ["low", "medium", "high"];
+const CONVICTION_DOTS = 5;
+function resolveConvictionIndex(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const match = CONVICTION_LEVELS.findIndex((level) => level === normalized);
+  if (match >= 0) return Math.min(CONVICTION_DOTS, Math.max(1, (match + 1) * 2 - 1));
+  return 2;
+}
+function ConvictionDots({ value, label }) {
+  const filled = resolveConvictionIndex(value);
+  return (
+    <span
+      className="research-conviction"
+      role="img"
+      aria-label={`Conviction: ${label || value || "Medium"}${typeof filled === "number" ? ` (${filled} of ${CONVICTION_DOTS})` : ""}`}
+      title={`Conviction: ${label || value || "Medium"}`}
+    >
+      {Array.from({ length: CONVICTION_DOTS }, (_, idx) => (
+        <i key={idx} className={idx < filled ? "filled" : ""} aria-hidden="true" />
+      ))}
+    </span>
+  );
+}
+
 function formatDateTime(value) {
   if (!value) return "Not synced";
   try {
@@ -598,7 +622,7 @@ function ResearchObjectControls({ onEdit, onDuplicate, onResolve, onArchive, sta
   );
 }
 
-export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWatchlist, onOpenPortfolio }) {
+export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWatchlist, onOpenPortfolio, onPromoteToDecisionThread }) {
   const fileInputRef = useRef(null);
 
   const [sources, setSources] = useState(() => readLocalJson(SOURCES_STORAGE_KEY, buildInitialSources()));
@@ -1936,6 +1960,37 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
     });
   }
 
+  const [promotingDecisionThread, setPromotingDecisionThread] = useState(false);
+  async function promoteDocToDecisionThread(doc) {
+    if (typeof onPromoteToDecisionThread !== "function") {
+      setNotice("Decision threads are not connected in this workspace.");
+      return;
+    }
+    const symbols = Array.isArray(doc?.symbols) ? doc.symbols.filter(Boolean) : [];
+    const symbol = symbols[0] || "";
+    if (!symbol) {
+      setNotice("This note has no linked ticker. Add a symbol before promoting to a decision thread.");
+      return;
+    }
+    setPromotingDecisionThread(true);
+    try {
+      await onPromoteToDecisionThread({
+        docId: doc.id,
+        title: doc.title || `${symbol} decision thread`,
+        symbol,
+        summary: doc.summary || "",
+        sourceType: doc.sourceType || "manual",
+        sourceName: doc.sourceName || inferSourceLabel(doc.sourceType)
+      });
+      updateDocumentStatus(doc.id, "linked");
+      setNotice(`${symbol} promoted to decision thread.`);
+    } catch (error) {
+      setNotice(error?.message || "Could not promote to decision thread.");
+    } finally {
+      setPromotingDecisionThread(false);
+    }
+  }
+
   function primeTickerAction(symbol, targetView, draftType) {
     const nextSymbol = String(symbol || "").trim().toUpperCase();
     if (!nextSymbol) return;
@@ -2183,6 +2238,14 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                     <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "trigger")}>Create Trigger</button>
                     <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "catalyst")}>Add Catalyst</button>
                     <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(doc, "decision")}>Log Decision</button>
+                    <button
+                      type="button"
+                      className="research-link-btn primary"
+                      disabled={promotingDecisionThread}
+                      onClick={() => promoteDocToDecisionThread(doc)}
+                    >
+                      {promotingDecisionThread ? "Promoting…" : "Promote to Decision Thread"}
+                    </button>
                     <button type="button" className="research-link-btn" onClick={() => setSelectedDocId(doc.id)}>Review</button>
                   </div>
                 </article>
@@ -2449,7 +2512,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   {selectedTickerDecisions.slice(0, 2).map((item) => (
                     <div key={item.id} className="research-mini-row static">
                       <strong>{toSlugLabel(item.action)}</strong>
-                      <span>{item.conviction} conviction · {toSlugLabel(item.priority)} priority · {describeDueState(item.dueDate)}</span>
+                      <span><ConvictionDots value={item.conviction} label={item.conviction} />{item.conviction} conviction · {toSlugLabel(item.priority)} priority · {describeDueState(item.dueDate)}</span>
                     </div>
                   ))}
                   {selectedTickerBriefs.slice(0, 1).map((item) => (
@@ -2647,7 +2710,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   <div className="research-inbox-head">
                     <div>
                       <strong>{thesis.symbol} · {thesis.title}</strong>
-                      <span>{toSlugLabel(thesis.stage)} · {thesis.conviction} conviction · {toSlugLabel(thesis.coverageScope)} · {toSlugLabel(thesis.priority)} priority · {thesis.owner}</span>
+                      <span>{toSlugLabel(thesis.stage)} · <ConvictionDots value={thesis.conviction} label={thesis.conviction} />{thesis.conviction} conviction · {toSlugLabel(thesis.coverageScope)} · {toSlugLabel(thesis.priority)} priority · {thesis.owner}</span>
                     </div>
                     <div className="research-inline-pills">
                       <span className={`research-status-pill ${thesis.recordState === "resolved" ? "reviewed" : thesis.recordState === "archived" ? "archived" : "linked"}`}>{toSlugLabel(thesis.recordState)}</span>
@@ -3261,7 +3324,7 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
                   <div className="research-inbox-head">
                     <div>
                       <strong>{decision.symbol} · {toSlugLabel(decision.action)}</strong>
-                      <span>{decision.conviction} conviction · {toSlugLabel(decision.coverageScope)} · {toSlugLabel(decision.priority)} priority · {formatDateTime(decision.createdAt)} · {decision.owner}</span>
+                      <span><ConvictionDots value={decision.conviction} label={decision.conviction} />{decision.conviction} conviction · {toSlugLabel(decision.coverageScope)} · {toSlugLabel(decision.priority)} priority · {formatDateTime(decision.createdAt)} · {decision.owner}</span>
                     </div>
                     <button type="button" className="research-symbol-chip" onClick={() => { setSelectedTicker(decision.symbol); setActiveView("tickers"); }}>Dossier</button>
                   </div>
@@ -3518,6 +3581,14 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
               <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "trigger")}>Create Trigger</button>
               <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "catalyst")}>Add Catalyst</button>
               <button type="button" className="research-link-btn" onClick={() => requestDocumentPromotion(selectedDoc, "decision")}>Log Decision</button>
+              <button
+                type="button"
+                className="research-link-btn primary"
+                disabled={promotingDecisionThread}
+                onClick={() => promoteDocToDecisionThread(selectedDoc)}
+              >
+                {promotingDecisionThread ? "Promoting…" : "Promote to Decision Thread"}
+              </button>
             </div>
             {selectedDoc.url ? <a href={selectedDoc.url} target="_blank" rel="noreferrer">Open source reference</a> : null}
             <pre>{selectedDoc.body || selectedDoc.summary}</pre>

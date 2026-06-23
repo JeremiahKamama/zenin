@@ -145,13 +145,44 @@
       <div class="zenin-boot">
         <div class="zenin-boot-card">
           <div class="zenin-boot-brand">Zenin Capital</div>
-          <h1 class="zenin-boot-title">Loading Zenin</h1>
-          <p class="zenin-boot-copy">Initializing portfolios, watchlists, market data, and your workspace.</p>
+          <h1 class="zenin-boot-title" data-zenin-boot-title>Loading Zenin</h1>
+          <p class="zenin-boot-copy" data-zenin-boot-copy>Initializing portfolios, watchlists, market data, and your workspace.</p>
           <div class="zenin-boot-progress" aria-hidden="true"></div>
         </div>
       </div>
     </div>
     <template id="zenin-public-prerender"></template>
+    <script>
+      // Route-aware boot copy — runs before the JS bundle loads so the
+      // first flash matches the route the user actually opened.
+      (function () {
+        try {
+          var path = window.location.pathname || "/";
+          var search = window.location.search || "";
+          var isApp = path.indexOf("/app") === 0;
+          var isAuth = path.indexOf("/auth") === 0;
+          var isGuest = /[?&]guest=(1|true|yes)\b/i.test(search);
+          var titleEl = document.querySelector("[data-zenin-boot-title]");
+          var copyEl = document.querySelector("[data-zenin-boot-copy]");
+          if (!titleEl || !copyEl) return;
+          if (isApp && isGuest) {
+            titleEl.textContent = "Opening demo workspace";
+            copyEl.textContent = "Loading the Zenin demo workspace so you can explore portfolios, watchlists, and research.";
+          } else if (isApp) {
+            titleEl.textContent = "Checking session";
+            copyEl.textContent = "Verifying your Zenin session and loading your workspace.";
+          } else if (isAuth) {
+            titleEl.textContent = "Sign in to Zenin";
+            copyEl.textContent = "Securely accessing your Zenin workspace.";
+          } else {
+            titleEl.textContent = "Loading Zenin";
+            copyEl.textContent = "Initializing portfolios, watchlists, market data, and your workspace.";
+          }
+        } catch (e) {
+          // no-op — fall back to the static copy
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
