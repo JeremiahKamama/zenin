@@ -316,58 +316,23 @@ const APP_RUNTIME_CONFIG = {
       CAD: 0.74,
       AUD: 0.65,
       CHF: 1.13,
-      CNY: 0.14,
-      BTC: 65000,
-      ETH: 3500,
-      SOL: 140
+      CNY: 0.14
     }
   },
   tax: {
-    rules: {
-      USA: { name: 'United States', region: 'Americas', currency: 'USD', cgRate: 0.20, stRate: 0.37, logic: 'LTCG: 20%, STCG: 37%' },
-      Brazil: { name: 'Brazil', region: 'Americas', currency: 'BRL', cgRate: 0.15, stRate: 0.15, logic: 'Flat: 15-22.5%' },
-      Canada: { name: 'Canada', region: 'Americas', currency: 'CAD', cgRate: 0.2656, stRate: 0.2656, logic: '50% inclusion, top effective ~26.56%' },
-      UK: { name: 'United Kingdom', region: 'Europe', currency: 'GBP', cgRate: 0.24, stRate: 0.24, logic: 'CGT Higher Rate: 24%' },
-      Germany: { name: 'Germany', region: 'Europe', currency: 'EUR', cgRate: 0.26375, stRate: 0.26375, logic: 'Abgeltungsteuer: 26.375%' },
-      France: { name: 'France', region: 'Europe', currency: 'EUR', cgRate: 0.30, stRate: 0.30, logic: 'Flat Rate PFU: 30%' },
-      Spain: { name: 'Spain', region: 'Europe', currency: 'EUR', cgRate: 0.26, stRate: 0.26, logic: 'Savings Tax: 19-26%' },
-      Italy: { name: 'Italy', region: 'Europe', currency: 'EUR', cgRate: 0.26, stRate: 0.26, logic: 'Imposta Sostitutiva: 26%' },
-      Netherlands: { name: 'Netherlands', region: 'Europe', currency: 'EUR', cgRate: 0.32, stRate: 0.32, logic: 'Box 3 Deemed Return ~32%' },
-      Portugal: { name: 'Portugal', region: 'Europe', currency: 'EUR', cgRate: 0.28, stRate: 0.28, logic: 'Flat Rate: 28%' },
-      Switzerland: { name: 'Switzerland', region: 'Europe', currency: 'CHF', cgRate: 0.0, stRate: 0.0, logic: 'Capital Gains: 0% (private investors)' },
-      UAE: { name: 'United Arab Emirates', region: 'Middle East', currency: 'AED', cgRate: 0.0, stRate: 0.0, logic: 'Personal CGT: 0%' },
-      SaudiArabia: { name: 'Saudi Arabia', region: 'Middle East', currency: 'SAR', cgRate: 0.0, stRate: 0.0, logic: 'Personal CGT: 0%' },
-      Qatar: { name: 'Qatar', region: 'Middle East', currency: 'QAR', cgRate: 0.0, stRate: 0.0, logic: 'Personal CGT: 0%' },
-      Bahrain: { name: 'Bahrain', region: 'Middle East', currency: 'BHD', cgRate: 0.0, stRate: 0.0, logic: 'Personal CGT: 0%' },
-      Oman: { name: 'Oman', region: 'Middle East', currency: 'OMR', cgRate: 0.0, stRate: 0.0, logic: 'Personal CGT: 0%' },
-      Singapore: { name: 'Singapore', region: 'South East Asia', currency: 'SGD', cgRate: 0.0, stRate: 0.0, logic: 'No CGT for individuals' },
-      Malaysia: { name: 'Malaysia', region: 'South East Asia', currency: 'MYR', cgRate: 0.30, stRate: 0.30, logic: 'RPGT: 30% for disposal within 5 yrs' },
-      Indonesia: { name: 'Indonesia', region: 'South East Asia', currency: 'IDR', cgRate: 0.10, stRate: 0.10, logic: 'Final Tax on listings: 0.1%; general: 10%' },
-      Thailand: { name: 'Thailand', region: 'South East Asia', currency: 'THB', cgRate: 0.15, stRate: 0.15, logic: 'Withholding Tax: ~15%' },
-      Vietnam: { name: 'Vietnam', region: 'South East Asia', currency: 'VND', cgRate: 0.20, stRate: 0.20, logic: 'Securities Transfer Tax: 0.1%; CIT: 20%' },
-      Philippines: { name: 'Philippines', region: 'South East Asia', currency: 'PHP', cgRate: 0.15, stRate: 0.15, logic: 'Final Tax: 15% on net gains' },
-      India: { name: 'India', region: 'Asia', currency: 'INR', cgRate: 0.125, stRate: 0.20, logic: 'LTCG: 12.5%, STCG: 20%' },
-      China: { name: 'China', region: 'Asia', currency: 'CNY', cgRate: 0.20, stRate: 0.20, logic: 'Flat: 20% on income' },
-      Japan: { name: 'Japan', region: 'Asia', currency: 'JPY', cgRate: 0.20315, stRate: 0.20315, logic: 'Flat: 20.315%' },
-      SouthKorea: { name: 'South Korea', region: 'Asia', currency: 'KRW', cgRate: 0.22, stRate: 0.22, logic: 'Flat: 22% for large traders' },
-      HongKong: { name: 'Hong Kong', region: 'Asia', currency: 'HKD', cgRate: 0.0, stRate: 0.0, logic: 'No CGT' },
-      SouthAfrica: { name: 'South Africa', region: 'Africa', currency: 'ZAR', cgRate: 0.18, stRate: 0.18, logic: 'Effective ~18% (40% inclusion x 45%)' },
-      Nigeria: { name: 'Nigeria', region: 'Africa', currency: 'NGN', cgRate: 0.10, stRate: 0.10, logic: 'CGT: 10%' },
-      Egypt: { name: 'Egypt', region: 'Africa', currency: 'EGP', cgRate: 0.10, stRate: 0.10, logic: 'Exchange transaction tax; ~10% effective' },
-      Ethiopia: { name: 'Ethiopia', region: 'Africa', currency: 'ETB', cgRate: 0.30, stRate: 0.30, logic: 'Business income tax up to 30%' },
-      Kenya: { name: 'Kenya', region: 'Africa', currency: 'KES', cgRate: 0.15, stRate: 0.15, logic: 'CGT: 15%' },
-      Morocco: { name: 'Morocco', region: 'Africa', currency: 'MAD', cgRate: 0.15, stRate: 0.15, logic: 'Fixed tax: 15%' },
-      Angola: { name: 'Angola', region: 'Africa', currency: 'AOA', cgRate: 0.15, stRate: 0.15, logic: 'Capital income tax: 15%' },
-      Ghana: { name: 'Ghana', region: 'Africa', currency: 'GHS', cgRate: 0.15, stRate: 0.15, logic: 'Securities gains: 15%' },
-      Tanzania: { name: 'Tanzania', region: 'Africa', currency: 'TZS', cgRate: 0.10, stRate: 0.10, logic: 'CGT: 10% (resident individuals)' },
-      Cote: { name: "Cote d'Ivoire", region: 'Africa', currency: 'XOF', cgRate: 0.25, stRate: 0.25, logic: 'Corporate-aligned CGT: 25%' }
-    },
+    // Tax rates are now loaded from backend/data/taxRates.json via taxRateService.js
+    // The hardcoded rules below are a fallback only — the live rates (with Wikipedia
+    // refresh and government overrides) are served from GET /api/tax/rates.
+    // This static block is kept for backwards compatibility with code that reads
+    // getAppRuntimeConfig().tax.rules directly during startup before the service runs.
+    rules: {},
     regions: ['Americas', 'Europe', 'Middle East', 'South East Asia', 'Asia', 'Africa'],
-    lastUpdated: 'April 21, 2026',
+    lastUpdated: null,
     sources: [
       { label: 'OECD tax database', href: 'https://www.oecd.org/tax/tax-policy/tax-database/' },
       { label: 'KPMG tax rates online', href: 'https://kpmg.com/xx/en/home/services/tax/tax-tools-and-resources/tax-rates-online.html' },
-      { label: 'PwC worldwide tax summaries', href: 'https://taxsummaries.pwc.com/' }
+      { label: 'PwC worldwide tax summaries', href: 'https://taxsummaries.pwc.com/' },
+      { label: 'Wikipedia: Capital gains tax by country', href: 'https://en.wikipedia.org/wiki/Capital_gains_tax' }
     ],
     defaultIncomeBreakdown: {
       salary: 0,

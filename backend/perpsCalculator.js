@@ -1,6 +1,8 @@
 // backend/perpsCalculator.js
 // Perps Calculator — venue metadata, fee schedules, and calc engines
-// (basis carry, perp arbitrage, fee comparator). Latency data is wired in Phase 5.
+// (basis carry, perp arbitrage, fee comparator). Latency data is written by
+// the perps-bench-runner (Render Background Worker) into perps_latency_samples
+// and surfaced via GET /api/perps/latency.
 
 const CRYPTO_VENUES = [
   {

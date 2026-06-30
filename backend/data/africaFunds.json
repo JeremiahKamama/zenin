@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "last_updated": "2026-04-21",
+    "description": "Africa Money Market Fund data. No free API serves this data — fund managers publish AUM and yields in quarterly fact sheets. This file is manually maintained from fund manager reports. The last_updated date is surfaced in the UI so users know data freshness.",
+    "sources": [
+      { "label": "CIC Asset Management fund factsheets", "href": "https://www.cic.co.ke/asset-management/" },
+      { "label": "Britam Asset Managers reports", "href": "https://www.britam.com/investments" },
+      { "label": "Stanbic IBTC Asset Management", "href": "https://www.stanbicibtcbank.com/asset-management" },
+      { "label": "FBNQuest Asset Management", "href": "https://www.fbnquest.com/asset-management" },
+      { "label": "Ninety One fund factsheets", "href": "https://www.ninetyone.com/en-za/products/fund-finder" },
+      { "label": "STANLIB fund performance", "href": "https://www.stanlib.com/funds" }
+    ]
+  },
+  "mmf": [
+    { "id": "KE_CIC_MMF", "fundName": "CIC Money Market Fund", "country": "KE", "currency": "KES", "yieldRange": "9.8% - 11.2%", "yield": 10.4, "maturity": "45d", "liquidity": "High", "provider": "CIC Asset Management", "aum": 125000000000, "returnYtdPct": 4.6 },
+    { "id": "KE_BRITAM_MMF", "fundName": "Britam Money Market Fund", "country": "KE", "currency": "KES", "yieldRange": "9.4% - 10.8%", "yield": 10.1, "maturity": "39d", "liquidity": "High", "provider": "Britam Asset Managers", "aum": 98000000000, "returnYtdPct": 4.2 },
+    { "id": "NG_STANBIC_MMF", "fundName": "Stanbic IBTC Money Market Fund", "country": "NG", "currency": "NGN", "yieldRange": "13.1% - 15.5%", "yield": 14.3, "maturity": "52d", "liquidity": "High", "provider": "Stanbic IBTC Asset Mgmt", "aum": 410000000000, "returnYtdPct": 6.9 },
+    { "id": "NG_FBN_MMF", "fundName": "FBN Money Market Fund", "country": "NG", "currency": "NGN", "yieldRange": "12.8% - 14.9%", "yield": 13.8, "maturity": "49d", "liquidity": "High", "provider": "FBNQuest Asset Management", "aum": 350000000000, "returnYtdPct": 6.4 },
+    { "id": "ZA_NINETYONE_MMF", "fundName": "Ninety One Money Market Fund", "country": "ZA", "currency": "ZAR", "yieldRange": "7.2% - 8.6%", "yield": 7.9, "maturity": "34d", "liquidity": "High", "provider": "Ninety One", "aum": 74000000000, "returnYtdPct": 3.2 },
+    { "id": "ZA_STANLIB_MMF", "fundName": "STANLIB Money Market Fund", "country": "ZA", "currency": "ZAR", "yieldRange": "7.0% - 8.3%", "yield": 7.7, "maturity": "31d", "liquidity": "High", "provider": "STANLIB", "aum": 66500000000, "returnYtdPct": 3.0 }
+  ],
+  "reits": [
+    { "symbol": "FAIR", "yahooSymbol": "FAIR.NS", "name": "Fairvest REIT", "country": "KE", "region": "Kenya", "propertyType": "Retail" },
+    { "symbol": "GRT", "yahooSymbol": "GRT.JO", "name": "Growthpoint Properties", "country": "ZA", "region": "South Africa", "propertyType": "Diversified" },
+    { "symbol": "NEP", "yahooSymbol": "NEP.JO", "name": "NEPI Rockcastle", "country": "ZA", "region": "South Africa / CEE", "propertyType": "Retail" },
+    { "symbol": "SFS", "yahooSymbol": "SFS.JO", "name": "SFS Real Estate Investment Trust", "country": "ZA", "region": "South Africa", "propertyType": "Commercial" },
+    { "symbol": "UPDC", "yahooSymbol": "UPDC.JO", "name": "UPDC REIT", "country": "ZA", "region": "South Africa", "propertyType": "Mixed" },
+    { "symbol": "ILAM", "yahooSymbol": "ILAM.NS", "name": "ILAM Fahari I-REIT", "country": "KE", "region": "Kenya", "propertyType": "Commercial" }
+  ]
+}

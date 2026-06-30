@@ -1,3 +1,18 @@
+Hello World examples
+====================
+
+Files added:
+
+- `hello.py` - Minimal Python Hello World.
+- `stream_hello_baseten.py` - Streaming example using Baseten/OpenAI client. Set `BASETEN_API_KEY` before running.
+
+Run:
+
+```bash
+python3 hello.py
+export BASETEN_API_KEY="your_key_here"
+python3 stream_hello_baseten.py
+```
 # Zenin
 
 Zenin is a multi-asset trading dashboard that combines portfolio management, options analytics, prediction-market tracking, and journal/reporting workflows with a PostgreSQL-backed backend.

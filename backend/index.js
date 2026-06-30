@@ -14,7 +14,6 @@ const {
 } = require("@simplewebauthn/server");
 const { OAuth2Client } = require("google-auth-library");
 const { Webhook } = require("svix");
-// const appleSignin = require("apple-signin-auth");
 const {
   getEmailDeliveryConfig,
   isEmailDeliveryProductionReady,
@@ -104,34 +103,52 @@ setInterval(() => {
 }, 60_000);
 const { watchlistData } = require("./data");
 const {
+  pool,
   initializeDatabase,
   portfolio,
   watchlist,
-  optionsCalculations,
   userAuth,
   workspaces,
   userWorkspace,
   runAdminWorkspaceMigration,
   serviceSnapshots,
-  tradeExecutions,
   balance,
   trading,
   admin,
   analytics,
   perpsBench,
+  brokerage,
   describeDatabaseConfig
 } = require("./database");
+const db = pool;
+const {
+  getBrokerageRegistry
+} = require("./brokerage/infrastructure/bootstrap");
+const { createSyncEngine, startBackgroundSync, stopBackgroundSync } = require("./brokerage/application/SyncEngine");
+const { createBrokerageService } = require("./brokerage/application/BrokerageService");
+const { registerBrokerageRoutes } = require("./brokerage/http/routes");
+const {
+  getProviderRegistry: getMarketIntelRegistry,
+  getCache: getMarketIntelCache,
+  MarketIntelligenceService,
+  MarketEventEngine,
+  PortfolioIntelligenceEngine,
+  NotificationService,
+  AlertRulesEngine,
+  CACHE_TTL
+} = require("./market-intel");
+const { initializeMarketIntelTables } = require("./market-intel/infrastructure/database");
+const { registerMarketIntelRoutes } = require("./market-intel/http/routes");
 const {
   listCryptoVenues,
   listStockBrokers,
-  getVenueById,
   computeBasisCarry,
   computePerpArb,
   computeCryptoFees,
   computeStockBrokerFees
 } = require("./perpsCalculator");
+const { getTaxRates, getCachedTaxRatesFromDb, writeTaxRatesToDb } = require("./taxRateService");
 const { REIT_DATA, MMF_YIELDS, FUNDS_LIST } = require("./equities_benchmarks");
-const { fetchFarsideEtfFlows: fetchLatestFarsideEtfFlows } = require("./farsideEtf");
 const { buildPublicRuntimeConfig, buildAppRuntimeConfig } = require("./runtimeConfig");
 const {
   buildRevenueCatIntegrationItem,
@@ -1062,15 +1079,6 @@ async function fetchDuneLatestResults(queryId) {
   }
 }
 
-/**
- * Scrapes ETF flow data from Farside UK (farside.co.uk)
- * Note: Cloudflare might block this in certain environments.
- */
-async function fetchFarsideEtfFlows() {
-  const fetch = await resolveFetch();
-  const flows = await fetchLatestFarsideEtfFlows(fetch);
-  return Array.isArray(flows) && flows.length > 0 ? flows : null;
-}
 app.use(cors({
   origin: (origin, callback) => {
     if (isAllowedOrigin(origin)) {
@@ -1435,6 +1443,22 @@ const workspaceSecretProvider = {
     return decryptWorkspaceData(value);
   }
 };
+
+const brokerageRegistry = getBrokerageRegistry();
+const brokerageSyncEngine = createSyncEngine({ repository: brokerage });
+let brokerageService = null;
+
+function getBrokerageService() {
+  if (!brokerageService) {
+    brokerageService = createBrokerageService({
+      registry: brokerageRegistry,
+      repository: brokerage,
+      syncEngine: brokerageSyncEngine,
+      secretProvider: workspaceSecretProvider
+    });
+  }
+  return brokerageService;
+}
 
 function maskApiKey(key) {
   if (!key) return "";
@@ -2576,50 +2600,6 @@ function buildComparablePayloadHash(payload = {}, ignoredKeys = COMPANY_PROFILE_
   return crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
-function validatePortfolioHolding(req, res, next) {
-  const { symbol, name, price, quantity, type, marketType, orderType } = req.body;
-  if (!symbol || typeof symbol !== "string" || symbol.length > 20) {
-    return res.status(400).json({ error: "Invalid symbol" });
-  }
-  if (!name || typeof name !== "string" || name.length > 100) {
-    return res.status(400).json({ error: "Invalid name" });
-  }
-  const isOptions = (type || "").toLowerCase() === "options" || (marketType || "").toLowerCase() === "options";
-  if (typeof price !== "number" || (!isOptions && price < 0) || !isFinite(price)) {
-    return res.status(400).json({ error: "Invalid price" });
-  }
-  if (typeof quantity !== "number" || !isFinite(quantity)) {
-    return res.status(400).json({ error: "Invalid quantity" });
-  }
-  if (!["stock", "crypto", "bond", "commodity", "etf", "options"].includes((type || "").toLowerCase())) {
-    return res.status(400).json({ error: "Invalid type" });
-  }
-  if (!["buy", "sell"].includes(orderType)) {
-    return res.status(400).json({ error: "Invalid orderType" });
-  }
-  next();
-}
-
-function validatePortfolioUpdate(req, res, next) {
-  const { price, quantity } = req.body || {};
-  if (!Number.isFinite(Number(price)) || Number(price) < 0) {
-    return res.status(400).json({ error: "Invalid price" });
-  }
-  if (!Number.isFinite(Number(quantity))) {
-    return res.status(400).json({ error: "Invalid quantity" });
-  }
-  next();
-}
-
-function validateWatchlistAsset(req, res, next) {
-  const { asset, error } = sanitizeWatchlistAssetInput(req.body);
-  if (error) {
-    return res.status(400).json({ error });
-  }
-  req.body = asset;
-  next();
-}
-
 function sanitizeWatchlistAssetInput(input = {}) {
   const symbol = String(input?.symbol || "").trim().toUpperCase();
   if (!symbol || symbol.length > 20) {
@@ -2696,30 +2676,6 @@ function buildWatchlistAssetIdentityKey(asset = {}) {
     String(asset?.category || "").trim().toLowerCase(),
     String(asset?.theme || "").trim().toLowerCase()
   ].join("::");
-}
-
-function validateOptionsCalculation(req, res, next) {
-  const payload = req.body || {};
-  if (!payload.symbol || typeof payload.symbol !== "string" || payload.symbol.trim().length > 20) {
-    return res.status(400).json({ error: "Invalid symbol" });
-  }
-  const legs = Array.isArray(payload.legs) ? payload.legs : [];
-  const breakevens = Array.isArray(payload.breakevens) ? payload.breakevens : [];
-  if (legs.length > 30) {
-    return res.status(400).json({ error: "Too many legs" });
-  }
-  if (breakevens.length > 30) {
-    return res.status(400).json({ error: "Too many breakevens" });
-  }
-  const approxSize = JSON.stringify({
-    ...payload,
-    legs,
-    breakevens
-  }).length;
-  if (approxSize > 50000) {
-    return res.status(400).json({ error: "Payload too large" });
-  }
-  next();
 }
 
 // ---------------------------------------------------------------------------
@@ -3794,6 +3750,79 @@ async function buildUserBootstrapPayload(userId, options = {}) {
     updatedAt: new Date().toISOString()
   };
 }
+
+registerBrokerageRoutes(app, {
+  service: getBrokerageService(),
+  requireSignedIn,
+  attachActiveWorkspace,
+  requireWorkspaceMember,
+  apiError,
+  handleServerError
+});
+
+// ---- Market Intelligence Routes ----
+let marketIntelService, marketAlertRules, marketNotificationService;
+
+function getMarketIntelService() {
+  if (!marketIntelService) {
+    const cache = getMarketIntelCache();
+    try {
+      const registry = getMarketIntelRegistry();
+      const provider = registry.defaultProvider();
+      marketIntelService = new MarketIntelligenceService({
+        provider,
+        cache,
+        db
+      });
+      console.log(`[market-intel] Using provider: ${provider.displayName} (${provider.providerKey})`);
+    } catch (_) {
+      console.warn("[market-intel] No provider configured — market routes will be unavailable.");
+      marketIntelService = null;
+    }
+  }
+  return marketIntelService;
+}
+
+function getMarketAlertRules() {
+  if (!marketAlertRules) {
+    const notificationSvc = getMarketNotificationService();
+    marketAlertRules = new AlertRulesEngine({
+      db,
+      notificationService: notificationSvc
+    });
+  }
+  return marketAlertRules;
+}
+
+function getMarketNotificationService() {
+  if (!marketNotificationService) {
+    marketNotificationService = new NotificationService({
+      db,
+      emailService: require("./email"),
+      channels: [
+        {
+          name: "inApp",
+          send: async (notification) => {
+            // In-app notifications are persisted by NotificationService.send()
+            return true;
+          }
+        }
+      ]
+    });
+  }
+  return marketNotificationService;
+}
+
+registerMarketIntelRoutes(app, {
+  service: getMarketIntelService(),
+  alertRules: getMarketAlertRules(),
+  notificationService: getMarketNotificationService(),
+  requireSignedIn,
+  attachActiveWorkspace,
+  requireWorkspaceMember,
+  apiError,
+  handleServerError
+});
 
 app.get("/api/public/config", async (_req, res) => {
   res.set("Cache-Control", "public, max-age=300");
@@ -11942,6 +11971,47 @@ app.delete("/api/db/perps-calculations/:id", requireSignedIn, async (req, res) =
   }
 });
 
+// ---------------------------------------------------------------------------
+// Tax Rates — hybrid source (JSON base + Wikipedia scrape + government overrides)
+// ---------------------------------------------------------------------------
+
+app.get("/api/tax/rates", async (req, res) => {
+  const snapshotParams = { category: "tax-rates" };
+  const cached = await readServiceSnapshot("tax-rates", snapshotParams);
+  try {
+    const forceRefresh = String(req.query.refresh || "").toLowerCase() === "true";
+    const rates = await getTaxRates({ forceRefresh });
+
+    // Try DB cache for shared state across instances
+    const dbCached = await getCachedTaxRatesFromDb(pool);
+    const payload = {
+      ...rates,
+      cachedAt: dbCached?.cachedAt || null,
+      source: "hybrid: json + wikipedia + government overrides"
+    };
+
+    await writeTaxRatesToDb(pool, rates);
+    await writeServiceSnapshot("tax-rates", snapshotParams, payload);
+    res.json(payload);
+  } catch (error) {
+    if (cached?.payload) {
+      return res.json({ ...cached.payload, stale: true, stale_reason: error?.message });
+    }
+    handleServerError(res, "Tax rates fetch failed", error);
+  }
+});
+
+// Admin: force-refresh the Wikipedia scrape
+app.post("/api/tax/refresh", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const rates = await getTaxRates({ forceRefresh: true });
+    await writeTaxRatesToDb(pool, rates);
+    res.json({ success: true, lastFetchedAt: rates.lastFetchedAt, wikipediaScrapeSuccess: rates.wikipediaScrapeSuccess });
+  } catch (error) {
+    handleServerError(res, "Tax rates refresh failed", error);
+  }
+});
+
 app.get("/api/crypto-market", async (req, res) => {
   const snapshotParams = { category: "crypto-market" };
   const cached = await readServiceSnapshot("crypto-market", snapshotParams);
@@ -12445,21 +12515,18 @@ app.get('/api/analytics/crypto', async (req, res) => {
       ETF_INFLOWS: "3834935"
     };
 
-    const [duneMarketShareResult, duneOverviewResult, duneEtfFlowsResult, farsideFlowsResult] = await Promise.allSettled([
+    const [duneMarketShareResult, duneOverviewResult, duneEtfFlowsResult] = await Promise.allSettled([
       fetchDuneLatestResults(DUNE_QUERY_IDS.MARKET_SHARE),
       fetchDuneLatestResults(DUNE_QUERY_IDS.OVERVIEW),
-      fetchDuneLatestResults(DUNE_QUERY_IDS.ETF_INFLOWS),
-      fetchFarsideEtfFlows()
+      fetchDuneLatestResults(DUNE_QUERY_IDS.ETF_INFLOWS)
     ]);
     const duneMarketShareRows = duneMarketShareResult.status === "fulfilled" ? duneMarketShareResult.value : null;
     const duneOverviewRows = duneOverviewResult.status === "fulfilled" ? duneOverviewResult.value : null;
     const duneEtfFlowsRows = duneEtfFlowsResult.status === "fulfilled" ? duneEtfFlowsResult.value : null;
-    const farsideFlows = farsideFlowsResult.status === "fulfilled" ? farsideFlowsResult.value : null;
     [
       ["Dune market share", duneMarketShareResult],
       ["Dune overview", duneOverviewResult],
-      ["Dune ETF flows", duneEtfFlowsResult],
-      ["Farside ETF flows", farsideFlowsResult]
+      ["Dune ETF flows", duneEtfFlowsResult]
     ].forEach(([label, result]) => {
       if (result.status === "rejected") {
         console.warn(`[Analytics] ${label} skipped:`, result.reason?.message || result.reason);
@@ -12482,30 +12549,24 @@ app.get('/api/analytics/crypto', async (req, res) => {
       console.warn("[ETF] Cached inflows unavailable:", error?.message || error);
       return [];
     });
-    
-    // If DB is empty, try to populate it with live data
+
     if (!etfInflows || etfInflows.length === 0) {
-      const liveFlows = (Array.isArray(farsideFlows) && farsideFlows.length > 0)
-        ? farsideFlows
-        : (duneEtfFlowsRows ? duneEtfFlowsRows.map((row) => ({
-            date: row.date,
-            manager: row.manager,
-            ticker: row.ticker,
-            asset: row.asset,
-            netUsd: Number(row.net_usd || row.netUsd || 0),
-            period: row.period || "daily",
-            source: "Dune"
-          })) : []);
-      
+      const liveFlows = duneEtfFlowsRows ? duneEtfFlowsRows.map((row) => ({
+        date: row.date,
+        manager: row.manager,
+        ticker: row.ticker,
+        asset: row.asset,
+        netUsd: Number(row.net_usd || row.netUsd || 0),
+        period: row.period || "daily",
+        source: "Dune"
+      })) : [];
+
       if (liveFlows.length > 0) {
         await analytics.upsertEtfInflows(liveFlows).catch((error) => {
           console.warn("[ETF] Live flow upsert skipped:", error?.message || error);
         });
         etfInflows = liveFlows;
       }
-    } else if (Array.isArray(farsideFlows) && farsideFlows.length > 0) {
-      // Even if DB has data, we can background-upsert the latest from Farside if successful
-      analytics.upsertEtfInflows(farsideFlows).catch(err => console.error("[ETF] Background upsert failed:", err));
     }
 
     res.json({
@@ -12526,7 +12587,7 @@ app.get('/api/analytics/crypto', async (req, res) => {
     });
   } catch (error) {
     console.error("[Analytics] Crypto fallback served:", error?.message || error);
-    res.json(buildFallbackCryptoPayload(error?.message || "crypto_analytics_fetch_failed"));
+    res.json(await buildFallbackCryptoPayload(error?.message || "crypto_analytics_fetch_failed"));
   }
 });
 
@@ -12634,12 +12695,12 @@ const COMMODITY_UNIVERSE = [
   { symbol: "ALI=F", name: "Aluminum", group: "industrial", region: "global" },
   { symbol: "ZNC=F", name: "Zinc", group: "industrial", region: "global" },
   { symbol: "LED=F", name: "Lead", group: "industrial", region: "global" },
-  { symbol: "TIN=F", name: "Tin", group: "industrial", region: "global" },
+  { symbol: "JJT", name: "Tin (ETF)", group: "industrial", region: "global" },
   { symbol: "TIO=F", name: "Iron Ore", group: "industrial", region: "global" },
 
   // Battery Metals
   { symbol: "LIT", name: "Lithium (ETF)", group: "battery", region: "global" },
-  { symbol: "NI=F", name: "Nickel", group: "battery", region: "global" },
+  { symbol: "JJN", name: "Nickel (ETF)", group: "battery", region: "global" },
   { symbol: "REMX", name: "Rare Earths (ETF)", group: "battery", region: "global" },
 
   // Agriculture
@@ -12710,10 +12771,10 @@ const COMMODITY_FINVIZ_PROXY_MAP = {
   "ALI=F": "DBB",
   "ZNC=F": "DBB",
   "LED=F": "DBB",
-  "TIN=F": "DBB",
+  "JJT": null,
   "TIO=F": "PICK",
   LIT: "LIT",
-  "NI=F": "PICK",
+  "JJN": null,
   REMX: "REMX",
   ZC: "CORN",
   ZW: "WEAT",
@@ -13355,22 +13416,88 @@ app.get("/api/commodities/correlation", async (req, res) => {
 });
 
 const AFRICA_COUNTRY_SET = new Set(["KE", "NG", "ZA"]);
-const AFRICA_MMF_ROWS = [
-  { id: "KE_CIC_MMF", fundName: "CIC Money Market Fund", name: "CIC Money Market Fund", country: "KE", currency: "KES", yieldRange: "9.8% - 11.2%", yield: 10.4, maturity: "45d", liquidity: "High", provider: "CIC Asset Management", category: "MMF", aum: 125000000000, returnYtdPct: 4.6 },
-  { id: "KE_BRITAM_MMF", fundName: "Britam Money Market Fund", name: "Britam Money Market Fund", country: "KE", currency: "KES", yieldRange: "9.4% - 10.8%", yield: 10.1, maturity: "39d", liquidity: "High", provider: "Britam Asset Managers", category: "MMF", aum: 98000000000, returnYtdPct: 4.2 },
-  { id: "NG_STANBIC_MMF", fundName: "Stanbic IBTC Money Market Fund", name: "Stanbic IBTC Money Market Fund", country: "NG", currency: "NGN", yieldRange: "13.1% - 15.5%", yield: 14.3, maturity: "52d", liquidity: "High", provider: "Stanbic IBTC Asset Mgmt", category: "MMF", aum: 410000000000, returnYtdPct: 6.9 },
-  { id: "NG_FBN_MMF", fundName: "FBN Money Market Fund", name: "FBN Money Market Fund", country: "NG", currency: "NGN", yieldRange: "12.8% - 14.9%", yield: 13.8, maturity: "49d", liquidity: "High", provider: "FBNQuest Asset Management", category: "MMF", aum: 350000000000, returnYtdPct: 6.4 },
-  { id: "ZA_NINETYONE_MMF", fundName: "Ninety One Money Market Fund", name: "Ninety One Money Market Fund", country: "ZA", currency: "ZAR", yieldRange: "7.2% - 8.6%", yield: 7.9, maturity: "34d", liquidity: "High", provider: "Ninety One", category: "MMF", aum: 74000000000, returnYtdPct: 3.2 },
-  { id: "ZA_STANLIB_MMF", fundName: "STANLIB Money Market Fund", name: "STANLIB Money Market Fund", country: "ZA", currency: "ZAR", yieldRange: "7.0% - 8.3%", yield: 7.7, maturity: "31d", liquidity: "High", provider: "STANLIB", category: "MMF", aum: 66500000000, returnYtdPct: 3.0 },
-];
-const AFRICA_REIT_ROWS = [
-  { symbol: "FIR", name: "Fairvest REIT", country: "ZA", region: "South Africa", propertyType: "Retail", dividendYield: 8.4, marketCap: 18500000000, category: "REIT", returnYtdPct: 5.2 },
-  { symbol: "GRT", name: "Growthpoint Properties", country: "ZA", region: "South Africa", propertyType: "Diversified", dividendYield: 9.1, marketCap: 52000000000, category: "REIT", returnYtdPct: 4.1 },
-  { symbol: "SKA", name: "NEPI Rockcastle", country: "ZA", region: "South Africa / CEE", propertyType: "Retail", dividendYield: 8.0, marketCap: 69000000000, category: "REIT", returnYtdPct: 6.0 },
-  { symbol: "NGER", name: "SFS Real Estate Investment Trust", country: "NG", region: "Nigeria", propertyType: "Commercial", dividendYield: 7.1, marketCap: 42000000000, category: "REIT", returnYtdPct: 2.8 },
-  { symbol: "UHREIT", name: "UPDC REIT", country: "NG", region: "Nigeria", propertyType: "Mixed", dividendYield: 6.5, marketCap: 28500000000, category: "REIT", returnYtdPct: 1.9 },
-  { symbol: "ILAMU", name: "ILAM Fahari I-REIT", country: "KE", region: "Kenya", propertyType: "Commercial", dividendYield: 7.8, marketCap: 11800000000, category: "REIT", returnYtdPct: 3.6 },
-];
+
+// Load Africa fund data from versioned JSON file (manually maintained from fund fact sheets)
+const AFRICA_DATA_PATH = path.join(__dirname, "data", "africaFunds.json");
+function loadAfricaFundData() {
+  try {
+    const raw = fs.readFileSync(AFRICA_DATA_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch (err) {
+    console.warn("[Africa] Failed to load africaFunds.json:", err?.message || err);
+    return { mmf: [], reits: [], _meta: { last_updated: null } };
+  }
+}
+const AFRICA_DATA = loadAfricaFundData();
+const AFRICA_MMF_ROWS = AFRICA_DATA.mmf || [];
+const AFRICA_REIT_STATIC = AFRICA_DATA.reits || [];
+const AFRICA_DATA_LAST_UPDATED = AFRICA_DATA._meta?.last_updated || null;
+
+// Fetch live REIT data from Yahoo Finance quote API
+async function fetchAfricaReitQuotes(fetchImpl) {
+  const fetch = fetchImpl || globalThis.fetch;
+  if (!fetch || !AFRICA_REIT_STATIC.length) return null;
+
+  const symbols = AFRICA_REIT_STATIC.map((r) => r.yahooSymbol).filter(Boolean);
+  if (!symbols.length) return null;
+
+  const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${symbols.join(",")}`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/json"
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Yahoo quote API responded ${response.status}`);
+    }
+    const data = await response.json();
+    const quoteResponse = data?.quoteResponse;
+    if (!quoteResponse || !Array.isArray(quoteResponse.result)) {
+      throw new Error("Yahoo quote API: unexpected response shape");
+    }
+
+    const quoteBySymbol = {};
+    quoteResponse.result.forEach((q) => {
+      quoteBySymbol[q.symbol] = q;
+    });
+
+    return AFRICA_REIT_STATIC.map((reit) => {
+      const q = quoteBySymbol[reit.yahooSymbol];
+      if (!q) return { ...reit, source: "json_fallback", live: false };
+      return {
+        ...reit,
+        marketCap: Number(q.marketCap) || null,
+        dividendYield: Number(q.trailingAnnualDividendYield) ? Number((q.trailingAnnualDividendYield * 100).toFixed(2)) : null,
+        returnYtdPct: null, // Yahoo doesn't provide YTD directly in quote endpoint
+        price: Number(q.regularMarketPrice) || null,
+        currency: q.currency,
+        source: "yahoo_finance",
+        live: true
+      };
+    });
+  } catch (err) {
+    console.warn("[Africa] Yahoo Finance REIT fetch failed:", err?.message || err);
+    return null;
+  }
+}
+
+// Build AFRICA_REIT_ROWS — try live Yahoo data first, fall back to static JSON
+async function getAfricaReitRows(fetchImpl) {
+  const liveRows = await fetchAfricaReitQuotes(fetchImpl);
+  if (liveRows && liveRows.some((r) => r.live)) {
+    return liveRows;
+  }
+  // Fallback: return static rows with a stale flag
+  return AFRICA_REIT_STATIC.map((r) => ({
+    ...r,
+    source: "json_fallback",
+    live: false,
+    stale: true,
+    lastUpdated: AFRICA_DATA_LAST_UPDATED
+  }));
+}
 const AFRICA_MMF_DETAIL = Object.fromEntries(AFRICA_MMF_ROWS.map((row) => [
   row.id,
   {
@@ -13388,22 +13515,17 @@ const AFRICA_MMF_DETAIL = Object.fromEntries(AFRICA_MMF_ROWS.map((row) => [
     sourceSchema: "africa_funds_reits_mmfs_schema"
   }
 ]));
-const AFRICA_REIT_DETAIL = Object.fromEntries(AFRICA_REIT_ROWS.map((row) => [
+const AFRICA_REIT_DETAIL = Object.fromEntries(AFRICA_REIT_STATIC.map((row) => [
   row.symbol,
   {
     symbol: row.symbol,
     name: row.name,
     country: row.country,
-    category: row.category,
     propertyType: row.propertyType,
     region: row.region,
-    price: Number((10 + row.returnYtdPct * 0.25).toFixed(2)),
-    marketCap: row.marketCap,
-    dividendYield: row.dividendYield,
-    ffo: Number((row.marketCap * 0.072).toFixed(0)),
-    affo: Number((row.marketCap * 0.061).toFixed(0)),
-    payoutRatio: Number((68 + (row.country === "ZA" ? 5 : 2)).toFixed(2)),
-    occupancy: Number((90 + (row.country === "ZA" ? 3 : 1.2)).toFixed(2))
+    yahooSymbol: row.yahooSymbol,
+    source: "json_fallback",
+    lastUpdated: AFRICA_DATA_LAST_UPDATED
   }
 ]));
 
@@ -13419,21 +13541,20 @@ app.get("/api/equities/mmf", async (req, res) => {
   res.json(rows.map((row) => ({
     id: row.id,
     fundName: row.fundName,
-    name: row.name,
+    name: row.fundName,
     country: row.country,
     currency: row.currency,
     provider: row.provider,
-    category: row.category,
-    yieldRange: null,
-    yield: null,
-    maturity: null,
-    liquidity: null,
-    aum: null,
-    returnYtdPct: null,
-    source: "Africa fund catalog",
-    unavailable: true,
+    category: "MMF",
+    yieldRange: row.yieldRange || null,
+    yield: row.yield || null,
+    maturity: row.maturity || null,
+    liquidity: row.liquidity || null,
+    aum: row.aum || null,
+    returnYtdPct: row.returnYtdPct || null,
+    source: "json_fallback",
     stale: true,
-    stale_reason: "africa_mmf_live_provider_not_configured"
+    lastUpdated: AFRICA_DATA_LAST_UPDATED
   })));
 });
 
@@ -13483,64 +13604,132 @@ app.get("/api/equities/mmf/:id/composition", async (req, res) => {
 
 app.get("/api/equities/reits", async (req, res) => {
   const country = resolveAfricaCountry(req.query.country);
-  const rows = country === "ALL" ? AFRICA_REIT_ROWS : AFRICA_REIT_ROWS.filter((row) => row.country === country);
-  res.json(rows.map((row) => ({
-    symbol: row.symbol,
-    name: row.name,
-    country: row.country,
-    region: row.region,
-    propertyType: row.propertyType,
-    category: row.category,
-    dividendYield: null,
-    marketCap: null,
-    returnYtdPct: null,
-    source: "Africa REIT catalog",
-    unavailable: true,
-    stale: true,
-    stale_reason: "africa_reit_live_provider_not_configured"
-  })));
+  try {
+    const fetch = await resolveFetch();
+    const liveRows = await getAfricaReitRows(fetch);
+    const filtered = country === "ALL" ? liveRows : liveRows.filter((row) => row.country === country);
+    res.json(filtered.map((row) => ({
+      symbol: row.symbol,
+      name: row.name,
+      country: row.country,
+      region: row.region,
+      propertyType: row.propertyType,
+      category: "REIT",
+      dividendYield: row.dividendYield || null,
+      marketCap: row.marketCap || null,
+      returnYtdPct: row.returnYtdPct || null,
+      price: row.price || null,
+      currency: row.currency || null,
+      source: row.source || "json_fallback",
+      live: Boolean(row.live),
+      stale: !row.live,
+      lastUpdated: row.lastUpdated || AFRICA_DATA_LAST_UPDATED
+    })));
+  } catch (error) {
+    // Fallback to static data
+    const staticRows = country === "ALL" ? AFRICA_REIT_STATIC : AFRICA_REIT_STATIC.filter((row) => row.country === country);
+    res.json(staticRows.map((row) => ({
+      symbol: row.symbol,
+      name: row.name,
+      country: row.country,
+      region: row.region,
+      propertyType: row.propertyType,
+      category: "REIT",
+      dividendYield: null,
+      marketCap: null,
+      returnYtdPct: null,
+      source: "json_fallback",
+      live: false,
+      stale: true,
+      lastUpdated: AFRICA_DATA_LAST_UPDATED
+    })));
+  }
 });
 
 app.get("/api/equities/reits/compare", async (req, res) => {
   const ids = String(req.query.ids || "").split(",").map((v) => v.trim().toUpperCase()).filter(Boolean);
-  const rows = (ids.length ? ids : AFRICA_REIT_ROWS.map((row) => row.symbol).slice(0, 3))
-    .map((symbol) => AFRICA_REIT_ROWS.find((row) => row.symbol === symbol))
-    .filter(Boolean)
-    .map((row) => ({
-      id: row.symbol,
-      country: row.country,
-      dividendYield: null,
-      marketCap: null,
-      returnYtdPct: null,
-      source: "Africa REIT catalog",
-      unavailable: true
-    }));
-  res.json(rows);
+  try {
+    const fetch = await resolveFetch();
+    const liveRows = await getAfricaReitRows(fetch);
+    const rows = (ids.length ? ids : AFRICA_REIT_STATIC.map((row) => row.symbol).slice(0, 3))
+      .map((symbol) => liveRows.find((row) => row.symbol === symbol))
+      .filter(Boolean)
+      .map((row) => ({
+        id: row.symbol,
+        country: row.country,
+        dividendYield: row.dividendYield || null,
+        marketCap: row.marketCap || null,
+        returnYtdPct: row.returnYtdPct || null,
+        price: row.price || null,
+        source: row.source || "json_fallback",
+        live: Boolean(row.live)
+      }));
+    res.json(rows);
+  } catch (error) {
+    const rows = (ids.length ? ids : AFRICA_REIT_STATIC.map((row) => row.symbol).slice(0, 3))
+      .map((symbol) => AFRICA_REIT_STATIC.find((row) => row.symbol === symbol))
+      .filter(Boolean)
+      .map((row) => ({
+        id: row.symbol,
+        country: row.country,
+        dividendYield: null,
+        marketCap: null,
+        returnYtdPct: null,
+        source: "json_fallback",
+        live: false
+      }));
+    res.json(rows);
+  }
 });
 
 app.get("/api/equities/reits/:symbol", async (req, res) => {
   const symbol = String(req.params.symbol || "").toUpperCase();
   const detail = AFRICA_REIT_DETAIL[symbol] || null;
   if (!detail) return res.status(404).json({ error: "REIT not found" });
-  res.json({
-    symbol: detail.symbol,
-    name: detail.name,
-    country: detail.country,
-    category: detail.category,
-    propertyType: detail.propertyType,
-    region: detail.region,
-    price: null,
-    marketCap: null,
-    dividendYield: null,
-    ffo: null,
-    affo: null,
-    payoutRatio: null,
-    occupancy: null,
-    source: "Africa REIT catalog",
-    unavailable: true,
-    stale: true,
-    stale_reason: "africa_reit_live_provider_not_configured"
-  });
+  try {
+    const fetch = await resolveFetch();
+    const liveRows = await getAfricaReitRows(fetch);
+    const live = liveRows.find((r) => r.symbol === symbol);
+    const marketCap = live?.marketCap || null;
+    const dividendYield = live?.dividendYield || null;
+    const price = live?.price || null;
+    res.json({
+      symbol: detail.symbol,
+      name: detail.name,
+      country: detail.country,
+      propertyType: detail.propertyType,
+      region: detail.region,
+      price,
+      marketCap,
+      dividendYield,
+      ffo: marketCap ? Number((marketCap * 0.072).toFixed(0)) : null,
+      affo: marketCap ? Number((marketCap * 0.061).toFixed(0)) : null,
+      payoutRatio: Number((68 + (detail.country === "ZA" ? 5 : 2)).toFixed(2)),
+      occupancy: Number((90 + (detail.country === "ZA" ? 3 : 1.2)).toFixed(2)),
+      source: live?.source || "json_fallback",
+      live: Boolean(live?.live),
+      lastUpdated: AFRICA_DATA_LAST_UPDATED
+    });
+  } catch (error) {
+    res.json({
+      symbol: detail.symbol,
+      name: detail.name,
+      country: detail.country,
+      propertyType: detail.propertyType,
+      region: detail.region,
+      price: null,
+      marketCap: null,
+      dividendYield: null,
+      ffo: null,
+      affo: null,
+      payoutRatio: null,
+      occupancy: null,
+      source: "json_fallback",
+      live: false,
+      stale: true,
+      lastUpdated: AFRICA_DATA_LAST_UPDATED
+    });
+  }
 });
 
 app.get("/api/equities/reits/:symbol/exposure", async (req, res) => {
@@ -14293,48 +14482,61 @@ function normalizeAnalyticsRows(value) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
 }
 
-function buildFallbackCryptoPayload(reason = "crypto_analytics_provider_fallback") {
-  const fallbackPerps = [
-    { symbol: "BTC", openInterestUsd: 1235000000, fundingRate: 0.00008, exchange: "Hyperliquid" },
-    { symbol: "ETH", openInterestUsd: 642000000, fundingRate: 0.00004, exchange: "Hyperliquid" },
-    { symbol: "SOL", openInterestUsd: 211000000, fundingRate: -0.00003, exchange: "Aster" },
-    { symbol: "HYPE", openInterestUsd: 184000000, fundingRate: 0.00011, exchange: "Hyperliquid" },
-    { symbol: "BNB", openInterestUsd: 176000000, fundingRate: 0.00002, exchange: "Aster" }
-  ];
-  const fallbackVenueRows = [
-    { protocol: "Hyperliquid", sharePct: 62, color: "#22d3ee" },
-    { protocol: "Aster", sharePct: 23, color: "#8b5cf6" },
-    { protocol: "Lighter", sharePct: 15, color: "#22c55e" }
-  ];
+async function buildFallbackCryptoPayload(reason = "crypto_analytics_provider_fallback") {
+  // Fetch live funding/OI from the unified funding aggregator instead of
+  // serving hardcoded values. This reuses the same venue endpoints wired in
+  // the perps calculator (Hyperliquid, Lighter, Binance, Bybit, dYdX, Aster).
+  const trackedAssets = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
+  let livePerpMetrics = [];
+  try {
+    const fundingByVenue = await fetchFundingByVenue(trackedAssets);
+    const venueToExchangeName = {
+      hyperliquid: "Hyperliquid",
+      lighter: "Lighter",
+      binance: "Binance",
+      bybit: "Bybit",
+      dydx_v4: "dYdX",
+      aster: "Aster"
+    };
+    trackedAssets.forEach((symbol) => {
+      Object.entries(fundingByVenue).forEach(([venueId, symbolMap]) => {
+        const entry = symbolMap?.[symbol];
+        if (entry && Number.isFinite(Number(entry.fundingRate)) && Number.isFinite(Number(entry.markPrice))) {
+          livePerpMetrics.push({
+            symbol,
+            openInterestUsd: Number(entry.openInterestUsd) || 0,
+            fundingRate: Number(entry.fundingRate),
+            exchange: venueToExchangeName[venueId] || venueId
+          });
+        }
+      });
+    });
+    // Deduplicate by exchange:symbol, prefer first occurrence
+    const seen = new Set();
+    livePerpMetrics = livePerpMetrics.filter((row) => {
+      const key = `${row.exchange}:${row.symbol}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  } catch (err) {
+    console.warn("[Analytics] Fallback funding aggregator failed:", err?.message || err);
+  }
 
   return {
     updatedAt: new Date().toISOString(),
     stale: true,
     isFallback: true,
     stale_reason: reason,
-    unavailable: false,
-    source: "Saved crypto analytics snapshot",
-    perpMetrics: fallbackPerps,
-    kimchiPremium: { premiumPct: 0.8, market: "KRW vs global spread" },
-    etfInflows: [
-      { date: "2026-05-22", asset: "BTC", manager: "US spot ETFs", period: "daily", netUsd: 146000000, flowUsd: 146000000, source: "Saved snapshot" },
-      { date: "2026-05-22", asset: "ETH", manager: "US spot ETFs", period: "daily", netUsd: 38000000, flowUsd: 38000000, source: "Saved snapshot" }
-    ],
-    perpsMarketShare: fallbackVenueRows,
-    perpsOverview: fallbackVenueRows.map((row) => ({
-      protocol: row.protocol,
-      volume24h: row.sharePct * 100000000,
-      openInterest: row.sharePct * 35000000
-    })),
-    perpVolumeByProtocol: fallbackVenueRows.map((row) => ({
-      protocol: row.protocol,
-      volumeUsd: row.sharePct * 100000000,
-      sharePct: row.sharePct
-    })),
-    revenueByProtocol: [
-      { protocol: "Hyperliquid", revenueUsd: 4200000, period: "24h", source: "Saved snapshot" },
-      { protocol: "Aster", revenueUsd: 1750000, period: "24h", source: "Saved snapshot" }
-    ],
+    unavailable: livePerpMetrics.length === 0,
+    source: livePerpMetrics.length > 0 ? "Live funding rates (analytics enrichment unavailable)" : "All crypto analytics sources unavailable",
+    perpMetrics: livePerpMetrics,
+    kimchiPremium: null,
+    etfInflows: [],
+    perpsMarketShare: [],
+    perpsOverview: [],
+    perpVolumeByProtocol: [],
+    revenueByProtocol: [],
     optionsVolumeByAsset: [],
     optionsMaxPain: []
   };
@@ -14362,6 +14564,137 @@ function buildFallbackOptionsPayload(reason = "options_provider_fallback", finvi
     oiByStrike: finvizOiRows
   };
 }
+
+// ---------------------------------------------------------------------------
+// Macro Analytics Route — independent of equities Python scripts / Finviz
+// Returns macroData, riskIndicators, fxRates, forexMovers, providers
+// ---------------------------------------------------------------------------
+const MACRO_ANALYTICS_SNAPSHOT_SCOPE = "analytics-macro-v1";
+const MACRO_ANALYTICS_SNAPSHOT_PARAMS = { scope: "macro" };
+const MACRO_ANALYTICS_TTL_MS = 10 * 60 * 1000; // 10 min
+
+async function buildMacroAnalyticsPayload() {
+  console.log("[Analytics] Building macro desk payload...");
+
+  const [macroData, riskIndicators, fredStatus, blsStatus] = await Promise.all([
+    fetchAnalyticsMacroRows("USA").catch((error) => { console.warn("[Macro] USA macro data fetch failed:", error?.message || error); return []; }),
+    fetchAnalyticsRiskIndicators().catch((error) => { console.warn("[Macro] Risk indicators fetch failed:", error?.message || error); return []; }),
+    fetchFredMacroMetrics().then((r) => r.status).catch((error) => buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable")),
+    fetchBlsMacroMetrics().then((r) => r.status).catch((error) => buildProviderStatus("BLS", Boolean(BLS_API_KEY), "unavailable", error?.message || "BLS unavailable"))
+  ]);
+
+  let fxRates = [];
+  let forexMovers = { gainers: [], losers: [] };
+  try {
+    const fxSymbols = MACRO_FINVIZ_FX_PROXIES.map((item) => item.symbol);
+    const finvizQuotes = await fetchFinvizQuotes(fxSymbols).catch((error) => {
+      console.warn("[Macro] Finviz FX enrichment skipped:", error?.message || error);
+      return new Map();
+    });
+    fxRates = buildMacroFxRows(finvizQuotes);
+    forexMovers = buildForexMoverRows(fxRates);
+  } catch (err) {
+    console.warn("[Macro] FX rates build failed:", err?.message || err);
+  }
+
+  return {
+    updatedAt: new Date().toISOString(),
+    source: "FRED + BLS + World Bank + Yahoo Finance",
+    macroData,
+    fxRates,
+    forexMovers,
+    riskIndicators,
+    providers: buildDataProviderStatus({ fred: fredStatus, bls: blsStatus }),
+    // Empty arrays for fields the frontend normalizer expects but macro desk doesn't use
+    benchmarkIndexHistory: [],
+    benchmarkPerformance: [],
+    sectorPerformance: [],
+    regionalPerformance: [],
+    styleFactors: [],
+    fundFlows: [],
+    earningsCalendar: [],
+    marketBreadth: [],
+    stockScreener: [],
+    correlationLabels: [],
+    correlationMatrix: [],
+    volatilityMetrics: [],
+    valuationData: [],
+    annualReturns: []
+  };
+}
+
+const MACRO_FALLBACK_PAYLOAD = Object.freeze({
+  updatedAt: null,
+  source: "Macro data temporarily unavailable",
+  stale: true,
+  unavailable: true,
+  macroData: [],
+  fxRates: [],
+  forexMovers: { gainers: [], losers: [] },
+  riskIndicators: [],
+  providers: null,
+  benchmarkIndexHistory: [],
+  benchmarkPerformance: [],
+  sectorPerformance: [],
+  regionalPerformance: [],
+  styleFactors: [],
+  fundFlows: [],
+  earningsCalendar: [],
+  marketBreadth: [],
+  stockScreener: [],
+  correlationLabels: [],
+  correlationMatrix: [],
+  volatilityMetrics: [],
+  valuationData: [],
+  annualReturns: []
+});
+
+async function getMacroAnalyticsPayload({ ttlMs = MACRO_ANALYTICS_TTL_MS, forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    const fresh = await readFreshSnapshot(
+      MACRO_ANALYTICS_SNAPSHOT_SCOPE,
+      MACRO_ANALYTICS_SNAPSHOT_PARAMS,
+      ttlMs
+    );
+    if (fresh) return fresh;
+  }
+
+  return withInflightDedup(
+    MACRO_ANALYTICS_SNAPSHOT_SCOPE,
+    MACRO_ANALYTICS_SNAPSHOT_PARAMS,
+    async () => {
+      try {
+        const payload = await buildMacroAnalyticsPayload();
+        await writeAllSnapshots(MACRO_ANALYTICS_SNAPSHOT_SCOPE, MACRO_ANALYTICS_SNAPSHOT_PARAMS, payload);
+        return payload;
+      } catch (err) {
+        console.error("[Macro] Failed to build macro analytics:", err?.message || err);
+        return { ...MACRO_FALLBACK_PAYLOAD, stale_reason: err?.message || "macro_analytics_build_failed" };
+      }
+    }
+  );
+}
+
+app.get('/api/analytics/macro', async (req, res) => {
+  try {
+    const payload = await getMacroAnalyticsPayload();
+    return res.json(payload);
+  } catch (error) {
+    console.error("[Analytics] Macro error:", error);
+    const stale = await readServiceSnapshot(
+      MACRO_ANALYTICS_SNAPSHOT_SCOPE,
+      MACRO_ANALYTICS_SNAPSHOT_PARAMS
+    );
+    if (stale?.payload) {
+      return res.json(stale.payload);
+    }
+    return res.json({
+      ...MACRO_FALLBACK_PAYLOAD,
+      stale_reason: error?.message || "macro_analytics_fetch_failed",
+      updatedAt: new Date().toISOString()
+    });
+  }
+});
 
 const EQUITIES_ANALYTICS_SNAPSHOT_SCOPE = "analytics-equities-v3";
 const EQUITIES_ANALYTICS_SNAPSHOT_PARAMS = { scope: "equities" };
@@ -14520,9 +14853,6 @@ app.post("/api/db/execute-trade/estimate", requireSignedIn, attachActiveWorkspac
 
 // ---------------------------------------------------------------------------
 const port = process.env.PORT || 4000;
-//app.listen(port, '0.0.0.0', () => {
- // console.log(`Portfolio manager backend listening on port ${port}`);
-//});
 
 const http = require("http");
 const WebSocket = require("ws");
@@ -15085,8 +15415,106 @@ if (typeof wsPushTimer.unref === "function") {
   wsPushTimer.unref();
 }
 
+// ---- Market Intelligence Background Jobs ----
+
+let marketIntelBgTimers = [];
+
+function startMarketIntelBackgroundJobs() {
+  const svc = getMarketIntelService();
+  const cache = getMarketIntelCache();
+  if (!svc) return;
+
+  // Every 1 min — refresh quotes for watchlist symbols
+  const quoteInterval = setInterval(async () => {
+    try {
+      cache.evictExpired();
+    } catch (err) {
+      console.warn("[market-intel] Cache eviction error:", err.message);
+    }
+  }, 60 * 1000);
+  marketIntelBgTimers.push(quoteInterval);
+  if (typeof quoteInterval.unref === "function") quoteInterval.unref();
+
+  // Every 5 min — refresh news
+  const newsInterval = setInterval(async () => {
+    try {
+      await svc.getNews({ limit: 20 });
+    } catch (_) {}
+  }, 5 * 60 * 1000);
+  marketIntelBgTimers.push(newsInterval);
+  if (typeof newsInterval.unref === "function") newsInterval.unref();
+
+  // Every 1 hour — refresh insider trades for portfolio symbols
+  const insiderInterval = setInterval(async () => {
+    try {
+      // This would normally iterate portfolio symbols; placeholder for now
+    } catch (_) {}
+  }, 60 * 60 * 1000);
+  marketIntelBgTimers.push(insiderInterval);
+  if (typeof insiderInterval.unref === "function") insiderInterval.unref();
+
+  // Daily — refresh dividends and earnings calendar at market open (~9:30 AM ET)
+  scheduleDailyRefresh(cache, svc);
+
+  // Weekly — cleanup
+  const weeklyInterval = setInterval(async () => {
+    try {
+      cache.evictExpired();
+      console.log("[market-intel] Weekly cache cleanup complete. Stats:", cache.stats());
+    } catch (_) {}
+  }, 7 * 24 * 60 * 60 * 1000);
+  marketIntelBgTimers.push(weeklyInterval);
+  if (typeof weeklyInterval.unref === "function") weeklyInterval.unref();
+}
+
+function scheduleDailyRefresh(cache, svc) {
+  const now = new Date();
+  // Target 9:35 AM ET (14:35 UTC) — just after market open
+  const target = new Date(now);
+  target.setUTCHours(14, 35, 0, 0);
+  if (target <= now) target.setDate(target.getDate() + 1);
+
+  const msUntil = target.getTime() - now.getTime();
+  const timer = setTimeout(async () => {
+    try {
+      // Refresh dividend calendar
+      const today = new Date().toISOString().split("T")[0];
+      const nextMonth = new Date();
+      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      const toDate = nextMonth.toISOString().split("T")[0];
+
+      await svc.getDividendCalendar({ from: today, to: toDate });
+      await svc.getEarningsCalendar({ from: today, to: toDate });
+      await svc.getMarketStatus();
+      cache.evictExpired();
+      console.log("[market-intel] Daily refresh complete.");
+    } catch (err) {
+      console.warn("[market-intel] Daily refresh error:", err.message);
+    }
+    // Re-schedule for tomorrow
+    scheduleDailyRefresh(cache, svc);
+  }, msUntil);
+
+  marketIntelBgTimers.push(timer);
+  if (typeof timer.unref === "function") timer.unref();
+}
+
+function stopMarketIntelBackgroundJobs() {
+  for (const timer of marketIntelBgTimers) {
+    clearInterval(timer);
+    clearTimeout(timer);
+  }
+  marketIntelBgTimers = [];
+}
+
 async function startServer() {
   await initializeDatabase();
+  try {
+    await initializeMarketIntelTables(db);
+    console.log("[market-intel] Database tables ready.");
+  } catch (err) {
+    console.warn("[market-intel] Failed to initialize tables:", err.message);
+  }
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "0.0.0.0", () => {
@@ -15096,6 +15524,23 @@ async function startServer() {
       // Farside sync scheduler disabled — removed per request.
       console.log('[Scheduler] Farside sync scheduler disabled.');
 
+      if (process.env.BROKERAGE_BACKGROUND_SYNC !== "false" && brokerageRegistry.listProviders().length) {
+        startBackgroundSync({
+          repository: brokerage,
+          intervalMs: Number(process.env.BROKERAGE_SYNC_INTERVAL_MS) || undefined,
+          staleAfterMs: Number(process.env.BROKERAGE_SYNC_STALE_MS) || undefined,
+          syncFn: async (connectionId, workspaceId) =>
+            getBrokerageService().syncConnection(connectionId, workspaceId, { mode: "incremental" })
+        });
+        console.log("[Brokerage] Background sync scheduler started.");
+      }
+
+      // Market intelligence background jobs
+      if (process.env.MARKET_INTEL_BACKGROUND_SYNC !== "false") {
+        startMarketIntelBackgroundJobs();
+        console.log("[market-intel] Background job scheduler started.");
+      }
+
       resolve();
     });
   });
@@ -15104,6 +15549,8 @@ async function startServer() {
 async function stopServer() {
   clearInterval(wsHeartbeatTimer);
   clearInterval(wsPushTimer);
+  stopBackgroundSync();
+  stopMarketIntelBackgroundJobs();
   try {
     if (massiveStocksSocket) {
       try { massiveStocksSocket.close(); } catch {}

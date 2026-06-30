@@ -3767,3 +3767,76 @@ body.page-dark-theme #root {
     justify-self: start;
   }
 }
+
+/* ── Light theme overrides for auth/legal pages ────────────────────── */
+body.light-theme-active .auth-v2-shell,
+body.light-theme-active .auth-v2-bg {
+  background: #f8fafc !important;
+}
+
+body.light-theme-active .auth-v2-card {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08) !important;
+}
+
+body.light-theme-active .auth-v2-subtitle,
+body.light-theme-active .auth-v2-bottom-link,
+body.light-theme-active .auth-v2-label,
+body.light-theme-active .auth-v2-footnote,
+body.light-theme-active .auth-v2-rule-list,
+body.light-theme-active .auth-v2-divider,
+body.light-theme-active .auth-v2-terms,
+body.light-theme-active .auth-v2-readonly-row,
+body.light-theme-active .auth-v2-back {
+  color: #475569 !important;
+}
+
+body.light-theme-active .auth-v2-input {
+  background: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme-active .auth-v2-input::placeholder {
+  color: #94a3b8 !important;
+}
+
+body.light-theme-active .auth-v2-btn-primary {
+  background: #0f172a !important;
+  color: #ffffff !important;
+  border-color: #0f172a !important;
+}
+
+body.light-theme-active .auth-v2-btn-ghost,
+body.light-theme-active .auth-v2-link-btn {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+body.light-theme-active .auth-v2-strength-track {
+  background: rgba(15, 23, 42, 0.08) !important;
+}
+
+body.light-theme-active .auth-v2-card h1,
+body.light-theme-active .auth-v2-modal-card h1 {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .auth-v2-signup-rules {
+  background: rgba(241, 245, 249, 0.72) !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+}
+
+body.light-theme-active .auth-v2-rule-list li {
+  color: #475569 !important;
+}
+
+body.light-theme-active .auth-v2-rule-list li.ok {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .auth-v2-rule-list li::before {
+  color: #94a3b8 !important;
+}

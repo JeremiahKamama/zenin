@@ -1,17 +1,21 @@
 // backend/perpsRunner.js
 // Perps Latency Benchmark Runner
 //
-// Measures perps order submission latency across venues. Supports two modes:
-//   - dry_run (default): measures HTTP round-trip to venue API endpoints.
-//     No funded accounts needed. Gives a network-floor baseline.
-//   - live: submits real post-only orders, measures end-to-end confirmation
-//     via WebSocket account feed, then cleans up. Requires funded wallets.
+// Measures perps order submission latency across venues. Dry-run only:
+// probes each venue's public API endpoint and records the HTTP round-trip
+// as a network-floor baseline. No funded accounts, no order placement,
+// no real funds at risk.
+//
+// (A live mode that submits real post-only orders and measures end-to-end
+// confirmation was previously stubbed but never implemented — it would
+// require runner-owned funded credentials and per-venue order adapters.
+// It is intentionally not supported; passing PERPS_BENCH_MODE=live fails
+// loudly so it can't silently degrade into a misleading no-op.)
 //
 // Safety guards:
 //   - Global kill switch (PERPS_BENCH_ENABLED env var, defaults to false)
 //   - Per-venue enable/disable in DB (perps_runner_state table)
 //   - Per-venue daily order budget cap (default 100 samples/day)
-//   - Strict cleanup: cancel any open order after each sample
 //   - All errors logged to perps_runner_state.last_error
 
 const { perpsBench } = require("./database");
@@ -127,9 +131,10 @@ async function runSingleSample(venueId, runId, mode, fetchImpl) {
   try {
     let result;
     if (mode === "live") {
-      // Live order submission — requires venue-specific adapters
-      // TODO: implement per-venue order submission + WS confirmation
-      result = { error: "Live mode not yet implemented for this venue. Use dry_run mode." };
+      // Live mode (real order placement) is intentionally not supported.
+      // See file header. Fail loudly so PERPS_BENCH_MODE=live can't
+      // silently degrade into a misleading no-op sample.
+      throw new Error("Live probe mode is not supported. Use dry_run (PERPS_BENCH_MODE=dry_run).");
     } else {
       // Dry-run: HTTP probe to venue endpoint
       result = await probeVenueHttp(venueId, fetchImpl);
@@ -157,7 +162,10 @@ async function runSingleSample(venueId, runId, mode, fetchImpl) {
 }
 
 async function runContinuousLoop({ rateMs = DEFAULT_RATE_MS, mode = "dry_run", fetchImpl = null } = {}) {
-  const fetch = fetchImpl || (await import("node-fetch")).default || globalThis.fetch;
+  // Prefer the injected impl (tests), then Node's native global fetch
+  // (available in Node 18+, which the project requires), then fall back
+  // to node-fetch only if neither is present.
+  const fetch = fetchImpl || globalThis.fetch || (await import("node-fetch")).default;
   if (!fetch) throw new Error("No fetch implementation available");
 
   const enabled = getEnvBool("PERPS_BENCH_ENABLED", false);

@@ -37,38 +37,15 @@ function buildFallbackCryptoPayload(reason = "crypto_analytics_unavailable") {
     stale: true,
     isFallback: true,
     stale_reason: reason,
-    source: "Saved crypto analytics snapshot",
-    perpMetrics: [
-      { symbol: "BTC", openInterestUsd: 1235000000, fundingRate: 0.00008, exchange: "Hyperliquid" },
-      { symbol: "ETH", openInterestUsd: 642000000, fundingRate: 0.00004, exchange: "Hyperliquid" },
-      { symbol: "SOL", openInterestUsd: 211000000, fundingRate: -0.00003, exchange: "Aster" },
-      { symbol: "HYPE", openInterestUsd: 184000000, fundingRate: 0.00011, exchange: "Hyperliquid" },
-      { symbol: "BNB", openInterestUsd: 176000000, fundingRate: 0.00002, exchange: "Aster" },
-    ],
-    kimchiPremium: { premiumPct: 0.8, market: "KRW vs global spread" },
-    etfInflows: [
-      { date: "2026-05-22", asset: "BTC", manager: "US spot ETFs", period: "daily", netUsd: 146000000, flowUsd: 146000000, source: "Saved snapshot" },
-      { date: "2026-05-22", asset: "ETH", manager: "US spot ETFs", period: "daily", netUsd: 38000000, flowUsd: 38000000, source: "Saved snapshot" },
-    ],
-    perpsMarketShare: [
-      { protocol: "Hyperliquid", sharePct: 62, color: "#22d3ee" },
-      { protocol: "Aster", sharePct: 23, color: "#8b5cf6" },
-      { protocol: "Lighter", sharePct: 15, color: "#22c55e" },
-    ],
-    perpsOverview: [
-      { protocol: "Hyperliquid", volume24h: 6200000000, openInterest: 2170000000 },
-      { protocol: "Aster", volume24h: 2300000000, openInterest: 805000000 },
-      { protocol: "Lighter", volume24h: 1500000000, openInterest: 525000000 },
-    ],
-    perpVolumeByProtocol: [
-      { protocol: "Hyperliquid", volumeUsd: 6200000000, sharePct: 62 },
-      { protocol: "Aster", volumeUsd: 2300000000, sharePct: 23 },
-      { protocol: "Lighter", volumeUsd: 1500000000, sharePct: 15 },
-    ],
-    revenueByProtocol: [
-      { protocol: "Hyperliquid", revenueUsd: 4200000, period: "24h", source: "Saved snapshot" },
-      { protocol: "Aster", revenueUsd: 1750000, period: "24h", source: "Saved snapshot" },
-    ],
+    unavailable: true,
+    source: "Backend unreachable — all crypto analytics sources unavailable",
+    perpMetrics: [],
+    kimchiPremium: null,
+    etfInflows: [],
+    perpsMarketShare: [],
+    perpsOverview: [],
+    perpVolumeByProtocol: [],
+    revenueByProtocol: [],
     optionsVolumeByAsset: [],
     optionsMaxPain: [],
   };
@@ -181,14 +158,14 @@ const EMPTY_COMMODITIES = {
 const COMMODITY_GROUPS = ["all", "energy", "metals", "agriculture", "fertilizers", "industrial", "battery", "soft", "livestock"];
 const COMMODITY_VIEWS = ["price", "flows", "seasonality", "curve", "compare"];
 const COMMODITY_TERMINAL_UNIVERSE = [
-  { symbol: "CL", name: "WTI Crude", group: "energy", region: "global", unit: "USD/bbl", latestPrice: 76.24, dailyChangePct: -2.48, ytdChangePct: -6.2, oneYearReturnPct: -8.4, curveStructure: "Backwardation", inventory: "Low", demand: "Firming", risk: "Medium", source: "Yahoo Finance + EIA" },
-  { symbol: "BZ", name: "Brent Crude", group: "energy", region: "global", unit: "USD/bbl", latestPrice: 80.85, dailyChangePct: -2.22, ytdChangePct: -5.1, oneYearReturnPct: -7.6, curveStructure: "Backwardation", inventory: "Low", demand: "Stable", risk: "Medium", source: "Yahoo Finance + EIA" },
-  { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", unit: "USD/MMBtu", latestPrice: 2.31, dailyChangePct: 21.6, ytdChangePct: -18.6, oneYearReturnPct: -12.7, curveStructure: "Contango", inventory: "Very Low", demand: "Weak", risk: "High", source: "Yahoo Finance + EIA" },
-  { symbol: "GC", name: "Gold", group: "metals", region: "global", unit: "USD/oz", latestPrice: 2358.4, dailyChangePct: 1.56, ytdChangePct: 2.3, oneYearReturnPct: 14.2, curveStructure: "Carry", inventory: "Normal", demand: "Stable", risk: "Low", source: "FRED + Yahoo Finance" },
-  { symbol: "SI", name: "Silver", group: "metals", region: "global", unit: "USD/oz", latestPrice: 30.12, dailyChangePct: 6.94, ytdChangePct: 14.2, oneYearReturnPct: 18.4, curveStructure: "Carry", inventory: "High", demand: "Stable", risk: "Low", source: "FRED + Yahoo Finance" },
-  { symbol: "HG", name: "Copper", group: "industrial", region: "global", unit: "USD/mt", latestPrice: 9821, dailyChangePct: -1.83, ytdChangePct: -8.9, oneYearReturnPct: -11.2, curveStructure: "Backwardation", inventory: "Low", demand: "Improving", risk: "Medium", source: "Yahoo Finance + LME" },
-  { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: 6.45, dailyChangePct: 1.55, ytdChangePct: 6.1, oneYearReturnPct: -2.8, curveStructure: "Weather bid", inventory: "Above Avg", demand: "Weak", risk: "High", source: "Yahoo Finance + USDA" },
-  { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: 12.37, dailyChangePct: 1.21, ytdChangePct: 7.4, oneYearReturnPct: 6.7, curveStructure: "Carry", inventory: "High", demand: "Neutral", risk: "Medium", source: "Yahoo Finance + USDA" },
+  { symbol: "CL", name: "WTI Crude", group: "energy", region: "global", unit: "USD/bbl", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "BZ", name: "Brent Crude", group: "energy", region: "global", unit: "USD/bbl", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "NG", name: "Natural Gas", group: "energy", region: "usa", unit: "USD/MMBtu", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "GC", name: "Gold", group: "metals", region: "global", unit: "USD/oz", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "SI", name: "Silver", group: "metals", region: "global", unit: "USD/oz", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "HG", name: "Copper", group: "industrial", region: "global", unit: "USD/mt", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "ZW", name: "Wheat", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
+  { symbol: "ZS", name: "Soybeans", group: "agriculture", region: "global", unit: "USD/bu", latestPrice: null, dailyChangePct: null, ytdChangePct: null, oneYearReturnPct: null, curveStructure: null, inventory: null, demand: null, risk: null, source: null },
 ];
 
 const COMMODITY_STRESS_FALLBACKS = {
@@ -1222,7 +1199,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       setLoading((prev) => ({ ...prev, [activeTab]: shouldBlockRender }));
       setRefreshing((prev) => ({ ...prev, [activeTab]: !shouldBlockRender }));
       setErrors((prev) => ({ ...prev, [activeTab]: "" }));
-      const endpointTab = activeTab === "macro" ? "equities" : activeTab;
+      const endpointTab = activeTab;
 
       try {
         const payload = await fetchApiJson(backendUrl, `/analytics/${endpointTab}`, {

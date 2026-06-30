@@ -371,7 +371,7 @@ function buildDevFullAccessUser() {
   return {
     id: "dev-full-access",
     email: "dev@zenin.test",
-    displayName: "Local Full Access",
+    displayName: "Developer",
     currentPlan: "desk",
     currentBillingCycle: "monthly",
     isAdmin: true,
@@ -3306,7 +3306,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   const isSidebarVisuallyCollapsed = isSidebarCollapsed;
   // Live viewport metrics drive auto-collapse on resize + hamburger visibility on every render.
   const viewportWidth = useViewportWidth();
-  const isDesktopWideEnoughForExpandedRail = useMediaQuery("(min-width: 1100px)");
+  const isDesktopWideEnoughForExpandedRail = useMediaQuery("(min-width: 961px)");
   // Auto-collapse on laptop/tablet without losing the user's manual override:
   //   * If the viewport shrinks below the breakpoint, force the rail collapsed.
   //   * If it grows back above the breakpoint, automatically expand again,
@@ -3346,7 +3346,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
-      if (devFullAccess) return "Local Full Access";
+      if (devFullAccess) return "Developer";
       if (!parsed) return getGuestWorkspaceLabel();
       if (isAdminUser(parsed)) return "Admin";
       return formatPlanLabel(parsed?.currentPlan, parsed?.currentBillingCycle);
@@ -3399,7 +3399,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
-      if (devFullAccess) return "Local Full Access";
+      if (devFullAccess) return "Developer";
       return String(parsed?.displayName || "").trim();
     } catch {
       return "";
@@ -3832,7 +3832,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         setAuthDisplayName(devUser.displayName);
         setCurrentPlan("desk");
         setCurrentBillingCycle("monthly");
-        setAccountPlanLabel("Local Full Access");
+        setAccountPlanLabel("Developer");
         setProfileSecurity(profileSecurityFromUser(devUser, devUser.email));
         setActiveWorkspace(null);
         setWorkspaceMembers([]);
@@ -5993,6 +5993,21 @@ const handleOptionTradeClosed = async (tradeId) => {
     ];
     return [...sectionCommands, ...actionCommands];
   }, [accessibleSections, isSidebarVisuallyCollapsed]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Alt+1–9 global shortcuts: jump to sections 1–9 (Home..Journal)
+  useEffect(() => {
+    const handler = (event) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      const digit = Number(event.key);
+      if (!Number.isFinite(digit) || digit < 1 || digit > 9) return;
+      event.preventDefault();
+      const visible = accessibleSections.filter((sec) => sections.includes(sec));
+      const target = visible[digit - 1];
+      if (target) openWorkspaceSection(target);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [accessibleSections, openWorkspaceSection]); // eslint-disable-line react-hooks/exhaustive-deps
   const usesWorkspaceShell = routeState.type !== "company";
   const shouldRenderGuestPreview = isExplicitGuestMode && (activeSection === "Home" || Boolean(GUEST_PREVIEW_BY_SECTION[activeSection]));
   const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
@@ -6426,6 +6441,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   onLoadAlertAssignments={loadWorkspaceAlertAssignments}
                   onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
                   currentUserId={authUserId}
+                  hasDeskFeatureAccess={hasDeskFeatureAccess}
                 />
               </>
             ) : (
@@ -6564,6 +6580,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               onLoadAlertAssignments={loadWorkspaceAlertAssignments}
               onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
               currentUserId={authUserId}
+              hasDeskFeatureAccess={hasDeskFeatureAccess}
             />
               </>
             )}
@@ -8086,7 +8103,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           />
                         </label>
                         <label className="settings-toggle-row">
-                          <span>Research updates</span>
+                          <span>Order executions</span>
                           <input
                             type="checkbox"
                             checked={preferences.notifyOrderEvents}

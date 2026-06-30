@@ -108,9 +108,9 @@ function LatencyMonitorTab() {
   if (!data?.runnerDeployed && (!data?.venues || data.venues.length === 0)) {
     return (
       <GuidedEmptyState
-        eyebrow="Phase 5"
-        title="Zenin Probe runner not deployed"
-        description="Latency monitoring requires the benchmark runner. Deploy the perps-bench-runner as a Render Background Worker with PERPS_BENCH_ENABLED=true, then enable venues below."
+        eyebrow="Bench runner"
+        title="Zenin Probe runner not enabled"
+        description="Latency monitoring requires the benchmark runner. Enable the perps-bench-runner (Render Background Worker) with PERPS_BENCH_ENABLED=true, then enable at least one venue below."
         steps={[
           "Deploy perps-bench-runner (Render Background Worker, node perps-bench-runner.js)",
           "Set PERPS_BENCH_ENABLED=true and PERPS_BENCH_MODE=dry_run",
@@ -197,7 +197,7 @@ function LatencyMonitorTab() {
       )}
 
       <div className="perps-methodology-note">
-        <strong>Methodology:</strong> In dry-run mode, measures HTTP round-trip to venue API endpoints (network-floor baseline). In live mode, submits post-only BTC orders via venue's preferred transport (WS where supported) and measures end-to-end confirmation via private account feed. Cleanup cancel runs outside the measured window.
+        <strong>Methodology:</strong> Dry-run only. Probes each venue's public API endpoint and records the HTTP round-trip as a network-floor baseline — no order placement, no funded accounts. Use these numbers as a relative venue-to-venue comparison, not an absolute order-confirmation latency.
       </div>
     </div>
   );

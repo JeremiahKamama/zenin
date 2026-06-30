@@ -14,8 +14,8 @@
     "migrate:admin-workspace": "node scripts/run-admin-workspace-migration.js",
     "security:workspace-smoke": "node scripts/security-workspace-smoke.js",
     "test:integration": "node --test test/integration/*.test.js",
-    "test:unit": "node --test test/unit/*.test.js",
-    "test": "node --test test/unit/*.test.js"
+    "test:unit": "node --test $(find test/unit -name '*.test.js' | tr '\\n' ' ')",
+    "test": "node --test $(find test/unit -name '*.test.js' | tr '\\n' ' ')"
   },
   "dependencies": {
     "@simplewebauthn/server": "^9.0.3",
@@ -34,6 +34,7 @@
     "qrcode": "^1.5.4",
     "qs": "^6.15.2",
     "resend": "^6.12.4",
+    "snaptrade-typescript-sdk": "^10.0.17",
     "svix": "^1.95.1",
     "telegram": "^2.26.22",
     "ws": "^8.21.0",

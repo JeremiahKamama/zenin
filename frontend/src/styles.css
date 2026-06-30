@@ -83,7 +83,7 @@
 
   /* ── Sidebar metrics ────────────────────────────────────────────  */
   --sidebar-width:        270px;
-  --sidebar-width-collapsed: 86px;
+  --sidebar-width-collapsed: 100px;
   --sidebar-collapse-bp:  1100px;
 
   font-family: var(--font-brand);
@@ -367,7 +367,8 @@ select option {
 .journal-debrief-table tbody tr:nth-child(even),
 .journal-report-table tbody tr:nth-child(even),
 .options-calculation-history-table tbody tr:nth-child(even),
-.whale-trades-table tbody tr:nth-child(even) {
+.whale-trades-table tbody tr:nth-child(even),
+.home-exec-log-table tbody tr:nth-child(even) {
   background: rgba(255, 255, 255, 0.018);
 }
 /* Sticky first column — keeps the symbol/ticker visible during horizontal scroll on wide tables. */
@@ -396,7 +397,9 @@ select option {
 .perps-data-table thead th:first-child,
 .perps-data-table tbody td:first-child,
 .whale-trades-table thead th:first-child,
-.whale-trades-table tbody td:first-child {
+.whale-trades-table tbody td:first-child,
+.home-exec-log-table thead th:first-child,
+.home-exec-log-table tbody td:first-child {
   position: sticky;
   left: 0;
   background: var(--color-surface-card-strong);
@@ -411,7 +414,8 @@ select option {
 .journal-debrief-table tbody tr:nth-child(even) td:first-child,
 .journal-report-table tbody tr:nth-child(even) td:first-child,
 .options-calculation-history-table tbody tr:nth-child(even) td:first-child,
-.whale-trades-table tbody tr:nth-child(even) td:first-child {
+.whale-trades-table tbody tr:nth-child(even) td:first-child,
+.home-exec-log-table tbody tr:nth-child(even) td:first-child {
   background: var(--color-surface-card);
 }
 .portfolio-v2-table td.num,
@@ -1065,7 +1069,7 @@ button {
 }
 
 .sidebar.collapsed {
-  width: 86px;
+  width: var(--sidebar-width-collapsed);
   overflow-x: hidden;
 }
 
@@ -1075,13 +1079,20 @@ button {
 .sidebar.collapsed .nav-badge,
 .sidebar.collapsed .sidebar-footer-email,
 .sidebar.collapsed .sidebar-plan-label,
-.sidebar.collapsed .sidebar-account-chevron {
+.sidebar.collapsed .sidebar-account-chevron,
+.sidebar.collapsed .sidebar-section-header {
   display: none;
 }
 
 .sidebar.collapsed .nav-btn {
   justify-content: center;
   padding: 10px;
+}
+
+/* Collapsed-sidebar active indicator — left accent bar since there's no label. */
+.sidebar.collapsed .nav-btn.active {
+  border-left: 3px solid var(--color-accent);
+  padding-left: 7px;
 }
 
 .sidebar-header {
@@ -1634,8 +1645,7 @@ body.dark-theme .sidebar-footer {
 .sidebar-theme-row:focus-visible,
 .sidebar-footer:focus-visible,
 .mobile-hamburger-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(7, 11, 20, 0.94), 0 0 0 4px rgba(96, 165, 250, 0.85);
+  outline: 2px solid var(--color-accent);
 }
 
 .sidebar-overview-card {
@@ -15722,6 +15732,22 @@ body:not(.light-theme-active) .indicator-metric-modal {
   font-family: var(--font-mono);
 }
 
+/* Watchlist dense mode — hides secondary columns and tightens row padding. */
+.watchlist-table--dense thead th:nth-child(4),
+.watchlist-table--dense thead th:nth-child(6),
+.watchlist-table--dense thead th:nth-child(7),
+.watchlist-table--dense tbody td:nth-child(4),
+.watchlist-table--dense tbody td:nth-child(6),
+.watchlist-table--dense tbody td:nth-child(7) {
+  display: none;
+}
+.watchlist-table--dense th,
+.watchlist-table--dense td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: var(--fs-xs);
+}
+
 .category-tabs.compact button,
 .watchlist-theme-strip .theme-pill {
   min-height: 34px;
@@ -20490,15 +20516,17 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-signal-row.warn {
-  border-left: 2px solid #f59e0b;
+  border-left: 3px solid var(--color-amber);
 }
-
 .home-exec-signal-row.info {
-  border-left: 2px solid #00d4ff;
+  border-left: 3px solid var(--color-accent);
 }
-
-.home-exec-signal-row.risk {
-  border-left: 2px solid #ef4444;
+.home-exec-signal-row.risk,
+.home-exec-signal-row.critical {
+  border-left: 3px solid var(--color-danger);
+}
+.home-exec-signal-row.opportunity {
+  border-left: 3px solid var(--color-success);
 }
 
 .home-exec-signal-main {
@@ -28017,6 +28045,16 @@ body.light-theme-active .sidebar.premium-operator-console {
 
 .sidebar.sidebar-overhaul-v2.collapsed .sidebar-utility-row:hover {
   background: rgba(255, 255, 255, 0.035);
+}
+
+.sidebar.sidebar-overhaul-v2.collapsed .sidebar-utility-left {
+  flex: 0;
+  justify-content: center;
+  gap: 0;
+}
+
+.sidebar.sidebar-overhaul-v2.collapsed .sidebar-account-row {
+  justify-content: center;
 }
 
 .sidebar.sidebar-overhaul-v2.collapsed .sidebar-theme-icon,
@@ -39786,6 +39824,13 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   color: #cbd5e1;
   text-align: left;
   cursor: pointer;
+  min-width: 0;
+}
+
+.journal-decision-templates button {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .guest-mission-steps button.active,
@@ -41950,6 +41995,29 @@ body.page-dark-theme .search-type-buttons {
   border-bottom: 1px solid rgba(148, 163, 184, 0.06);
 }
 
+/* ── DataAgeChip — staleness indicator ──────────────────────────── */
+.data-age-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+.data-age-chip i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.data-age-chip--fresh { color: var(--color-success); }
+.data-age-chip--stale { color: var(--color-amber); }
+.data-age-chip--hazard { color: var(--color-danger); }
+
 /* ── Phase 4: Retro-fit the 5-breakpoint responsive pattern ────────── */
 /* The laptop-intermediate range (1024–1280) had a gap where dense tables
    fought a 270px sidebar. These rules collapse right rails + reduce column
@@ -42116,6 +42184,17 @@ body.page-dark-theme .search-type-buttons {
     overflow-x: auto;
     scrollbar-width: thin;
   }
+  /* Predictions — category tab strip scrolls horizontally. */
+  .prediction-desk-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .prediction-desk-tabs::-webkit-scrollbar { height: 4px; }
+  .prediction-desk-tabs::-webkit-scrollbar-thumb {
+    background: var(--color-border-medium);
+    border-radius: 2px;
+  }
   /* Decision kanban — horizontal scroll on small screens. */
   .decision-threads-board {
     display: flex;
@@ -42152,4 +42231,115 @@ body.page-dark-theme .search-type-buttons {
   .options-equity-ladder-scroll {
     max-height: 50vh;
   }
+}
+
+/* ── Mobile touch-target minimums (44px WCAG-compliant) ─────────── */
+@media (pointer: coarse) {
+  .nav-btn,
+  .category-tabs button,
+  .settings-category-btn,
+  .portfolio-command-tab,
+  .home-exec-link,
+  .journal-btn,
+  button.settings-mini-btn,
+  button.settings-primary-btn,
+  .decision-threads-column-head,
+  .tax-workbench-idea-apply,
+  .prediction-show-more-btn {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .watchlist-header-actions button { min-height: 44px; padding: 10px 12px; }
+  .close-btn { min-width: 44px; min-height: 44px; }
+}
+@media (max-width: 640px) {
+  .mobile-hamburger-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 12px;
+  }
+}
+
+/* ── Light theme catch-ups ─────────────────────────────────────────── */
+/* ponytail: targeted overrides for base rules that ship dark colors   */
+/* unguarded. Keep this block at the end so it wins by source order.   */
+body.light-theme-active .topbar,
+body.light-theme-active .top-nav,
+body.light-theme-active .app-topbar {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-bottom-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+body.light-theme-active .connected-account-trust-item {
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+body.light-theme-active .connected-account-trust-title strong {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .connected-account-trust-meta {
+  color: #64748b !important;
+}
+
+body.light-theme-active .provider-trust-pill-verified {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+body.light-theme-active .provider-trust-pill-unverified {
+  color: #a16207;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.26);
+}
+
+body.light-theme-active .provider-trust-pill-rejected {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.28);
+}
+
+body.light-theme-active .analytics-desk-command {
+  background: rgba(255, 255, 255, 0.96) !important;
+}
+
+body.light-theme-active .analytics-desk-command strong {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-desk-command em {
+  color: #64748b !important;
+}
+
+body.light-theme-active .analytics-desk-command span,
+body.light-theme-active .analytics-desk-command.amber span,
+body.light-theme-active .analytics-desk-command.orange span,
+body.light-theme-active .analytics-desk-command.cyan span {
+  color: #475569 !important;
+}
+
+body.light-theme-active .analytics-equities-toolbar-pill,
+body.light-theme-active .analytics-equities-toolbar-btn {
+  background: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+body.light-theme-active .analytics-equities-toolbar-pill span {
+  color: #64748b !important;
+}
+
+body.light-theme-active .analytics-equities-toolbar-pill strong {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-equities-toolbar-btn {
+  color: #0f172a !important;
+}
+
+body.light-theme-active .analytics-equities-toolbar-btn:hover,
+body.light-theme-active .analytics-equities-toolbar-btn:focus-visible {
+  color: #0284c7 !important;
+  border-color: rgba(2, 132, 199, 0.34) !important;
 }

@@ -97,9 +97,8 @@ EXPLICIT_MAP = {
     "ALI=F":  "ALI=F",
     "ZNC=F":  "ZNC=F",
     "LED=F":  "LED=F",
-    "TIN=F":  "TIN=F",
     "TIO=F":  "TIO=F",
-    "NI=F":   "NI=F",
+    "JJN":    "JJN",
     "ZO=F":   "ZO=F",
     "ZR=F":   "ZR=F",
     "ZL=F":   "ZL=F",
@@ -273,14 +272,28 @@ def _fetch_from_yahoo_chart(yf_symbol: str):
 def _fetch_single(yf_symbol: str):
     try:
         hist = yf.Ticker(yf_symbol).history(period="5d")
-        if hist.empty:
-            return _fetch_from_yahoo_chart(yf_symbol)
-        price, change_pct = _price_and_change(hist["Close"].dropna())
+        if not hist.empty:
+            price, change_pct = _price_and_change(hist["Close"].dropna())
+            if price is not None:
+                return price, change_pct
+    except Exception:
+        pass
+    price, change_pct = _fetch_from_yahoo_chart(yf_symbol)
+    if price is not None:
+        return price, change_pct
+    try:
+        info = yf.Ticker(yf_symbol).info
+        price = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
+        prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
         if price is not None:
+            price = float(price)
+            change_pct = None
+            if prev and float(prev):
+                change_pct = round(((price - float(prev)) / float(prev)) * 100, 4)
             return price, change_pct
     except Exception:
         pass
-    return _fetch_from_yahoo_chart(yf_symbol)
+    return None, None
 
 def fetch_prices(requests: list) -> dict:
     if not requests:

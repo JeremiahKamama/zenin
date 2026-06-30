@@ -848,7 +848,7 @@ export function OptionsCalculator({   spotPrice = 0,
 
       {savedCalculationsOpen ? (
         <div className="modal-overlay" onClick={() => setSavedCalculationsOpen(false)}>
-          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()} style={{ width: "95%", maxWidth: "1200px", padding: "24px", overflowX: "hidden" }}>
+          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()} style={{ width: "95%", maxWidth: "1200px", padding: "24px", overflowX: "auto" }}>
             <div className="options-calculation-history-head">
               <div>
                 <p className="options-calculation-history-kicker">Saved Calculations</p>

@@ -2169,7 +2169,7 @@ function JournalDecisionLayer({
           <button type="button" className="journal-btn secondary" onClick={onJumpToReview}>Review queue</button>
         </div>
       </div>
-      <div className="journal-decision-score">
+      <div className="journal-decision-score" title="Weighted average of rule adherence, emotional discipline, and P&L sign (positive P&L = 72%, negative = 48%).">
         <span>Decision quality</span>
         <strong>{Number.isFinite(qualityScore) ? `${qualityScore}%` : "—"}</strong>
         <small>{reviewQueueItems.length ? `${reviewQueueItems.length} follow-up${reviewQueueItems.length === 1 ? "" : "s"} waiting` : "No urgent follow-ups"}</small>

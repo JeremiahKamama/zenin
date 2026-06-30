@@ -61,9 +61,18 @@ export function Watchlist({
   onLoadAlertAssignments,
   onUpdateAlertAssignment,
   currentUserId = "",
+  hasDeskFeatureAccess = false,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("list"); // "grid" or "list"
+  const [isDense, setIsDense] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("zenin_watchlist_dense") === "1";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("zenin_watchlist_dense", isDense ? "1" : "0");
+  }, [isDense]);
   const [selectedIntentAsset, setSelectedIntentAsset] = useState(null);
   const [alertActionBusy, setAlertActionBusy] = useState({});
   const [earningsItems, setEarningsItems] = useState([]);
@@ -709,6 +718,19 @@ useEffect(() => {
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
               </button>
+              <button
+                type="button"
+                className={isDense ? "active" : ""}
+                onClick={() => {
+                  const next = !isDense;
+                  setIsDense(next);
+                  if (next) setViewMode("list");
+                }}
+                title={isDense ? "Normal density" : "Compact (hide secondary columns)"}
+                aria-pressed={isDense}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="6" x2="4" y2="18"></line><line x1="10" y1="6" x2="10" y2="18"></line><line x1="16" y1="6" x2="20" y2="6"></line><line x1="16" y1="12" x2="20" y2="12"></line><line x1="16" y1="18" x2="20" y2="18"></line></svg>
+              </button>
             </InlineControlGroup>
             <label className="watchlist-alert-threshold" title="Day change (%) above which a name flags as a Review alert.">
               <span>Alert&nbsp;≥</span>
@@ -913,7 +935,7 @@ useEffect(() => {
                     />
                   ) : (
                     <div className="watchlist-table-wrap">
-                      <table className="watchlist-table">
+                      <table className={`watchlist-table${isDense ? " watchlist-table--dense" : ""}`}>
                         <thead>
                           <tr>
                             <th
@@ -1237,11 +1259,13 @@ useEffect(() => {
       )}
       </section>
 
-      <SharedWatchlistWorkspacePanel
-        activeCategory={activeCategory}
-        activeTheme={activeTheme}
-        assets={displayedAssets}
-      />
+      {hasDeskFeatureAccess ? (
+        <SharedWatchlistWorkspacePanel
+          activeCategory={activeCategory}
+          activeTheme={activeTheme}
+          assets={displayedAssets}
+        />
+      ) : null}
 
       {selectedIndicatorMetric ? (
         <IndicatorMetricModal

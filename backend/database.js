@@ -2266,6 +2266,125 @@ async function initializeDatabase() {
       `, [finalEntry, finalOpenedAt, row.id]);
     }
 
+    // ── Brokerage domain tables ─────────────────────────────────────────────
+    // Provider-independent persistence for the brokerage abstraction layer.
+    // See backend/brokerage/README.md for schema rationale.
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS brokerage_connections (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        provider_user_ref TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
+        last_synced_at TIMESTAMPTZ,
+        last_sync_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        provider_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id, workspace_id, provider, provider_user_ref)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brokerage_connections_workspace_user
+        ON brokerage_connections (workspace_id, user_id, provider);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS brokerage_accounts (
+        id SERIAL PRIMARY KEY,
+        connection_id INTEGER NOT NULL REFERENCES brokerage_connections(id) ON DELETE CASCADE,
+        provider_account_id TEXT NOT NULL,
+        institution_name TEXT NOT NULL DEFAULT '',
+        account_type TEXT NOT NULL DEFAULT 'other',
+        masked_number TEXT,
+        name TEXT NOT NULL DEFAULT '',
+        is_meta_only BOOLEAN NOT NULL DEFAULT FALSE,
+        last_synced_at TIMESTAMPTZ,
+        provider_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(connection_id, provider_account_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brokerage_accounts_connection
+        ON brokerage_accounts (connection_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS brokerage_holdings (
+        id SERIAL PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES brokerage_accounts(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        asset_type TEXT NOT NULL DEFAULT 'equity',
+        quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+        average_entry_price DOUBLE PRECISION,
+        current_price DOUBLE PRECISION,
+        market_value DOUBLE PRECISION,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        opened_at TIMESTAMPTZ,
+        provider_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        as_of TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(account_id, symbol, asset_type, currency)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brokerage_holdings_account
+        ON brokerage_holdings (account_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS brokerage_transactions (
+        id SERIAL PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES brokerage_accounts(id) ON DELETE CASCADE,
+        provider_tx_id TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'other',
+        side TEXT,
+        symbol TEXT,
+        quantity DOUBLE PRECISION,
+        unit_price DOUBLE PRECISION,
+        notional DOUBLE PRECISION,
+        fee DOUBLE PRECISION,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        description TEXT,
+        executed_at TIMESTAMPTZ NOT NULL,
+        provider_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(account_id, provider_tx_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brokerage_transactions_account
+        ON brokerage_transactions (account_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brokerage_transactions_executed
+        ON brokerage_transactions (account_id, executed_at DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS brokerage_provider_metadata (
+        id SERIAL PRIMARY KEY,
+        provider TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(provider, key)
+      );
+    `);
+
     await client.query("COMMIT");
     console.log("PostgreSQL database initialized.");
   } catch (error) {
@@ -8732,11 +8851,13 @@ const perpsBench = {
       ON CONFLICT (venue_id) DO UPDATE SET
         is_enabled = COALESCE($2, perps_runner_state.is_enabled),
         is_running = COALESCE($3, perps_runner_state.is_running),
-        orders_today = COALESCE($4, perps_runner_state.orders_today),
         daily_order_budget = COALESCE($5, perps_runner_state.daily_order_budget),
         last_error = COALESCE($6, perps_runner_state.last_error),
         last_reset_date = CASE WHEN perps_runner_state.last_reset_date < CURRENT_DATE THEN CURRENT_DATE ELSE perps_runner_state.last_reset_date END,
-        orders_today = CASE WHEN perps_runner_state.last_reset_date < CURRENT_DATE THEN 0 ELSE COALESCE($4, perps_runner_state.orders_today) END,
+        orders_today = CASE
+          WHEN perps_runner_state.last_reset_date < CURRENT_DATE THEN COALESCE($4, 0)
+          ELSE COALESCE($4, perps_runner_state.orders_today)
+        END,
         updated_at = NOW()
       RETURNING *;
     `, [
@@ -8764,6 +8885,314 @@ const perpsBench = {
   }
 };
 
+// ── Brokerage domain repository ─────────────────────────────────────────────
+// Provider-independent persistence. Methods follow the same namespace-with-methods
+// pattern as userWorkspace / portfolio / etc.
+
+const brokerage = {
+  // ── Connections ──────────────────────────────────────────────────────────
+
+  connections: {
+    /**
+     * List brokerage connections for a workspace.
+     * @param {number} workspaceId
+     * @returns {Promise<Object[]>}
+     */
+    list: async (workspaceId) => {
+      const result = await pool.query(`
+        SELECT
+          id, user_id AS "userId", workspace_id AS "workspaceId",
+          provider, provider_user_ref AS "providerUserRef", status,
+          capabilities, last_synced_at AS "lastSyncedAt",
+          last_sync_meta AS "lastSyncMeta", provider_meta AS "providerMeta",
+          created_at AS "createdAt", updated_at AS "updatedAt"
+        FROM brokerage_connections
+        WHERE workspace_id = $1
+        ORDER BY created_at DESC;
+      `, [Number(workspaceId)]);
+      return result.rows;
+    },
+
+    /**
+     * Find a connection by Zenin id + workspace scope.
+     * @param {number} id
+     * @param {number} workspaceId
+     * @returns {Promise<Object|null>}
+     */
+    getById: async (id, workspaceId) => {
+      const result = await pool.query(`
+        SELECT
+          id, user_id AS "userId", workspace_id AS "workspaceId",
+          provider, provider_user_ref AS "providerUserRef", status,
+          capabilities, last_synced_at AS "lastSyncedAt",
+          last_sync_meta AS "lastSyncMeta", provider_meta AS "providerMeta",
+          created_at AS "createdAt", updated_at AS "updatedAt"
+        FROM brokerage_connections
+        WHERE id = $1 AND workspace_id = $2;
+      `, [Number(id), Number(workspaceId)]);
+      return result.rows[0] || null;
+    },
+
+    /**
+     * Upsert a connection (idempotent on userId+provider+providerUserRef).
+     * @param {Object} payload
+     * @param {number} payload.userId
+     * @param {number} payload.workspaceId
+     * @param {string} payload.provider
+     * @param {string} payload.providerUserRef
+     * @param {string} [payload.status]
+     * @param {Object} [payload.capabilities]
+     * @returns {Promise<Object>}
+     */
+    upsert: async (payload) => {
+      const result = await pool.query(`
+        INSERT INTO brokerage_connections
+          (user_id, workspace_id, provider, provider_user_ref, status, capabilities, provider_meta)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+        ON CONFLICT (user_id, workspace_id, provider, provider_user_ref)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          capabilities = EXCLUDED.capabilities,
+          provider_meta = EXCLUDED.provider_meta,
+          updated_at = NOW()
+        RETURNING
+          id, user_id AS "userId", workspace_id AS "workspaceId",
+          provider, provider_user_ref AS "providerUserRef", status,
+          capabilities, last_synced_at AS "lastSyncedAt",
+          last_sync_meta AS "lastSyncMeta", provider_meta AS "providerMeta",
+          created_at AS "createdAt", updated_at AS "updatedAt";
+      `, [
+        Number(payload.userId), Number(payload.workspaceId),
+        String(payload.provider).trim().toLowerCase(),
+        String(payload.providerUserRef).trim(),
+        String(payload.status || "pending").trim().toLowerCase(),
+        JSON.stringify(payload.capabilities || {}),
+        JSON.stringify(payload.providerMeta || {})
+      ]);
+      return result.rows[0];
+    },
+
+    /**
+     * Update a connection's sync metadata.
+     */
+    updateSync: async (id, { status, syncedAt, meta = {} } = {}) => {
+      const sets = [];
+      const values = [Number(id)];
+      let idx = 1;
+      const push = (col, val) => { if (val !== undefined) { idx++; sets.push(`${col} = $${idx}`); values.push(val); } };
+      if (status != null) push("status", String(status).trim().toLowerCase());
+      if (syncedAt != null) push("last_synced_at", syncedAt);
+      if (meta && Object.keys(meta).length) push("last_sync_meta", JSON.stringify(meta));
+      if (!sets.length) return null;
+      sets.push("updated_at = NOW()");
+      const result = await pool.query(`
+        UPDATE brokerage_connections SET ${sets.join(", ")}
+        WHERE id = $1
+        RETURNING
+          id, provider, provider_user_ref AS "providerUserRef", status,
+          last_synced_at AS "lastSyncedAt", last_sync_meta AS "lastSyncMeta",
+          provider_meta AS "providerMeta";
+      `, values);
+      return result.rows[0] || null;
+    },
+
+    remove: async (id) => {
+      await pool.query("DELETE FROM brokerage_connections WHERE id = $1", [Number(id)]);
+    },
+
+    /**
+     * Lists connections that should be refreshed by the background sync worker.
+     * @param {string} staleBeforeIso  ISO timestamp — connections synced before this are due.
+     * @param {number} [limit=10]
+     */
+    listDueForSync: async (staleBeforeIso, limit = 10) => {
+      const result = await pool.query(`
+        SELECT
+          id, user_id AS "userId", workspace_id AS "workspaceId",
+          provider, provider_user_ref AS "providerUserRef", status,
+          capabilities, last_synced_at AS "lastSyncedAt",
+          last_sync_meta AS "lastSyncMeta", provider_meta AS "providerMeta"
+        FROM brokerage_connections
+        WHERE status IN ('connected', 'pending')
+          AND (last_synced_at IS NULL OR last_synced_at < $1::timestamptz)
+        ORDER BY last_synced_at NULLS FIRST, updated_at ASC
+        LIMIT $2;
+      `, [staleBeforeIso, Math.min(Math.max(Number(limit) || 10, 1), 50)]);
+      return result.rows;
+    }
+  },
+
+  // ── Accounts ─────────────────────────────────────────────────────────────
+
+  accounts: {
+    list: async (connectionId) => {
+      const result = await pool.query(`
+        SELECT * FROM brokerage_accounts WHERE connection_id = $1 ORDER BY created_at DESC;
+      `, [Number(connectionId)]);
+      return result.rows;
+    },
+
+    upsert: async (payload) => {
+      const result = await pool.query(`
+        INSERT INTO brokerage_accounts
+          (connection_id, provider_account_id, institution_name, account_type, masked_number, name, is_meta_only, provider_meta)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+        ON CONFLICT (connection_id, provider_account_id)
+        DO UPDATE SET
+          institution_name = EXCLUDED.institution_name,
+          account_type = EXCLUDED.account_type,
+          masked_number = EXCLUDED.masked_number,
+          name = EXCLUDED.name,
+          is_meta_only = EXCLUDED.is_meta_only,
+          provider_meta = EXCLUDED.provider_meta,
+          last_synced_at = NOW(),
+          updated_at = NOW()
+        RETURNING *;
+      `, [
+        Number(payload.connectionId),
+        String(payload.providerAccountId),
+        String(payload.institutionName || ""),
+        String(payload.accountType || "other"),
+        payload.maskedNumber || null,
+        String(payload.name || ""),
+        Boolean(payload.isMetaOnly),
+        JSON.stringify(payload.providerMeta || {})
+      ]);
+      return result.rows[0];
+    },
+
+    removeByConnection: async (connectionId) => {
+      await pool.query("DELETE FROM brokerage_accounts WHERE connection_id = $1", [Number(connectionId)]);
+    }
+  },
+
+  // ── Holdings ─────────────────────────────────────────────────────────────
+
+  holdings: {
+    list: async (accountId) => {
+      const result = await pool.query(`
+        SELECT * FROM brokerage_holdings WHERE account_id = $1 ORDER BY symbol;
+      `, [Number(accountId)]);
+      return result.rows;
+    },
+
+    sync: async (accountId, holdings) => {
+      if (!Array.isArray(holdings) || !holdings.length) return { upserted: 0 };
+      let upserted = 0;
+      for (const h of holdings) {
+        await pool.query(`
+          INSERT INTO brokerage_holdings
+            (account_id, symbol, name, asset_type, quantity, average_entry_price,
+             current_price, market_value, currency, opened_at, provider_meta, as_of)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+          ON CONFLICT (account_id, symbol, asset_type, currency)
+          DO UPDATE SET
+            quantity = EXCLUDED.quantity,
+            average_entry_price = EXCLUDED.average_entry_price,
+            current_price = EXCLUDED.current_price,
+            market_value = EXCLUDED.market_value,
+            opened_at = COALESCE(EXCLUDED.opened_at, brokerage_holdings.opened_at),
+            provider_meta = EXCLUDED.provider_meta,
+            as_of = EXCLUDED.as_of,
+            updated_at = NOW();
+        `, [
+          Number(accountId),
+          String(h.symbol || ""),
+          h.name || null,
+          String(h.assetType || "equity"),
+          Number(h.quantity || 0),
+          h.averageEntryPrice != null ? Number(h.averageEntryPrice) : null,
+          h.currentPrice != null ? Number(h.currentPrice) : null,
+          h.marketValue != null ? Number(h.marketValue) : null,
+          String(h.currency || "USD"),
+          h.openedAt || null,
+          JSON.stringify(h.providerMeta || {})
+        ]);
+        upserted++;
+      }
+      return { upserted };
+    },
+
+    removeAll: async (accountId) => {
+      await pool.query("DELETE FROM brokerage_holdings WHERE account_id = $1", [Number(accountId)]);
+    }
+  },
+
+  // ── Transactions (deduped on provider_tx_id) ───────────────────────────
+
+  transactions: {
+    list: async (accountId, { limit = 100, offset = 0 } = {}) => {
+      const result = await pool.query(`
+        SELECT * FROM brokerage_transactions
+        WHERE account_id = $1
+        ORDER BY executed_at DESC
+        LIMIT $2 OFFSET $3;
+      `, [Number(accountId), Math.min(Number(limit), 1000), Number(offset)]);
+      return result.rows;
+    },
+
+    /**
+     * Insert transactions, deduplicating on (account_id, provider_tx_id).
+     * Returns counts of new vs skipped.
+     */
+    sync: async (accountId, transactions) => {
+      if (!Array.isArray(transactions) || !transactions.length) return { inserted: 0, skipped: 0 };
+      let inserted = 0;
+      let skipped = 0;
+      for (const tx of transactions) {
+        const txId = String(tx.id || "");
+        if (!txId) { skipped++; continue; }
+        try {
+          await pool.query(`
+            INSERT INTO brokerage_transactions
+              (account_id, provider_tx_id, type, side, symbol, quantity,
+               unit_price, notional, fee, currency, description, executed_at, provider_meta)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+            ON CONFLICT (account_id, provider_tx_id) DO NOTHING;
+          `, [
+            Number(accountId), txId,
+            String(tx.type || "other"),
+            tx.side || null,
+            tx.symbol || null,
+            tx.quantity != null ? Number(tx.quantity) : null,
+            tx.unitPrice != null ? Number(tx.unitPrice) : null,
+            tx.notional != null ? Number(tx.notional) : null,
+            tx.fee != null ? Number(tx.fee) : null,
+            String(tx.currency || "USD"),
+            tx.description || null,
+            tx.executedAt || new Date().toISOString(),
+            JSON.stringify(tx.providerMeta || {})
+          ]);
+          inserted++;
+        } catch {
+          skipped++;
+        }
+      }
+      return { inserted, skipped };
+    }
+  },
+
+  // ── Provider metadata (freeform key-value per provider) ─────────────────
+
+  metadata: {
+    get: async (provider, key) => {
+      const result = await pool.query(
+        "SELECT value FROM brokerage_provider_metadata WHERE provider = $1 AND key = $2;",
+        [String(provider).trim().toLowerCase(), String(key).trim()]
+      );
+      return result.rows[0]?.value || null;
+    },
+
+    set: async (provider, key, value) => {
+      await pool.query(`
+        INSERT INTO brokerage_provider_metadata (provider, key, value)
+        VALUES ($1, $2, $3::jsonb)
+        ON CONFLICT (provider, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+      `, [String(provider).trim().toLowerCase(), String(key).trim(), JSON.stringify(value)]);
+    }
+  }
+};
+
 module.exports = {
   pool,
   initializeDatabase,
@@ -8781,6 +9210,7 @@ module.exports = {
   admin,
   analytics,
   perpsBench,
+  brokerage,
   clearAllData,
   closeDatabase,
   describeDatabaseConfig

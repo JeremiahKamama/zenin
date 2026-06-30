@@ -603,7 +603,7 @@ const OptionsStrategySimulator = ({
                                   </div>
                                   <div className="greek-box" style={{ background: "var(--options-sim-greek-bg)", borderRadius: "6px", padding: "6px", textAlign: "center" }}>
                                     <label style={{ display: "block", fontSize: "0.6rem", color: "var(--options-sim-subtle)", marginBottom: "2px" }}>Theta</label>
-                                    <strong style={{ fontSize: "0.85rem", color: "#ef4444" }}>{realtimeGreeks.theta.toFixed(2)}</strong>
+                                    <strong style={{ fontSize: "0.85rem", color: realtimeGreeks.theta > 0 ? "var(--color-success)" : realtimeGreeks.theta < 0 ? "var(--color-danger)" : "var(--color-text-primary)" }}>{realtimeGreeks.theta.toFixed(2)}</strong>
                                   </div>
                                   <div className="greek-box" style={{ background: "var(--options-sim-greek-bg)", borderRadius: "6px", padding: "6px", textAlign: "center" }}>
                                     <label style={{ display: "block", fontSize: "0.6rem", color: "var(--options-sim-subtle)", marginBottom: "2px" }}>Vega</label>

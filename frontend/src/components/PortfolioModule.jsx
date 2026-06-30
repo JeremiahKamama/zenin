@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
-import { Sparkline } from "./Sparkline";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
@@ -136,7 +135,6 @@ export function PortfolioModule({
   onOpenMarketContext,
   onOpenConnections,
   connectedAccounts = [],
-  hasDeskFeatureAccess = false,
   onOpenPlans
 }){
   const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
@@ -3482,7 +3480,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                         <td className="greek">{row.positions}</td>
                         <td className="greek">{row.symbols.join(", ") || "—"}</td>
                         <td className="bid-ask positive">
-                          ${row.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {formatMoney(row.value, "USD")}
                         </td>
                         <td className="greek">{row.weight.toFixed(2)}%</td>
                       </tr>
@@ -3503,10 +3501,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <button type="button" className="pagination-button" onClick={() => setSelectedHolding(null)}>Close</button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px", marginBottom: "10px" }}>
-              <div className="journal-stat-card"><span className="journal-stat-label">Value</span><span className="journal-stat-value">${Number(selectedHolding.positionValue || 0).toFixed(2)}</span></div>
-              <div className="journal-stat-card"><span className="journal-stat-label">PnL</span><span className="journal-stat-value">{Number(selectedHolding.positionGain || 0) >= 0 ? "+" : ""}${Number(selectedHolding.positionGain || 0).toFixed(2)}</span></div>
+              <div className="journal-stat-card"><span className="journal-stat-label">Value</span><span className="journal-stat-value">{formatMoney(selectedHolding.positionValue)}</span></div>
+              <div className="journal-stat-card"><span className="journal-stat-label">PnL</span><span className="journal-stat-value">{formatSignedMoney(selectedHolding.positionGain)}</span></div>
               <div className="journal-stat-card"><span className="journal-stat-label">Quantity</span><span className="journal-stat-value">{Number(selectedHolding.quantity || 0).toFixed(2)}</span></div>
-              <div className="journal-stat-card"><span className="journal-stat-label">Price</span><span className="journal-stat-value">${Number(selectedHolding.price || 0).toFixed(2)}</span></div>
+              <div className="journal-stat-card"><span className="journal-stat-label">Price</span><span className="journal-stat-value">{formatMoney(selectedHolding.price)}</span></div>
             </div>
             <div style={{ borderTop: "1px solid rgba(148,163,184,0.14)", paddingTop: "10px", marginTop: "10px" }}>
               <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>Tax Lot Optimizer</div>

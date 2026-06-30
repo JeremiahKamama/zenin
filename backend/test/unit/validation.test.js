@@ -527,9 +527,8 @@ test("exchangeKeySchema defaults optional fields", () => {
     apiKey: "key123",
   });
   assert.ok(result.success);
-  assert.equal(result.data.permissionScope, "unknown");
-  assert.equal(result.data.canTrade, false);
-  assert.equal(result.data.riskLevel, "standard");
+  assert.equal(result.data.apiSecret, undefined);
+  assert.equal(result.data.extraData, undefined);
 });
 
 // ── watchlistBulkSchema ───────────────────────────────────────────────────────

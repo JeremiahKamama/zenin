@@ -4,6 +4,7 @@ import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
+import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { zeninFetchJson } from "../utils/zeninFetch";
 
@@ -818,10 +819,25 @@ export function HomeModule({
 
   useEffect(() => {
     if (!marketDetailOpen) return;
-    
+
+    // Hydrate from resilient cache immediately so the page never flashes empty.
+    const macroCache = readResilientCache("market-context", { source: "macro" });
+    const eventsCache = readResilientCache("market-context", { source: "economic-calendar" });
+    const equitiesCache = readResilientCache("market-context", { source: "equities" });
+
+    if (macroCache?.payload) setMacroData(Array.isArray(macroCache.payload) ? macroCache.payload : []);
+    if (eventsCache?.payload) setEventsData(Array.isArray(eventsCache.payload) ? eventsCache.payload : []);
+    if (equitiesCache?.payload) setHomeEquitiesSnapshot(equitiesCache.payload);
+
+    // If all three caches are present, mark health as "stale" while the network fetch runs.
+    const hasAnyCache = macroCache?.payload || eventsCache?.payload || equitiesCache?.payload;
+    if (hasAnyCache) {
+      setMarketContextHealth({ status: "stale", staleSources: ["cached"], unavailableSources: [] });
+    }
+
     const fetchData = async () => {
       setMarketDataLoading(true);
-      
+
       try {
         const [macroRes, eventsRes, equitiesRes] = await Promise.allSettled([
           zeninFetchJson("/macro-indicators?country=USA"),
@@ -832,39 +848,38 @@ export function HomeModule({
         const staleSources = [];
         const unavailableSources = [];
 
-        if (macroRes.status === "fulfilled") {
+        if (macroRes.status === "fulfilled" && macroRes.value) {
           const data = macroRes.value;
-          setMacroData(Array.isArray(data?.metrics) ? data.metrics : []);
+          const metrics = Array.isArray(data?.metrics) ? data.metrics : [];
+          setMacroData(metrics);
+          writeResilientCache("market-context", { source: "macro" }, metrics);
           if (data?.stale) staleSources.push("macro");
-          if (data?.unavailable) unavailableSources.push("macro");
         } else {
-          setMacroData([]);
           unavailableSources.push("macro");
         }
 
-        if (eventsRes.status === "fulfilled") {
+        if (eventsRes.status === "fulfilled" && eventsRes.value) {
           const data = eventsRes.value;
-          setEventsData(Array.isArray(data?.events) ? data.events : []);
+          const events = Array.isArray(data?.events) ? data.events : [];
+          setEventsData(events);
+          writeResilientCache("market-context", { source: "economic-calendar" }, events);
           if (data?.stale) staleSources.push("calendar");
-          if (data?.unavailable) unavailableSources.push("calendar");
         } else {
-          setEventsData([]);
           unavailableSources.push("calendar");
         }
 
-        if (equitiesRes.status === "fulfilled") {
+        if (equitiesRes.status === "fulfilled" && equitiesRes.value) {
           const data = equitiesRes.value;
           setHomeEquitiesSnapshot(data);
+          writeResilientCache("market-context", { source: "equities" }, data);
           if (data?.stale) staleSources.push("equities");
-          if (data?.unavailable) unavailableSources.push("equities");
         } else {
-          setHomeEquitiesSnapshot(null);
           unavailableSources.push("equities");
         }
 
         setMarketContextHealth({
           status: unavailableSources.length
-            ? "degraded"
+            ? (hasAnyCache ? "stale" : "degraded")
             : staleSources.length
             ? "stale"
             : "live",
@@ -873,19 +888,23 @@ export function HomeModule({
         });
       } catch (err) {
         console.error("Market Context: Fetch failed", err);
-        setMacroData([]);
-        setEventsData([]);
-        setHomeEquitiesSnapshot(null);
-        setMarketContextHealth({
-          status: "offline",
-          staleSources: [],
-          unavailableSources: ["macro", "calendar", "equities"],
-        });
+        if (!hasAnyCache) {
+          setMacroData([]);
+          setEventsData([]);
+          setHomeEquitiesSnapshot(null);
+          setMarketContextHealth({
+            status: "offline",
+            staleSources: [],
+            unavailableSources: ["macro", "calendar", "equities"],
+          });
+        }
+        // When stale cache exists, keep showing it — the user sees the last-known-good state
+        // with the existing "stale" health chip.
       } finally {
         setMarketDataLoading(false);
       }
     };
-    
+
     fetchData();
   }, [marketDetailOpen, marketRefreshNonce]);
 
