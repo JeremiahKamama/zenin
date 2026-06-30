@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev --build-from-source
+RUN npm ci --omit=dev
 
 COPY requirements.txt ./
 RUN python3 -m venv /opt/venv && \
