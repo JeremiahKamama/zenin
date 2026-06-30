@@ -64,4 +64,5 @@ jobs:
             ':!**/node_modules/**' \
             ':!**/dist/**' \
             ':!docs/**' \
-            ':!README.md'
+            ':!README.md' \
+            ':!.github/workflows/security.yml'

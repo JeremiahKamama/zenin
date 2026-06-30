@@ -685,7 +685,10 @@ async function buildCommodityStressRows(item) {
     unavailable: true,
   }));
 
-  const eiaRows = await fetchEiaCommodityFundamentals(item.symbol).catch(() => ({ rows: [] }));
+  const eiaRows = await fetchEiaCommodityFundamentals(item.symbol).catch((error) => {
+    console.warn(`[Commodities] EIA fundamentals fetch failed for ${item.symbol}:`, error?.message || error);
+    return { rows: [] };
+  });
   const inventoryRows = (eiaRows.rows || [])
     .filter((row) => /stock|storage|working gas/i.test(String(row.metric || "")))
     .map((row, idx) => ({
@@ -706,7 +709,10 @@ async function buildCommodityStressRows(item) {
       unavailable: false,
     }));
 
-  const nwsRows = await fetchNwsActiveAlertsByAreas(profile.weatherAreas).catch(() => []);
+  const nwsRows = await fetchNwsActiveAlertsByAreas(profile.weatherAreas).catch((error) => {
+    console.warn(`[Commodities] NWS weather alerts fetch failed:`, error?.message || error);
+    return [];
+  });
   const weatherRows = nwsRows.map((row) => ({
     id: `stress-weather-${row.area}`,
     symbol: item.symbol,
@@ -1416,6 +1422,7 @@ function decryptWorkspaceData(stored) {
     decrypted += decipher.final("utf8");
     return decrypted;
   } catch (e) {
+    console.warn("[Crypto] Workspace data decryption failed:", e?.message || e);
     return null;
   }
 }
@@ -1554,7 +1561,7 @@ function sanitizeWorkspaceInvite(invite = null) {
 }
 
 function createVerificationCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 function createBackupCodes() {
@@ -1871,7 +1878,9 @@ app.use((req, res, next) => {
             attempts,
             path: req.path
           }
-        }).catch(() => {});
+        }).catch((error) => {
+          console.warn("[Admin] Failed to persist workspace-403 security event:", error?.message || error);
+        });
       }
     }
   });
@@ -2131,7 +2140,12 @@ function isSignedInAdmin(req) {
 function hasValidMigrationKey(req) {
   if (!ADMIN_MIGRATION_KEY) return false;
   const provided = String(req.headers["x-migration-key"] || "").trim();
-  return provided && provided === ADMIN_MIGRATION_KEY;
+  if (!provided) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_MIGRATION_KEY));
+  } catch {
+    return false;
+  }
 }
 
 function buildSecurityDiff(before = {}, after = {}) {
@@ -2270,7 +2284,9 @@ app.post("/api/webhooks/resend", async (req, res) => {
       endpoint: "POST /api/webhooks/resend",
       statusCode: 503,
       actorType: "system"
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("[Email] Failed to persist webhook config warning log:", error?.message || error);
+    });
     return res.status(503).json({ error: "Webhook secret is not configured." });
   }
 
@@ -2292,7 +2308,9 @@ app.post("/api/webhooks/resend", async (req, res) => {
       endpoint: "POST /api/webhooks/resend",
       statusCode: 400,
       actorType: "system"
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("[Email] Failed to persist webhook signature rejection log:", error?.message || error);
+    });
     return res.status(400).json({ error: "Invalid webhook signature." });
   }
 
@@ -3290,8 +3308,8 @@ async function fetchCryptoQuotesBySymbols(symbols = []) {
         if (key && ctxs[idx]) spotCtxMap.set(key, ctxs[idx]);
       });
     }
-  } catch {
-    // fallback to CoinGecko below
+  } catch (error) {
+    console.warn("[Prices] Hyperliquid spot context fetch failed, falling back to CoinGecko:", error?.message || error);
   }
 
   const quotes = {};
@@ -3333,8 +3351,8 @@ async function fetchCryptoQuotesBySymbols(symbols = []) {
           quotes[symbol].source = "CoinGecko";
         }
       });
-    } catch {
-      // ignore CoinGecko failures
+    } catch (error) {
+      console.warn("[Prices] CoinGecko quote enrichment failed:", error?.message || error);
     }
   }
 
@@ -3554,9 +3572,9 @@ function computeTrend(value, previous) {
 
 async function fetchAnalyticsMacroRows(country = "USA") {
   const [fredResult, blsResult, wbRows] = await Promise.all([
-    String(country).toUpperCase() === "USA" ? fetchFredMacroMetrics().catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-    String(country).toUpperCase() === "USA" ? fetchBlsMacroMetrics().catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-    fetchWorldBankMacroMetrics(country).catch(() => [])
+    String(country).toUpperCase() === "USA" ? fetchFredMacroMetrics().catch((error) => { console.warn("[Macro] FRED metrics fetch failed:", error?.message || error); return { rows: [] }; }) : Promise.resolve({ rows: [] }),
+    String(country).toUpperCase() === "USA" ? fetchBlsMacroMetrics().catch((error) => { console.warn("[Macro] BLS metrics fetch failed:", error?.message || error); return { rows: [] }; }) : Promise.resolve({ rows: [] }),
+    fetchWorldBankMacroMetrics(country).catch((error) => { console.warn(`[Macro] World Bank metrics fetch failed for ${country}:`, error?.message || error); return []; })
   ]);
   const metrics = sanitizeMacroMetrics([...wbRows, ...(blsResult.rows || []), ...(fredResult.rows || [])]);
   const sourceByKey = new Map(
@@ -3752,7 +3770,8 @@ async function buildUserBootstrapPayload(userId, options = {}) {
       try {
         const rawExtra = typeof item.extraData === "string" ? workspaceSecretProvider.decryptSecret(item.extraData) : item.extraData;
         parsedExtra = typeof rawExtra === "string" ? JSON.parse(rawExtra) : (rawExtra || {});
-      } catch {
+      } catch (error) {
+        console.warn("[Bootstrap] Failed to decrypt/parse workspace account extraData for item", item.id, ":", error?.message || error);
         parsedExtra = {};
       }
       const capability = buildConnectionCapability(item.exchange);
@@ -5146,8 +5165,8 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
         await userWorkspace.exchangeKeys.updateScopeVerification(req.workspace.workspace.id, parseInt(req.params.id), {
           status: "sync_failed"
         });
-      } catch {
-        // no-op
+      } catch (statusError) {
+        console.warn("[Exchange] Failed to persist sync error status:", statusError?.message || statusError);
       }
     }
     const burst = trackSecurityAnomaly(`exchange-sync-failure:${req.workspace?.workspace?.id || "unknown"}`, 10 * 60 * 1000);
@@ -5162,7 +5181,9 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
           keyId: Number(req.params?.id || 0),
           error: err?.message || "Exchange sync failed"
         }
-      }).catch(() => {});
+      }).catch((logError) => {
+        console.warn("[Exchange] Failed to persist sync burst security event:", logError?.message || logError);
+      });
     }
     handleServerError(res, "Exchange sync failed", err);
   }
@@ -5451,7 +5472,9 @@ app.delete("/api/account", authLimiter, requireSignedIn, validate(accountDeleteS
         ownedWorkspaceCount: deletionPlan.ownedWorkspaces.length,
         legacySupabaseUserIdPresent: Boolean(deletionPlan.user.supabaseUserId)
       }
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("[Auth] Failed to persist account deletion audit log:", error?.message || error);
+    });
 
     req.auth = { isGuest: true, userId: null, user: null, token: null, authSource: "deleted" };
     return res.json({ success: true });
@@ -5942,7 +5965,8 @@ app.post("/api/admin/users/:id/suspend", requireAdmin, requireRecentAdminReauth,
 
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("[Admin] User suspension failed:", error?.message || error);
+    res.status(500).json({ error: "Failed to suspend user" });
   }
 });
 
@@ -5970,7 +5994,8 @@ app.delete("/api/admin/users/:id", requireAdmin, requireRecentAdminReauth, async
 
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("[Admin] User deletion failed:", error?.message || error);
+    res.status(500).json({ error: "Failed to delete user" });
   }
 });
 
@@ -6316,7 +6341,7 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
       emailVerified: false
     });
 
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
     const { hash: codeHash } = derivePasswordHash(verificationCode);
     
     await userAuth.updateUserVerificationCode(created.id, codeHash);
@@ -6446,7 +6471,11 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
       } else {
         // sms or email
         const expectedHash = hashToken(`${user.twoFactorMethod}:${verificationCode}`);
-        mfaValid = (expectedHash === user.twoFactorSecretHash);
+        try {
+          mfaValid = crypto.timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(String(user.twoFactorSecretHash || ""), "hex"));
+        } catch {
+          mfaValid = false;
+        }
       }
 
       // If TOTP/SMS/Email code failed, check backup codes (#BackupCodeHashing)
@@ -6734,7 +6763,7 @@ app.post("/api/auth/resend-verification", async (req, res) => {
       }
     }
 
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
     const { hash: codeHash } = derivePasswordHash(verificationCode);
 
     try {
@@ -8291,7 +8320,8 @@ app.get("/api/earnings-calendar", async (req, res) => {
         .map((item) => String(item?.symbol || "").trim().toUpperCase())
         .filter(Boolean);
       symbols = [...new Set(inferred)].slice(0, limit);
-    } catch {
+    } catch (error) {
+      console.warn("[Earnings] Failed to infer symbols from watchlist:", error?.message || error);
       symbols = [];
     }
   }
@@ -9167,7 +9197,8 @@ async function fetchWorldBankMacroMetrics(countryCode) {
       try {
         const rows = await fetchWorldBankIndicatorSeries(countryCode, wbCode);
         return { key: config.key, rows };
-      } catch {
+      } catch (error) {
+        console.warn(`[Macro] World Bank indicator fetch failed for ${config.key} (${wbCode}):`, error?.message || error);
         return { key: config.key, rows: [] };
       }
     })
@@ -9273,7 +9304,8 @@ async function aggregateMacroMetricsForCountries(countryCodes = []) {
   const metricsByCountry = await Promise.all(members.map(async (code) => {
     try {
       return await fetchWorldBankMacroMetrics(code);
-    } catch {
+    } catch (error) {
+      console.warn(`[Macro] World Bank macro metrics fetch failed for country ${code}:`, error?.message || error);
       return [];
     }
   }));
@@ -9887,7 +9919,8 @@ async function loadPredictionSnapshot() {
           isEventAllowedForCategory(event, category)
         );
       }
-    } catch {
+    } catch (error) {
+      console.warn("[Predictions] Primary event fetch failed for category", category, ":", error?.message || error);
       events = [];
     }
 
@@ -9897,7 +9930,8 @@ async function loadPredictionSnapshot() {
         events = (Array.isArray(taggedEvents) ? taggedEvents : []).filter((event) =>
           isEventAllowedForCategory(event, category)
         );
-      } catch {
+      } catch (error) {
+        console.warn("[Predictions] Fallback tag event fetch failed for", tagSlug, ":", error?.message || error);
         events = [];
       }
     }
@@ -10476,7 +10510,8 @@ async function fetchMassiveExchangeMap() {
       acc[id] = String(row?.acronym || row?.mic || row?.name || row?.type || `Exchange ${id}`).trim();
       return acc;
     }, {});
-  } catch {
+  } catch (error) {
+    console.warn("[Options] Failed to fetch Massive exchange map:", error?.message || error);
     return {};
   }
 }
@@ -12014,7 +12049,17 @@ app.get("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorkspa
 
 app.get("/api/db/trade-executions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const executions = await userWorkspace.tradeFills.getExecutions(req.auth.userId, req.query || {}, req.workspace?.workspace?.id || null);
+    const filters = req.query || {};
+    if (filters.limit != null && (!Number.isFinite(Number(filters.limit)) || Number(filters.limit) < 1)) {
+      return res.status(400).json({ error: "limit must be a positive integer." });
+    }
+    if (filters.from && Number.isNaN(new Date(filters.from).getTime())) {
+      return res.status(400).json({ error: "from must be a valid ISO date string." });
+    }
+    if (filters.to && Number.isNaN(new Date(filters.to).getTime())) {
+      return res.status(400).json({ error: "to must be a valid ISO date string." });
+    }
+    const executions = await userWorkspace.tradeFills.getExecutions(req.auth.userId, filters, req.workspace?.workspace?.id || null);
     res.json({
       executions,
       source: "api_connections",
@@ -12036,7 +12081,11 @@ app.get("/api/db/trade-fees/summary", requireSignedIn, attachActiveWorkspace, re
 
 app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
-    const notifications = await userWorkspace.notifications.getAll(req.auth.userId, req.query || {}, req.workspace?.workspace?.id || null);
+    const options = req.query || {};
+    if (options.limit != null && (!Number.isFinite(Number(options.limit)) || Number(options.limit) < 1)) {
+      return res.status(400).json({ error: "limit must be a positive integer." });
+    }
+    const notifications = await userWorkspace.notifications.getAll(req.auth.userId, options, req.workspace?.workspace?.id || null);
     const unreadCount = notifications.filter((item) => !item.readAt).length;
     res.json({ notifications, unreadCount });
   } catch (error) {
@@ -12046,7 +12095,11 @@ app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWor
 
 app.post("/api/notifications/:id/read", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
-    const notification = await userWorkspace.notifications.markRead(req.auth.userId, req.params.id, req.workspace?.workspace?.id || null);
+    const notificationId = Number(req.params.id);
+    if (!Number.isFinite(notificationId) || notificationId < 1 || !Number.isInteger(notificationId)) {
+      return res.status(400).json({ error: "Notification id must be a positive integer." });
+    }
+    const notification = await userWorkspace.notifications.markRead(req.auth.userId, notificationId, req.workspace?.workspace?.id || null);
     if (!notification) return res.status(404).json({ error: "Notification not found" });
     res.json({ notification });
   } catch (error) {
@@ -12756,8 +12809,8 @@ async function fetchLiveCommodityRows(group = "all") {
           asOf: latest.date
         });
       }
-    } catch {
-      // Keep commodity list resilient when a provider has a partial outage.
+    } catch (error) {
+      console.warn(`[Commodities] FRED series fetch failed for ${item.symbol}:`, error?.message || error);
     }
   }));
   const proxySymbols = [...new Set(COMMODITY_UNIVERSE.map((row) => getCommodityFinvizProxy(row.symbol)).filter(Boolean))];
@@ -12923,7 +12976,10 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
   const range = String(req.query.range || "1Y").toUpperCase();
   const item = getCommodity(req.params.symbol);
   try {
-    const fredSeries = await fetchFredCommoditySeries(item.symbol, range).catch(() => []);
+    const fredSeries = await fetchFredCommoditySeries(item.symbol, range).catch((error) => {
+      console.warn(`[Commodities] FRED price series fetch failed for ${item.symbol}:`, error?.message || error);
+      return [];
+    });
     if (fredSeries.length) {
       return res.json({ updatedAt: new Date().toISOString(), symbol: item.symbol, source: "FRED", series: fredSeries });
     }
@@ -12956,7 +13012,7 @@ app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
       status: buildProviderStatus("EIA", Boolean(EIA_API_KEY), "unavailable", error?.message || "EIA unavailable")
     }));
     const proxySymbol = getCommodityFinvizProxy(item.symbol);
-    const finvizQuote = proxySymbol ? await fetchFinvizQuote(proxySymbol).catch(() => null) : null;
+    const finvizQuote = proxySymbol ? await fetchFinvizQuote(proxySymbol).catch((error) => { console.warn(`[Commodities] Finviz quote fetch failed for proxy ${proxySymbol}:`, error?.message || error); return null; }) : null;
     const finvizSummary = finvizQuote?.summary || {};
     const finvizMetrics = proxySymbol
       ? [
@@ -14321,8 +14377,8 @@ async function buildEquitiesAnalyticsPayload() {
   }
 
   const [macroData, riskIndicators, fredStatus, blsStatus] = await Promise.all([
-    fetchAnalyticsMacroRows("USA").catch(() => []),
-    fetchAnalyticsRiskIndicators().catch(() => []),
+    fetchAnalyticsMacroRows("USA").catch((error) => { console.warn("[Analytics] Macro data fetch failed:", error?.message || error); return []; }),
+    fetchAnalyticsRiskIndicators().catch((error) => { console.warn("[Analytics] Risk indicators fetch failed:", error?.message || error); return []; }),
     fetchFredMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable")),
     fetchBlsMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("BLS", Boolean(BLS_API_KEY), "unavailable", error?.message || "BLS unavailable"))
   ]);
