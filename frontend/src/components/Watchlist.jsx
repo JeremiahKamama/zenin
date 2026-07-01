@@ -51,6 +51,7 @@ export function Watchlist({
   isInWatchlist,
   onToggleStar,
   onImportAssets,
+  onRefresh,
   onPageChange,
   liveStatus = "idle",
   lastLivePriceAt = null,
@@ -73,6 +74,8 @@ export function Watchlist({
     if (typeof window === "undefined") return;
     localStorage.setItem("zenin_watchlist_dense", isDense ? "1" : "0");
   }, [isDense]);
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const [localRefreshNonce, setLocalRefreshNonce] = useState(0);
   const [selectedIntentAsset, setSelectedIntentAsset] = useState(null);
   const [alertActionBusy, setAlertActionBusy] = useState({});
   const [earningsItems, setEarningsItems] = useState([]);
@@ -464,7 +467,7 @@ useEffect(() => {
       isMounted = false;
       controller.abort();
     };
-  }, [activeCategory, indicatorCountry]);
+  }, [activeCategory, indicatorCountry, localRefreshNonce]);
 
   useEffect(() => {
     if (activeCategory !== "stocks") return;
@@ -528,7 +531,7 @@ useEffect(() => {
       isMounted = false;
       controller.abort();
     };
-  }, [activeCategory, earningsSymbols.join(",")]);
+  }, [activeCategory, earningsSymbols.join(","), localRefreshNonce]);
 
   const formatEarningsDate = (value) => {
     if (!value) return "No upcoming date";
@@ -702,6 +705,23 @@ useEffect(() => {
               aria-controls="watchlist-import-panel"
             >
               Import
+            </button>
+            <button
+              type="button"
+              className="watchlist-import-trigger"
+              onClick={async () => {
+                setRefreshBusy(true);
+                try {
+                  await onRefresh?.();
+                  setLocalRefreshNonce((prev) => prev + 1);
+                } catch {}
+                setRefreshBusy(false);
+              }}
+              disabled={refreshBusy}
+              aria-label="Refresh watchlist data"
+              title="Refresh watchlist data and flush pending import syncs"
+            >
+              {refreshBusy ? "..." : "⟳"}
             </button>
             <InlineControlGroup className="watchlist-toolbar-toggle">
               <button

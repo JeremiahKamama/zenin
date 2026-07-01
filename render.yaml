@@ -52,7 +52,7 @@ services:
       # Frontend no longer requires VITE_SUPABASE_* variables. Use `VITE_API_URL`
       # to point the client at the backend API if needed during builds.
       - key: VITE_API_URL
-        sync: false
+        value: https://portv1-backend.onrender.com/api
     routes:
       # Send all routes to index.html so React Router / client-side nav works
       - type: rewrite

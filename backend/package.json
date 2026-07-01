@@ -27,6 +27,7 @@
     "express-rate-limit": "^7.4.1",
     "google-auth-library": "^10.7.0",
     "helmet": "^8.0.0",
+    "ioredis": "^5.11.1",
     "node-fetch": "^3.3.2",
     "nodemailer": "^9.0.1",
     "otplib": "^13.4.0",

@@ -36,6 +36,7 @@ import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { useMediaQuery, useViewportWidth } from "./hooks/useMediaQuery";
 import { usePlanGate } from "./hooks/usePlanGate";
 import { CommandPalette, useCommandPaletteLauncher } from "./components/CommandPalette";
+import { enqueueImportSync, flushImportSyncQueue, hasPendingImportSync } from "./utils/importSyncQueue";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
@@ -1328,6 +1329,7 @@ function App() {
   const [watchlistStale, setWatchlistStale] = useState(false);
   const [watchlistNotice, setWatchlistNotice] = useState("");
   const [watchlistRetryNonce, setWatchlistRetryNonce] = useState(0);
+  const [watchlistRefreshNonce, setWatchlistRefreshNonce] = useState(0);
   const [sharedWatchlistAccess, setSharedWatchlistAccess] = useState({ shared: false, allowed: true, requiredPlan: "starter" });
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
@@ -3113,7 +3115,26 @@ const handleOptionTradeClosed = async (tradeId) => {
     setWatchlistStale(false);
     setWatchlistNotice(`${normalizedAssets.length} row${normalizedAssets.length === 1 ? "" : "s"} imported${meta?.source ? ` from ${meta.source}` : ""}.`);
 
-    if (!hasAuthToken() || isGuestUser) {
+    // Skip backend sync when running in dev full-access, guest, or unauthenticated mode.
+    if (!hasAuthToken() || isGuestUser || devFullAccess) {
+      // Persist to resilient cache so imported assets survive page reloads.
+      try {
+        const cacheParams = { category: String(activeCategory || "").toLowerCase() || "stocks" };
+        const cached = readResilientCache("watchlist-category", cacheParams);
+        const existing = Array.isArray(cached?.payload?.assets) ? cached.payload.assets : [];
+        const merged = [...existing];
+        normalizedAssets.forEach((asset) => {
+          if (!merged.some((a) => String(a.symbol || "").toLowerCase() === String(asset.symbol || "").toLowerCase())) {
+            merged.push(asset);
+          }
+        });
+        writeResilientCache("watchlist-category", cacheParams, {
+          category: cacheParams.category,
+          assets: merged,
+          stale: true,
+          stale_reason: "import_pending_sync"
+        });
+      } catch {}
       return { imported: normalizedAssets.length, saved: false };
     }
 
@@ -3132,11 +3153,56 @@ const handleOptionTradeClosed = async (tradeId) => {
       return { imported: normalizedAssets.length, added: importedCount, saved: true };
     } catch (error) {
       console.warn("Watchlist import saved locally; backend sync failed.", error);
+      // Persist the merged list to resilient cache so imports survive page reloads
+      // even when the backend is unreachable (dev mode, cold start, etc.).
+      try {
+        const cacheParams = { category: String(activeCategory || "").toLowerCase() || "stocks" };
+        const cached = readResilientCache("watchlist-category", cacheParams);
+        const existing = Array.isArray(cached?.payload?.assets) ? cached.payload.assets : [];
+        const merged = [...existing];
+        normalizedAssets.forEach((asset) => {
+          if (!merged.some((a) => String(a.symbol || "").toLowerCase() === String(asset.symbol || "").toLowerCase())) {
+            merged.push(asset);
+          }
+        });
+        writeResilientCache("watchlist-category", cacheParams, {
+          category: cacheParams.category,
+          assets: merged,
+          stale: true,
+          stale_reason: "import_pending_sync"
+        });
+      } catch (cacheError) {
+        console.warn("Could not persist import to offline cache.", cacheError);
+      }
+      // Enqueue the failed import so it will be replayed when the backend
+      // becomes reachable (next manual refresh or next successful sync).
+      try { enqueueImportSync(normalizedAssets); } catch {}
       setWatchlistStale(true);
       setWatchlistNotice("Imported locally. Zenin could not sync the batch to the backend yet.");
       return { imported: normalizedAssets.length, added: importedCount, saved: false };
     }
   };
+  // ponytail: replay queue — flushes pending watchlist imports on manual refresh.
+  const handleRefreshWatchlist = useCallback(async () => {
+    if (hasPendingImportSync()) {
+      const result = await flushImportSyncQueue();
+      if (result.syncedBatches > 0) {
+        setWatchlistNotice(
+          `Synced ${result.syncedBatches} import batch${result.syncedBatches > 1 ? "es" : ""} (${result.totalAssets} asset${result.totalAssets !== 1 ? "s" : ""}) to the backend.`
+        );
+        if (result.failedBatches > 0) {
+          setWatchlistNotice(
+            (prev) =>
+              `${prev} ${result.failedBatches} batch${result.failedBatches > 1 ? "es" : ""} queued for retry.`
+          );
+        }
+      } else if (result.failedBatches > 0) {
+        setWatchlistNotice(`Backend unreachable — ${result.failedBatches} import batch${result.failedBatches > 1 ? "es" : ""} still queued.`);
+      }
+      // Force a category re-fetch so the watchlist reflects synced data.
+      setWatchlistRefreshNonce((prev) => prev + 1);
+    }
+  }, []);
 
   const removeFromWatchlist = async ({ symbol, marketType, category = null, theme = null }) => {
     if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
@@ -6581,6 +6647,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
               currentUserId={authUserId}
               hasDeskFeatureAccess={hasDeskFeatureAccess}
+              onRefresh={handleRefreshWatchlist}
             />
               </>
             )}

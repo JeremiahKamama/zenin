@@ -140,6 +140,11 @@ const {
 const { initializeMarketIntelTables } = require("./market-intel/infrastructure/database");
 const { registerMarketIntelRoutes } = require("./market-intel/http/routes");
 const {
+  CompanyProfileService,
+  registerCompanyProfileRoutes: registerNewCompanyProfileRoutes
+} = require("./company-profile");
+const {
+
   listCryptoVenues,
   listStockBrokers,
   computeBasisCarry,
@@ -3794,6 +3799,19 @@ function getMarketAlertRules() {
   return marketAlertRules;
 }
 
+// ---- Company Profile Aggregation Service ----
+let companyProfileService;
+const ENABLE_NEW_COMPANY_PROFILE = process.env.ENABLE_NEW_COMPANY_PROFILE === "true";
+
+function getCompanyProfileService() {
+  if (!companyProfileService) {
+    companyProfileService = new CompanyProfileService({
+      runtimeConfig: { companyProfileCacheTtlMs: ROUTE_CACHE_TTLS_MS["company-profile"] || 15 * 60 * 1000 }
+    });
+  }
+  return companyProfileService;
+}
+
 function getMarketNotificationService() {
   if (!marketNotificationService) {
     marketNotificationService = new NotificationService({
@@ -3823,6 +3841,15 @@ registerMarketIntelRoutes(app, {
   apiError,
   handleServerError
 });
+
+if (ENABLE_NEW_COMPANY_PROFILE) {
+  registerNewCompanyProfileRoutes(app, getCompanyProfileService(), {
+    selectPrimaryStockCatalogEntry,
+    buildStockPeers,
+    buildManufacturingNotes
+  });
+  console.log("[company-profile] New aggregation service enabled.");
+}
 
 app.get("/api/public/config", async (_req, res) => {
   res.set("Cache-Control", "public, max-age=300");
