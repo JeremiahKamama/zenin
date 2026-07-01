@@ -4,7 +4,7 @@
 services:
   # ── Backend (Node.js + Python) ────────────────────────────────────────────
   - type: web
-    name: portv1-backend
+    name: zenin-mx6w
     runtime: docker
     plan: starter
     rootDir: backend
@@ -41,7 +41,7 @@ services:
 
   # ── Frontend (React / Vite static site) ───────────────────────────────────
   - type: web
-    name: portv1-frontend
+    name: zenin-frontend
     runtime: static
     plan: free
     rootDir: frontend
@@ -52,7 +52,7 @@ services:
       # Frontend no longer requires VITE_SUPABASE_* variables. Use `VITE_API_URL`
       # to point the client at the backend API if needed during builds.
       - key: VITE_API_URL
-        value: https://portv1-backend.onrender.com/api
+        value: https://zenin-mx6w.onrender.com/api
     routes:
       # Send all routes to index.html so React Router / client-side nav works
       - type: rewrite
@@ -69,7 +69,7 @@ services:
 
   # ── Admin Console (React / Vite static site) ──────────────────────────────
   - type: web
-    name: portv1-admin
+    name: zenin-admin
     runtime: static
     plan: free
     rootDir: admin
@@ -87,7 +87,7 @@ services:
   # funded accounts needed. Set PERPS_BENCH_MODE=live and enable venues via
   # the admin toggle endpoint to submit real post-only orders.
   - type: worker
-    name: portv1-perps-bench
+    name: zenin-perps-bench
     runtime: docker
     plan: starter
     rootDir: backend
