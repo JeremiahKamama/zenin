@@ -9,6 +9,14 @@ import { CompactPageHeader, DensePanelHeader, InlineControlGroup } from "./Compa
 import { ResearchWorkspacePanel } from "./InstitutionalPanels";
 import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
 import { zeninFetchJson } from "../utils/zeninFetch";
+import {
+  toFiniteNumber,
+  formatPercent as _formatPercent,
+  formatFixed as _formatFixed,
+  formatSignedValue as _formatSignedValue,
+} from "../utils/formatNumbers";
+import { formatDateTime as _formatDateTime } from "../utils/formatDates";
+import { downloadCsvFile } from "../utils/downloadHelpers";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto Desk", shortLabel: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
@@ -271,53 +279,19 @@ function formatCompactMoney(value, currency = "USD") {
 }
 
 function formatPercent(value, digits = 2) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "—";
-  return `${amount >= 0 ? "+" : ""}${amount.toFixed(digits)}%`;
+  return _formatPercent(value, digits);
 }
 
 function formatFixed(value, digits = 2, suffix = "") {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "—";
-  return `${amount.toFixed(digits)}${suffix}`;
+  return _formatFixed(value, digits, { suffix });
 }
 
 function formatDateTime(value) {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return _formatDateTime(value);
 }
 
 function formatSignedValue(value, digits = 2) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "—";
-  return `${numeric > 0 ? "+" : ""}${numeric.toFixed(digits)}`;
-}
-
-function downloadCsvFile(fileName, rows) {
-  if (!Array.isArray(rows) || !rows.length || typeof document === "undefined") return;
-  const escapeCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  const csv = rows.map((row) => row.map(escapeCell).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function toFiniteNumber(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
+  return _formatSignedValue(value, digits);
 }
 
 function pickFirstNumber(...values) {

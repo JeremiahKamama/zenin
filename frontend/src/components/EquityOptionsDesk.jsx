@@ -1,33 +1,17 @@
 import { GuidedEmptyState } from "./CompactWorkspaceUI";
+import {
+  formatMoney as _formatMoney,
+  formatNumber,
+  formatPercent,
+  formatFixed,
+} from "../utils/formatNumbers";
 
 function formatMoney(value, digits = 2) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "—";
-  if (Math.abs(numeric) >= 1_000_000_000) return `$${(numeric / 1_000_000_000).toFixed(2)}B`;
-  if (Math.abs(numeric) >= 1_000_000) return `$${(numeric / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(numeric) >= 1_000) return `$${(numeric / 1_000).toFixed(2)}K`;
-  return `$${numeric.toFixed(digits)}`;
-}
-
-function formatNumber(value, digits = 0) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "—";
-  return numeric.toLocaleString(undefined, {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-function formatPercent(value, digits = 2) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "—";
-  return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(digits)}%`;
+  return _formatMoney(value, { digits, compact: true });
 }
 
 function formatRatio(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "—";
-  return numeric.toFixed(2);
+  return formatFixed(value, 2);
 }
 
 function formatIv(value) {

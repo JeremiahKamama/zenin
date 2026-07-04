@@ -6,6 +6,7 @@ import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, sav
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
 import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup, MetricStrip } from "./CompactWorkspaceUI";
+import { downloadBlob as _downloadBlob, downloadCsvFile, escapeCsvValue } from "../utils/downloadHelpers";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -1275,27 +1276,9 @@ export function JournalModule({
     [analytics?.tradedAssetsReport]
   );
 
-  const downloadBlob = (blob, fileName) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  };
+  const downloadBlob = (blob, fileName) => _downloadBlob(fileName, blob);
 
-  const escapeCsvCell = (value) => {
-    const text = String(value ?? "");
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-  };
-
-  const downloadCsv = (rows, fileName) => {
-    const csv = rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    downloadBlob(blob, fileName);
-  };
+  const downloadCsv = (rows, fileName) => downloadCsvFile(fileName, rows);
 
   const exportTradedAssetsToExcel = () => {
     if (!reportExportRows.length) return;

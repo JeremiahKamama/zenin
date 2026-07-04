@@ -4,6 +4,8 @@ import { TradingViewChart } from "./TradingViewChart";
 import { zeninFetch } from "../utils/zeninFetch";
 import { hasWorkspaceSession } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { formatMoney, formatFixed } from "../utils/formatNumbers";
+import { formatDateTime } from "../utils/formatDates";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
@@ -31,14 +33,8 @@ function formatCalculationTimestamp(value) {
   });
 }
 
-function formatMoney(value, digits = 2) {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? `$${amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}` : "—";
-}
-
 function formatNumber(value, digits = 4) {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount.toFixed(digits) : "—";
+  return formatFixed(value, digits);
 }
 
 function formatLegSummary(leg = {}, index = 0) {

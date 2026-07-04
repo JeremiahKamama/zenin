@@ -98,6 +98,11 @@ import {
 import { Line, Bar } from 'react-chartjs-2';
 import { adminFetch } from './utils/adminFetch';
 import { copyTextToClipboard, downloadCsvFile, downloadJsonFile } from './utils/adminUi';
+import {
+  formatDateOnly as _formatDateOnly,
+  formatDateTime as _formatDateTime,
+  formatRelativeTime as _formatRelativeTime,
+} from './utils/formatDates';
 
 ChartJS.register(
   CategoryScale,
@@ -123,33 +128,9 @@ const useAdminUi = () => React.useContext(AdminUiContext);
 
 const createAutoFitColumns = (minWidth = 220) => `repeat(auto-fit, minmax(${minWidth}px, 1fr))`;
 
-const formatAbsoluteDate = (value, fallback = 'N/A') => {
-  if (!value) return fallback;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return fallback;
-  return date.toLocaleDateString();
-};
-
-const formatAbsoluteDateTime = (value, fallback = 'N/A') => {
-  if (!value) return fallback;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return fallback;
-  return date.toLocaleString();
-};
-
-const formatRelativeTime = (value, fallback = 'N/A') => {
-  if (!value) return fallback;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return fallback;
-  const diffMs = Date.now() - date.getTime();
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diffMs < minute) return 'Just now';
-  if (diffMs < hour) return `${Math.max(1, Math.round(diffMs / minute))}m ago`;
-  if (diffMs < day) return `${Math.max(1, Math.round(diffMs / hour))}h ago`;
-  return `${Math.max(1, Math.round(diffMs / day))}d ago`;
-};
+const formatAbsoluteDate = (value, fallback = 'N/A') => _formatDateOnly(value, fallback);
+const formatAbsoluteDateTime = (value, fallback = 'N/A') => _formatDateTime(value, fallback);
+const formatRelativeTime = (value, fallback = 'N/A') => _formatRelativeTime(value, fallback);
 
 const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US', {
   style: 'currency',

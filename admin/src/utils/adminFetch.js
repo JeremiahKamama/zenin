@@ -3,29 +3,20 @@
  * Handles base URL resolution and standard headers.
  */
 
+import { readCookie } from "./cookieUtils";
+
 function resolveAdminApiUrl() {
   if (typeof window === 'undefined') return 'http://localhost:4000/api/admin';
   const hostname = window.location.hostname.toLowerCase();
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
     return 'http://localhost:4000/api/admin';
   }
-  // Production mapping: admin.zenin.capital -> backend-api/api/admin
   return 'https://zenin-mx6w.onrender.com/api/admin'; 
 }
 
 const ADMIN_API_BASE_URL = resolveAdminApiUrl();
 const AUTH_API_BASE_URL = ADMIN_API_BASE_URL.replace(/\/admin$/, "");
 let adminCsrfTokenCache = null;
-
-function readCookie(name) {
-  if (typeof document === "undefined") return "";
-  const prefix = `${name}=`;
-  return String(document.cookie || "")
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(prefix))
-    ?.slice(prefix.length) || "";
-}
 
 async function ensureAdminCsrfToken() {
   if (typeof window === "undefined") return "";

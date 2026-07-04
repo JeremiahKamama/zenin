@@ -15,6 +15,11 @@ import {
   writeLocalJson
 } from "../utils/workspacePersistence";
 import { zeninFetch, zeninFetchJson } from "../utils/zeninFetch";
+import { numberOrZero } from "../utils/formatNumbers";
+import {
+  formatDateTime as _formatDateTime,
+  formatDateOnly as _formatDateOnly,
+} from "../utils/formatDates";
 
 const SOURCES_NAMESPACE = "research:knowledge:sources";
 const DOCUMENTS_NAMESPACE = "research:knowledge:documents";
@@ -205,11 +210,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function numberOrZero(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : 0;
-}
-
 function toSlugLabel(value) {
   return String(value || "")
     .replace(/_/g, "-")
@@ -243,31 +243,19 @@ function ConvictionDots({ value, label }) {
 }
 
 function formatDateTime(value) {
-  if (!value) return "Not synced";
-  try {
-    return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return String(value);
-  }
+  return _formatDateTime(value, "Not synced");
 }
 
 function formatDateOnly(value) {
-  if (!value) return "No date";
-  try {
-    return new Date(value).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-  } catch {
-    return String(value);
-  }
+  return _formatDateOnly(value, "No date");
 }
 
 function formatCurrency(value) {
-  const numeric = numberOrZero(value);
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(numeric);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(numberOrZero(value));
 }
 
 function formatPercent(value, digits = 1) {
-  const numeric = numberOrZero(value);
-  return `${numeric.toFixed(digits)}%`;
+  return `${numberOrZero(value).toFixed(digits)}%`;
 }
 
 function daysUntil(dateValue) {

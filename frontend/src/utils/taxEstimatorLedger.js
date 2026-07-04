@@ -1,3 +1,5 @@
+import { numberOrZero } from "./formatNumbers";
+
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
 export const TAX_LEDGER_BUCKETS = [
@@ -32,11 +34,6 @@ export const TAX_LEDGER_BUCKETS = [
     fallbackSymbol: "ALT-BOOK",
   },
 ];
-
-function numberOrZero(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : 0;
-}
 
 function roundAmount(value) {
   return Math.round(numberOrZero(value) * 100) / 100;

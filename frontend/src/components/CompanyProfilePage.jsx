@@ -3,6 +3,13 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { getCurrencySymbol } from "../utils/currencyUtils";
 import { zeninFetch } from "../utils/zeninFetch";
+import {
+  formatMoney as _formatMoney,
+  formatNumber as _formatNumber,
+  formatFixed,
+} from "../utils/formatNumbers";
+import { formatDateOnly } from "../utils/formatDates";
+
 const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_DATE_KEY = "zenin_profile_session_date";
 
@@ -16,8 +23,6 @@ function isFresh(cacheEntry, ttlMs) {
   const dateStr = new Date(cacheEntry.updatedAt).toISOString().split("T")[0];
   const today = getTodayStr();
   
-  // Is it within TTL AND is it from the same calendar day?
-  // Using calendar day ensures "once a day" behavior across sessions.
   return Number.isFinite(ts) && (Date.now() - ts < ttlMs) && (dateStr === today);
 }
 
@@ -32,15 +37,8 @@ function hasUsableCompanyProfile(profile) {
 }
 
 function formatMoney(value, currency = "USD") {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "Not available";
-  const abs = Math.abs(numeric);
   const symbol = getCurrencySymbol(currency);
-  if (abs >= 1e12) return `${symbol}${(numeric / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${symbol}${(numeric / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${symbol}${(numeric / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${symbol}${(numeric / 1e3).toFixed(2)}K`;
-  return `${symbol}${numeric.toFixed(2)}`;
+  return _formatMoney(value, { compact: true, symbol, fallback: "Not available" });
 }
 
 function formatPercent(value) {
@@ -50,20 +48,11 @@ function formatPercent(value) {
 }
 
 function formatNumber(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "Not available";
-  return new Intl.NumberFormat("en-US").format(numeric);
+  return _formatNumber(value, 0, { fallback: "Not available" });
 }
 
 function formatDate(value) {
-  if (!value) return "Not available";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric"
-  }).format(date);
+  return formatDateOnly(value, "Not available");
 }
 
 function formatLabel(value) {
@@ -90,8 +79,7 @@ function numericTone(value) {
 }
 
 function formatDecimal(value, digits = 1) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(digits) : "Not available";
+  return formatFixed(value, digits, { fallback: "Not available" });
 }
 
 function normalizeFrameworkKey(theme, category) {

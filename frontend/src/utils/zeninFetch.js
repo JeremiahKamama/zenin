@@ -4,21 +4,12 @@
  */
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { readCookie } from "./cookieUtils";
 
 const SIMULATED_PLAN_VALUES = new Set(["starter", "pro", "desk"]);
 const CSRF_FETCH_TIMEOUT_MS = 12000;
 const CSRF_FETCH_ATTEMPTS = 1;
 let csrfTokenCache = null;
-
-function readCookie(name) {
-  if (typeof document === "undefined") return "";
-  const prefix = `${name}=`;
-  return String(document.cookie || "")
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(prefix))
-    ?.slice(prefix.length) || "";
-}
 
 function getSimulationPlanHeaderValue(endpoint) {
   if (typeof window === "undefined") return null;
