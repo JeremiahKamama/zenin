@@ -18,7 +18,7 @@ import {
   LayoutDashboard,
   GitCommitHorizontal,
   Receipt,
-  Pulse,
+  Zap,
   Moon,
   Sun,
   User,
@@ -84,7 +84,7 @@ export function TaxIcon() {
 }
 
 export function LiveRailIcon() {
-  return <Pulse {...iconProps} />;
+  return <Zap {...iconProps} />;
 }
 
 export function ThemeDarkIcon() {
