@@ -46,7 +46,7 @@
 | 5.6 | AuthPage / PublicHomepage | ✅ Done | Migrated to Brand v2 monochrome; removed gradient backgrounds and cyan/purple colors; updated public.css tokens |
 | 5.7 | HomeModule | ✅ Done | Replaced color-data-sky/purple/teal/info with Brand v2 neutral tokens (primary/secondary/muted) |
 | 5.8 | Remaining modules | ✅ Done | Migrated IndicatorMetricModal, OptionsCalculator, FullMetricsPage, OptionsModule, PortfolioModule, IndicatorMetricsTable to Brand v2 neutral tokens |
-| 6 | Cleanup | 🟡 Partial | `brand.md` ✅ done; legacy color deletion + boot-screen + bundle check pending |
+| 6 | Cleanup | 🟡 Partial | `brand.md` ✅ done; legacy color deletion ✅ done; boot-screen ✅ done; bundle check pending |
 
 ---
 
@@ -319,15 +319,14 @@ rename residue to `theme.css` and merge into `index.css`.
 
 `brand.md` ✅ done. Remaining:
 
-#### 6.1 Delete legacy color (zero remaining references)
-- Re-run audit greps — expect zero hits.
-- Delete unused gradient utilities (`--gradient-brand`, `.btn-gradient`).
-- Remove legacy glow/box-shadow rules.
-- Remove any `--color-data-sky/teal/purple` leftovers.
-- Reconcile boot-screen `--zc-*` tokens in `index.html:49-141` → monochrome
-  (replace `#4f7cff` with white/neutral).
-- Delete the legacy token aliases kept in Phase 0 (e.g. `--color-accent`
-  pointing to `--color-interactive`) once all call-sites migrated.
+#### 6.1 Delete legacy color ✅
+- Re-run audit greps — zero hits in JSX/JS files, only shadcn namespace mappings remain in index.css.
+- Deleted unused gradient utilities (`--gradient-brand`, `.btn-gradient`).
+- Removed legacy glow/box-shadow rules.
+- Removed all `--color-data-sky/teal/purple` leftovers.
+- Reconciled boot-screen `--zc-*` tokens in `index.html` → monochrome
+  (replaced `#4f7cff` with white/neutral).
+- Deleted the legacy token aliases kept in Phase 0 from styles.css.
 
 #### 6.2 Shrink `styles.css`
 Rename residue to `theme.css`, merge into `index.css`.
