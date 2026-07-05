@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import "./public.css";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
@@ -379,33 +380,32 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="auth-v2-shell">
-      <div className="auth-v2-bg" aria-hidden="true" />
-      <main className="auth-v2-main">
-        <section className="auth-v2-card">
-          <button className="auth-v2-back" onClick={() => { window.location.href = "/"; }}>
+    <div className="min-h-screen flex flex-col relative bg-[#0A0A0A] font-sans text-[#A3A3A3]">
+      <main className="flex-1 flex items-center justify-center relative z-10 p-6">
+        <section className="w-full max-w-[400px] flex flex-col bg-[#111111] backdrop-blur-xl border border-[#262626] rounded-2xl p-8 shadow-2xl relative mx-auto my-auto">
+          <button className="absolute top-6 left-6 text-[#737373] hover:text-white transition-colors bg-transparent border-none cursor-pointer flex items-center gap-2" onClick={() => { window.location.href = "/"; }}>
             <span>←</span> Back to home
           </button>
 
           {mode === "signup" ? (
             <>
-              <h1>Create your workspace</h1>
-              <p className="auth-v2-subtitle">Secure sign-in, email confirmation, and recovery for Zenin Capital.</p>
+              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Create your workspace</h1>
+              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">Secure sign-in, email confirmation, and recovery for Zenin Capital.</p>
 
-              <label className="auth-v2-label" htmlFor="signup-name">Display name</label>
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signup-name">Display name</label>
               <input
                 id="signup-name"
-                className="auth-v2-input"
+                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                 value={signupForm.displayName}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, displayName: e.target.value }))}
                 placeholder="Your name"
                 autoComplete="name"
               />
 
-              <label className="auth-v2-label" htmlFor="signup-email">Email address</label>
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signup-email">Email address</label>
               <input
                 id="signup-email"
-                className="auth-v2-input"
+                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                 type="email"
                 value={signupForm.email}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, email: e.target.value }))}
@@ -413,11 +413,11 @@ export default function AuthPage() {
                 autoComplete="email"
               />
 
-              <label className="auth-v2-label" htmlFor="signup-password">Password</label>
-              <div className="auth-v2-password-row">
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signup-password">Password</label>
+              <div className="relative flex items-center w-full">
                 <input
                   id="signup-password"
-                  className="auth-v2-input"
+                  className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                   type={visiblePasswords.signup ? "text" : "password"}
                   value={signupForm.password}
                   onChange={(e) => setSignupForm((prev) => ({ ...prev, password: e.target.value }))}
@@ -426,7 +426,7 @@ export default function AuthPage() {
                 />
                 <button
                   type="button"
-                  className="auth-v2-eye-btn"
+                  className="absolute right-3 text-[#737373] hover:text-white bg-transparent border-none cursor-pointer p-1"
                   onClick={() => togglePasswordVisibility("signup")}
                   aria-label={visiblePasswords.signup ? "Hide password" : "Show password"}
                   title={visiblePasswords.signup ? "Hide password" : "Show password"}
@@ -441,13 +441,13 @@ export default function AuthPage() {
                 ))}
               </ul>
 
-              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onSignUp}>
+              <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading} onClick={onSignUp}>
                 {loading ? "Creating account..." : "Create account"}
               </button>
 
               <div style={{ height: 12 }} />
               <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
+                className={cn(buttonVariants({ variant: "outline" }), "w-full")} 
                 type="button"
                 style={{ width: '100%' }}
                 onClick={handleGuestEntry}
@@ -455,19 +455,19 @@ export default function AuthPage() {
                 Continue as Guest
               </button>
 
-              <p className="auth-v2-bottom-link">Already have an account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Sign in</button></p>
+              <p className="mt-8 text-center text-sm text-[#737373]">Already have an account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Sign in</button></p>
             </>
           ) : null}
 
           {mode === "signin" ? (
             <>
-              <h1>Sign in</h1>
-              <p className="auth-v2-subtitle">Continue to your Zenin workspace with secure authentication.</p>
+              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Sign in</h1>
+              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">Continue to your Zenin workspace with secure authentication.</p>
 
-              <label className="auth-v2-label" htmlFor="signin-email">Email address</label>
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signin-email">Email address</label>
               <input
                 id="signin-email"
-                className="auth-v2-input"
+                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                 type="email"
                 value={signinForm.email}
                 onChange={(e) => setSigninForm((prev) => ({ ...prev, email: e.target.value }))}
@@ -475,11 +475,11 @@ export default function AuthPage() {
                 autoComplete="email"
               />
 
-              <label className="auth-v2-label" htmlFor="signin-password">Password</label>
-              <div className="auth-v2-password-row">
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signin-password">Password</label>
+              <div className="relative flex items-center w-full">
                 <input
                   id="signin-password"
-                  className="auth-v2-input"
+                  className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                   type={visiblePasswords.signin ? "text" : "password"}
                   value={signinForm.password}
                   onChange={(e) => setSigninForm((prev) => ({ ...prev, password: e.target.value }))}
@@ -488,7 +488,7 @@ export default function AuthPage() {
                 />
                 <button
                   type="button"
-                  className="auth-v2-eye-btn"
+                  className="absolute right-3 text-[#737373] hover:text-white bg-transparent border-none cursor-pointer p-1"
                   onClick={() => togglePasswordVisibility("signin")}
                   aria-label={visiblePasswords.signin ? "Hide password" : "Show password"}
                   title={visiblePasswords.signin ? "Hide password" : "Show password"}
@@ -497,21 +497,21 @@ export default function AuthPage() {
                 </button>
               </div>
 
-              <div className="auth-v2-check-row">
-                <label className="auth-v2-checkbox">
+              <div className="flex items-center justify-between mt-4 mb-6 text-sm">
+                <label className="flex items-center gap-2 text-[#A3A3A3] cursor-pointer">
                   <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
                   <span>Keep this device signed in</span>
                 </label>
-                <button className="auth-v2-link-btn" onClick={() => updateMode("forgot")}>Forgot password?</button>
+                <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("forgot")}>Forgot password?</button>
               </div>
 
-              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onSignIn}>
+              <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading} onClick={onSignIn}>
                 {loading ? "Signing in..." : "Sign in"}
               </button>
 
               <div style={{ height: 12 }} />
               <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
+                className={cn(buttonVariants({ variant: "outline" }), "w-full")} 
                 type="button"
                 style={{ width: '100%' }}
                 onClick={handleGuestEntry}
@@ -519,31 +519,31 @@ export default function AuthPage() {
                 Continue as Guest
               </button>
 
-              <div className="auth-v2-divider">Or continue with</div>
-              <div className="auth-v2-oauth-row">
-                <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-google-btn" disabled={loading} onClick={() => onOAuth("google")}>
+              <div className="flex items-center text-xs text-[#525252] my-6 uppercase tracking-wider before:content-[''] before:flex-1 before:border-t before:border-[#262626] before:mr-4 after:content-[''] after:flex-1 after:border-t after:border-[#262626] after:ml-4">Or continue with</div>
+              <div className="flex flex-col gap-3">
+                <button className={cn(buttonVariants({ variant: "outline" }), "w-full flex items-center gap-2")} disabled={loading} onClick={() => onOAuth("google")}>
                   Continue with Google
                 </button>
-                <button className="auth-v2-btn auth-v2-btn-ghost" disabled={loading} onClick={onPasskeySignIn}>
+                <button className={cn(buttonVariants({ variant: "outline" }), "w-full")} disabled={loading} onClick={onPasskeySignIn}>
                   Sign in with Passkey
                 </button>
               </div>
 
-              <p className="auth-v2-bottom-link">Need an account? <button className="auth-v2-link-btn" onClick={() => updateMode("signup")}>Create one</button></p>
+              <p className="mt-8 text-center text-sm text-[#737373]">Need an account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signup")}>Create one</button></p>
             </>
           ) : null}
 
           {mode === "verify" ? (
             <>
-              <h1>Verify your email</h1>
-              <p className="auth-v2-subtitle">
+              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Verify your email</h1>
+              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">
                 Enter the 6-digit code Zenin sent to {signinForm.email ? <strong>{signinForm.email}</strong> : "your inbox"}.
               </p>
 
-              <label className="auth-v2-label" htmlFor="verification-code">Verification code</label>
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="verification-code">Verification code</label>
               <input
                 id="verification-code"
-                className="auth-v2-input auth-v2-code-input"
+                className="flex h-12 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all text-center tracking-[0.5em] font-mono text-xl"
                 type="text"
                 inputMode="numeric"
                 value={verificationForm.code}
@@ -552,24 +552,24 @@ export default function AuthPage() {
                 autoComplete="one-time-code"
               />
 
-              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading || !/^\d{6}$/.test(verificationForm.code)} onClick={onVerifyEmail}>
+              <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading || !/^\d{6}$/.test(verificationForm.code)} onClick={onVerifyEmail}>
                 {loading ? "Verifying..." : "Verify and continue"}
               </button>
 
-              <button className="auth-v2-btn auth-v2-btn-ghost auth-v2-inline-secondary" disabled={loading} onClick={onResendVerification}>
+              <button className={cn(buttonVariants({ variant: "ghost" }), "w-full mt-2")} disabled={loading} onClick={onResendVerification}>
                 Resend code
               </button>
 
-              <p className="auth-v2-bottom-link">
-                Need another account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Back to sign in</button>
+              <p className="mt-8 text-center text-sm text-[#737373]">
+                Need another account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Back to sign in</button>
               </p>
             </>
           ) : null}
 
           {mode === "forgot" ? (
             <>
-              <h1>{recoveryReady ? "Set a new password" : "Reset password"}</h1>
-              <p className="auth-v2-subtitle">
+              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">{recoveryReady ? "Set a new password" : "Reset password"}</h1>
+              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">
                 {recoveryReady
                   ? "Choose a new password for your Zenin account."
                   : "Send a recovery link to your email, then return here to complete the reset."}
@@ -577,10 +577,10 @@ export default function AuthPage() {
 
               {!recoveryReady ? (
                 <>
-                  <label className="auth-v2-label" htmlFor="forgot-email">Email address</label>
+                  <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="forgot-email">Email address</label>
                   <input
                     id="forgot-email"
-                    className="auth-v2-input"
+                    className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                     type="email"
                     value={forgotForm.email}
                     onChange={(e) => setForgotForm((prev) => ({ ...prev, email: e.target.value }))}
@@ -588,17 +588,17 @@ export default function AuthPage() {
                     autoComplete="email"
                   />
 
-                  <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onForgotRequest}>
+                  <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading} onClick={onForgotRequest}>
                     {loading ? "Sending..." : "Send reset link"}
                   </button>
                 </>
               ) : (
                 <>
-                  <label className="auth-v2-label" htmlFor="reset-password">New password</label>
-                  <div className="auth-v2-password-row">
+                  <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="reset-password">New password</label>
+                  <div className="relative flex items-center w-full">
                     <input
                       id="reset-password"
-                      className="auth-v2-input"
+                      className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                       type={visiblePasswords.reset ? "text" : "password"}
                       value={forgotForm.newPassword}
                       onChange={(e) => setForgotForm((prev) => ({ ...prev, newPassword: e.target.value }))}
@@ -607,7 +607,7 @@ export default function AuthPage() {
                     />
                     <button
                       type="button"
-                      className="auth-v2-eye-btn"
+                      className="absolute right-3 text-[#737373] hover:text-white bg-transparent border-none cursor-pointer p-1"
                       onClick={() => togglePasswordVisibility("reset")}
                       aria-label={visiblePasswords.reset ? "Hide password" : "Show password"}
                       title={visiblePasswords.reset ? "Hide password" : "Show password"}
@@ -616,25 +616,25 @@ export default function AuthPage() {
                     </button>
                   </div>
 
-                  <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} onClick={onResetPassword}>
+                  <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading} onClick={onResetPassword}>
                     {loading ? "Updating..." : "Update password"}
                   </button>
                 </>
               )}
 
-              <p className="auth-v2-bottom-link">Back to <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>sign in</button></p>
+              <p className="mt-8 text-center text-sm text-[#737373]">Back to <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>sign in</button></p>
             </>
           ) : null}
 
           {mode === "mfa" ? (
             <>
-              <h1>Verify it is you</h1>
-              <p className="auth-v2-subtitle">This account has authenticator app MFA enabled.</p>
+              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Verify it is you</h1>
+              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">This account has authenticator app MFA enabled.</p>
 
-              <label className="auth-v2-label" htmlFor="mfa-code">Authenticator code</label>
+              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="mfa-code">Authenticator code</label>
               <input
                 id="mfa-code"
-                className="auth-v2-input"
+                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
                 type="text"
                 inputMode="numeric"
                 value={mfaForm.code}
@@ -643,20 +643,20 @@ export default function AuthPage() {
                 autoComplete="one-time-code"
               />
 
-              <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading || !/^\d{6}$/.test(mfaForm.code)} onClick={onVerifyMfa}>
+              <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading || !/^\d{6}$/.test(mfaForm.code)} onClick={onVerifyMfa}>
                 {loading ? "Verifying..." : "Verify and continue"}
               </button>
 
-              <p className="auth-v2-bottom-link">
-                Need to use another account? <button className="auth-v2-link-btn" onClick={() => updateMode("signin")}>Back to sign in</button>
+              <p className="mt-8 text-center text-sm text-[#737373]">
+                Need to use another account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Back to sign in</button>
               </p>
             </>
           ) : null}
 
-          {error ? <p className="auth-v2-error-inline">{error}</p> : null}
-          {message ? <p className="auth-v2-success-inline">✓ {message}</p> : null}
+          {error ? <p className="mt-4 p-3 bg-red-950/50 border border-red-900 rounded-md text-red-200 text-sm">{error}</p> : null}
+          {message ? <p className="mt-4 p-3 bg-green-950/50 border border-green-900 rounded-md text-green-200 text-sm">✓ {message}</p> : null}
           {!isSupabaseConfigured() ? (
-            <p className="auth-v2-error-inline">Authentication environment variables are missing on this frontend build.</p>
+            <p className="mt-4 p-3 bg-red-950/50 border border-red-900 rounded-md text-red-200 text-sm">Authentication environment variables are missing on this frontend build.</p>
           ) : null}
         </section>
       </main>

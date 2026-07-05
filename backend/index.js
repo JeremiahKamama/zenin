@@ -32,6 +32,8 @@ const {
   signinSchema,
   forgotPasswordRequestSchema,
   forgotPasswordConfirmSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
   executeTradeSchema,
   tradeEstimateBatchSchema,
   portfolioUpdateSchema,
@@ -118,7 +120,8 @@ const {
   analytics,
   perpsBench,
   brokerage,
-  describeDatabaseConfig
+  describeDatabaseConfig,
+  closeDatabase
 } = require("./database");
 const db = pool;
 const {
@@ -160,6 +163,11 @@ const {
   getRevenueCatAdminSummary,
   getRevenueCatCustomerSnapshot
 } = require("./revenuecat");
+
+// Sentry MUST be initialized before the Express app is constructed so the
+// request/handler integrations can instrument it. No-op without SENTRY_BACKEND_DSN.
+const sentry = require("./sentry");
+sentry.initSentry();
 
 const app = express();
 
@@ -1022,12 +1030,29 @@ function applyCorsHeaders(req, res) {
 }
 
 // CSRF origin validation for state-changing requests (#6)
+// For state-changing methods that carry our session cookie, we require either:
+//   - a valid Origin header from an allowed origin, OR
+//   - a valid CSRF token (checked downstream by the csrf middleware).
+// Browsers always send Origin on cross-site requests; omitting Origin is only
+// legitimate for same-origin requests. If a cookie is present but neither
+// Origin nor a CSRF header is supplied, the request is treated as suspicious
+// and rejected here so it can't slip past the cookie-scoped CSRF gate.
 app.use((req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   const origin = req.headers.origin;
-  if (!origin) return next(); // same-origin requests may omit Origin
-  if (isAllowedOrigin(origin)) return next();
-  return res.status(403).json({ error: "Origin not allowed." });
+  if (origin) {
+    if (isAllowedOrigin(origin)) return next();
+    return res.status(403).json({ error: "Origin not allowed." });
+  }
+  // No Origin header. Allow only when the request carries neither a session
+  // cookie nor a CSRF token (e.g. machine-to-machine without cookies). Cookie-
+  // bearing requests must clear the CSRF token check that runs next.
+  const hasSessionCookie = /zenin_session=/i.test(String(req.headers.cookie || ""));
+  const hasCsrfHeader = Boolean(String(req.headers["x-csrf-token"] || "").trim());
+  if (hasSessionCookie && !hasCsrfHeader) {
+    return res.status(403).json({ error: "Origin or CSRF token required." });
+  }
+  return next();
 });
 
 const CSRF_EXEMPT_PATHS = new Set([
@@ -1039,9 +1064,14 @@ function shouldEnforceCsrf(req) {
   const method = String(req.method || "").toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return false;
   if (CSRF_EXEMPT_PATHS.has(String(req.path || ""))) return false;
+  // A cookie-authenticated state-changing request must clear CSRF — even if a
+  // Bearer header happens to be present (the app authenticates via cookies, so
+  // a stray bearer token must not weaken CSRF for cookie-bearing requests).
+  const hasCookies = Boolean(String(req.headers.cookie || "").trim());
+  if (hasCookies) return true;
+  // Pure bearer-token (no cookie) machine-to-machine requests skip CSRF.
   if (getBearerToken(req)) return false;
   const hasOrigin = Boolean(String(req.headers.origin || "").trim());
-  const hasCookies = Boolean(String(req.headers.cookie || "").trim());
   return hasOrigin || hasCookies;
 }
 
@@ -1142,11 +1172,24 @@ const writeLimiter = rateLimit({
   message: { error: "Too many write requests." }
 });
 
+// Account-aware rate limiting: combines IP with a hash of the target email (when
+// present in the request body). This prevents an attacker from rotating IPs to
+// brute-force a specific account — the per-account bucket is independent of IP.
+function accountAwareKey(req, limitName) {
+  const ip = req.ip || (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!email) return `${limitName}:${ip}`;
+  // Deterministic hash avoids exposing the email in store keys / logs.
+  const hash = crypto.createHash("sha256").update(email).digest("base64url").slice(0, 16);
+  return `${limitName}:${hash}`;
+}
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => accountAwareKey(req, "auth"),
   message: { error: "Too many authentication attempts. Please try again later." }
 });
 
@@ -1155,7 +1198,28 @@ const passwordResetLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => accountAwareKey(req, "pwreset"),
   message: { error: "Too many password reset attempts. Please try again later." }
+});
+
+// Email verification code is 6 digits — a determined client can brute-force it,
+// so throttle verification attempts and resends harder than the general auth
+// limiter. Resends drive outbound email (cost / abuse vector), so cap them at 5.
+const verifyEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Verify-email uses the session's user (not req.body.email), so key by IP
+  // only — the session provides its own account scoping.
+  message: { error: "Too many verification attempts. Please try again later." }
+});
+const resendVerificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many verification emails requested. Please try again later." }
 });
 
 const expensiveReadLimiter = rateLimit({
@@ -1213,6 +1277,11 @@ const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
 const ADMIN_REAUTH_TTL_MS = 15 * 60 * 1000;
 const SENSITIVE_REAUTH_TTL_MS = 15 * 60 * 1000;
 const CSRF_COOKIE_NAME = "zenin_csrf";
+// Short-lived httpOnly cookie carrying the per-OAuth-flow nonce. Bound into the
+// HMAC-signed state token and verified on callback so a leaked state token alone
+// cannot complete a login (defense against OAuth state replay / login-CSRF).
+// OAUTH_STATE_TTL_MS is defined further down alongside the state-token helpers.
+const OAUTH_STATE_COOKIE_NAME = "zenin_oauth_state";
 const AUTH_HASH_KEY_RAW = String(process.env.AUTH_HASH_KEY || process.env.ZENIN_APP_SECRET || "").trim();
 const FALLBACK_SECRET = "zenin_default_secure_fallback_secret_32chars_min_9f2a1c77_placeholder";
 let AUTH_HASH_KEY = AUTH_HASH_KEY_RAW;
@@ -1790,6 +1859,53 @@ function buildCsrfCookieOptions(req) {
   };
 }
 
+// OAuth state nonce — bound to the HMAC-signed state token via a short-lived
+// httpOnly cookie. Prevents a stolen state token from being replayed to log a
+// victim into an attacker's account (login-CSRF) since the callback must echo
+// both the signed state AND the cookie nonce.
+function buildOAuthStateCookieOptions(req, expiresAt) {
+  const secure = shouldUseSecureCookies(req);
+  const options = {
+    httpOnly: true,
+    secure,
+    // Use lax so the cookie survives the top-level OAuth redirect back to us.
+    sameSite: "lax",
+    path: "/"
+  };
+  const expiryDate = new Date(expiresAt);
+  if (Number.isFinite(expiryDate.getTime())) {
+    options.expires = expiryDate;
+    options.maxAge = Math.max(0, expiryDate.getTime() - Date.now());
+  }
+  return options;
+}
+
+function setOAuthStateNonceCookie(res, req, nonce) {
+  const expiresAt = Date.now() + OAUTH_STATE_TTL_MS;
+  res.cookie(OAUTH_STATE_COOKIE_NAME, nonce, buildOAuthStateCookieOptions(req, expiresAt));
+}
+
+function clearOAuthStateNonceCookie(res, req) {
+  const secure = shouldUseSecureCookies(req);
+  res.cookie(OAUTH_STATE_COOKIE_NAME, "", {
+    httpOnly: true,
+    secure,
+    sameSite: "lax",
+    path: "/",
+    expires: new Date(0),
+    maxAge: 0
+  });
+}
+
+function getOAuthStateNonceCookie(req) {
+  const cookies = parseCookies(req);
+  return String(cookies[OAUTH_STATE_COOKIE_NAME] || "").trim() || null;
+}
+
+function generateOAuthStateNonce() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
 function setSessionCookie(res, req, token, expiresAt, { persistent = true } = {}) {
   res.cookie(SESSION_COOKIE_NAME, token, buildSessionCookieOptions(req, { expiresAt, persistent }));
 }
@@ -1842,6 +1958,22 @@ async function resolveAuthContext(req) {
 app.use(async (req, _res, next) => {
   try {
     req.auth = await resolveAuthContext(req);
+    // Attach safe user context to Sentry. Only id/role/plan — never tokens,
+    // credentials, or sensitive financial fields. Guests get null to avoid
+    // polluting events with anonymous ids.
+    if (req.auth?.isGuest) {
+      sentry.setUser(null);
+      sentry.setTag("authSource", "guest");
+    } else if (req.auth?.userId) {
+      sentry.setUser({
+        id: String(req.auth.userId),
+        // role/plan only — no email by default to limit PII exposure.
+        role: req.auth.user?.adminRole && req.auth.user.adminRole !== "user"
+          ? req.auth.user.adminRole
+          : "user"
+      });
+      sentry.setTag("authSource", req.auth.authSource || "session");
+    }
     next();
   } catch (error) {
     next(error);
@@ -1863,6 +1995,15 @@ app.use((req, res, next) => {
   req.requestId = requestId;
   res.setHeader("x-request-id", requestId);
 
+  // Tag the Sentry event with the request id so events can be cross-referenced
+  // with the admin system log. The auth middleware enriches user/workspace.
+  sentry.setTag("requestId", requestId);
+  sentry.setContext("request", {
+    method: req.method,
+    path: req.path
+    // query/body intentionally omitted for privacy; see backend/sentry.js
+  });
+
   res.on("finish", () => {
     if (!String(req.path || "").startsWith("/api/")) return;
     const statusCode = Number(res.statusCode || 0);
@@ -1872,6 +2013,22 @@ app.use((req, res, next) => {
       : statusCode >= 400
         ? "warning"
         : "info";
+
+    // Breadcrumb every API request so Sentry replays show the call sequence
+    // that led to an error. No request bodies — privacy sanitizer strips them.
+    sentry.addBreadcrumb({
+      category: "http",
+      type: "http",
+      level: statusCode >= 500 ? "error" : statusCode >= 400 ? "warning" : "info",
+      message: `${req.method} ${req.path} -> ${statusCode}`,
+      data: {
+        method: req.method,
+        path: req.path,
+        statusCode,
+        durationMs,
+        requestId
+      }
+    });
 
     admin.recordSystemLog({
       level,
@@ -2418,6 +2575,19 @@ function handleServerError(res, context, error, options = {}) {
   const code = options.code || error?.code || (status >= 500 ? "INTERNAL_SERVER_ERROR" : "REQUEST_FAILED");
 
   console.error(`${context}:`, error?.message || error);
+  // Mirror 5xx into Sentry with the handler context. 4xx stays out to avoid
+  // quota noise from validation/client errors. requestId tag is set per-request
+  // in the logging middleware, so this event links back to the admin log row.
+  if (status >= 500) {
+    sentry.captureException(error instanceof Error ? error : new Error(String(error?.message || error)), {
+      tags: {
+        statusCode: status,
+        errorCode: code,
+        context: String(context || "handleServerError"),
+        requestId: res?.req?.requestId || null
+      }
+    });
+  }
   return apiError(res, status, {
     error: safeError,
     message: safeMessage,
@@ -4592,7 +4762,7 @@ app.get("/api/decision-threads/outcomes", requireSignedIn, attachActiveWorkspace
   }
 });
 
-app.get("/api/db/balance", requireSignedIn, async (req, res) => {
+app.get("/api/db/balance", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const current = await userWorkspace.balance.get(req.auth.userId);
     res.json({ balance: current });
@@ -4601,7 +4771,7 @@ app.get("/api/db/balance", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/balance", requireSignedIn, writeLimiter, validate(balanceChangeSchema), async (req, res) => {
+app.post("/api/db/balance", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(balanceChangeSchema), async (req, res) => {
   try {
     const { amount, type } = req.body;
     if (!["deposit", "withdraw"].includes(type)) return res.status(400).json({ error: "Invalid type" });
@@ -5554,6 +5724,13 @@ const adminRateLimit = rateLimit({
 
 app.use("/api/admin/*", adminRateLimit);
 
+// Defense-in-depth: every /api/admin route must be authenticated. This global
+// guard ensures no admin route can ever be reached without a valid session,
+// even if an individual handler omits requireSignedIn (which is a footgun
+// since requireAdmin currently relies on the upstream global auth middleware).
+// The per-route requireSignedIn calls are still correct but now redundant.
+app.use("/api/admin", requireSignedIn);
+
 app.post("/api/admin/reauth/verify", requireSignedIn, requireAdmin, authLimiter, async (req, res) => {
   try {
     const currentPassword = String(req.body?.currentPassword || "");
@@ -5893,7 +6070,7 @@ app.get("/api/admin/search", requireAdmin, async (req, res) => {
   }
 });
 
-app.patch("/api/admin/users/:id/plan", requireAdmin, async (req, res) => {
+app.patch("/api/admin/users/:id/plan", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const { plan } = req.body;
@@ -6151,7 +6328,7 @@ app.post("/api/admin/users/bulk", requireAdmin, requireRecentAdminReauth, async 
   }
 });
 
-app.post("/api/admin/alerts", requireAdmin, async (req, res) => {
+app.post("/api/admin/alerts", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const title = String(req.body?.title || "Admin alert").trim();
     const query = String(req.body?.query || "").trim();
@@ -6192,7 +6369,7 @@ app.post("/api/admin/alerts", requireAdmin, async (req, res) => {
   }
 });
 
-app.patch("/api/admin/alerts/:id", requireAdmin, async (req, res) => {
+app.patch("/api/admin/alerts/:id", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
     const status = String(req.body?.status || "resolved").trim().toLowerCase();
@@ -6228,7 +6405,7 @@ app.patch("/api/admin/alerts/:id", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/admin/incidents", requireAdmin, async (req, res) => {
+app.post("/api/admin/incidents", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const title = String(req.body?.title || "Admin incident").trim();
     const severity = String(req.body?.severity || "warning").trim().toLowerCase();
@@ -6266,7 +6443,7 @@ app.post("/api/admin/incidents", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/admin/integrations/:name/retry", requireAdmin, async (req, res) => {
+app.post("/api/admin/integrations/:name/retry", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const integrationName = String(req.params?.name || "").trim();
     if (!integrationName) {
@@ -6695,7 +6872,7 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(for
   }
 });
 
-app.post("/api/auth/verify-email", async (req, res) => {
+app.post("/api/auth/verify-email", verifyEmailLimiter, validate(verifyEmailSchema), async (req, res) => {
   try {
     const { code } = req.body;
     if (!code) {
@@ -6776,7 +6953,7 @@ app.post("/api/auth/verify-email", async (req, res) => {
   }
 });
 
-app.post("/api/auth/resend-verification", async (req, res) => {
+app.post("/api/auth/resend-verification", resendVerificationLimiter, validate(resendVerificationSchema), async (req, res) => {
   try {
     if (requireProductionEmailDeliveryReady(res)) return;
     const session = req.auth && !req.auth.isGuest ? req.auth : null;
@@ -7207,11 +7384,17 @@ app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
   const returnTo = sanitizeInternalRedirectPath(req.body?.returnTo, "/app");
   const entryPath = sanitizeOAuthEntryPath(req.body?.entryPath);
   const authMode = sanitizeOAuthMode(req.body?.authMode, "signin");
+  // Bind this flow to a per-request nonce stored in a short-lived httpOnly
+  // cookie. The callback must echo BOTH the signed state and this nonce, so a
+  // leaked state token alone cannot complete a login.
+  const stateNonce = generateOAuthStateNonce();
+  setOAuthStateNonceCookie(res, req, stateNonce);
   const state = createOAuthStateToken({
     provider,
     returnTo,
     entryPath,
     authMode,
+    stateNonce,
     frontendOrigin: sanitizeOAuthFrontendOrigin(req.body?.frontendOrigin || req.headers.origin || req.headers.referer)
   });
   if (provider === "google") {
@@ -7280,6 +7463,21 @@ async function completeGoogleOAuth(req, res, { code, state, json = false } = {})
   if (oauthState.provider !== "google") {
     return fail("Google sign-in session was invalid. Please try again.", 400);
   }
+  // Verify the state-bound nonce matches the httpOnly cookie set at /oauth/start.
+  // A legitimate callback echoes both the signed state token and the nonce
+  // cookie; a replayed/intercepted state token without the matching cookie fails here.
+  const cookieNonce = getOAuthStateNonceCookie(req);
+  const stateNonceBuf = Buffer.from(String(oauthState.stateNonce || ""));
+  const cookieNonceBuf = Buffer.from(String(cookieNonce || ""));
+  const nonceValid = Boolean(oauthState.stateNonce) && Boolean(cookieNonce)
+    && stateNonceBuf.length === cookieNonceBuf.length
+    && stateNonceBuf.length > 0
+    && crypto.timingSafeEqual(stateNonceBuf, cookieNonceBuf);
+  if (!nonceValid) {
+    return fail("Google sign-in session was invalid or expired. Please try again.", 400);
+  }
+  // Single-use: clear the nonce once consumed.
+  clearOAuthStateNonceCookie(res, req);
 
   try {
     const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -7576,8 +7774,32 @@ app.get("/", (req, res) => {
   });
 });
 
+// Lightweight liveness probe — confirms the process is up and serving HTTP.
+// Does NOT probe dependencies (cheap, never fails unless the process is wedged).
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Readiness probe — verifies dependencies (Postgres) so load balancers stop
+// routing traffic to an instance that can't actually serve requests.
+// Returns 503 with the failing dependency when something is wrong.
+app.get("/health/ready", async (_req, res) => {
+  const checks = {};
+  let allOk = true;
+
+  try {
+    await pool.query("SELECT 1");
+    checks.postgres = "ok";
+  } catch (err) {
+    checks.postgres = `error: ${err?.message || "unknown"}`;
+    allOk = false;
+  }
+
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? "ready" : "unavailable",
+    timestamp: new Date().toISOString(),
+    checks
+  });
 });
 
 app.get("/api/categories", (_req, res) => {
@@ -11589,7 +11811,7 @@ app.get("/api/prediction/market-details/:marketId", async (req, res) => {
 // ---------------------------------------------------------------------------
 // Options Calculator Persistence
 // ---------------------------------------------------------------------------
-app.get("/api/db/options-calculations", requireSignedIn, async (req, res) => {
+app.get("/api/db/options-calculations", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const { limit = 20, symbol } = req.query;
     const records = (await userWorkspace.options.getRecent(req.auth.userId, limit, symbol || null)).map((row) => ({
@@ -11607,7 +11829,7 @@ app.get("/api/db/options-calculations", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/options-calculations", requireSignedIn, writeLimiter, validate(optionsCalculationSchema), async (req, res) => {
+app.post("/api/db/options-calculations", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(optionsCalculationSchema), async (req, res) => {
   try {
     const payload = req.body || {};
     const record = await userWorkspace.options.add(req.auth.userId, payload);
@@ -11964,7 +12186,7 @@ app.post("/api/calculator/fees", async (req, res) => {
 });
 
 // Perps calculator persistence
-app.get("/api/db/perps-calculations", requireSignedIn, async (req, res) => {
+app.get("/api/db/perps-calculations", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const { limit = 20, calcType } = req.query;
     const records = await userWorkspace.perpsCalculations.getRecent(req.auth.userId, limit, calcType || null);
@@ -11974,7 +12196,7 @@ app.get("/api/db/perps-calculations", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/db/perps-calculations", requireSignedIn, writeLimiter, async (req, res) => {
+app.post("/api/db/perps-calculations", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
     const payload = req.body || {};
     const record = await userWorkspace.perpsCalculations.add(req.auth.userId, {
@@ -11989,7 +12211,7 @@ app.post("/api/db/perps-calculations", requireSignedIn, writeLimiter, async (req
   }
 });
 
-app.delete("/api/db/perps-calculations/:id", requireSignedIn, async (req, res) => {
+app.delete("/api/db/perps-calculations/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     await userWorkspace.perpsCalculations.delete(req.auth.userId, req.params.id);
     res.json({ success: true });
@@ -15573,6 +15795,49 @@ async function startServer() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Terminal error handler — must be registered AFTER all routes (Express 4 only
+// invokes 4-arg middleware for errors thrown/sync-next(err) in the chain).
+// Catches any handler that forgets try/catch and any thrown error that reaches
+// next(). Avoids hung sockets and leaked stack traces in the response body.
+//
+// The Sentry Express error handler is registered FIRST so it can enrich the
+// event with the request context before our handler responds. We additionally
+// capture 5xx errors explicitly to guarantee breadcrumbs/tags are attached.
+// ---------------------------------------------------------------------------
+sentry.registerExpressErrorHandler(app);
+
+app.use((err, req, res, _next) => {
+  const status = Number(err?.status) || (err && err.statusCode) || 500;
+  const isServerErr = status >= 500;
+  if (isServerErr) {
+    console.error("[unhandled-error]", {
+      requestId: req?.requestId || null,
+      method: req?.method,
+      path: req?.path,
+      message: err?.message,
+      stack: err?.stack
+    });
+    // Capture with the current scope (requestId/user tags were set in the
+    // request middleware). 4xx stays out of Sentry to avoid quota noise.
+    sentry.captureException(err, {
+      tags: {
+        statusCode: status,
+        requestId: req?.requestId || null
+      }
+    });
+  }
+  if (res.headersSent) return; // delegate to the default Express terminator
+  return apiError(res, status, {
+    error: isServerErr ? "Internal server error" : (err?.message || "Request failed"),
+    message: isServerErr
+      ? "Something went wrong. Please try again."
+      : (err?.message || "The request could not be completed."),
+    code: err?.code || (isServerErr ? "INTERNAL_SERVER_ERROR" : "REQUEST_FAILED"),
+    retryable: isRetryableStatus(status)
+  });
+});
+
 async function stopServer() {
   clearInterval(wsHeartbeatTimer);
   clearInterval(wsPushTimer);
@@ -15618,6 +15883,57 @@ if (require.main === module) {
       );
     }
     process.exit(1);
+  });
+
+  // --- Lifecycle hardening -------------------------------------------------
+  // SIGTERM/SIGINT: drain in-flight requests, close the HTTP server + WS layer,
+  // then close the DB pool before exiting. Lets deploys/rollbacks finish cleanly
+  // instead of hard-cutting mid trade / mid brokerage sync / mid pg transaction.
+  let shuttingDown = false;
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] Received ${signal}, draining...`);
+    try {
+      await stopServer();
+    } catch (err) {
+      console.error("[shutdown] Error stopping server:", err?.message || err);
+    }
+    try {
+      await closeDatabase();
+    } catch (err) {
+      console.error("[shutdown] Error closing database pool:", err?.message || err);
+    }
+    // Flush Sentry events before exiting so the deploy signal is captured.
+    await sentry.close(2000);
+    console.log("[shutdown] Complete.");
+    process.exit(0);
+  }
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+  // Log-and-track unhandled rejections / uncaught exceptions so they never
+  // silently wedge the process. We log and continue for rejections (an unhandled
+  // promise should not crash the server); uncaught exceptions are fatal and exit.
+  process.on("unhandledRejection", (reason) => {
+    console.error("[unhandledRejection]", reason);
+    sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)), {
+      level: "error",
+      tags: { kind: "unhandled_rejection" }
+    });
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[uncaughtException]", err);
+    sentry.captureException(err, {
+      level: "fatal",
+      tags: { kind: "uncaught_exception" }
+    });
+    // Flush Sentry, then exit so the process manager restarts.
+    setImmediate(async () => {
+      await sentry.close(2000);
+      process.exit(1);
+    });
   });
 }
 

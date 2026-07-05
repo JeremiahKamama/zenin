@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
+import { DataTable } from "./data-table/DataTable";
 import { TradingViewChart } from "./TradingViewChart";
+import { chartColors } from "../utils/chartTheme";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
@@ -333,14 +335,15 @@ export function HomeModule({
       return;
     }
 
-    let canceled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     setMoversLoading(true);
     const nextByKey = {};
     let cursor = 0;
     const concurrency = Math.min(6, moversUniverse.length);
 
     const worker = async () => {
-      while (!canceled && cursor < moversUniverse.length) {
+      while (!signal.aborted && cursor < moversUniverse.length) {
         const index = cursor;
         cursor += 1;
         const asset = moversUniverse[index];
@@ -354,7 +357,8 @@ export function HomeModule({
 
         try {
           const res = await zeninFetch(
-            `/interval-performance?symbol=${encodeURIComponent(symbol)}&type=${encodeURIComponent(moverType)}`
+            `/interval-performance?symbol=${encodeURIComponent(symbol)}&type=${encodeURIComponent(moverType)}`,
+            { signal }
           );
           if (!res.ok) continue;
           const data = await res.json();
@@ -363,6 +367,7 @@ export function HomeModule({
           moversPerfCacheRef.current.set(key, perf);
           nextByKey[key] = perf;
         } catch (error) {
+          if (signal.aborted) return;
           console.warn(`[Home] Performance fetch failed for ${key}:`, error?.message || error);
         }
       }
@@ -370,7 +375,7 @@ export function HomeModule({
 
     Promise.all(Array.from({ length: concurrency }, () => worker()))
       .then(() => {
-        if (canceled) return;
+        if (signal.aborted) return;
         const hydrated = {};
         moversUniverse.forEach((asset) => {
           const moverType = asset.__moverType === "crypto" ? "crypto" : "tradfi";
@@ -381,14 +386,12 @@ export function HomeModule({
         setMoversPerformanceByKey(hydrated);
       })
       .finally(() => {
-        if (!canceled) {
+        if (!signal.aborted) {
           setMoversLoading(false);
         }
       });
 
-    return () => {
-      canceled = true;
-    };
+    return () => controller.abort();
   }, [moversUniverseKey, marketRefreshNonce]);
 
   const getMoverChange = (asset) => {
@@ -425,14 +428,15 @@ export function HomeModule({
   }, [moversUniverse, moversPerformanceByKey, moversHorizon]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     const hydrateTodayView = async () => {
       try {
         const [macroPayload, earningsPayload] = await Promise.allSettled([
-          zeninFetchJson("/macro-indicators?country=USA"),
-          zeninFetchJson("/earnings-calendar")
+          zeninFetchJson("/macro-indicators?country=USA", { signal }),
+          zeninFetchJson("/earnings-calendar", { signal })
         ]);
-        if (cancelled) return;
+        if (signal.aborted) return;
 
         const macroValue = macroPayload.status === "fulfilled" ? macroPayload.value : null;
         const earningsValue = earningsPayload.status === "fulfilled" ? earningsPayload.value : null;
@@ -471,7 +475,7 @@ export function HomeModule({
         });
       } catch (error) {
         console.warn("[Home] Today view headlines fetch failed:", error?.message || error);
-        if (!cancelled) {
+        if (!signal.aborted) {
           setTodayView((prev) => ({
             ...prev,
             headlines: ["Macro and earnings feeds unavailable, showing portfolio-native signals."]
@@ -481,9 +485,7 @@ export function HomeModule({
       }
     };
     hydrateTodayView();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, []);
 
   const gainers = [...moversWithChange]
@@ -820,6 +822,9 @@ export function HomeModule({
   useEffect(() => {
     if (!marketDetailOpen) return;
 
+    const controller = new AbortController();
+    const { signal } = controller;
+
     // Hydrate from resilient cache immediately so the page never flashes empty.
     const macroCache = readResilientCache("market-context", { source: "macro" });
     const eventsCache = readResilientCache("market-context", { source: "economic-calendar" });
@@ -840,10 +845,12 @@ export function HomeModule({
 
       try {
         const [macroRes, eventsRes, equitiesRes] = await Promise.allSettled([
-          zeninFetchJson("/macro-indicators?country=USA"),
-          zeninFetchJson("/economic-calendar"),
-          zeninFetchJson("/analytics/equities")
+          zeninFetchJson("/macro-indicators?country=USA", { signal }),
+          zeninFetchJson("/economic-calendar", { signal }),
+          zeninFetchJson("/analytics/equities", { signal })
         ]);
+
+        if (signal.aborted) return;
 
         const staleSources = [];
         const unavailableSources = [];
@@ -887,6 +894,7 @@ export function HomeModule({
           unavailableSources,
         });
       } catch (err) {
+        if (signal.aborted) return;
         console.error("Market Context: Fetch failed", err);
         if (!hasAnyCache) {
           setMacroData([]);
@@ -901,11 +909,12 @@ export function HomeModule({
         // When stale cache exists, keep showing it — the user sees the last-known-good state
         // with the existing "stale" health chip.
       } finally {
-        setMarketDataLoading(false);
+        if (!signal.aborted) setMarketDataLoading(false);
       }
     };
 
     fetchData();
+    return () => controller.abort();
   }, [marketDetailOpen, marketRefreshNonce]);
 
   useEffect(() => {
@@ -1227,8 +1236,8 @@ export function HomeModule({
   const isProfitable = totalAccountEquity >= initialBalance;
 
   const chartColor = chartMode === "pnl"
-    ? (isProfitable ? "#22c55e" : "#ef4444")
-    : "#38bdf8";
+    ? (isProfitable ? "var(--color-success)" : "var(--color-danger)")
+    : "var(--color-data-primary)";
 
   const yFormatter = (val) => {
     if (chartMode === "percentage") return `${val.toFixed(2)}%`;
@@ -2223,7 +2232,7 @@ export function HomeModule({
       change: Number.isFinite(Number(finvizBreadth?.adLine)) ? `${Number(finvizBreadth.adLine) >= 0 ? "+" : ""}${Number(finvizBreadth.adLine).toFixed(0)}` : "—",
       tone: Number.isFinite(Number(finvizBreadth?.adLine)) ? Number(finvizBreadth.adLine) >= 0 ? "positive" : "negative" : "neutral",
       caption: "Finviz breadth proxy",
-      color: "#22c55e",
+      color: "var(--color-success)",
       seed: Number.isFinite(Number(finvizBreadth?.above50dmaPct)) ? Number(finvizBreadth.above50dmaPct) : Number(marketBreadthPct) || 0,
     },
     {
@@ -2232,7 +2241,7 @@ export function HomeModule({
       change: Number.isFinite(Number(finvizFactorLeader?.score)) ? `${Number(finvizFactorLeader.score) >= 0 ? "+" : ""}${Number(finvizFactorLeader.score).toFixed(2)}` : "—",
       tone: Number.isFinite(Number(finvizFactorLeader?.score)) ? Number(finvizFactorLeader.score) >= 0 ? "positive" : "negative" : "neutral",
       caption: "Finviz style rotation",
-      color: "#3b82f6",
+      color: "var(--color-data-secondary)",
       seed: Number(finvizFactorLeader?.score || 0) * 10,
     },
     {
@@ -2243,7 +2252,7 @@ export function HomeModule({
         : "—",
       tone: Number.isFinite(Number(finvizRevisionSummary?.breadthPct)) ? Number(finvizRevisionSummary.breadthPct) >= 50 ? "positive" : "negative" : "neutral",
       caption: "Finviz ratings feed",
-      color: "#8b5cf6",
+      color: "var(--color-data-muted)",
       seed: Number(finvizRevisionSummary?.breadthPct || 0),
     },
     {
@@ -2252,7 +2261,7 @@ export function HomeModule({
       change: Number.isFinite(Number(largeCapFlow?.netFlowUsdBn)) ? `${Number(largeCapFlow.netFlowUsdBn) >= 0 ? "+" : ""}${Number(largeCapFlow.netFlowUsdBn).toFixed(2)}B` : "—",
       tone: Number.isFinite(Number(largeCapFlow?.netFlowUsdBn)) ? Number(largeCapFlow.netFlowUsdBn) >= 0 ? "positive" : "negative" : "neutral",
       caption: "SPY proxy flow",
-      color: "#06b6d4",
+      color: "var(--color-data-secondary)",
       seed: Number(largeCapFlow?.netFlowUsdBn || 0) * 10,
     },
     {
@@ -2261,7 +2270,7 @@ export function HomeModule({
       change: Number.isFinite(Number(finvizMoverLeader?.move)) ? formatSignedPercent(finvizMoverLeader.move) : "—",
       tone: Number.isFinite(Number(finvizMoverLeader?.move)) ? Number(finvizMoverLeader.move) >= 0 ? "positive" : "negative" : "neutral",
       caption: finvizMoverLeader?.company || "Finviz screener",
-      color: "#f59e0b",
+      color: "var(--color-warning)",
       seed: Number.isFinite(Number(finvizMoverLeader?.move)) ? Number(finvizMoverLeader.move) * 10 : 0,
     }
   ];
@@ -2547,7 +2556,7 @@ export function HomeModule({
                   <span>{row.indicator}</span>
                   <strong>{row.value}</strong>
                   <em className={row.tone}>{row.change}</em>
-                  <MiniSparkline values={row.series} color={row.color || (row.tone === "negative" ? "#ef4444" : "#3b82f6")} />
+                  <MiniSparkline values={row.series} color={row.color || (row.tone === "negative" ? "var(--color-danger)" : "var(--color-data-primary")} />
                 </div>
               )) : (
                 <div className="market-empty-row">Macro indicators are unavailable right now. Refresh once the backend feed is healthy.</div>
@@ -2814,33 +2823,19 @@ export function HomeModule({
             </div>
             {recentActivityRows.length ? (
               <div className="home-exec-log-table-wrap">
-                <table className="home-exec-log-table">
-                  <thead>
-                    <tr>
-                      <th>Timestamp</th>
-                      <th>Asset_Ticker</th>
-                      <th>Instruction</th>
-                      <th>Notional_Amt</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentActivityRows.map((row) => (
-                      <tr key={row.id} onClick={() => setSelectedActivityDetail(row)} tabIndex={0} role="button" onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setSelectedActivityDetail(row);
-                        }
-                      }}>
-                        <td><span className="home-exec-log-stamp">{row.timestampLabel}</span></td>
-                        <td><strong>{row.symbol}</strong></td>
-                        <td><span className="home-exec-log-instruction">{row.instruction}</span></td>
-                        <td><span className="home-exec-log-notional">{row.value > 0 ? formatMoney(row.value) : "--"}</span></td>
-                        <td><span className={`home-exec-status ${row.tone}`}>{row.status}</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={[
+                    { key: "timestampLabel", header: "Timestamp", sortable: false, cell: (row) => <span className="home-exec-log-stamp">{row.timestampLabel}</span> },
+                    { key: "symbol", header: "Asset_Ticker", sortable: false, cell: (row) => <strong>{row.symbol}</strong> },
+                    { key: "instruction", header: "Instruction", sortable: false, cell: (row) => <span className="home-exec-log-instruction">{row.instruction}</span> },
+                    { key: "value", header: "Notional_Amt", sortable: false, cell: (row) => <span className="home-exec-log-notional">{row.value > 0 ? formatMoney(row.value) : "--"}</span> },
+                    { key: "status", header: "Status", sortable: false, cell: (row) => <span className={`home-exec-status ${row.tone}`}>{row.status}</span> },
+                  ]}
+                  data={recentActivityRows}
+                  getRowId={(row) => row.id}
+                  onRowClick={(row) => setSelectedActivityDetail(row)}
+                  className="home-exec-log-table"
+                />
               </div>
             ) : (
               <HomeEmptyState title="No recent activity yet" description="Trades and portfolio updates will appear here." />
@@ -3012,8 +3007,8 @@ export function HomeModule({
                       chart: { type: "donut", background: "transparent" },
                       labels: ["Crypto", "Cash"],
                       legend: { show: false },
-                      stroke: { width: 2, colors: ["#14191f"] },
-                      colors: ["#5cc8f6", "#5bc48c"],
+                      stroke: { width: 2, colors: [chartColors.surface()] },
+                      colors: [chartColors.info(), chartColors.success()],
                       dataLabels: { enabled: false },
                       tooltip: { y: { formatter: (val) => `${Number(val).toFixed(1)}%` } },
                       plotOptions: { pie: { donut: { size: "70%" } } }
@@ -3387,7 +3382,7 @@ function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction, secondaryAc
   );
 }
 
-function MiniSparkline({ values = [], color = "#38bdf8" }) {
+function MiniSparkline({ values = [], color = "var(--color-data-primary)" }) {
   const series = Array.isArray(values) ? values.filter((value) => Number.isFinite(Number(value))).map(Number) : [];
   if (!series.length) {
     return <div className="market-sparkline-empty" aria-hidden="true" />;

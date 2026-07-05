@@ -15,9 +15,12 @@
     "security:workspace-smoke": "node scripts/security-workspace-smoke.js",
     "test:integration": "node --test test/integration/*.test.js",
     "test:unit": "node --test $(find test/unit -name '*.test.js' | tr '\\n' ' ')",
-    "test": "node --test $(find test/unit -name '*.test.js' | tr '\\n' ' ')"
+    "test": "node --test $(find test/unit -name '*.test.js' | tr '\\n' ' ')",
+    "sentry:create-release": "node scripts/sentry-release.mjs"
   },
   "dependencies": {
+    "@sentry/node": "^10.63.0",
+    "@sentry/profiling-node": "^10.63.0",
     "@simplewebauthn/server": "^9.0.3",
     "apple-signin-auth": "^1.7.5",
     "axios": "^1.16.1",
@@ -42,6 +45,7 @@
     "zod": "^4.4.2"
   },
   "devDependencies": {
+    "@sentry/cli": "^3.6.0",
     "nodemon": "^3.0.1"
   }
 }

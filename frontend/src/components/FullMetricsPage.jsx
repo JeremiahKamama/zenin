@@ -79,40 +79,63 @@ export function FullMetricsPage({
 
   const [macroIndicators, setMacroIndicators] = useState(null);
   const [macroPrices, setMacroPrices] = useState({});
+  const [macroStatus, setMacroStatus] = useState("loading"); // "loading" | "ready" | "error"
   const [benchmarkHistory, setBenchmarkHistory] = useState([]);
   const [benchmarkFinviz, setBenchmarkFinviz] = useState(null);
+  const [benchmarkStatus, setBenchmarkStatus] = useState("loading"); // "loading" | "ready" | "error"
 
   useEffect(() => {
+    const controller = new AbortController();
+    let failed = false;
+
     const fetchMacro = async () => {
       try {
-        const res = await zeninFetch("/macro-indicators?country=USA");
+        const res = await zeninFetch("/macro-indicators?country=USA", { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setMacroIndicators(data);
+        } else {
+          failed = true;
         }
-      } catch (e) { console.error("Macro Fetch Error:", e); }
+      } catch (e) {
+        if (e?.name !== "AbortError") {
+          console.error("Macro Fetch Error:", e);
+          failed = true;
+        }
+      }
     };
-    
+
     const fetchMacroPrices = async () => {
       const symbols = ["UST10Y", "XAU", "WTI", "DXY"];
       const results = {};
       await Promise.all(symbols.map(async (s) => {
         try {
-          const res = await zeninFetch(`/prices?symbol=${s}`);
+          const res = await zeninFetch(`/prices?symbol=${s}`, { signal: controller.signal });
           if (res.ok) {
             const data = await res.json();
             results[s] = data;
           }
-        } catch (e) { console.error(`Price Fetch Error (${s}):`, e); }
+        } catch (e) {
+          if (e?.name !== "AbortError") console.error(`Price Fetch Error (${s}):`, e);
+        }
       }));
       setMacroPrices(results);
     };
 
-    fetchMacro();
-    fetchMacroPrices();
+    (async () => {
+      await Promise.all([fetchMacro(), fetchMacroPrices()]);
+      if (!controller.signal.aborted) {
+        setMacroStatus(failed ? "error" : "ready");
+      }
+    })();
+
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let failed = false;
+
     const fetchBenchmarkHistory = async () => {
       const benchmarkMap = {
         "S&P 500": { symbol: "SPY", type: "stock" },
@@ -125,12 +148,19 @@ export function FullMetricsPage({
 
       const { symbol, type } = benchmarkMap[benchmark] || { symbol: "SPY", type: "stock" };
       try {
-        const res = await zeninFetch(`/history?symbol=${symbol}&type=${type}&interval=1D`);
+        const res = await zeninFetch(`/history?symbol=${symbol}&type=${type}&interval=1D`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setBenchmarkHistory(data.history || []);
+        } else {
+          failed = true;
         }
-      } catch (e) { console.error("Benchmark History Fetch Error:", e); }
+      } catch (e) {
+        if (e?.name !== "AbortError") {
+          console.error("Benchmark History Fetch Error:", e);
+          failed = true;
+        }
+      }
     };
 
     const fetchBenchmarkFinviz = async () => {
@@ -144,16 +174,27 @@ export function FullMetricsPage({
       };
       const symbol = benchmarkMap[benchmark] || "SPY";
       try {
-        const res = await zeninFetch(`/finviz?symbol=${symbol}`);
+        const res = await zeninFetch(`/finviz?symbol=${symbol}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setBenchmarkFinviz(data);
         }
-      } catch (e) { console.error("Benchmark Finviz Fetch Error:", e); }
+      } catch (e) {
+        if (e?.name !== "AbortError") {
+          console.error("Benchmark Finviz Fetch Error:", e);
+        }
+      }
     };
 
-    fetchBenchmarkHistory();
-    fetchBenchmarkFinviz();
+    setBenchmarkStatus("loading");
+    (async () => {
+      await Promise.all([fetchBenchmarkHistory(), fetchBenchmarkFinviz()]);
+      if (!controller.signal.aborted) {
+        setBenchmarkStatus(failed ? "error" : "ready");
+      }
+    })();
+
+    return () => controller.abort();
   }, [benchmark]);
 
   // Filter portfolio and trades based on selected Asset Class
@@ -676,11 +717,11 @@ export function FullMetricsPage({
                   </div>
 
                   <div className="legend">
-                    <Legend color="#3b82f6" label="Equities" value="56%" />
-                    <Legend color="#14b8a6" label="Options" value="18%" />
-                    <Legend color="#f59e0b" label="Commodities" value="12%" />
-                    <Legend color="#8b5cf6" label="Cash" value="8%" />
-                    <Legend color="#94a3b8" label="Other" value="6%" />
+                    <Legend color="var(--color-data-primary)" label="Equities" value="56%" />
+                    <Legend color="var(--color-data-secondary)" label="Options" value="18%" />
+                    <Legend color="var(--color-warning)" label="Commodities" value="12%" />
+                    <Legend color="var(--color-data-muted)" label="Cash" value="8%" />
+                    <Legend color="var(--color-data-slate)" label="Other" value="6%" />
                   </div>
                 </div>
               </article>
@@ -746,18 +787,18 @@ export function FullMetricsPage({
             <article className="panel">
               <h2>Asset Class Exposure</h2>
               <div className="allocation-bar">
-                <span style={{ width: "56%", background: "#3b82f6" }} />
-                <span style={{ width: "18%", background: "#14b8a6" }} />
-                <span style={{ width: "12%", background: "#f59e0b" }} />
-                <span style={{ width: "8%", background: "#8b5cf6" }} />
-                <span style={{ width: "6%", background: "#94a3b8" }} />
+                <span style={{ width: "56%", background: "var(--color-data-primary)" }} />
+                <span style={{ width: "18%", background: "var(--color-data-secondary)" }} />
+                <span style={{ width: "12%", background: "var(--color-warning)" }} />
+                <span style={{ width: "8%", background: "var(--color-data-muted)" }} />
+                <span style={{ width: "6%", background: "var(--color-data-slate)" }} />
               </div>
               <div className="legend wide">
-                <Legend color="#3b82f6" label="Equities" value="56%" />
-                <Legend color="#14b8a6" label="Options" value="18%" />
-                <Legend color="#f59e0b" label="Commodities" value="12%" />
-                <Legend color="#8b5cf6" label="Cash" value="8%" />
-                <Legend color="#94a3b8" label="Other" value="6%" />
+                <Legend color="var(--color-data-primary)" label="Equities" value="56%" />
+                <Legend color="var(--color-data-secondary)" label="Options" value="18%" />
+                <Legend color="var(--color-warning)" label="Commodities" value="12%" />
+                <Legend color="var(--color-data-muted)" label="Cash" value="8%" />
+                <Legend color="var(--color-data-slate)" label="Other" value="6%" />
               </div>
             </article>
 
@@ -776,6 +817,14 @@ export function FullMetricsPage({
         {activeTab === "Benchmark Comparison" && (
           <section className="panel">
             <h2>Benchmark Comparison</h2>
+            {benchmarkStatus === "loading" && (
+              <p className="insight-copy">Loading benchmark data…</p>
+            )}
+            {benchmarkStatus === "error" && (
+              <p className="insight-copy" style={{ color: "var(--danger)" }}>
+                Benchmark data is unavailable right now. Showing locally computed figures where possible. Try refreshing the page.
+              </p>
+            )}
             <div className="comparison-grid">
               {benchmarkData.map(([period, portfolio, benchmark, diff]) => (
                 <div className="comparison-card" key={period}>
@@ -814,6 +863,14 @@ export function FullMetricsPage({
           <section className="metrics-grid two">
             <article className="panel">
               <h2>Macro & Commodities</h2>
+              {macroStatus === "loading" && (
+                <p className="insight-copy">Loading macro data…</p>
+              )}
+              {macroStatus === "error" && (
+                <p className="insight-copy" style={{ color: "var(--danger)" }}>
+                  Macro & commodity data is unavailable right now. Some values may be missing. Try refreshing the page.
+                </p>
+              )}
               <div className="table-list">
                 {macroCommoditiesData.map(([label, value, change]) => (
                   <MetricLine key={label} label={label} value={value} note={change} />
@@ -912,38 +969,22 @@ const styles = `
   overflow-x: hidden;
 }
 
-body:not(.light-theme-active) .metrics-shell {
-  --bg: #000000;
-  --panel: #050505;
-  --panel-2: #080808;
-  --border: rgba(255, 255, 255, 0.06);
-  --text: #f8fafc;
-  --muted: #64748b;
-  --soft: #94a3b8;
-  --blue: #38bdf8;
-  --blue-2: #0ea5e9;
-  --green: #22c55e;
-  --red: #ef4444;
-  --yellow: #f59e0b;
-  --shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-  background: var(--bg);
-  color: var(--text);
-}
-
-body.light-theme-active .metrics-shell {
-  --bg: #f8fafc;
-  --panel: #ffffff;
-  --panel-2: #f8fafc;
-  --border: #e2e8f0;
-  --text: #0f172a;
-  --muted: #64748b;
-  --soft: #334155;
-  --blue: #0284c7;
-  --blue-2: #2563eb;
-  --green: #16a34a;
-  --red: #dc2626;
-  --yellow: #d97706;
-  --shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+/* FullMetrics scoped tokens — aliased to the global design system so they
+   flip with the theme automatically. Local names retained for compatibility. */
+.metrics-shell {
+  --bg: var(--color-bg-base);
+  --panel: var(--color-surface-card);
+  --panel-2: var(--color-surface-elevated);
+  --border: var(--color-border-subtle);
+  --text: var(--color-text-primary);
+  --muted: var(--color-text-muted);
+  --soft: var(--color-data-slate);
+  --blue: var(--color-data-primary);
+  --blue-2: var(--color-data-primary);
+  --green: var(--color-success);
+  --red: var(--color-danger);
+  --yellow: var(--color-warning);
+  --shadow: var(--shadow-3);
   background: var(--bg);
   color: var(--text);
 }
@@ -1172,7 +1213,7 @@ body.light-theme-active .metrics-shell {
   place-items: center;
   background:
     radial-gradient(circle, var(--panel) 0 45%, transparent 46%),
-    conic-gradient(#3b82f6 0 56%, #14b8a6 56% 74%, #f59e0b 74% 86%, #8b5cf6 86% 94%, #94a3b8 94% 100%);
+    conic-gradient(var(--color-data-primary) 0 56%, var(--color-data-secondary) 56% 74%, var(--color-warning) 74% 86%, var(--color-data-muted) 86% 94%, var(--color-data-slate) 94% 100%);
   border: 1px solid var(--border);
 }
 .donut span { font-weight: 900; font-size: 24px; }

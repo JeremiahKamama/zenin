@@ -1269,6 +1269,16 @@ async function initializeDatabase() {
       );
     `);
 
+    // Admin dashboards filter activity by workspace and recency; index the hot path.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_workspace_activity_log_workspace_created
+      ON workspace_activity_log (workspace_id, created_at DESC);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_workspace_activity_log_actor_created
+      ON workspace_activity_log (actor_user_id, created_at DESC);
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS workspace_alert_assignments (
         id SERIAL PRIMARY KEY,
@@ -1314,6 +1324,17 @@ async function initializeDatabase() {
       ADD COLUMN IF NOT EXISTS session_id INTEGER,
       ADD COLUMN IF NOT EXISTS actor_type TEXT,
       ADD COLUMN IF NOT EXISTS environment TEXT;
+    `);
+
+    // Log dashboards filter by level/service and recency; these keep them fast
+    // as the append-only table grows.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_app_system_logs_level_created
+      ON app_system_logs (level, created_at DESC);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_app_system_logs_service_created
+      ON app_system_logs (service, created_at DESC);
     `);
 
     await client.query(`
@@ -1947,6 +1968,17 @@ async function initializeDatabase() {
       );
     `);
 
+    // Audit-log lookups are almost always scoped to an admin or target user,
+    // ordered by recency.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_admin_created
+      ON admin_audit_logs (admin_user_id, created_at DESC);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_target_created
+      ON admin_audit_logs (target_user_id, created_at DESC);
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_exchange_keys (
         id SERIAL PRIMARY KEY,
@@ -2291,6 +2323,15 @@ async function initializeDatabase() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_brokerage_connections_workspace_user
         ON brokerage_connections (workspace_id, user_id, provider);
+    `);
+
+    // Background sync scans for due connections via status + last_synced_at;
+    // a partial index on that exact predicate keeps the scheduler fast as the
+    // table grows (only 'connected'/'pending' rows are candidates).
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brokerage_connections_sync_due
+        ON brokerage_connections (last_synced_at NULLS FIRST)
+        WHERE status IN ('connected', 'pending');
     `);
 
     await client.query(`

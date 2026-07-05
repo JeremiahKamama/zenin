@@ -327,7 +327,7 @@ export function OptionsCalculator({   spotPrice = 0,
     savedCalculationsPage * CALCULATIONS_PAGE_SIZE
   );
 
-  const isProfitColor = (val) => val >= 0 ? "#22c55e" : "#ef4444";
+  const isProfitColor = (val) => val >= 0 ? "var(--color-success)" : "var(--color-danger)";
 
   const payoffTimeScale = 100;
   const payoffChartOptions = useMemo(() => ({
@@ -345,7 +345,7 @@ export function OptionsCalculator({   spotPrice = 0,
   const payoffChartSeries = [{
     name: "P&L",
     type: "area",
-    color: "#38bdf8",
+    color: "var(--color-data-primary)",
     data: payoffSeriesData,
     options: {
       priceFormat: {
@@ -365,7 +365,7 @@ export function OptionsCalculator({   spotPrice = 0,
       position: "atPriceMiddle",
       price: spotPayoffPoint.value,
       shape: "circle",
-      color: "#f59e0b",
+      color: "var(--color-warning)",
       text: "Spot"
     } : null,
     ...breakevenPoints.map((point) => ({
@@ -373,7 +373,7 @@ export function OptionsCalculator({   spotPrice = 0,
       position: "atPriceMiddle",
       price: 0,
       shape: "circle",
-      color: "#22d3ee",
+      color: "var(--color-data-secondary)",
       text: "BE"
     }))
   ].filter(Boolean);
@@ -513,7 +513,7 @@ export function OptionsCalculator({   spotPrice = 0,
   };
 
   return (
-    <div className="options-calculator options-exec-calculator" style={{ marginTop: "32px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "24px" }}>
+    <div className="options-calculator options-exec-calculator" style={{ marginTop: "32px", borderTop: "1px solid var(--color-border-medium)", paddingTop: "24px" }}>
       <h2 className="options-calculator-title" style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 500, color: "var(--color-text-primary)" }}>
         Options Calculator
       </h2>
@@ -521,7 +521,7 @@ export function OptionsCalculator({   spotPrice = 0,
       <div className="options-calculator-layout" style={{ marginBottom: "16px" }}>
         <div className="options-calculator-side">
           <div className="watchlist-panel glass options-calculator-symbol-panel options-exec-panel" style={{ padding: "16px" }}>
-            <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
+            <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "var(--color-data-slate)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
             {isRfqSymbol ? (
               <div className="options-calculator-mode-pill rfq" style={{ marginBottom: "10px" }}>
                 RFQ market
@@ -544,7 +544,7 @@ export function OptionsCalculator({   spotPrice = 0,
                 }}
                 placeholder="Search symbol..."
                 className="options-calculator-symbol-input"
-                style={{ width: "100%", padding: "8px 12px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "8px", color: "#f1f5f9", fontSize: "14px", outline: "none" }}
+                style={{ width: "100%", padding: "8px 12px", background: "var(--color-surface-panel)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "8px", color: "var(--color-data-slate-bright)", fontSize: "14px", outline: "none" }}
               />
               {showSymbolDropdown && filteredSymbols.length > 0 && (
                 <div
@@ -554,7 +554,7 @@ export function OptionsCalculator({   spotPrice = 0,
                     top: "100%",
                     left: 0,
                     right: 0,
-                    background: "#0f172a",
+                    background: "var(--color-surface-elevated)",
                     border: "1px solid rgba(148,163,184,0.2)",
                     borderRadius: "8px",
                     marginTop: "4px",
@@ -572,7 +572,7 @@ export function OptionsCalculator({   spotPrice = 0,
                         commitSymbolSelection(s);
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(148,163,184,0.08)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = s === symbol ? "rgba(56,189,248,0.1)" : "transparent")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = s === symbol ? "rgba(255, 255, 255, 0.08)" : "transparent")}
                       style={{
                         padding: "10px 14px",
                         width: "100%",
@@ -580,8 +580,8 @@ export function OptionsCalculator({   spotPrice = 0,
                         textAlign: "left",
                         cursor: "pointer",
                         fontSize: "14px",
-                        color: s === symbol ? "#38bdf8" : "#f1f5f9",
-                        background: s === symbol ? "rgba(56,189,248,0.1)" : "transparent"
+                        color: s === symbol ? "var(--color-data-primary)" : "var(--color-data-slate-bright)",
+                        background: s === symbol ? "rgba(255, 255, 255, 0.08)" : "transparent"
                       }}
                     >
                       {s}
@@ -590,24 +590,24 @@ export function OptionsCalculator({   spotPrice = 0,
                 </div>
               )}
             </div>
-            <div className="options-calculator-spot-box" style={{ marginTop: "12px", padding: "10px", background: "rgba(56,189,248,0.06)", borderRadius: "8px", border: "1px solid rgba(56,189,248,0.15)" }}>
-              <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>
+            <div className="options-calculator-spot-box" style={{ marginTop: "12px", padding: "10px", background: "rgba(255, 255, 255, 0.04)", borderRadius: "8px", border: "1px solid rgba(255, 255, 255, 0.08)" }}>
+              <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "var(--color-data-slate-dim)" }}>
                 Last Available Price
               </p>
-              <p className="options-calculator-spot-value" style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "#38bdf8" }}>
+              <p className="options-calculator-spot-value" style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "var(--color-data-primary)" }}>
                 {Number.isFinite(effectiveSpot) && effectiveSpot > 0 ? `$${effectiveSpot.toLocaleString()}` : "Unavailable"}
               </p>
-              <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#64748b" }}>
+              <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>
                 Source: {spotSource === "lyra" ? "Lyra" : spotSource === "hyperliquid" ? "Hyperliquid (fallback)" : "Unavailable"}
               </p>
               {isRfqMarket ? (
-                <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#fbbf24" }}>
+                <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--color-data-amber-bright)" }}>
                   Market mode: {marketStructureLabel}. {marketStructureNote || "A full ladder snapshot may not be available for every quote."}
                 </p>
               ) : null}
             </div>
             {!hasCalculatorMarketData ? (
-              <p style={{ margin: "10px 0 0", fontSize: "11px", lineHeight: 1.45, color: "#f59e0b" }}>
+              <p style={{ margin: "10px 0 0", fontSize: "11px", lineHeight: 1.45, color: "var(--color-warning)" }}>
                 {isRfqSymbol
                   ? `${normalizedSymbol} is currently exposed through RFQ on Derive, so prefilled strikes, IV, and premiums may be sparse here. Switch the chain asset to ${normalizedSymbol} or search another asset for a full ladder-driven calculation.`
                   : `No options market data is available for ${normalizedSymbol || "this asset"} right now. Search another asset to continue calculations.`}
@@ -616,7 +616,7 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
 
           <div className="watchlist-panel glass options-calculator-strategy-panel options-exec-panel" style={{ padding: "16px" }}>
-            <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
+            <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "var(--color-data-slate)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
             <div className="options-calculator-strategy-grid">
               {strategies.map((s) => (
                 <button
@@ -684,7 +684,7 @@ export function OptionsCalculator({   spotPrice = 0,
                       className="options-leg-input"
                     />
                     {deribitGreeksLoading[i] && (
-                      <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: '#38bdf8', pointerEvents: 'none' }}>⟳ Deribit</span>
+                      <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--color-data-primary)', pointerEvents: 'none' }}>⟳ Deribit</span>
                     )}
                   </div>
                 </div>
@@ -762,16 +762,16 @@ export function OptionsCalculator({   spotPrice = 0,
             ))}
           </div>
 
-          <div className="options-calculator-greeks-grid" style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
+          <div className="options-calculator-greeks-grid" style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid var(--color-border-medium)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
             {[
               { label: "Net P&L", value: `$${totals.pnl.toFixed(2)}`, color: isProfitColor(totals.pnl) },
-              { label: "Delta", value: totals.delta.toFixed(4), color: totals.delta >= 0 ? "#38bdf8" : "#f59e0b" },
-              { label: "Gamma", value: totals.gamma.toFixed(6), color: "#94a3b8" },
-              { label: "Theta", value: totals.theta.toFixed(4), color: totals.theta >= 0 ? "#22c55e" : "#ef4444" },
-              { label: "Vega", value: totals.vega.toFixed(4), color: "#a78bfa" },
+              { label: "Delta", value: totals.delta.toFixed(4), color: totals.delta >= 0 ? "var(--color-data-primary)" : "var(--color-warning)" },
+              { label: "Gamma", value: totals.gamma.toFixed(6), color: "var(--color-data-slate)" },
+              { label: "Theta", value: totals.theta.toFixed(4), color: totals.theta >= 0 ? "var(--color-success)" : "var(--color-danger)" },
+              { label: "Vega", value: totals.vega.toFixed(4), color: "var(--color-data-secondary)" },
             ].map(({ label, value, color }) => (
-              <div className="options-calculator-greek-card" key={label} style={{ background: "rgba(0,0,0,0.3)", borderRadius: "8px", padding: "10px", textAlign: "center" }}>
-                <p style={{ margin: "0 0 4px", fontSize: "10px", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</p>
+              <div className="options-calculator-greek-card" key={label} style={{ background: "var(--color-surface-elevated)", borderRadius: "8px", padding: "10px", textAlign: "center" }}>
+                <p style={{ margin: "0 0 4px", fontSize: "10px", color: "var(--color-data-slate-dim)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</p>
                 <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color }}>{value}</p>
               </div>
             ))}
@@ -804,25 +804,25 @@ export function OptionsCalculator({   spotPrice = 0,
       <div className="watchlist-panel glass options-calculator-pnl-panel options-exec-panel options-exec-pnl-panel" style={{ padding: "20px" }}>
         <div className="options-calculator-pnl-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
-            <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>
-            <p style={{ margin: 0, fontSize: "11px", color: "#64748b" }}>At expiration - underlying price vs profit/loss</p>
+            <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "var(--color-data-slate)", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>
+            <p style={{ margin: 0, fontSize: "11px", color: "var(--color-data-slate-dim)" }}>At expiration - underlying price vs profit/loss</p>
           </div>
           <div className="options-calculator-pnl-stats" style={{ display: "flex", gap: "20px" }}>
             <div style={{ textAlign: "center" }}>
-              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "#64748b" }}>MAX PROFIT</p>
-              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: maxProfit === Infinity ? "#22c55e" : isProfitColor(maxProfit) }}>
+              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>MAX PROFIT</p>
+              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: maxProfit === Infinity ? "var(--color-success)" : isProfitColor(maxProfit) }}>
                 {maxProfit > 9999 ? "Unlimited" : `$${maxProfit.toFixed(2)}`}
               </p>
             </div>
             <div style={{ textAlign: "center" }}>
-              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "#64748b" }}>MAX LOSS</p>
-              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#ef4444" }}>
+              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>MAX LOSS</p>
+              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "var(--color-danger)" }}>
                 {maxLoss < -9999 ? "Unlimited" : `$${maxLoss.toFixed(2)}`}
               </p>
             </div>
             <div style={{ textAlign: "center" }}>
-              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "#64748b" }}>BREAKEVEN</p>
-              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#f59e0b" }}>
+              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>BREAKEVEN</p>
+              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "var(--color-warning)" }}>
                 {breakevenPoints.length > 0 ? `$${breakevenPoints.map((point) => point.toLocaleString()).join(" / $")}` : "—"}
               </p>
             </div>
@@ -863,7 +863,7 @@ export function OptionsCalculator({   spotPrice = 0,
             {savedCalculationsLoading ? (
               <div className="loading-state" style={{ marginTop: "8px" }}>Loading saved calculations...</div>
             ) : savedCalculationsError ? (
-              <div className="loading-state" style={{ marginTop: "8px", color: "#f59e0b" }}>{savedCalculationsError}</div>
+              <div className="loading-state" style={{ marginTop: "8px", color: "var(--color-warning)" }}>{savedCalculationsError}</div>
             ) : savedCalculations.length === 0 ? (
               <div className="loading-state" style={{ marginTop: "8px" }}>No saved calculations for {normalizedSymbol || "this asset"} yet.</div>
             ) : (

@@ -8,20 +8,19 @@ export default function LegalPage({ type = "terms" }) {
   const lastUpdated = "May 12, 2026";
 
   return (
-    <div className="auth-v2-shell">
-      <div className="auth-v2-bg" aria-hidden="true" />
-      <main className="auth-v2-main" style={{ padding: "40px 20px" }}>
-        <a className="auth-v2-logo" href="/" aria-label="Zenin Capital homepage">
+    <div className="min-h-screen flex flex-col relative bg-[#0A0A0A] font-sans text-[#A3A3A3]">
+      <main className="flex-1 flex items-center justify-center relative z-10 p-6">
+        <a className="mb-8" href="/" aria-label="Zenin Capital homepage">
           <ZeninLogo size="md" />
         </a>
 
-        <article className="auth-v2-card" style={{ maxWidth: 800, width: "100%", padding: 40, overflowY: "visible" }}>
-          <header style={{ marginBottom: 32, borderBottom: "1px solid rgba(148, 163, 184, 0.12)", paddingBottom: 24 }}>
-            <h1 style={{ fontSize: "2.5rem", marginBottom: 8, textAlign: "left" }}>{title}</h1>
-            <p style={{ color: "#94a3b8", fontSize: "0.9rem" }}>Last updated: {lastUpdated}</p>
+        <article className="w-full max-w-[800px] bg-[#111111] border border-[#262626] rounded-2xl p-10" style={{ overflowY: "visible" }}>
+          <header style={{ marginBottom: 32, borderBottom: "1px solid rgba(255, 255, 255, 0.06)", paddingBottom: 24 }}>
+            <h1 style={{ fontSize: "2.5rem", marginBottom: 8, textAlign: "left", color: "white" }}>{title}</h1>
+            <p style={{ color: "#737373", fontSize: "0.9rem" }}>Last updated: {lastUpdated}</p>
           </header>
 
-          <div className="legal-content" style={{ color: "#e2e8f0", lineHeight: 1.6 }}>
+          <div className="legal-content" style={{ color: "#A3A3A3", lineHeight: 1.6 }}>
             {isTerms ? (
               <TermsContent />
             ) : (
@@ -29,8 +28,8 @@ export default function LegalPage({ type = "terms" }) {
             )}
           </div>
 
-          <footer style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid rgba(148, 163, 184, 0.12)", textAlign: "center" }}>
-            <button className="auth-v2-btn auth-v2-btn-primary" style={{ width: "auto", padding: "0 32px" }} onClick={() => window.history.back()}>
+          <footer style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid rgba(255, 255, 255, 0.06)", textAlign: "center" }}>
+            <button className="px-8 py-2 bg-white text-black rounded-md hover:bg-[#E5E5E5] transition-colors" style={{ width: "auto" }} onClick={() => window.history.back()}>
               Go Back
             </button>
           </footer>
@@ -43,8 +42,8 @@ export default function LegalPage({ type = "terms" }) {
 function Section({ title, children }) {
   return (
     <section style={{ marginBottom: 32 }}>
-      <h2 style={{ fontSize: "1.25rem", color: "#f8fafc", marginBottom: 12, fontWeight: 600 }}>{title}</h2>
-      <div style={{ color: "#94a3b8" }}>{children}</div>
+      <h2 style={{ fontSize: "1.25rem", color: "white", marginBottom: 12, fontWeight: 600 }}>{title}</h2>
+      <div style={{ color: "#A3A3A3" }}>{children}</div>
     </section>
   );
 }

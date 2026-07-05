@@ -61,7 +61,7 @@ export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
                   className={onSelectMetric ? "indicator-metric-row clickable" : ""}
                   onClick={onSelectMetric ? () => onSelectMetric(metric) : undefined}
                 >
-                  <td style={{ textAlign: "left", color: "#e2e8f0", fontWeight: 600 }}>
+                  <td style={{ textAlign: "left", color: "var(--color-data-slate-bright)", fontWeight: 600 }}>
                     <div className="indicator-metric-cell">
                       <span>{metric.label}</span>
                       {metric.unit ? <small>{metric.unit}</small> : null}
@@ -73,13 +73,13 @@ export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
                       <small>{formatMetricDate(metricDates.previous)}</small>
                     </div>
                   </td>
-                  <td style={{ color: "#e2e8f0" }}>
+                  <td style={{ color: "var(--color-data-slate-bright)" }}>
                     <div className="indicator-metric-value-cell">
                       <span>{formatMacroValue(metric.current, metric.key)}</span>
                       <small>{formatMetricDate(metricDates.current)}</small>
                     </div>
                   </td>
-                  <td style={{ color: "#38bdf8" }}>
+                  <td style={{ color: "var(--color-data-primary)" }}>
                     <div className="indicator-metric-value-cell">
                       <span>{formatMacroValue(metric.expectation, metric.key)}</span>
                       <small>{formatMetricDate(metricDates.expected)}</small>
@@ -91,7 +91,7 @@ export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: "11px", color: "#64748b" }}>
+      <div style={{ fontSize: "11px", color: "var(--color-data-slate-dim)" }}>
         Source: {snapshot?.source || "EODHD"}
         {snapshot?.updatedAt ? ` · Updated ${new Date(snapshot.updatedAt).toLocaleString()}` : ""}
       </div>

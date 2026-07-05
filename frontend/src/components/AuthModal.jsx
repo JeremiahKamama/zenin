@@ -180,7 +180,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
   };
 
   return (
-    <div className="home-v3-drawer-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', padding: '16px' }}>
+    <div className="home-v3-drawer-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, position: 'fixed', inset: 0, background: 'var(--color-surface-overlay)', padding: '16px' }}>
       <div className="auth-v2-card auth-v2-modal-card" style={{ width: 'min(420px, 100%)', position: 'relative' }}>
         <button 
           onClick={onClose}
@@ -188,8 +188,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
             position: 'absolute',
             top: '14px',
             right: '14px',
-            background: 'rgba(255,255,255,0.05)',
-            border: '1px solid rgba(255,255,255,0.1)',
+            background: 'var(--color-surface-hover)',
+            border: '1px solid var(--color-border-medium)',
             color: 'var(--muted)',
             width: '30px',
             height: '30px',
@@ -213,29 +213,32 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
             <h1 style={{ textAlign: 'center' }}>Create account</h1>
             <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>Get started with Zenin Capital for free.</p>
             
-            <label className="auth-v2-label">Full Name</label>
+            <label className="auth-v2-label" htmlFor="signup-fullname">Full Name</label>
             <input 
               className="auth-v2-input"
+              id="signup-fullname"
               placeholder="John Doe"
               value={signupForm.fullName}
               onChange={e => setSignupForm({...signupForm, fullName: e.target.value})}
               required
             />
 
-            <label className="auth-v2-label">Email address</label>
+            <label className="auth-v2-label" htmlFor="signup-email">Email address</label>
             <input 
               className="auth-v2-input"
               type="email"
+              id="signup-email"
               placeholder="name@company.com"
               value={signupForm.email}
               onChange={e => setSignupForm({...signupForm, email: e.target.value})}
               required
             />
 
-            <label className="auth-v2-label">Password</label>
+            <label className="auth-v2-label" htmlFor="signup-password">Password</label>
             <input 
               className="auth-v2-input"
               type="password"
+              id="signup-password"
               placeholder="10+ chars, number, symbol"
               value={signupForm.password}
               onChange={e => setSignupForm({...signupForm, password: e.target.value})}
@@ -268,10 +271,11 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
             <h1 style={{ textAlign: 'center' }}>Sign in</h1>
             <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>Welcome back to Zenin Capital.</p>
 
-            <label className="auth-v2-label">Email address</label>
+            <label className="auth-v2-label" htmlFor="signin-email">Email address</label>
             <input 
               className="auth-v2-input"
               type="email"
+              id="signin-email"
               placeholder="name@company.com"
               value={signinForm.email}
               onChange={e => setSigninForm({...signinForm, email: e.target.value})}
@@ -279,12 +283,13 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
             />
 
             <div className="auth-v2-modal-forgot-row">
-              <label className="auth-v2-label">Password</label>
+              <label className="auth-v2-label" htmlFor="signin-password">Password</label>
               <button type="button" className="auth-v2-link-btn auth-v2-modal-forgot-link" onClick={() => setMode("forgot")}>Forgot password?</button>
             </div>
             <input 
               className="auth-v2-input"
               type="password"
+              id="signin-password"
               placeholder="••••••••"
               value={signinForm.password}
               onChange={e => setSigninForm({...signinForm, password: e.target.value})}
@@ -370,10 +375,11 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
             <h1 style={{ textAlign: 'center' }}>Reset password</h1>
             <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>Enter your email and we'll send a reset link.</p>
 
-            <label className="auth-v2-label">Email address</label>
+            <label className="auth-v2-label" htmlFor="forgot-email">Email address</label>
             <input 
               className="auth-v2-input"
               type="email"
+              id="forgot-email"
               placeholder="name@company.com"
               value={forgotForm.email}
               onChange={e => setForgotForm({...forgotForm, email: e.target.value})}

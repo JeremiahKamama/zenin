@@ -68,34 +68,68 @@ async function fmpGet(path, params = {}, options = {}) {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
+  const startedAt = Date.now();
+
+  // Sentry — safe no-ops when unconfigured.
+  const sentry = require("../../../sentry");
 
   try {
     const response = await fetch(url, {
       signal: options.signal || controller.signal,
       headers: { Accept: "application/json" }
     });
+    const durationMs = Date.now() - startedAt;
 
     if (response.status === 401 || response.status === 403) {
+      sentry.captureException(new FmpHttpError("FMP API authentication failed", response.status), {
+        tags: { provider: "fmp", kind: "auth_error", statusCode: String(response.status) }
+      });
       throw new FmpHttpError("FMP API authentication failed", response.status);
     }
     if (response.status === 429) {
+      sentry.captureException(new FmpHttpError("FMP API rate limit exceeded", 429), {
+        tags: { provider: "fmp", kind: "rate_limited", statusCode: "429" }
+      });
       throw new FmpHttpError("FMP API rate limit exceeded", 429);
     }
     if (!response.ok) {
       const text = await response.text().catch(() => "");
+      sentry.addBreadcrumb({
+        category: "market-intel.fmp",
+        level: "warning",
+        message: `FMP ${path} -> ${response.status}`,
+        data: { provider: "fmp", path, statusCode: response.status, durationMs }
+      });
       throw new FmpHttpError(
         `FMP API error ${response.status}: ${text.slice(0, 200)}`,
         response.status
       );
     }
 
+    // Latency breadcrumb on success — useful for diagnosing slow market-data loads.
+    sentry.addBreadcrumb({
+      category: "market-intel.fmp",
+      type: "http",
+      message: `FMP ${path} -> 200`,
+      data: { provider: "fmp", path, durationMs }
+    });
+
     const data = await response.json();
     return data;
   } catch (err) {
+    const durationMs = Date.now() - startedAt;
     if (err instanceof FmpHttpError) throw err;
     if (err.name === "AbortError") {
+      sentry.captureException(new FmpHttpError("FMP API request timed out", 504), {
+        tags: { provider: "fmp", kind: "timeout", statusCode: "504" },
+        extra: { durationMs }
+      });
       throw new FmpHttpError("FMP API request timed out", 504);
     }
+    sentry.captureException(new FmpHttpError(`FMP API request failed: ${err.message}`, 0), {
+      tags: { provider: "fmp", kind: "network_error", statusCode: "0" },
+      extra: { durationMs }
+    });
     throw new FmpHttpError(`FMP API request failed: ${err.message}`, 0);
   } finally {
     clearTimeout(timeout);

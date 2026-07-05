@@ -22,6 +22,8 @@ const {
   BrokeragePermissionDenied,
   BrokerageSynchronizationError,
 } = require("../../domain/errors");
+// Observability — safe no-ops when Sentry is unconfigured.
+const sentry = require("../../../sentry");
 
 /**
  * Extracts the HTTP status and message from any error shape the SDK may throw.
@@ -105,7 +107,40 @@ async function withSnapTradeErrors(fn, operation) {
   try {
     return await fn();
   } catch (err) {
-    throw translateSnapTradeError(err, operation);
+    const translated = translateSnapTradeError(err, operation);
+    const { status } = inspectSnapTradeError(err);
+
+    // Breadcrumb every SnapTrade failure so the failure trail is visible in
+    // Sentry replays/traces leading up to a sync error. Captures auth/rate-limit
+    // failures distinctly so the team can alert on broken provider connections.
+    sentry.addBreadcrumb({
+      category: "brokerage.snaptrade",
+      type: "error",
+      level: "error",
+      message: `${operation || "SnapTrade request"} failed: ${translated.message}`,
+      data: {
+        provider: "snaptrade",
+        operation: operation || "request",
+        statusCode: status,
+        errorCode: translated.code,
+        retryable: translated.retryable === true
+      }
+    });
+
+    // Authentication failures (expired/revoked tokens) are operationally
+    // important — surface them as their own events so the team can see which
+    // connections need reauthorization.
+    if (translated instanceof BrokerageAuthenticationError) {
+      sentry.captureException(translated, {
+        tags: {
+          provider: "snaptrade",
+          errorCode: String(translated.code || "BROKERAGE_AUTH_ERROR"),
+          statusCode: String(status || "unknown")
+        }
+      });
+    }
+
+    throw translated;
   }
 }
 

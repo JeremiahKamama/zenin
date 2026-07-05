@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DataTable } from "./data-table/DataTable";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { getCurrencySymbol } from "../utils/currencyUtils";
@@ -1381,35 +1382,29 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 <section className="intel-section">
                   <h3 className="intel-title">Analyst Ratings</h3>
                   <div className="intel-table-wrap table-scroll">
-                    <table className="intel-table analyst-ratings-table">
-                      <thead>
-                        <tr>
-                          <th>Date</th>
-                          <th>Firm</th>
-                          <th>Action</th>
-                          <th>Rating</th>
-                          <th>Target</th>
-                          <th>Prior</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {normalizedFinvizRatings.slice(0, 12).map((r) => (
-                          <tr key={r.id}>
-                            <td className="analyst-date">{r.date}</td>
-                            <td className="analyst-firm">{r.analyst}</td>
-                            <td>
-                              <span className={`intel-status ${r.tone === "positive" ? "positive" : r.tone === "negative" ? "negative" : ""}`}>
-                                {r.action}
-                              </span>
-                            </td>
-                            <td className={`rating-cell ${r.tone}`}>{r.rating}</td>
-                            <td className="analyst-target">{r.target}</td>
-                            <td className="analyst-target previous">{r.previousTarget}</td>
-                          </tr>
-                        ))}
-                        {!normalizedFinvizRatings.length && <tr><td colSpan="6" className="empty-table-msg">No recent ratings found.</td></tr>}
-                      </tbody>
-                    </table>
+                    <DataTable
+                      columns={[
+                        { key: "date", header: "Date", sortable: false, cell: (r) => <span className="analyst-date">{r.date}</span> },
+                        { key: "analyst", header: "Firm", sortable: false, cell: (r) => <span className="analyst-firm">{r.analyst}</span> },
+                        {
+                          key: "action",
+                          header: "Action",
+                          sortable: false,
+                          cell: (r) => (
+                            <span className={`intel-status ${r.tone === "positive" ? "positive" : r.tone === "negative" ? "negative" : ""}`}>
+                              {r.action}
+                            </span>
+                          ),
+                        },
+                        { key: "rating", header: "Rating", sortable: false, cell: (r) => <span className={`rating-cell ${r.tone}`}>{r.rating}</span> },
+                        { key: "target", header: "Target", sortable: false, cell: (r) => <span className="analyst-target">{r.target}</span> },
+                        { key: "previousTarget", header: "Prior", sortable: false, cell: (r) => <span className="analyst-target previous">{r.previousTarget}</span> },
+                      ]}
+                      data={normalizedFinvizRatings.slice(0, 12)}
+                      getRowId={(r) => r.id}
+                      emptyState={<div className="empty-table-msg">No recent ratings found.</div>}
+                      className="intel-table analyst-ratings-table"
+                    />
                   </div>
                 </section>
 
@@ -1417,31 +1412,36 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                 <section className="intel-section">
                   <h3 className="intel-title">Insider Trading</h3>
 <div className="intel-table-wrap table-scroll">
-                  <table className="intel-table">
-                      <thead>
-                        <tr>
-                          <th>Owner</th>
-                          <th>Relationship</th>
-                          <th>Date</th>
-                          <th>Type</th>
-                          <th>Value</th>
-                          <th>Shares</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {finvizData.insider?.slice(0, 10).map((ins, i) => (
-                          <tr key={`ins-${i}`}>
-                            <td className="owner-cell">{ins.owner}</td>
-                            <td>{ins.relationship}</td>
-                            <td>{ins.date}</td>
-                            <td><span className={`intel-status ${String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : String(ins.transaction).toLowerCase().includes('sale') ? 'negative' : ''}`}>{ins.transaction}</span></td>
-                            <td className={String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : 'negative'}>{ins.value}</td>
-                            <td>{ins.shares}</td>
-                          </tr>
-                        ))}
-                        {!finvizData.insider?.length && <tr><td colSpan="6" className="empty-table-msg">No recent insider trades found.</td></tr>}
-                      </tbody>
-                    </table>
+                    <DataTable
+                      columns={[
+                        { key: "owner", header: "Owner", sortable: false, cell: (ins) => <span className="owner-cell">{ins.owner}</span> },
+                        { key: "relationship", header: "Relationship", sortable: false },
+                        { key: "date", header: "Date", sortable: false },
+                        {
+                          key: "transaction",
+                          header: "Type",
+                          sortable: false,
+                          cell: (ins) => (
+                            <span className={`intel-status ${String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : String(ins.transaction).toLowerCase().includes('sale') ? 'negative' : ''}`}>
+                              {ins.transaction}
+                            </span>
+                          ),
+                        },
+                        {
+                          key: "value",
+                          header: "Value",
+                          sortable: false,
+                          cell: (ins) => (
+                            <span className={String(ins.transaction).toLowerCase().includes('buy') ? 'positive' : 'negative'}>{ins.value}</span>
+                          ),
+                        },
+                        { key: "shares", header: "Shares", sortable: false },
+                      ]}
+                      data={(finvizData.insider || []).slice(0, 10)}
+                      getRowId={(ins, i) => `ins-${i}`}
+                      emptyState={<div className="empty-table-msg">No recent insider trades found.</div>}
+                      className="intel-table"
+                    />
                   </div>
                 </section>
 
@@ -1517,31 +1517,30 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
             <h2>Recent earnings performance</h2>
           </div>
           <div className="company-earnings-table-wrap table-scroll" style={{ maxHeight: "400px", overflowY: "auto" }}>
-            <table className="company-earnings-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>EPS estimate</th>
-                  <th>Reported EPS</th>
-                  <th>Surprise</th>
-                </tr>
-              </thead>
-              <tbody>
-                {earningsHistory.slice(0, 40).map((row, index) => {
-                  const surprise = Number(row?.surprisePct);
-                  return (
-                    <tr key={`${row?.date || "earnings"}-${index}`}>
-                      <td>{formatDate(row?.date)}</td>
-                      <td>{row?.epsEstimate ?? "n/a"}</td>
-                      <td>{row?.reportedEps ?? "n/a"}</td>
-                      <td className={Number.isFinite(surprise) ? (surprise >= 0 ? "positive" : "negative") : ""}>
-                        {Number.isFinite(surprise) ? `${surprise.toFixed(1)}%` : "n/a"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                { key: "date", header: "Date", sortable: false, cell: (row) => formatDate(row?.date) },
+                { key: "epsEstimate", header: "EPS estimate", sortable: false, cell: (row) => row?.epsEstimate ?? "n/a" },
+                { key: "reportedEps", header: "Reported EPS", sortable: false, cell: (row) => row?.reportedEps ?? "n/a" },
+                {
+                  key: "surprisePct",
+                  header: "Surprise",
+                  sortable: false,
+                  cell: (row) => {
+                    const surprise = Number(row?.surprisePct);
+                    if (!Number.isFinite(surprise)) return "n/a";
+                    return (
+                      <span className={surprise >= 0 ? "positive" : "negative"}>
+                        {surprise.toFixed(1)}%
+                      </span>
+                    );
+                  },
+                },
+              ]}
+              data={earningsHistory.slice(0, 40)}
+              getRowId={(row, i) => `${row?.date || "earnings"}-${i}`}
+              className="company-earnings-table"
+            />
           </div>
         </div>
       )}

@@ -1,19 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Search, X } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
 /**
  * CommandPalette — Koyfin-style ⌘K launcher.
+ *
+ * Built on the shadcn Dialog primitive (Brand v2 monochrome) with the custom
+ * keyboard navigation, filtering, and grouping preserved. The Dialog handles
+ * focus-trap, scroll-lock, and Escape; we keep ↑/↓/Enter ourselves.
  *
  * Props:
  *   open            boolean   controlled visibility
  *   onClose         () => void
  *   commands        Array<{ id, label, group?, hint?, shortcut?, run, keywords? }>
  *                   where run: () => void  (call after closing the palette)
- *
- * Keyboard:
- *   ⌘/Ctrl+K        toggles open (handled by the host, or by mounting this component)
- *   ↑/↓             move selection
- *   Enter           execute highlighted command
- *   Esc             close
  */
 export function CommandPalette({ open, onClose, commands = [] }) {
   const [query, setQuery] = useState("");
@@ -30,11 +36,20 @@ export function CommandPalette({ open, onClose, commands = [] }) {
     });
   }, [commands, query]);
 
+  const groups = useMemo(() => {
+    const out = new Map();
+    filtered.forEach((cmd) => {
+      const key = cmd.group || "Commands";
+      if (!out.has(key)) out.set(key, []);
+      out.get(key).push(cmd);
+    });
+    return Array.from(out.entries());
+  }, [filtered]);
+
   useEffect(() => {
     if (!open) return;
     setQuery("");
     setActiveIndex(0);
-    // Defer focus to next paint so the overlay has mounted.
     const t = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(t);
   }, [open]);
@@ -46,10 +61,8 @@ export function CommandPalette({ open, onClose, commands = [] }) {
   useEffect(() => {
     if (!open) return undefined;
     const handler = (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      } else if (event.key === "ArrowDown") {
+      // Escape is handled by Radix Dialog's onEscapeKey; only nav keys here.
+      if (event.key === "ArrowDown") {
         event.preventDefault();
         setActiveIndex((prev) => Math.min(prev + 1, filtered.length - 1));
       } else if (event.key === "ArrowUp") {
@@ -60,7 +73,6 @@ export function CommandPalette({ open, onClose, commands = [] }) {
         const cmd = filtered[activeIndex];
         if (cmd) {
           onClose();
-          // Run after close so the host can unmount the overlay first if needed.
           setTimeout(() => cmd.run(), 0);
         }
       }
@@ -77,28 +89,23 @@ export function CommandPalette({ open, onClose, commands = [] }) {
     }
   }, [activeIndex, open]);
 
-  if (!open) return null;
-
-  const groups = useMemo(() => {
-    const out = new Map();
-    filtered.forEach((cmd) => {
-      const key = cmd.group || "Commands";
-      if (!out.has(key)) out.set(key, []);
-      out.get(key).push(cmd);
-    });
-    return Array.from(out.entries());
-  }, [filtered]);
-
   let runningIndex = -1;
 
   return (
-    <div className="cmdk-overlay" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={onClose}>
-      <div className="cmdk-window" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="cmdk-input-row">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="m20 20-3.2-3.2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent
+        className="max-w-xl gap-0 p-0"
+        // Hide the default shadcn close X — palette has its own esc/kbd affordance.
+        showCloseButton={false}
+      >
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogDescription className="sr-only">
+          Search sections, jump to a desk, or run an action.
+        </DialogDescription>
+
+        {/* Search row */}
+        <div className="flex items-center gap-3 border-b border-[var(--color-border-default)] px-4 py-3">
+          <Search className="h-4 w-4 shrink-0 opacity-60" aria-hidden="true" />
           <input
             ref={inputRef}
             value={query}
@@ -107,16 +114,32 @@ export function CommandPalette({ open, onClose, commands = [] }) {
             aria-label="Search commands"
             autoComplete="off"
             spellCheck="false"
+            className="flex-1 bg-transparent text-[var(--fs-base)] text-[color:inherit] outline-none placeholder:text-[color:var(--color-text-muted)]"
           />
-          <kbd className="cmdk-esc" aria-hidden="true">Esc</kbd>
+          <kbd
+            className="hidden h-5 items-center rounded-[var(--radius)] border border-[var(--color-border-default)] bg-[var(--color-surface-elevated)] px-1.5 text-[var(--fs-xs)] uppercase tracking-wide text-[color:var(--color-text-muted)] sm:inline-flex"
+            aria-hidden="true"
+          >
+            Esc
+          </kbd>
         </div>
+
+        {/* List / empty state */}
         {filtered.length === 0 ? (
-          <div className="cmdk-empty">No matches for “{query}”.</div>
+          <div className="px-4 py-8 text-center text-[var(--fs-sm)] text-[color:var(--color-text-muted)]">
+            No matches for “{query}”.
+          </div>
         ) : (
-          <ul ref={listRef} className="cmdk-list" aria-label="Available commands">
+          <ul
+            ref={listRef}
+            className="max-h-[360px] overflow-y-auto p-2"
+            aria-label="Available commands"
+          >
             {groups.map(([group, items]) => (
-              <li key={group} className="cmdk-group">
-                <div className="cmdk-group-label">{group}</div>
+              <li key={group} className="mb-2">
+                <div className="mb-2-label px-2 py-1.5 text-[var(--fs-xs)] uppercase tracking-wide text-[color:var(--color-text-muted)]">
+                  {group}
+                </div>
                 <ul>
                   {items.map((cmd) => {
                     runningIndex += 1;
@@ -127,19 +150,30 @@ export function CommandPalette({ open, onClose, commands = [] }) {
                         <button
                           type="button"
                           data-cmd-index={idx}
-                          className={isActive ? "cmdk-row active" : "cmdk-row"}
                           aria-selected={isActive}
                           onMouseEnter={() => setActiveIndex(idx)}
                           onClick={() => {
                             onClose();
                             setTimeout(() => cmd.run(), 0);
                           }}
+                          className={cn(
+                            "flex w-full items-center justify-between gap-3 rounded-[var(--radius)] px-2 py-2 text-left text-[var(--fs-sm)] transition-colors",
+                            isActive
+                              ? "bg-[var(--color-selected)] text-[color:var(--color-text-primary)]"
+                              : "text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]"
+                          )}
                         >
-                          <span className="cmdk-row-label">
-                            {cmd.label}
-                            {cmd.hint && <small>{cmd.hint}</small>}
+                          <span className="flex flex-col">
+                            <span>{cmd.label}</span>
+                            {cmd.hint && (
+                              <small className="text-[var(--fs-xs)] text-[color:var(--color-text-muted)]">{cmd.hint}</small>
+                            )}
                           </span>
-                          {cmd.shortcut && <kbd className="cmdk-shortcut">{cmd.shortcut}</kbd>}
+                          {cmd.shortcut && (
+                            <kbd className="shrink-0 rounded-[var(--radius)] border border-[var(--color-border-default)] bg-[var(--color-surface-elevated)] px-1.5 py-0.5 text-[var(--fs-xs)] tracking-widest text-[color:var(--color-text-muted)]">
+                              {cmd.shortcut}
+                            </kbd>
+                          )}
                         </button>
                       </li>
                     );
@@ -149,8 +183,8 @@ export function CommandPalette({ open, onClose, commands = [] }) {
             ))}
           </ul>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

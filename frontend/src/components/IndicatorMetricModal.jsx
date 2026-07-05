@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { TradingViewChart } from "./TradingViewChart";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { chartColors } from "../utils/chartTheme";
 
 const formatMetricValue = (value, unit) => {
   const n = Number(value);
@@ -63,7 +64,7 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
     () => ({
       layout: {
         background: { type: 'solid', color: 'transparent' },
-        textColor: '#94a3b8',
+        textColor: chartColors.muted(),
       },
       rightPriceScale: {
         borderVisible: false,
@@ -85,7 +86,7 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
         name: metric?.label || "Indicator",
         data: filteredSeries,
         type: "area",
-        color: "#38bdf8"
+        color: "var(--color-data-primary)"
       }
     ],
     [filteredSeries, metric]

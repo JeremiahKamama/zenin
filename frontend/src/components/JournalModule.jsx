@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Chart from "react-apexcharts";
+import { DataTable } from "./data-table/DataTable";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { chartColors, activeChartThemeMode } from "../utils/chartTheme";
 import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
 import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup, MetricStrip } from "./CompactWorkspaceUI";
+import DecisionComposer from "./DecisionComposer";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -566,10 +569,9 @@ export function JournalModule({
     setEntryErrors({});
   };
 
-  const addJournalEntry = () => {
+  const addJournalEntry = ({ attachments: evidenceFiles = [] } = {}) => {
     const nextErrors = {};
     if (!String(entryDraft.symbol || "").trim()) nextErrors.symbol = "Symbol is required.";
-    if (!String(entryDraft.strategy || "").trim()) nextErrors.strategy = "Strategy is required.";
     if (!String(entryDraft.side || "").trim()) nextErrors.side = "Side is required.";
     setEntryErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
@@ -577,6 +579,9 @@ export function JournalModule({
       return;
     }
     setSaveStatus("saving");
+    const evidenceMeta = evidenceFiles.length > 0
+      ? evidenceFiles.map((f) => ({ name: f.name, size: f.size, type: f.type }))
+      : [];
     const normalized = {
       ...entryDraft,
       symbol: String(entryDraft.symbol || "").toUpperCase(),
@@ -585,7 +590,8 @@ export function JournalModule({
       notional: Number(entryDraft.notional) || 0,
       status: entryDraft.status || "Open",
       tradeDate: entryDraft.tradeDate || new Date().toISOString(),
-      decisionThreadId: entryDraft.decisionThreadId || null
+      decisionThreadId: entryDraft.decisionThreadId || null,
+      evidenceFiles: evidenceMeta
     };
     if (editingEntryId) {
       setJournalEntries((prev) =>
@@ -1084,7 +1090,7 @@ export function JournalModule({
     legend: { show: false },
     stroke: { show: false },
     dataLabels: { enabled: false },
-    colors: ["#22c55e", "#ef4444"],
+    colors: [chartColors.success(), chartColors.danger()],
     plotOptions: { pie: { donut: { size: "70%" } } }
   };
 
@@ -1564,8 +1570,6 @@ export function JournalModule({
     }));
   }, [executionRows]);
 
-  const confidenceDots = Math.max(1, Math.min(5, Number(entryDraft.confidence) || 1));
-
   const buildTradeLogRow = (row, idx) => {
     const key = String(row?.clientId || row?.id || `execution-${idx}`);
     const linked = mapBySourceTradeKey.get(key);
@@ -2032,15 +2036,13 @@ export function JournalModule({
         </>
       )}
 
-      <JournalQuickEntryDrawer
+      <DecisionComposer
         open={isQuickEntryOpen}
         onClose={() => setIsQuickEntryOpen(false)}
         entryDraft={entryDraft}
         setEntryDraft={setEntryDraft}
-        entryErrors={entryErrors}
-        saveStatus={saveStatus}
-        confidenceDots={confidenceDots}
         editingEntryId={editingEntryId}
+        journalThreadContext={journalThreadContext}
         onSave={addJournalEntry}
       />
 
@@ -2649,50 +2651,52 @@ function JournalEntriesTable({ rows, onOpenDetail, formatValue }) {
   return (
     <>
       <div className="journal-table-wrap">
-        <table className="journal-table">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Date</th>
-              <th>Setup</th>
-              <th>Side</th>
-              <th>Regime</th>
-              <th>Confidence</th>
-              <th>Status</th>
-              <th className="numeric">P&L</th>
-              <th>Notes</th>
-              <th className="numeric">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} onClick={() => onOpenDetail(row)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" ? onOpenDetail(row) : null}>
-                <td><JournalSymbolCell row={row} /></td>
-                <td>{row.date}</td>
-                <td>{row.setup}</td>
-                <td><JournalSideChip side={row.side} /></td>
-                <td>{row.regime}</td>
-                <td><ConfidenceDots value={row.confidence} /></td>
-                <td><JournalStatusPill status={row.status} /></td>
-                <td className={`numeric ${Number(row.pnl) >= 0 ? "positive" : "negative"}`}>{Number(row.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(row.pnl), true)}</td>
-                <td><span className="journal-notes-count" aria-label={`${row.notesCount} notes`}>▣ {row.notesCount}</span></td>
-                <td className="numeric">
-                  <button
-                    type="button"
-                    className="journal-kebab"
-                    aria-label={`Open actions for ${row.symbol}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onOpenDetail(row);
-                    }}
-                  >
-                    ⋯
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={[
+            { key: "symbol", header: "Symbol", sortable: false, cell: (row) => <JournalSymbolCell row={row} /> },
+            { key: "date", header: "Date", sortable: false },
+            { key: "setup", header: "Setup", sortable: false },
+            { key: "side", header: "Side", sortable: false, cell: (row) => <JournalSideChip side={row.side} /> },
+            { key: "regime", header: "Regime", sortable: false },
+            { key: "confidence", header: "Confidence", sortable: false, cell: (row) => <ConfidenceDots value={row.confidence} /> },
+            { key: "status", header: "Status", sortable: false, cell: (row) => <JournalStatusPill status={row.status} /> },
+            {
+              key: "pnl",
+              header: "P&L",
+              align: "right",
+              sortable: false,
+              cell: (row) => (
+                <span className={Number(row.pnl) >= 0 ? "positive" : "negative"}>
+                  {Number(row.pnl) >= 0 ? "+" : "-"}{formatValue(Math.abs(row.pnl), true)}
+                </span>
+              ),
+            },
+            { key: "notesCount", header: "Notes", sortable: false, cell: (row) => <span className="journal-notes-count" aria-label={`${row.notesCount} notes`}>▣ {row.notesCount}</span> },
+            {
+              key: "actions",
+              header: "Actions",
+              align: "right",
+              sortable: false,
+              cell: (row) => (
+                <button
+                  type="button"
+                  className="journal-kebab"
+                  aria-label={`Open actions for ${row.symbol}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenDetail(row);
+                  }}
+                >
+                  ⋯
+                </button>
+              ),
+            },
+          ]}
+          data={rows}
+          getRowId={(row) => row.id}
+          onRowClick={(row) => onOpenDetail(row)}
+          className="journal-table"
+        />
       </div>
       <div className="journal-entry-card-list">
         {rows.map((row) => (
@@ -2922,19 +2926,19 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
     }))
   }];
   const intradayOptions = {
-    chart: { toolbar: { show: false }, foreColor: "#94A3B8", background: "transparent" },
+    chart: { toolbar: { show: false }, foreColor: chartColors.muted(), background: "transparent" },
     grid: { borderColor: "rgba(148,163,184,0.12)" },
-    theme: { mode: "dark" },
+    theme: { mode: activeChartThemeMode() },
     plotOptions: {
       bar: {
         borderRadius: 6,
         distributed: true
       }
     },
-    colors: filteredRows.map((row) => Number(row.pnl || 0) >= 0 ? "#22C55E" : "#EF4444"),
+    colors: filteredRows.map((row) => chartColors.pnl(row.pnl)),
     xaxis: {
       labels: {
-        style: { colors: "#94A3B8", fontSize: "11px" }
+        style: { colors: chartColors.muted(), fontSize: "11px" }
       }
     },
     yaxis: {
@@ -3351,91 +3355,6 @@ function JournalProgress({ label, value, tone }) {
       <div><span>{label}</span><strong>{value}%</strong></div>
       <i><b className={tone} style={{ width: `${value}%` }} /></i>
     </div>
-  );
-}
-
-function JournalQuickEntryPanel(props) {
-  return (
-    <div className="journal-card journal-quick-entry-card">
-      <div className="journal-section-head">
-        <div><h3>Quick Entry</h3><p>Log a decision in under a minute.</p></div>
-      </div>
-      <JournalQuickEntryForm {...props} />
-      <div className="journal-today-notes">
-        <h3>Today's Notes</h3>
-        {props.todayNotes?.length ? props.todayNotes.map((entry) => (
-          <div key={entry.id}>
-            <span>{new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            <strong>{entry.strategy || entry.symbol || "Note"}</strong>
-            <p>{entry.postReview || entry.preThesis || "No note content yet."}</p>
-          </div>
-        )) : <p>No notes yet today.</p>}
-      </div>
-    </div>
-  );
-}
-
-function JournalQuickEntryDrawer({ open, onClose, ...props }) {
-  if (!open) return null;
-  return (
-    <div className="journal-drawer-backdrop" onMouseDown={onClose}>
-      <aside className="journal-mobile-entry-drawer" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="New journal entry">
-        <div className="journal-drawer-head">
-          <div><h3>Quick Entry</h3><p>Log a decision in under a minute.</p></div>
-          <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close quick entry">×</button>
-        </div>
-        <JournalQuickEntryForm {...props} />
-      </aside>
-    </div>
-  );
-}
-
-function JournalQuickEntryForm({ entryDraft, setEntryDraft, entryErrors, saveStatus, confidenceDots, editingEntryId, onSave }) {
-  const requiredValid = String(entryDraft.symbol || "").trim() && String(entryDraft.strategy || "").trim() && String(entryDraft.side || "").trim();
-  const setField = (field, value) => setEntryDraft((prev) => ({ ...prev, [field]: value }));
-  return (
-    <form className="journal-quick-form" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
-      <JournalField label="Symbol" error={entryErrors.symbol}>
-        <input value={entryDraft.symbol} onChange={(event) => setField("symbol", event.target.value.toUpperCase())} aria-invalid={!!entryErrors.symbol} />
-      </JournalField>
-      <JournalField label="Strategy" error={entryErrors.strategy}>
-        <input value={entryDraft.strategy} onChange={(event) => setField("strategy", event.target.value)} aria-invalid={!!entryErrors.strategy} />
-      </JournalField>
-      <JournalField label="Setup Tag">
-        <input value={entryDraft.setupTag} onChange={(event) => setField("setupTag", event.target.value)} />
-      </JournalField>
-      <JournalField label="Decision" error={entryErrors.side}>
-        <div className="journal-side-toggle">
-          <button type="button" className={entryDraft.side === "BUY" ? "buy active" : ""} onClick={() => setField("side", "BUY")}>Increase</button>
-          <button type="button" className={entryDraft.side === "SELL" ? "sell active" : ""} onClick={() => setField("side", "SELL")}>Reduce</button>
-        </div>
-      </JournalField>
-      <JournalField label="Timeframe"><select value={entryDraft.timeframe} onChange={(event) => setField("timeframe", event.target.value)}><option value="intraday">Intraday</option><option value="swing">Swing</option><option value="position">Position</option></select></JournalField>
-      <JournalField label="Regime"><input value={entryDraft.marketRegime} onChange={(event) => setField("marketRegime", event.target.value)} /></JournalField>
-      <JournalField label="Emotion"><select value={entryDraft.emotion} onChange={(event) => setField("emotion", event.target.value)}><option value="neutral">Neutral</option><option value="confident">Confident</option><option value="fearful">Fearful</option><option value="fomo">FOMO</option><option value="disciplined">Disciplined</option></select></JournalField>
-      <JournalField label={`Confidence ${confidenceDots}/5`}>
-        <div className="journal-confidence-slider">
-          <span>Low</span>
-          <input aria-label="Confidence" type="range" min={1} max={5} step={1} value={confidenceDots} onChange={(event) => setField("confidence", Number(event.target.value))} />
-          <span>High</span>
-        </div>
-      </JournalField>
-      <JournalField label="Notes" wide><textarea rows={4} value={entryDraft.postReview} onChange={(event) => setField("postReview", event.target.value)} /></JournalField>
-      <JournalField label="Screenshot / Link" wide><input value={entryDraft.chartLink} onChange={(event) => setField("chartLink", event.target.value)} /></JournalField>
-      <button type="submit" className="journal-btn primary full" disabled={!requiredValid || saveStatus === "saving"}>
-        {saveStatus === "saving" ? "Saving..." : editingEntryId ? "Update Entry" : "Save Entry"}
-      </button>
-    </form>
-  );
-}
-
-function JournalField({ label, error, wide, children }) {
-  return (
-    <label className={wide ? "wide" : ""}>
-      <span>{label}</span>
-      {children}
-      {error ? <small className="journal-field-error">{error}</small> : null}
-    </label>
   );
 }
 

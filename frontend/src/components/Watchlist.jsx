@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DataTable } from "./data-table/DataTable";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
@@ -637,6 +638,166 @@ useEffect(() => {
     const change = Number(asset?.priceChangePercent);
     return Number.isFinite(change) && Math.abs(change) >= alertThresholdPct && asset?.isMarketOpen !== false;
   };
+
+  // ── TanStack DataTable column definitions ──────────────────────────
+  // Defined after the cell-renderer helpers (formatAssetPrice, isAlertTriggered,
+  // etc.) so the memo closes over them correctly. Sortable=false because sort
+  // is driven by the shared sortColumn state above (also consumed by the grid
+  // view). A follow-up can consolidate sorting into TanStack's native sort
+  // model once the grid view is retired.
+  const watchlistColumns = useMemo(() => [
+    {
+      key: "symbol",
+      header: "Symbol",
+      sortable: false,
+      cell: (asset) => (
+        <div className="watchlist-symbol-cell">
+          <strong>{asset.symbol}</strong>
+          <span>{asset.name || asset.marketType || asset.type || "tracked"}</span>
+        </div>
+      ),
+    },
+    {
+      key: "last",
+      header: "Last",
+      align: "right",
+      sortable: false,
+      cell: (asset) => formatAssetPrice(asset),
+    },
+    {
+      key: "priceChangePercent",
+      header: "% Chg",
+      align: "right",
+      sortable: false,
+      cell: (asset) => {
+        const change = Number(asset?.priceChangePercent);
+        const hasChange = Number.isFinite(change) && asset?.isMarketOpen !== false;
+        if (!hasChange) return "—";
+        return (
+          <span className={change >= 0 ? "positive" : "negative"}>
+            {change >= 0 ? "+" : ""}{change.toFixed(2)}%
+          </span>
+        );
+      },
+    },
+    {
+      key: "thesis",
+      header: "Thesis",
+      sortable: false,
+      cell: (asset) => asset.theme || asset.category || "Unassigned",
+    },
+    {
+      key: "alert",
+      header: "Alert",
+      sortable: false,
+      cell: (asset) => {
+        const triggered = isAlertTriggered(asset);
+        const assignment = getAlertAssignment(asset);
+        const status = assignment?.status || (triggered ? "open" : "quiet");
+        const assignedToMe = assignment?.assignedToUserId && String(assignment.assignedToUserId) === String(currentUserId);
+        return (
+          <span className={`watchlist-alert-chip ${triggered ? "active" : ""} ${status === "snoozed" ? "snoozed" : ""} ${status === "archived" ? "archived" : ""}`}>
+            {status === "snoozed" ? "Snoozed" : status === "archived" ? "Archived" : triggered ? "Review" : "Quiet"}
+            {assignedToMe ? " · You" : null}
+          </span>
+        );
+      },
+    },
+    {
+      key: "catalyst",
+      header: "Last catalyst",
+      sortable: false,
+      cell: (asset) => getCatalystLabel(asset),
+    },
+    {
+      key: "session",
+      header: "Session",
+      sortable: false,
+      cell: (asset) => getSessionLabel(asset),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      sortable: false,
+      cell: (asset) => {
+        const assignment = getAlertAssignment(asset);
+        const isOpen = !assignment || assignment.status === "open";
+        const key = buildAlertKey(asset);
+        const busy = alertActionBusy[key];
+        return (
+          <div className="watchlist-row-actions" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "inspect")}>Open</button>
+            <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "journal")}>Journal</button>
+            {isAlertTriggered(asset) ? (
+              <>
+                {isOpen ? (
+                  <button
+                    type="button"
+                    className="watchlist-action-btn primary"
+                    disabled={busy || alertsLoading}
+                    onClick={() => handleAlertAction(asset, "assign")}
+                    title="Assign this alert to me"
+                  >
+                    {busy === "assign" ? "…" : "Assign"}
+                  </button>
+                ) : null}
+                {assignment?.status === "open" || assignment?.status === "snoozed" ? (
+                  <button
+                    type="button"
+                    className="watchlist-action-btn"
+                    disabled={busy || alertsLoading}
+                    onClick={() => handleAlertAction(asset, assignment?.status === "snoozed" ? "reopen" : "snooze")}
+                    title={assignment?.status === "snoozed" ? "Reopen alert" : "Snooze for 24h"}
+                  >
+                    {busy === "snooze" || busy === "reopen" ? "…" : assignment?.status === "snoozed" ? "Reopen" : "Snooze"}
+                  </button>
+                ) : null}
+                {assignment?.status && assignment.status !== "archived" ? (
+                  <button
+                    type="button"
+                    className="watchlist-action-btn"
+                    disabled={busy || alertsLoading}
+                    onClick={() => handleAlertAction(asset, "archive")}
+                    title="Archive alert"
+                  >
+                    {busy === "archive" ? "…" : "Archive"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="watchlist-action-btn"
+                  disabled={busy || alertsLoading}
+                  onClick={() => handleAlertAction(asset, "alert")}
+                  title="Send watchlist alert email"
+                >
+                  {busy === "alert" ? "…" : "Email"}
+                </button>
+              </>
+            ) : null}
+            <button
+              className={`star-button compact ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleStar(asset);
+              }}
+              title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
+            >
+              ★
+            </button>
+          </div>
+        );
+      },
+    },
+  ], [
+    alertActionBusy,
+    alertsLoading,
+    currentUserId,
+    handleAlertAction,
+    handleIntent,
+    isInWatchlist,
+    onToggleStar,
+  ]);
   const selectedImportSource = WATCHLIST_IMPORT_SOURCES.find((source) => source.key === importSource) || WATCHLIST_IMPORT_SOURCES[0];
   const handleImportFile = async (event) => {
     const file = event.target.files?.[0];
@@ -892,7 +1053,7 @@ useEffect(() => {
                   Remove
                 </button>
               ) : null}
-              <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
+              <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} role="status" aria-label={macroLoading ? "Indicators: refreshing" : macroStale ? "Indicators: stale" : "Indicators: up to date"} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
                 <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
                 Indicators
               </span>
@@ -955,145 +1116,41 @@ useEffect(() => {
                     />
                   ) : (
                     <div className="watchlist-table-wrap">
-                      <table className={`watchlist-table${isDense ? " watchlist-table--dense" : ""}`}>
-                        <thead>
-                          <tr>
-                            <th
-                              aria-sort={sortColumn === "symbol" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
-                            >
-                              <button type="button" className="watchlist-sort-btn" onClick={() => toggleColumnSort("symbol")}>
-                                Symbol{sortColumn === "symbol" ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
-                              </button>
-                            </th>
-                            <th className="numeric" aria-sort={sortColumn === "last" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}>
-                              <button type="button" className="watchlist-sort-btn" onClick={() => toggleColumnSort("last")}>
-                                Last{sortColumn === "last" ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
-                              </button>
-                            </th>
-                            <th className="numeric" aria-sort={sortColumn === "priceChangePercent" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}>
-                              <button type="button" className="watchlist-sort-btn" onClick={() => toggleColumnSort("priceChangePercent")}>
-                                % Chg{sortColumn === "priceChangePercent" ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
-                              </button>
-                            </th>
-                            <th>Thesis</th>
-                            <th>Alert</th>
-                            <th>Last catalyst</th>
-                            <th>Session</th>
-                            <th className="numeric">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {pagedAssets.map((asset) => {
-                            const change = Number(asset?.priceChangePercent);
-                            const hasChange = Number.isFinite(change) && asset?.isMarketOpen !== false;
-                            return (
-                              <tr
-                                key={`${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
-                                className={asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""}
-                                title={asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined}
-                              >
-                                <td>
-                                  <div className="watchlist-symbol-cell">
-                                    <strong>{asset.symbol}</strong>
-                                    <span>{asset.name || asset.marketType || asset.type || "tracked"}</span>
-                                  </div>
-                                </td>
-                                <td className="numeric">{formatAssetPrice(asset)}</td>
-                                <td className={`numeric ${hasChange ? (change >= 0 ? "positive" : "negative") : ""}`}>
-                                  {hasChange ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "—"}
-                                </td>
-                                <td>{asset.theme || asset.category || "Unassigned"}</td>
-                                {(() => {
-                                  const triggered = isAlertTriggered(asset);
-                                  const assignment = getAlertAssignment(asset);
-                                  const status = assignment?.status || (triggered ? "open" : "quiet");
-                                  const assignedToMe = assignment?.assignedToUserId && String(assignment.assignedToUserId) === String(currentUserId);
-                                  return (
-                                    <td>
-                                      <span className={`watchlist-alert-chip ${triggered ? "active" : ""} ${status === "snoozed" ? "snoozed" : ""} ${status === "archived" ? "archived" : ""}`}>
-                                        {status === "snoozed" ? "Snoozed" : status === "archived" ? "Archived" : triggered ? "Review" : "Quiet"}
-                                        {assignedToMe ? " · You" : null}
-                                      </span>
-                                    </td>
-                                  );
-                                })()}
-                                <td>{getCatalystLabel(asset)}</td>
-                                <td>{getSessionLabel(asset)}</td>
-                                <td className="numeric watchlist-row-actions">
-                                  {(() => {
-                                    const assignment = getAlertAssignment(asset);
-                                    const isOpen = !assignment || assignment.status === "open";
-                                    const key = buildAlertKey(asset);
-                                    const busy = alertActionBusy[key];
-                                    return (
-                                      <>
-                                        <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "inspect")}>Open</button>
-                                        <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "journal")}>Journal</button>
-                                        {isAlertTriggered(asset) ? (
-                                          <>
-                                            {isOpen ? (
-                                              <button
-                                                type="button"
-                                                className="watchlist-action-btn primary"
-                                                disabled={busy || alertsLoading}
-                                                onClick={() => handleAlertAction(asset, "assign")}
-                                                title="Assign this alert to me"
-                                              >
-                                                {busy === "assign" ? "…" : "Assign"}
-                                              </button>
-                                            ) : null}
-                                            {assignment?.status === "open" || assignment?.status === "snoozed" ? (
-                                              <button
-                                                type="button"
-                                                className="watchlist-action-btn"
-                                                disabled={busy || alertsLoading}
-                                                onClick={() => handleAlertAction(asset, assignment?.status === "snoozed" ? "reopen" : "snooze")}
-                                                title={assignment?.status === "snoozed" ? "Reopen alert" : "Snooze for 24h"}
-                                              >
-                                                {busy === "snooze" || busy === "reopen" ? "…" : assignment?.status === "snoozed" ? "Reopen" : "Snooze"}
-                                              </button>
-                                            ) : null}
-                                            {assignment?.status && assignment.status !== "archived" ? (
-                                              <button
-                                                type="button"
-                                                className="watchlist-action-btn"
-                                                disabled={busy || alertsLoading}
-                                                onClick={() => handleAlertAction(asset, "archive")}
-                                                title="Archive alert"
-                                              >
-                                                {busy === "archive" ? "…" : "Archive"}
-                                              </button>
-                                            ) : null}
-                                            <button
-                                              type="button"
-                                              className="watchlist-action-btn"
-                                              disabled={busy || alertsLoading}
-                                              onClick={() => handleAlertAction(asset, "alert")}
-                                              title="Send watchlist alert email"
-                                            >
-                                              {busy === "alert" ? "…" : "Email"}
-                                            </button>
-                                          </>
-                                        ) : null}
-                                        <button
-                                          className={`star-button compact ${isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "active" : ""}`}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            onToggleStar(asset);
-                                          }}
-                                          title={isInWatchlist(asset, undefined, { strictStockMeta: true }) ? "Remove from watchlist" : "Add to watchlist"}
-                                        >
-                                          ★
-                                        </button>
-                                      </>
-                                    );
-                                  })()}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                      {/* External sort controls — sort state is shared with
+                          the grid view, so we keep one source of truth and
+                          surface it as a compact toolbar above the DataTable
+                          rather than per-header. A follow-up can move sorting
+                          into TanStack's sort model once the grid view retires. */}
+                      <div className="watchlist-sort-bar" role="group" aria-label="Sort blotter">
+                        <span className="watchlist-sort-label">Sort</span>
+                        {[
+                          { col: "symbol", label: "Symbol" },
+                          { col: "last", label: "Last" },
+                          { col: "priceChangePercent", label: "% Chg" },
+                        ].map(({ col, label }) => (
+                          <button
+                            key={col}
+                            type="button"
+                            className={`watchlist-sort-btn ${sortColumn === col ? "active" : ""}`}
+                            onClick={() => toggleColumnSort(col)}
+                            aria-sort={sortColumn === col ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+                          >
+                            {label}{sortColumn === col ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
+                          </button>
+                        ))}
+                      </div>
+                      <DataTable
+                        columns={watchlistColumns}
+                        data={pagedAssets}
+                        getRowId={(asset) => `${asset.symbol}-${asset.marketType || "default"}-${asset.category || "default"}-${asset.theme || "default"}`}
+                        getRowClassName={(asset) =>
+                          asset._liveDirection === "up" ? "live-up" : asset._liveDirection === "down" ? "live-down" : ""
+                        }
+                        getRowTitle={(asset) =>
+                          asset._liveUpdatedAt ? `Last price tick ${new Date(asset._liveUpdatedAt).toLocaleTimeString()}` : undefined
+                        }
+                        className={`watchlist-table${isDense ? " watchlist-table--dense" : ""}`}
+                      />
                     </div>
                   )}
                 </div>
@@ -1196,7 +1253,7 @@ useEffect(() => {
                   meta="Finviz"
                   actions={
                     <InlineControlGroup>
-                      <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
+                      <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} role="status" aria-label={earningsLoading ? "Earnings: refreshing" : earningsStale ? "Earnings: stale" : "Earnings: up to date"} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
                         <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
                         Earnings
                       </span>

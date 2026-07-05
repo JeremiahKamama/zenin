@@ -1,6 +1,8 @@
 // src/components/AnalyticsModule.jsx
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
+import ReactApexChart from "react-apexcharts";
+import { chartColors } from "../utils/chartTheme";
+import { DataTable as TanstackDataTable } from "./data-table/DataTable";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
 import { loadWorkspaceCollection, saveWorkspaceCollection } from "../utils/workspacePersistence";
 import { AssetModal } from "./AssetModal";
@@ -376,9 +378,9 @@ function getSourceQuality(input = {}) {
   return { key: "live", label: "Live", tone: "positive", source, reason };
 }
 
-function MiniSparkline({ points = [], width = 92, height = 24, color = "#38bdf8" }) {
+function MiniSparkline({ points = [], width = 92, height = 24, color = "var(--color-data-primary)" }) {
   const values = (Array.isArray(points) ? points : []).map((v) => Number(v)).filter((v) => Number.isFinite(v));
-  if (values.length < 2) return <span style={{ color: "#64748b" }}>—</span>;
+  if (values.length < 2) return <span style={{ color: "var(--color-data-slate-dim)" }}>—</span>;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
@@ -549,12 +551,12 @@ function normalizeCommoditiesPayload(payload) {
 }
 
 const getToneColor = (tone = "neutral") => {
-  if (tone === "positive" || tone === "success" || tone === "up") return "#22C55E";
-  if (tone === "negative" || tone === "danger" || tone === "down") return "#EF4444";
-  if (tone === "warning" || tone === "watch") return "#F59E0B";
-  if (tone === "purple" || tone === "advanced") return "#8B5CF6";
-  if (tone === "info" || tone === "primary") return "#22D3EE";
-  return "#94A3B8";
+  if (tone === "positive" || tone === "success" || tone === "up") return "var(--color-data-green)";
+  if (tone === "negative" || tone === "danger" || tone === "down") return "var(--color-data-red)";
+  if (tone === "warning" || tone === "watch") return "var(--color-data-amber)";
+  if (tone === "purple" || tone === "advanced") return "var(--color-data-secondary)";
+  if (tone === "info" || tone === "primary") return "var(--color-data-primary)";
+  return "var(--color-data-slate)";
 };
 
 const getTrendTone = (value) => {
@@ -2289,9 +2291,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             fontSize: 12,
                             borderRadius: 8,
                             cursor: "pointer",
-                            background: selectedPerpExchange === ex ? "rgba(56,189,248,0.2)" : "transparent",
-                            border: `1px solid ${selectedPerpExchange === ex ? "#38bdf8" : "rgba(255,255,255,0.08)"}`,
-                            color: selectedPerpExchange === ex ? "#38bdf8" : "#94a3b8",
+                            background: selectedPerpExchange === ex ? "rgba(255,255,255,0.2)" : "transparent",
+                            border: `1px solid ${selectedPerpExchange === ex ? "var(--color-interactive)" : "var(--color-border-medium)"}`,
+                            color: selectedPerpExchange === ex ? "var(--color-interactive)" : "var(--color-data-slate)",
                             transition: "all 0.2s ease"
                           }}
                         >
@@ -2343,7 +2345,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       </select>
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                      <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                         Page {etfPageIndex + 1}
                       </span>
                       <div style={{ display: "flex", gap: 4 }}>
@@ -2431,40 +2433,32 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     </div>
                   </div>
                   <div style={{ flex: 1, minHeight: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={cryptoData.perpsMarketShare}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={60}
-                          outerRadius={100}
-                          paddingAngle={5}
-                          dataKey="sharePct"
-                          nameKey="protocol"
-                          stroke="none"
-                        >
-                          {cryptoData.perpsMarketShare.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            background: "var(--color-surface-elevated)",
-                            border: "1px solid rgba(255, 255, 255, 0.1)",
-                            borderRadius: 8,
-                            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                          }}
-                          itemStyle={{ color: "#fff" }}
-                          formatter={(value) => [`${value}%`, "Market Share"]}
-                        />
-                        <Legend
-                          verticalAlign="bottom"
-                          height={36}
-                          wrapperStyle={{ paddingTop: 20 }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <ReactApexChart
+                      options={{
+                        chart: {
+                          type: "donut",
+                          background: "transparent",
+                          foreColor: chartColors.text(),
+                        },
+                        labels: (cryptoData.perpsMarketShare || []).map((e) => e.protocol),
+                        legend: {
+                          show: true,
+                          position: "bottom",
+                          labels: { colors: chartColors.text() },
+                        },
+                        stroke: { width: 2, colors: [chartColors.surface()] },
+                        // Brand v2: monochrome ramp. No saturated slice hues.
+                        colors: chartColors.palette(),
+                        dataLabels: { enabled: false },
+                        tooltip: {
+                          y: { formatter: (val) => `${Number(val).toFixed(1)}%` },
+                        },
+                        plotOptions: { pie: { donut: { size: "60%" } } },
+                      }}
+                      series={(cryptoData.perpsMarketShare || []).map((e) => Number(e.sharePct) || 0)}
+                      type="donut"
+                      height={300}
+                    />
                   </div>
                 </div>
               </div>
@@ -2582,10 +2576,10 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       label: "Venue",
                       render: (v) => {
                         const exLower = String(v || "").toLowerCase();
-                        const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
-                          : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
-                          : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
-                          : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
                             {v || "—"}
@@ -2624,10 +2618,10 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       label: "Venue",
                       render: (v) => {
                         const exLower = String(v || "").toLowerCase();
-                        const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
-                          : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
-                          : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
-                          : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
                             {v || "—"}
@@ -2664,10 +2658,10 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       label: "Venue",
                       render: (v) => {
                         const exLower = String(v || "").toLowerCase();
-                        const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
-                          : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
-                          : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
-                          : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
                             {v || "—"}
@@ -2724,15 +2718,15 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             const maxAbs = key === "delta" ? 1 : key === "gamma" ? 0.1 : key === "vega" ? 50 : 20;
                             const pct = Math.min(Math.abs(num) / maxAbs * 100, 100);
                             const isPositive = num >= 0;
-                            const barColor = isPositive ? "var(--color-brand-cyan)" : "#f87171";
-                            const barGrad = isPositive ? "linear-gradient(90deg, rgba(6,182,212,0.5), var(--color-brand-cyan))" : "linear-gradient(90deg, rgba(248,113,113,0.5), #f87171)";
+                            const barColor = isPositive ? "var(--color-data-up)" : "var(--color-data-down)";
+                            const barGrad = isPositive ? "linear-gradient(90deg, rgba(16,185,129,0.5), var(--color-data-up))" : "linear-gradient(90deg, rgba(239,68,68,0.5), var(--color-data-down))";
 
                             return (
                               <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 80 }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                   <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: "bold", color: barColor }}>{num.toFixed(3)}</span>
                                 </div>
-                                <div style={{ position: "relative", height: 6, background: "rgba(255,255,255,0.04)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.08)" }}>
+                                <div style={{ position: "relative", height: 6, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.08)" }}>
                                   <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: barGrad, borderRadius: 99, transition: "width 0.3s ease" }} />
                                 </div>
                               </div>
@@ -2743,7 +2737,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             <tr
                               key={`grk-row-${i}`}
                               style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
-                              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                              onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-hover)"}
                               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                             >
                               <td style={{ padding: "10px 12px", fontWeight: "bold", color: "var(--color-text-primary)", fontSize: 12 }}>{r.instrument}</td>
@@ -2796,7 +2790,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           const isCall = typeRaw.includes("C") || typeRaw.includes("CALL");
 
                           let moneyness = "—";
-                          let moneyStyle = { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.12)" };
+                          let moneyStyle = { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.12)" };
                           if (spotNum > 0 && Number.isFinite(strikeNum)) {
                             if (isCall) {
                               moneyness = strikeNum < spotNum ? "ITM" : strikeNum > spotNum ? "OTM" : "ATM";
@@ -2805,24 +2799,24 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             }
                           }
                           if (moneyness === "ITM") {
-                            moneyStyle = { color: "#4ade80", bg: "rgba(74,222,128,0.1)", border: "rgba(74,222,128,0.2)" };
+                            moneyStyle = { color: "var(--color-data-green-bright)", bg: "rgba(74,222,128,0.1)", border: "rgba(74,222,128,0.2)" };
                           } else if (moneyness === "OTM") {
-                            moneyStyle = { color: "#fb923c", bg: "rgba(251,146,60,0.1)", border: "rgba(251,146,60,0.2)" };
+                            moneyStyle = { color: "var(--color-data-amber-bright)", bg: "rgba(251,146,60,0.1)", border: "rgba(251,146,60,0.2)" };
                           } else if (moneyness === "ATM") {
-                            moneyStyle = { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" };
+                            moneyStyle = { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" };
                           }
 
                           const exLower = String(r.exchange || "").toLowerCase();
-                          const venueStyle = exLower.includes("deribit") ? { color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.2)" }
-                            : exLower.includes("binance") ? { color: "#fbbf24", bg: "rgba(251,191,36,0.1)", border: "rgba(251,191,36,0.2)" }
-                            : exLower.includes("derive") ? { color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.2)" }
-                            : { color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                          const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                            : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                            : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                            : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
 
                           return (
                             <tr
                               key={`oi-row-${i}`}
                               style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
-                              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                              onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-hover)"}
                               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                             >
                               <td style={{ padding: "10px 12px", fontWeight: "bold", color: "var(--color-text-primary)" }}>{r.asset}</td>
@@ -2831,9 +2825,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               <td style={{ padding: "10px 8px", textAlign: "center" }}>
                                 <span style={{
                                   fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4,
-                                  background: isCall ? "rgba(6,182,212,0.1)" : "rgba(248,113,113,0.1)",
-                                  border: isCall ? "1px solid rgba(6,182,212,0.2)" : "1px solid rgba(248,113,113,0.2)",
-                                  color: isCall ? "var(--color-brand-cyan)" : "#f87171"
+                                  background: isCall ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+                                  border: isCall ? "1px solid rgba(16,185,129,0.2)" : "1px solid rgba(239,68,68,0.2)",
+                                  color: isCall ? "var(--color-data-up)" : "var(--color-data-down)"
                                 }}>
                                   {typeRaw || "—"}
                                 </span>
@@ -3094,7 +3088,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           <span>{card.label}</span>
                           <strong>{card.value}</strong>
                           <em>{card.helper}</em>
-                          <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "#f06b63" : card.tone === "warning" ? "#f5b544" : "#58c783"} />
+                          <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "var(--color-data-red-bright)" : card.tone === "warning" ? "var(--color-data-amber-bright)" : "var(--color-data-green-bright)"} />
                         </article>
                       ))}
                     </section>
@@ -3141,7 +3135,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                     <td key={`${row.id}-${idx}`} className={value >= 0 ? "positive" : "negative"}>
                                       <div className="analytics-equities-score-cell">
                                         <b>{formatDeskScore(value)}</b>
-                                        <MiniSparkline points={row.sparkline} width={56} height={14} color={value >= 0 ? "#58c783" : "#f06b63"} />
+                                        <MiniSparkline points={row.sparkline} width={56} height={14} color={value >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)"} />
                                       </div>
                                     </td>
                                   ))}
@@ -3233,9 +3227,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           <span>Participation</span>
                         </div>
                         <div className="analytics-equities-breadth-chart">
-                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value) => value + 1.4)} width={480} height={84} color="#58c783" />
-                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value) => value * -1)} width={480} height={84} color="#f06b63" />
-                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.12)} width={480} height={84} color="#d9e3ef" />
+                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value) => value + 1.4)} width={480} height={84} color="var(--color-data-green-bright)" />
+                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value) => value * -1)} width={480} height={84} color="var(--color-data-red-bright)" />
+                          <MiniSparkline points={equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.12)} width={480} height={84} color="var(--color-data-slate-bright)" />
                         </div>
                         <div className="analytics-equities-histogram">
                           {equitiesDeskSnapshot.breadthHistogram.map((value, idx) => (
@@ -3371,7 +3365,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             <button
                               type="button"
                               onClick={() => setSelectedSymbol(String(v || row?.ticker || ""))}
-                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                              style={{ background: "transparent", border: "none", color: "var(--color-interactive)", cursor: "pointer", padding: 0 }}
                             >
                               {v || row?.ticker || "—"}
                             </button>
@@ -3400,8 +3394,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   padding: "2px 8px",
                                   borderRadius: 999,
                                   border: "1px solid rgba(148,163,184,0.25)",
-                                  background: selected ? "rgba(56,189,248,0.16)" : "rgba(5,5,5,0.4)",
-                                  color: selected ? "#7dd3fc" : "#cbd5e1",
+                                  background: selected ? "rgba(255,255,255,0.16)" : "rgba(5,5,5,0.4)",
+                                  color: selected ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                                   fontSize: 11,
                                   cursor: "pointer",
                                 }}
@@ -3434,7 +3428,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           render: (_v, row) => (
                             <MiniSparkline
                               points={row.sparkline || []}
-                              color={Number(row?.[rangeKey]) >= 0 ? "#4ade80" : "#f87171"}
+                              color={Number(row?.[rangeKey]) >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)"}
                             />
                           ),
                         },
@@ -3527,7 +3521,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             <button
                               type="button"
                               onClick={() => setSelectedFundId(String(v || row?.symbol || row?.id || ""))}
-                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                              style={{ background: "transparent", border: "none", color: "var(--color-interactive)", cursor: "pointer", padding: 0 }}
                             >
                               {v || row?.symbol || row?.id || "—"}
                             </button>
@@ -3560,8 +3554,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   padding: "2px 8px",
                                   borderRadius: 999,
                                   border: "1px solid rgba(148,163,184,0.25)",
-                                  background: selected ? "rgba(56,189,248,0.16)" : "rgba(5,5,5,0.4)",
-                                  color: selected ? "#7dd3fc" : "#cbd5e1",
+                                  background: selected ? "rgba(255,255,255,0.16)" : "rgba(5,5,5,0.4)",
+                                  color: selected ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                                   fontSize: 11,
                                   cursor: "pointer",
                                 }}
@@ -3639,13 +3633,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 {selectedMainCategory === "mmf" ? (
                   <div style={{ display: "grid", gap: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                      <div style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                         Country scope (schema-backed): Kenya, Nigeria, South Africa
                       </div>
                       <select
                         value={selectedMMFCountry}
                         onChange={(e) => setSelectedMMFCountry(e.target.value)}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                       >
                         <option value="ALL">All Countries</option>
                         <option value="KE">Kenya (KE)</option>
@@ -3665,7 +3659,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             <button
                               type="button"
                               onClick={() => setSelectedMMFId(String(v || row?.symbol || row?.fundName || ""))}
-                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                              style={{ background: "transparent", border: "none", color: "var(--color-interactive)", cursor: "pointer", padding: 0 }}
                             >
                               {row?.fundName || row?.name || v || "MMF"}
                             </button>
@@ -3717,13 +3711,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 {selectedMainCategory === "reits" ? (
                   <div style={{ display: "grid", gap: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                      <div style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                         Country scope (schema-backed): Kenya, Nigeria, South Africa
                       </div>
                       <select
                         value={selectedREITCountry}
                         onChange={(e) => setSelectedREITCountry(e.target.value)}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                       >
                         <option value="ALL">All Countries</option>
                         <option value="KE">Kenya (KE)</option>
@@ -3743,7 +3737,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             <button
                               type="button"
                               onClick={() => setSelectedSymbol(String(v || ""))}
-                              style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                              style={{ background: "transparent", border: "none", color: "var(--color-interactive)", cursor: "pointer", padding: 0 }}
                             >
                               {v || "—"}
                             </button>
@@ -3809,9 +3803,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           style={{
                             padding: "6px 10px",
                             borderRadius: 8,
-                            border: `1px solid ${selectedMarketView === item.key ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-                            background: selectedMarketView === item.key ? "rgba(56,189,248,0.16)" : "rgba(0,0,0,0.55)",
-                            color: selectedMarketView === item.key ? "#7dd3fc" : "#cbd5e1",
+                            border: `1px solid ${selectedMarketView === item.key ? "rgba(255,255,255,0.5)" : "rgba(148,163,184,0.2)"}`,
+                            background: selectedMarketView === item.key ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)",
+                            color: selectedMarketView === item.key ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                             cursor: "pointer",
                             fontSize: 12,
                           }}
@@ -3939,7 +3933,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       emptyText="No historical returns data."
                       headerExtra={
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                          <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                             {filteredEquities.annualReturns.length ? annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE + 1 : 0} - {Math.min((annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE, filteredEquities.annualReturns.length)} of {filteredEquities.annualReturns.length}
                           </span>
                           <div style={{ display: "flex", gap: 4 }}>
@@ -3951,7 +3945,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 borderRadius: 6,
                                 background: "rgba(5,5,5,0.7)",
                                 border: "1px solid rgba(148,163,184,0.2)",
-                                color: annualReturnsPageIndex === 0 ? "#475569" : "#e2e8f0",
+                                color: annualReturnsPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                                 cursor: annualReturnsPageIndex === 0 ? "default" : "pointer",
                                 fontSize: 12
                               }}
@@ -3966,7 +3960,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 borderRadius: 6,
                                 background: "rgba(5,5,5,0.7)",
                                 border: "1px solid rgba(148,163,184,0.2)",
-                                color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "#475569" : "#e2e8f0",
+                                color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                                 cursor: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "default" : "pointer",
                                 fontSize: 12
                               }}
@@ -3978,10 +3972,10 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       }
                       columns={[
                         { key: "year", label: "Year" },
-                        { key: "sp500", label: "S&P 500", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                        { key: "msciWorld", label: "MSCI World", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                        { key: "msciEm", label: "MSCI EM", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
-                        { key: "reits", label: "REITs (Global)", align: "right", render: (v) => <span style={{ color: v >= 0 ? "#86efac" : "#fca5a5" }}>{formatPercent(v)}</span> },
+                        { key: "sp500", label: "S&P 500", align: "right", render: (v) => <span style={{ color: v >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)" }}>{formatPercent(v)}</span> },
+                        { key: "msciWorld", label: "MSCI World", align: "right", render: (v) => <span style={{ color: v >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)" }}>{formatPercent(v)}</span> },
+                        { key: "msciEm", label: "MSCI EM", align: "right", render: (v) => <span style={{ color: v >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)" }}>{formatPercent(v)}</span> },
+                        { key: "reits", label: "REITs (Global)", align: "right", render: (v) => <span style={{ color: v >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)" }}>{formatPercent(v)}</span> },
                       ]}
                       rows={filteredEquities.annualReturns.slice(
                         annualReturnsPageIndex * ANNUAL_RETURNS_PAGE_SIZE,
@@ -4105,7 +4099,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             if (absVal >= 1e6) return (val / 1e6).toFixed(2) + " M";
                             return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                           })()}
-                          {row?.unit && !["B", "M", "T"].includes(row.unit) ? <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 4 }}>{row.unit}</span> : null}
+                          {row?.unit && !["B", "M", "T"].includes(row.unit) ? <span style={{ fontSize: 12, color: "var(--color-data-slate)", marginLeft: 4 }}>{row.unit}</span> : null}
                         </div>
                         <div style={{ marginTop: 8 }}><StatusPill tone={trend === "Unavailable" ? "neutral" : getTrendTone(trend)}>{trend}</StatusPill></div>
                         <div className="analytics-card-subtitle">{describeMacroOverviewRow(row)}</div>
@@ -4143,7 +4137,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         emptyText="No time-series rows."
                         pagination={
                           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                            <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                               {(macroTimeseries || []).length === 0
                                 ? "0 - 0"
                                 : `${(macroTimeseriesPageIndex * MACRO_TIMESERIES_PAGE_SIZE) + 1} - ${Math.min((macroTimeseriesPageIndex + 1) * MACRO_TIMESERIES_PAGE_SIZE, (macroTimeseries || []).length)}`
@@ -4196,7 +4190,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         multiple
                         value={compareGeos}
                         onChange={(e) => setCompareGeos(Array.from(e.target.selectedOptions).map((o) => o.value))}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
+                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
                       >
                         {macroGeographies
                           .filter((g) => selectedGeoType === "Global" ? g.type === "Global" : g.type === selectedGeoType)
@@ -4210,7 +4204,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             key={`cmp-chip-${code}`}
                             type="button"
                             onClick={() => setCompareGeos((prev) => prev.filter((c) => c !== code))}
-                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(5,5,5,0.55)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(5,5,5,0.55)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
                           >
                             {code} ×
                           </button>
@@ -4234,11 +4228,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No map rows."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         {(macroIndicators || []).map((ind) => <option key={`map-ind-${ind.code}`} value={ind.code}>{ind.name || ind.code}</option>)}
                       </select>
-                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="choropleth">Choropleth</option>
                         <option value="bubble">Bubble</option>
                       </select>
@@ -4259,19 +4253,19 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No calendar events."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Importance</option>
                         <option value="high">High</option>
                         <option value="medium">Medium</option>
                         <option value="low">Low</option>
                       </select>
-                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Geographies</option>
                         {macroGeographies.map((geo) => <option key={`cal-geo-${geo.code}`} value={geo.code}>{geo.code}</option>)}
                       </select>
-                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Types</option>
                         {macroCategoryOptions.map((cat) => <option key={`cal-type-${cat.key}`} value={cat.key}>{cat.label}</option>)}
                       </select>
@@ -4295,13 +4289,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No rankings rows."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">Scope: All</option>
                         <option value="g20">G20</option>
                         <option value="dm">Developed</option>
                         <option value="em">Emerging</option>
                       </select>
-                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="value_desc">Sort: Highest</option>
                         <option value="value_asc">Sort: Lowest</option>
                         <option value="delta_desc">Sort: Delta</option>
@@ -4327,14 +4321,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <button
                         type="button"
                         onClick={() => setForecastToggle((v) => !v)}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: forecastToggle ? "rgba(56,189,248,0.16)" : "rgba(0,0,0,0.55)", color: forecastToggle ? "#7dd3fc" : "#cbd5e1", cursor: "pointer", fontSize: 12 }}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: forecastToggle ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: forecastToggle ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
                       >
                         Forecast {forecastToggle ? "On" : "Off"}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConsensusVisible((v) => !v)}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: consensusVisible ? "rgba(56,189,248,0.16)" : "rgba(0,0,0,0.55)", color: consensusVisible ? "#7dd3fc" : "#cbd5e1", cursor: "pointer", fontSize: 12 }}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: consensusVisible ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: consensusVisible ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
                       >
                         Consensus {consensusVisible ? "Shown" : "Hidden"}
                       </button>
@@ -4380,15 +4374,15 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         const trendUp = trendRaw.includes("up") || trendRaw.includes("rising") || trendRaw.includes("expan") || trendRaw.includes("accel");
                         const trendDown = trendRaw.includes("down") || trendRaw.includes("falling") || trendRaw.includes("contract") || trendRaw.includes("decel");
                         const trendArrow = trendUp ? "↑" : trendDown ? "↓" : "→";
-                        const trendColor = trendUp ? "var(--color-brand-cyan)" : trendDown ? "#f87171" : "#94a3b8";
+                        const trendColor = trendUp ? "var(--color-data-up)" : trendDown ? "var(--color-data-down)" : "var(--color-data-slate)";
 
                         /* ── Risk status ── */
                         const riskRaw = String(row.riskStatus || row.status || "").toLowerCase();
                         const riskElevated = riskRaw.includes("elevated") || riskRaw.includes("watch") || riskRaw.includes("tight");
                         const riskLabel = row.riskStatus || (riskElevated ? "Watch" : "Normal");
                         const riskStyle = riskElevated
-                          ? { bg: "rgba(239,68,68,0.1)", border: "rgba(239,68,68,0.25)", color: "#f87171" }
-                          : { bg: "rgba(74,222,128,0.07)", border: "rgba(74,222,128,0.2)", color: "#4ade80" };
+                          ? { bg: "rgba(239,68,68,0.1)", border: "rgba(239,68,68,0.25)", color: "var(--color-data-red-bright)" }
+                          : { bg: "rgba(74,222,128,0.07)", border: "rgba(74,222,128,0.2)", color: "var(--color-data-green-bright)" };
 
                         /* ── Prior vs current delta ── */
                         const current = Number(row.value);
@@ -4403,7 +4397,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           <tr
                             key={`macro-row-${idx}`}
                             style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
-                            onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                            onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-hover)"}
                             onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                           >
                             <td style={{ padding: "10px 16px" }}>
@@ -4426,7 +4420,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold", fontSize: 13, color: "var(--color-text-primary)" }}>
                               {Number.isFinite(current) ? `${current.toFixed(2)}${row.unit ? ` ${row.unit}` : ""}` : "—"}
                               {delta !== null && (
-                                <span style={{ display: "block", fontSize: 9, color: delta > 0 ? "var(--color-brand-cyan)" : delta < 0 ? "#f87171" : "#94a3b8", marginTop: 1 }}>
+                                <span style={{ display: "block", fontSize: 9, color: delta > 0 ? "var(--color-data-up)" : delta < 0 ? "var(--color-data-down)" : "var(--color-data-slate)", marginTop: 1 }}>
                                   {delta > 0 ? "+" : ""}{delta.toFixed(2)} vs prior
                                 </span>
                               )}
@@ -4695,9 +4689,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         style={{
                           padding: "6px 10px",
                           borderRadius: 8,
-                          border: active ? "1px solid var(--color-brand-cyan)" : "1px solid var(--color-border-subtle)",
-                          background: active ? "rgba(56,189,248,0.16)" : "var(--color-surface-elevated)",
-                          color: active ? "var(--color-brand-cyan)" : "var(--color-text-secondary)",
+                          border: active ? "1px solid var(--color-interactive)" : "1px solid var(--color-border-subtle)",
+                          background: active ? "rgba(255,255,255,0.16)" : "var(--color-surface-elevated)",
+                          color: active ? "var(--color-interactive)" : "var(--color-text-secondary)",
                           cursor: "pointer",
                           fontSize: 12,
                           textTransform: "capitalize",
@@ -4774,7 +4768,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       minWidth: 220,
                       background: "rgba(5,5,5,0.75)",
                       border: "1px solid rgba(148,163,184,0.2)",
-                      color: "#e2e8f0",
+                      color: "var(--color-data-slate-bright)",
                       borderRadius: 8,
                       padding: "8px 10px",
                       fontSize: 12,
@@ -4824,9 +4818,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         style={{
                           padding: "6px 10px",
                           borderRadius: 8,
-                          border: `1px solid ${active ? "var(--color-brand-cyan)" : "var(--color-border-subtle)"}`,
-                          background: active ? "rgba(56,189,248,0.16)" : "var(--color-surface-elevated)",
-                          color: active ? "var(--color-brand-cyan)" : "var(--color-text-secondary)",
+                          border: `1px solid ${active ? "var(--color-interactive)" : "var(--color-border-subtle)"}`,
+                          background: active ? "rgba(255,255,255,0.16)" : "var(--color-surface-elevated)",
+                          color: active ? "var(--color-interactive)" : "var(--color-text-secondary)",
                           cursor: "pointer",
                           fontSize: 12,
                           textTransform: "capitalize",
@@ -4845,7 +4839,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 emptyText="No commodity rows."
                 headerExtra={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                    <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                       {(commodityAssetsPageIndex * COMMODITY_ASSETS_PAGE_SIZE) + 1}
                       {" - "}
                       {Math.min((commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE, (filteredCommodities.rows || []).length)}
@@ -4861,7 +4855,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         borderRadius: 6,
                         background: "rgba(5,5,5,0.7)",
                         border: "1px solid rgba(148,163,184,0.2)",
-                        color: commodityAssetsPageIndex === 0 ? "#475569" : "#e2e8f0",
+                        color: commodityAssetsPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                         cursor: commodityAssetsPageIndex === 0 ? "default" : "pointer",
                         fontSize: 12
                       }}
@@ -4877,7 +4871,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         borderRadius: 6,
                         background: "rgba(5,5,5,0.7)",
                         border: "1px solid rgba(148,163,184,0.2)",
-                        color: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "#475569" : "#e2e8f0",
+                        color: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                         cursor: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "default" : "pointer",
                         fontSize: 12
                       }}
@@ -4894,7 +4888,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <button
                         type="button"
                         onClick={() => setSelectedCommoditySymbol(String(v || ""))}
-                        style={{ background: "transparent", border: "none", color: "#7dd3fc", cursor: "pointer", padding: 0 }}
+                        style={{ background: "transparent", border: "none", color: "var(--color-interactive)", cursor: "pointer", padding: 0 }}
                       >
                         {v || "—"}
                       </button>
@@ -4922,7 +4916,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No price series."
                   headerExtra={
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                      <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                         {(commoditiesData.priceSeries || []).length === 0
                           ? "0 of 0"
                           : `${commodityPriceSeriesPageIndex * COMMODITY_PRICE_SERIES_PAGE_SIZE + 1} - ${Math.min(
@@ -4939,7 +4933,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
                           border: "1px solid rgba(148,163,184,0.2)",
-                          color: commodityPriceSeriesPageIndex === 0 ? "#475569" : "#e2e8f0",
+                          color: commodityPriceSeriesPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: commodityPriceSeriesPageIndex === 0 ? "default" : "pointer",
                           fontSize: 12
                         }}
@@ -4955,7 +4949,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
                           border: "1px solid rgba(148,163,184,0.2)",
-                          color: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "#475569" : "#e2e8f0",
+                          color: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "default" : "pointer",
                           fontSize: 12
                         }}
@@ -5011,14 +5005,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                     padding: "2px 6px",
                                     borderRadius: 4,
                                     fontSize: 10,
-                                    background: String(row.type).toLowerCase().includes("etf") ? "rgba(56,189,248,0.1)" : "rgba(168,85,247,0.1)",
-                                    border: String(row.type).toLowerCase().includes("etf") ? "1px solid rgba(56,189,248,0.2)" : "1px solid rgba(168,85,247,0.2)",
-                                    color: String(row.type).toLowerCase().includes("etf") ? "#38bdf8" : "#c084fc"
+                                    background: String(row.type).toLowerCase().includes("etf") ? "rgba(255,255,255,0.1)" : "rgba(163,163,163,0.1)",
+                                    border: String(row.type).toLowerCase().includes("etf") ? "1px solid rgba(255,255,255,0.2)" : "1px solid rgba(163,163,163,0.2)",
+                                    color: String(row.type).toLowerCase().includes("etf") ? "var(--color-data-primary)" : "var(--color-data-secondary)"
                                   }}>
                                     {row.type}
                                   </span>
                                 </td>
-                                <td style={{ padding: "8px 4px", textAlign: "right", color: isPositive ? "var(--color-brand-cyan)" : isNegative ? "#f87171" : "var(--color-text-primary)", fontWeight: "bold" }}>
+                                <td style={{ padding: "8px 4px", textAlign: "right", color: isPositive ? "var(--color-data-up)" : isNegative ? "var(--color-data-down)" : "var(--color-text-primary)", fontWeight: "bold" }}>
                                   {isPositive ? "+" : ""}{formatCompactMoney(row.value)}
                                 </td>
                               </tr>
@@ -5058,7 +5052,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 <span style={{ color: "var(--color-text-primary)", fontWeight: "bold" }}>{row.type}</span>
                                 <span style={{ color: "var(--color-text-secondary)" }}>{row.date}</span>
                               </div>
-                              <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.04)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.1)" }}>
+                              <div style={{ position: "relative", height: 10, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.1)" }}>
                                 <div
                                   style={{
                                     position: "absolute",
@@ -5066,13 +5060,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                     right: isPositive ? "auto" : "50%",
                                     width: `${percentage / 2}%`,
                                     height: "100%",
-                                    background: isPositive ? "linear-gradient(90deg, rgba(6,182,212,0.6), var(--color-brand-cyan))" : "linear-gradient(90deg, #f87171, #ef4444)",
+                                    background: isPositive ? "linear-gradient(90deg, rgba(16,185,129,0.6), var(--color-data-up))" : "linear-gradient(90deg, rgba(239,68,68,0.6), var(--color-data-down))",
                                     borderRadius: 99
                                   }}
                                 />
                                 <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: "100%", background: "rgba(148,163,184,0.3)" }} />
                               </div>
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: isPositive ? "var(--color-brand-cyan)" : "#f87171" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: isPositive ? "var(--color-data-up)" : "var(--color-data-down)" }}>
                                 <span>{isPositive ? "NET BUYING" : "NET SELLING"}</span>
                                 <span style={{ fontWeight: "bold" }}>{isPositive ? "+" : ""}{formatCompactMoney(row.value)}</span>
                               </div>
@@ -5097,7 +5091,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No seasonality rows."
                   headerExtra={
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                      <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
                         {(commoditiesData.seasonality || []).length === 0
                           ? "0 of 0"
                           : `${commoditySeasonalityPageIndex * COMMODITY_SEASONALITY_PAGE_SIZE + 1} - ${Math.min(
@@ -5114,7 +5108,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
                           border: "1px solid rgba(148,163,184,0.2)",
-                          color: commoditySeasonalityPageIndex === 0 ? "#475569" : "#e2e8f0",
+                          color: commoditySeasonalityPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: commoditySeasonalityPageIndex === 0 ? "default" : "pointer",
                           fontSize: 12
                         }}
@@ -5130,7 +5124,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
                           border: "1px solid rgba(148,163,184,0.2)",
-                          color: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "#475569" : "#e2e8f0",
+                          color: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "default" : "pointer",
                           fontSize: 12
                         }}
@@ -5174,14 +5168,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               gap: 6,
                               padding: "4px 8px",
                               borderRadius: 4,
-                              background: isBack ? "rgba(239, 68, 68, 0.12)" : "rgba(6, 182, 212, 0.12)",
-                              border: isBack ? "1px solid rgba(239, 68, 68, 0.3)" : "1px solid rgba(6, 182, 212, 0.3)",
-                              color: isBack ? "#f87171" : "#22d3ee",
+                              background: isBack ? "rgba(239, 68, 68, 0.12)" : "rgba(16, 185, 129, 0.12)",
+                              border: isBack ? "1px solid rgba(239, 68, 68, 0.3)" : "1px solid rgba(16, 185, 129, 0.3)",
+                              color: isBack ? "var(--color-data-down)" : "var(--color-data-up)",
                               fontSize: 11,
                               fontWeight: "bold",
                             }}
                           >
-                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isBack ? "#ef4444" : "#06b6d4" }} />
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isBack ? "var(--color-data-down)" : "var(--color-data-up)" }} />
                             {structure}
                           </span>
                         </div>
@@ -5205,7 +5199,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           {(commoditiesData.curve || []).map((row, idx) => {
                             const isPrompt = idx === 0;
                             const spreadNum = Number(row.spread);
-                            const spreadColor = spreadNum > 0 ? "var(--color-brand-cyan)" : spreadNum < 0 ? "#f87171" : "var(--color-text-secondary)";
+                            const spreadColor = spreadNum > 0 ? "var(--color-data-up)" : spreadNum < 0 ? "var(--color-data-down)" : "var(--color-text-secondary)";
                             return (
                               <tr
                                 key={`cv-row-${idx}`}
@@ -5215,8 +5209,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   fontWeight: isPrompt ? "bold" : "normal",
                                 }}
                               >
-                                <td style={{ padding: "8px 4px", color: isPrompt ? "var(--color-brand-cyan)" : "var(--color-text-primary)" }}>
-                                  {row.contract} {isPrompt && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(56,189,248,0.2)", marginLeft: 4 }}>PROMPT</span>}
+                                <td style={{ padding: "8px 4px", color: isPrompt ? "var(--color-interactive)" : "var(--color-text-primary)" }}>
+                                  {row.contract} {isPrompt && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,255,255,0.2)", marginLeft: 4 }}>PROMPT</span>}
                                 </td>
                                 <td style={{ padding: "8px 4px", textAlign: "right" }}>{formatMoney(row.price, 2)}</td>
                                 <td style={{ padding: "8px 4px", textAlign: "right", color: spreadColor }}>
@@ -5287,14 +5281,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
 
                                 {/* Curve line */}
-                                <path d={linePath} fill="none" stroke="var(--color-brand-cyan)" strokeWidth="2" />
+                                <path d={linePath} fill="none" stroke="var(--color-data-primary)" strokeWidth="2" />
 
                                 {/* Data point dots */}
                                 {points.map((p, idx) => (
                                   <g key={`dot-${idx}`}>
-                                    <circle cx={p.x} cy={p.y} r="3.5" fill="var(--color-surface)" stroke="var(--color-brand-cyan)" strokeWidth="2" />
+                                    <circle cx={p.x} cy={p.y} r="3.5" fill="var(--color-surface)" stroke="var(--color-data-primary)" strokeWidth="2" />
                                     {(idx === 0 || idx === curveData.length - 1) && (
-                                      <text x={p.x} y={p.y - 8} textAnchor="middle" fill="#e2e8f0" fontSize="8" fontWeight="bold">
+                                      <text x={p.x} y={p.y - 8} textAnchor="middle" fill="var(--color-data-slate-bright)" fontSize="8" fontWeight="bold">
                                         {formatMoney(p.price, 1)}
                                       </text>
                                     )}
@@ -5306,7 +5300,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             {/* X-axis labels */}
                             <div style={{ display: "flex", justifyContent: "space-between", width: "100%", maxWidth: width, padding: "0 10px", marginTop: 4 }}>
                               {curveData.map((d, i) => (
-                                <span key={`lbl-${i}`} style={{ fontSize: 9, color: i === 0 ? "var(--color-brand-cyan)" : "var(--color-text-secondary)", fontWeight: i === 0 ? "bold" : "normal" }}>
+                                <span key={`lbl-${i}`} style={{ fontSize: 9, color: i === 0 ? "var(--color-interactive)" : "var(--color-text-secondary)", fontWeight: i === 0 ? "bold" : "normal" }}>
                                   {d.contract}
                                 </span>
                               ))}
@@ -5383,7 +5377,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               borderRadius: 4,
                               background: "rgba(249,115,22,0.1)",
                               border: "1px solid rgba(249,115,22,0.25)",
-                              color: "#f97316",
+                              color: "var(--color-data-amber-bright)",
                               fontSize: 10,
                               fontWeight: "bold"
                             }}>
@@ -5398,9 +5392,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               gap: 4,
                               padding: "2px 6px",
                               borderRadius: 4,
-                              background: "rgba(6,182,212,0.1)",
-                              border: "1px solid rgba(6,182,212,0.25)",
-                              color: "var(--color-brand-cyan)",
+                              background: "rgba(255,255,255,0.1)",
+                              border: "1px solid rgba(255,255,255,0.25)",
+                              color: "var(--color-interactive)",
                               fontSize: 10,
                               fontWeight: "bold"
                             }}>
@@ -5435,7 +5429,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           },
                         ])
                       }
-                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(56,189,248,0.5)", background: "rgba(56,189,248,0.16)", color: "#7dd3fc", cursor: "pointer", fontSize: 11, fontWeight: "bold" }}
+                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.16)", color: "var(--color-interactive)", cursor: "pointer", fontSize: 11, fontWeight: "bold" }}
                     >
                       + Add Workspace Alert
                     </button>
@@ -5471,7 +5465,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
                       return mergedFeed.map((row, idx) => {
                         const isHigh = String(row.importance).toLowerCase() === "high" || String(row.importance).toLowerCase() === "active";
-                        const nodeColor = row.isAlert ? "#a855f7" : isHigh ? "#ef4444" : "#e2e8f0";
+                        const nodeColor = row.isAlert ? "var(--color-warning)" : isHigh ? "var(--color-danger)" : "var(--color-data-slate-bright)";
                         const importanceBadge = String(row.importance).toUpperCase();
                         
                         return (
@@ -5491,7 +5485,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               }}
                             />
 
-                            <div style={{ display: "flex", flexDirection: "column", gap: 3, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(148,163,184,0.08)", borderRadius: 6, padding: "8px 10px" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3, background: "var(--color-surface-hover)", border: "1px solid rgba(148,163,184,0.08)", borderRadius: 6, padding: "8px 10px" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                                 <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)" }}>{row.event}</div>
                                 <span style={{
@@ -5500,7 +5494,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   padding: "2px 5px",
                                   borderRadius: 4,
                                   background: isHigh ? "rgba(239,68,68,0.1)" : "rgba(148,163,184,0.08)",
-                                  color: isHigh ? "#f87171" : "var(--color-text-secondary)",
+                                  color: isHigh ? "var(--color-data-red-bright)" : "var(--color-text-secondary)",
                                   border: isHigh ? "1px solid rgba(239,68,68,0.2)" : "1px solid rgba(148,163,184,0.15)"
                                 }}>
                                   {importanceBadge}
@@ -5509,13 +5503,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               
                               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--color-text-secondary)", marginTop: 2 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                  <span style={{ color: "var(--color-brand-cyan)", fontWeight: "medium" }}>{row.date}</span>
+                                  <span style={{ color: "var(--color-interactive)", fontWeight: "medium" }}>{row.date}</span>
                                 </div>
                                 {!row.isAlert && (
                                   <button
                                     type="button"
                                     onClick={() => setCommodityAlertRules(prev => [...prev, { id: `rule-${Date.now()}`, symbol: selectedCommoditySymbol, rule: `Trigger alert on event: ${row.event}`, status: "active", sourceType: "Saved workspace rule" }])}
-                                    style={{ background: "transparent", border: "none", color: "var(--color-brand-cyan)", fontSize: 9, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                                    style={{ background: "transparent", border: "none", color: "var(--color-interactive)", fontSize: 9, cursor: "pointer", padding: 0, textDecoration: "underline" }}
                                   >
                                     Track catalyst
                                   </button>
@@ -6020,7 +6014,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               <strong>{card.value}</strong>
               <em>{card.helper}</em>
               <SourceQualityBadge quality={config.quality} compact />
-              <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "#f06b63" : card.tone === "warning" ? "#f5b544" : "#58c783"} />
+              <MiniSparkline points={card.sparkline} width={116} height={24} color={card.tone === "negative" ? "var(--color-data-red-bright)" : card.tone === "warning" ? "var(--color-data-amber-bright)" : "var(--color-data-green-bright)"} />
             </article>
           ))}
         </section>
@@ -6067,7 +6061,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                         <td key={`${row.id}-${idx}`} className={value >= 0 ? "positive" : "negative"}>
                           <div className="analytics-equities-score-cell">
                             <b>{formatDeskScore(value)}</b>
-                            <MiniSparkline points={row.sparkline} width={56} height={14} color={value >= 0 ? "#58c783" : "#f06b63"} />
+                            <MiniSparkline points={row.sparkline} width={56} height={14} color={value >= 0 ? "var(--color-data-green-bright)" : "var(--color-data-red-bright)"} />
                           </div>
                         </td>
                       ))}
@@ -6159,9 +6153,9 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               <span>Participation</span>
             </div>
             <div className="analytics-equities-breadth-chart">
-              <MiniSparkline points={snapshot.breadthTapeSeries.map((value) => value + 1.4)} width={480} height={84} color="#58c783" />
-              <MiniSparkline points={snapshot.breadthTapeSeries.map((value) => value * -1)} width={480} height={84} color="#f06b63" />
-              <MiniSparkline points={snapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.12)} width={480} height={84} color="#d9e3ef" />
+              <MiniSparkline points={snapshot.breadthTapeSeries.map((value) => value + 1.4)} width={480} height={84} color="var(--color-data-green-bright)" />
+              <MiniSparkline points={snapshot.breadthTapeSeries.map((value) => value * -1)} width={480} height={84} color="var(--color-data-red-bright)" />
+              <MiniSparkline points={snapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.12)} width={480} height={84} color="var(--color-data-slate-bright)" />
             </div>
             <div className="analytics-equities-histogram">
               {snapshot.breadthHistogram.map((value, idx) => (
@@ -6975,10 +6969,10 @@ function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore
       style={{
         background: "var(--color-surface-card)",
         backdropFilter: "blur(12px)",
-        border: "1px solid rgba(255, 255, 255, 0.16)",
+        border: "1px solid var(--color-border-strong)",
         borderRadius: 3,
         padding: 12,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        boxShadow: "0 8px 32px var(--color-surface-panel)",
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
@@ -6994,9 +6988,9 @@ function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore
             style={{
               padding: "6px 12px",
               borderRadius: 8,
-              border: `1px solid ${selectedGeoType === type ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.2)"}`,
-              background: selectedGeoType === type ? "rgba(56,189,248,0.16)" : "rgba(0,0,0,0.55)",
-              color: selectedGeoType === type ? "#7dd3fc" : "#cbd5e1",
+              border: `1px solid ${selectedGeoType === type ? "rgba(255,255,255,0.5)" : "rgba(148,163,184,0.2)"}`,
+              background: selectedGeoType === type ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)",
+              color: selectedGeoType === type ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
               cursor: "pointer",
               fontSize: 12
             }}
@@ -7005,14 +6999,14 @@ function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore
           </button>
         ))}
       </div>
-      <div style={{ fontSize: 12, color: "#94a3b8", textTransform: "capitalize" }}>
-        Regime: <span style={{ color: "#e2e8f0", fontWeight: 600 }}>{regimeLabel}</span>
+      <div style={{ fontSize: 12, color: "var(--color-data-slate)", textTransform: "capitalize" }}>
+        Regime: <span style={{ color: "var(--color-data-slate-bright)", fontWeight: 600 }}>{regimeLabel}</span>
         {Number.isFinite(Number(regimeScore)) ? (
-          <span style={{ marginLeft: 8, color: "#7dd3fc" }}>Score {Number(regimeScore).toFixed(0)}</span>
+          <span style={{ marginLeft: 8, color: "var(--color-interactive)" }}>Score {Number(regimeScore).toFixed(0)}</span>
         ) : null}
       </div>
       {regimeExplain ? (
-        <div style={{ width: "100%", fontSize: 11, color: "#94a3b8" }}>{regimeExplain}</div>
+        <div style={{ width: "100%", fontSize: 11, color: "var(--color-data-slate)" }}>{regimeExplain}</div>
       ) : null}
     </div>
   );
@@ -7041,19 +7035,19 @@ function GeographySearch({
       style={{
         background: "var(--color-surface-card)",
         backdropFilter: "blur(12px)",
-        border: "1px solid rgba(255, 255, 255, 0.16)",
+        border: "1px solid var(--color-border-strong)",
         borderRadius: 3,
         padding: 12,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+        boxShadow: "0 8px 32px var(--color-surface-panel)"
       }}
     >
-      <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Geography Search</div>
+      <div style={{ fontSize: 12, color: "var(--color-data-slate)", marginBottom: 8 }}>Geography Search</div>
       <input
         type="text"
         placeholder={`Search ${selectedGeoType.toLowerCase()}...`}
         value={searchQuery}
         onChange={(e) => onSearchChange(e.target.value)}
-        style={{ width: "100%", background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "#e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
+        style={{ width: "100%", background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
       />
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
         {recentGeoCodes.slice(0, 5).map((code) => (
@@ -7061,7 +7055,7 @@ function GeographySearch({
             key={`recent-${code}`}
             type="button"
             onClick={() => onSelectGeo(code)}
-            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(5,5,5,0.5)", color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(5,5,5,0.5)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
           >
             Recent: {code}
           </button>
@@ -7088,14 +7082,14 @@ function GeographySearch({
               <button
                 type="button"
                 onClick={() => onSelectGeo(geo.code)}
-                style={{ background: "transparent", border: "none", color: active ? "#7dd3fc" : "#e2e8f0", textAlign: "left", padding: 0, cursor: "pointer", fontSize: 12, flex: 1 }}
+                style={{ background: "transparent", border: "none", color: active ? "var(--color-interactive)" : "var(--color-data-slate-bright)", textAlign: "left", padding: 0, cursor: "pointer", fontSize: 12, flex: 1 }}
               >
                 {geo.name} ({geo.code})
               </button>
               <button
                 type="button"
                 onClick={() => onToggleFavorite(geo.code)}
-                style={{ background: "transparent", border: "none", color: fav ? "#fbbf24" : "#64748b", cursor: "pointer", fontSize: 13 }}
+                style={{ background: "transparent", border: "none", color: fav ? "var(--color-data-amber-bright)" : "var(--color-data-slate-dim)", cursor: "pointer", fontSize: 13 }}
                 title={fav ? "Unpin favorite" : "Pin favorite"}
               >
                 ★
@@ -7120,7 +7114,7 @@ function AnalyticsLayout({ eyebrow, title, description, updatedAt, isRefreshing 
           <>
             <span>Last update</span>
             <strong>{formatDateTime(updatedAt)}</strong>
-            {isRefreshing ? <em style={{ color: "#7dd3fc" }}>Refreshing…</em> : null}
+            {isRefreshing ? <em style={{ color: "var(--color-interactive)" }}>Refreshing…</em> : null}
           </>
         )}
       />
@@ -7309,6 +7303,10 @@ function TimeframeSelector({ options, value, onChange }) {
 }
 
 function DataTable({ columns, rows = [], emptyText, loading = false, filters, pagination, exportLabel, onRowClick }) {
+  // Adapter: bridges the legacy AnalyticsModule DataTable API
+  // ({key,label,align,render} columns, `rows` prop) onto the TanStack-backed
+  // DataTable primitive. All 54 call-sites in this module use the legacy
+  // shape, so this single adapter converts them at once.
   if (loading && rows.length === 0) return <LoadingSkeleton label="Loading table rows..." />;
   const handleExport = () => {
     if (!rows.length) return;
@@ -7351,51 +7349,31 @@ function DataTable({ columns, rows = [], emptyText, loading = false, filters, pa
     );
   }
 
+  // Translate legacy column shape → TanStack shape.
+  const tanstackColumns = columns.map((column) => ({
+    key: column.key,
+    header: column.label,
+    align: column.align,
+    sortable: false,
+    cell: (row) => {
+      const cellValue = row[column.key];
+      if (column.render) return column.render(cellValue, row);
+      if (typeof cellValue === "object" && cellValue !== null) return JSON.stringify(cellValue);
+      return cellValue ?? "—";
+    },
+  }));
+
   return (
     <>
       {actions}
       <div className="analytics-table-wrap">
-        <table className="analytics-data-table">
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column.key} className={column.align === "right" ? "numeric" : ""}>
-                  {column.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, idx) => (
-              <tr
-                key={row.id || `row-${idx}`}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                onKeyDown={onRowClick ? (event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onRowClick(row);
-                  }
-                } : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
-                role={onRowClick ? "button" : undefined}
-                className={onRowClick ? "analytics-clickable-row" : ""}
-              >
-                {columns.map((column) => {
-                  const cellValue = row[column.key];
-                  return (
-                    <td key={column.key} className={column.align === "right" ? "numeric" : ""}>
-                      {column.render
-                        ? column.render(cellValue, row)
-                        : typeof cellValue === "object" && cellValue !== null
-                        ? JSON.stringify(cellValue)
-                        : cellValue ?? "—"}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <TanstackDataTable
+          columns={tanstackColumns}
+          data={rows}
+          getRowId={(row, idx) => row.id || `row-${idx}`}
+          onRowClick={onRowClick}
+          className="analytics-data-table"
+        />
       </div>
     </>
   );
@@ -7431,7 +7409,7 @@ function AnalyticsTableCard({ title, subtitle, columns, rows = [], emptyText, he
   );
 }
 
-function ChartCard({ title, subtitle, rows = [], color = "#22D3EE", quality = null, children }) {
+function ChartCard({ title, subtitle, rows = [], color = "var(--color-data-primary)", quality = null, children }) {
   const values = rows.map((row) => Number(row?.value)).filter(Number.isFinite);
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;

@@ -398,8 +398,8 @@ export default function PublicHomepage() {
             <div>
               <span className="eyebrow">Portfolio tracker and market intelligence</span>
               <h1>
-                Track portfolios, <span className="gradient-text">research stocks,</span> model{" "}
-                <span className="gradient-text">options,</span> and estimate taxes in one place.
+                Track portfolios, <span className="text-white">research stocks,</span> model{" "}
+                <span className="text-white">options,</span> and estimate taxes in one place.
               </h1>
               <p>
                 Zenin Capital is a multi-asset market intelligence platform for investors and traders. Track portfolios,

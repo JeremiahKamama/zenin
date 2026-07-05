@@ -6122,7 +6122,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
       {isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <button
-          className="mobile-hamburger-btn"
+          className="fixed top-[calc(env(safe-area-inset-top,0px)+12px)] left-[max(12px,env(safe-area-inset-left))] z-[1000] flex items-center justify-center p-2 rounded-md bg-slate-400/10 border border-slate-400/20 backdrop-blur-md text-[var(--color-text-secondary)] cursor-pointer hover:bg-slate-400/20 transition-colors"
           onClick={() => setIsSidebarCollapsed(false)}
           aria-label="Open Menu"
           aria-expanded={!isSidebarVisuallyCollapsed}
@@ -6133,7 +6133,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       )}
       {!isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <div
-          className="sidebar-scrim"
+          className="fixed inset-0 z-[1090] bg-black/55 backdrop-blur-[2px] animate-in fade-in duration-200"
           role="presentation"
           aria-hidden="true"
           onClick={() => setIsSidebarCollapsed(true)}
@@ -6902,7 +6902,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
       {isSettingsOpen && (
         <div
-          className="settings-overlay"
+          className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
           role="dialog"
           aria-modal="true"
           aria-label="Workspace settings"
@@ -6914,24 +6914,24 @@ const handleOptionTradeClosed = async (tradeId) => {
             }
           }}
         >
-          <div className="settings-window" ref={settingsPanelRef} onClick={(e) => e.stopPropagation()}>
-            <div className="settings-window-header">
-              <div className="settings-title-block">
-                <span>CONTROL BAY</span>
-                <h2>Workspace Settings</h2>
-                <p>Profile, security, billing, data, and workstation controls.</p>
+          <div className="flex flex-col w-full max-w-4xl max-h-[90vh] bg-[var(--color-surface-card)] border border-[var(--color-border)] rounded-lg shadow-2xl overflow-hidden" ref={settingsPanelRef} onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start px-8 py-6 border-b border-[var(--color-border)]">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">CONTROL BAY</span>
+                <h2 className="text-xl font-medium text-[var(--color-text-primary)] m-0">Workspace Settings</h2>
+                <p className="text-sm text-[var(--color-text-secondary)] m-0">Profile, security, billing, data, and workstation controls.</p>
               </div>
-              <div className="settings-header-status">
+              <div className="flex items-center gap-2 text-[13px]">
                 <span className="settings-live-dot" aria-hidden="true" />
                 <strong>Live</strong>
                 <em>{accountPlanLabel}</em>
-                <button className="close-btn" onClick={() => setIsSettingsOpen(false)} aria-label="Close settings">&times;</button>
+                <button className="text-2xl text-[var(--color-text-muted)] hover:text-white cursor-pointer ml-4 leading-none bg-transparent border-none p-1" onClick={() => setIsSettingsOpen(false)} aria-label="Close settings">&times;</button>
               </div>
             </div>
 
-            <div className="settings-window-body">
-              <aside className="settings-categories" role="tablist" aria-label="Settings categories">
-                <div className="settings-nav-kicker">Settings Index</div>
+            <div className="flex flex-1 min-h-0">
+              <aside className="flex flex-col gap-1 w-[220px] p-6 pr-4 border-r border-[var(--color-border)] bg-[var(--color-bg-base)] overflow-y-auto" role="tablist" aria-label="Settings categories">
+                <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold px-3 pb-3">Settings Index</div>
                 {settingsCategories.map((category) => (
                   <button
                     key={category}
@@ -6939,7 +6939,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                     id={`settings-tab-${category.replace(/\s+/g, "-").toLowerCase()}`}
                     aria-selected={activeSettingsCategory === category}
                     aria-controls="settings-content-panel"
-                    className={`settings-category-btn ${activeSettingsCategory === category ? "active" : ""}`}
+                    className={`text-left px-3 py-2 rounded-md text-sm transition-colors ${ activeSettingsCategory === category ? "active" : "" ? "bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-white bg-transparent border-none"}`}
                     onClick={() => handleSettingsCategorySelect(category)}
                   >
                     {category}
@@ -6951,36 +6951,38 @@ const handleOptionTradeClosed = async (tradeId) => {
                 id="settings-content-panel"
                 role="tabpanel"
                 aria-labelledby={`settings-tab-${activeSettingsCategory.replace(/\s+/g, "-").toLowerCase()}`}
-                className="settings-content"
+                className="flex-1 p-8 overflow-y-auto bg-[var(--color-surface-card)]"
               >
                 {activeSettingsCategory === "Profile" && (
                   <>
-                    <div className="settings-preview-note">{settingsPreviewNote}</div>
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-email")}>
+                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-email")}>
                         <span>Email Address</span>
                         <span>{expandedSettingsPanels["profile-email"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["profile-email"] && (
-                        <div className="settings-panel-body">
-                          <p className="settings-meta">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
                             Current: <strong>{profileSecurity.email || userEmail}</strong>
                           </p>
                           {profileSecurity.pendingEmail ? (
-                            <p className="settings-warning">Pending verification: {profileSecurity.pendingEmail}</p>
+                            <p className="text-[13px] text-[var(--color-warning)] font-medium">Pending verification: {profileSecurity.pendingEmail}</p>
                           ) : null}
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>New Email</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="email"
                               value={profileForms.newEmail}
                               onChange={(e) => setProfileForms((prev) => ({ ...prev, newEmail: e.target.value }))}
                               placeholder="name@example.com"
                             />
                           </label>
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>Current Password</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="password"
                               value={profileForms.emailPassword}
                               onChange={(e) => setProfileForms((prev) => ({ ...prev, emailPassword: e.target.value }))}
@@ -6988,9 +6990,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                             />
                           </label>
                           {hasPendingEmail ? (
-                            <label className="settings-field">
+                            <label className="flex flex-col gap-2 w-full max-w-md">
                               <span>Verification Code</span>
                               <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                 type="text"
                                 value={profileForms.emailVerificationCode}
                                 onChange={(e) => setProfileForms((prev) => ({
@@ -7002,17 +7005,17 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </label>
                           ) : null}
                           {isGuestUser ? (
-                            <p className="settings-meta">
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
                               Demo accounts generate a local 6-digit code in this settings panel.
                             </p>
                           ) : (
-                            <p className="settings-meta">
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
                               We will send a 6-digit verification code to your new inbox before your sign-in email changes.
                             </p>
                           )}
-                          <div className="settings-inline-actions">
+                          <div className="flex gap-3 mt-2">
                             <button
-                              className="settings-primary-btn"
+                              className={cn(buttonVariants({ variant: "default" }))}
                               onClick={requestEmailChange}
                               disabled={!canSendEmailVerification}
                             >
@@ -7020,7 +7023,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </button>
                             {hasPendingEmail ? (
                               <button
-                                className="settings-secondary-btn"
+                                className={cn(buttonVariants({ variant: "secondary" }))}
                                 onClick={verifyPendingEmail}
                                 disabled={!canConfirmEmailVerification}
                               >
@@ -7029,23 +7032,24 @@ const handleOptionTradeClosed = async (tradeId) => {
                             ) : null}
                           </div>
                           {profileFeedback.email?.text ? (
-                            <p className={`settings-status ${profileFeedback.email.type}`}>{profileFeedback.email.text}</p>
+                            <p className={`text-[13px] font-medium mt-2 ${ profileFeedback.email.type === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>{profileFeedback.email.text}</p>
                           ) : null}
                         </div>
                       )}
                     </div>
 
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-password")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-password")}>
                         <span>Password</span>
                         <span>{expandedSettingsPanels["profile-password"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["profile-password"] && (
-                        <div className="settings-panel-body">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           {isGuestUser ? (
-                            <label className="settings-field">
+                            <label className="flex flex-col gap-2 w-full max-w-md">
                               <span>Current Password</span>
                               <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                 type="password"
                                 value={profileForms.currentPassword}
                                 onChange={(e) => setProfileForms((prev) => ({ ...prev, currentPassword: e.target.value }))}
@@ -7053,24 +7057,26 @@ const handleOptionTradeClosed = async (tradeId) => {
                               />
                             </label>
                           ) : (
-                            <p className="settings-meta">
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
                               Password changes now run through the recovery route so the account session and email verification stay in sync.
                             </p>
                           )}
                           {isGuestUser ? (
                             <>
-                              <label className="settings-field">
+                              <label className="flex flex-col gap-2 w-full max-w-md">
                                 <span>New Password</span>
                                 <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                   type="password"
                                   value={profileForms.newPassword}
                                   onChange={(e) => setProfileForms((prev) => ({ ...prev, newPassword: e.target.value }))}
                                   placeholder="Use at least 10 characters"
                                 />
                               </label>
-                              <label className="settings-field">
+                              <label className="flex flex-col gap-2 w-full max-w-md">
                                 <span>Confirm New Password</span>
                                 <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                   type="password"
                                   value={profileForms.confirmPassword}
                                   onChange={(e) => setProfileForms((prev) => ({ ...prev, confirmPassword: e.target.value }))}
@@ -7079,10 +7085,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                               </label>
                             </>
                           ) : null}
-                          <div className="settings-inline-actions">
+                          <div className="flex gap-3 mt-2">
                             {isGuestUser ? (
                               <button
-                                className="settings-primary-btn"
+                                className={cn(buttonVariants({ variant: "default" }))}
                                 onClick={updatePassword}
                                 disabled={!canUpdatePassword}
                               >
@@ -7090,7 +7096,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                               </button>
                             ) : (
                               <button
-                                className="settings-primary-btn"
+                                className={cn(buttonVariants({ variant: "default" }))}
                                 onClick={() => {
                                   window.location.href = "/auth?mode=forgot&next=/app";
                                 }}
@@ -7100,40 +7106,41 @@ const handleOptionTradeClosed = async (tradeId) => {
                             )}
                           </div>
                           {profileSecurity.passwordChangedAt ? (
-                            <p className="settings-meta">
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
                               Last changed: {new Date(profileSecurity.passwordChangedAt).toLocaleString()}
                             </p>
                           ) : null}
                           {profileFeedback.password?.text ? (
-                            <p className={`settings-status ${profileFeedback.password.type}`}>{profileFeedback.password.text}</p>
+                            <p className={`text-[13px] font-medium mt-2 ${ profileFeedback.password.type === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>{profileFeedback.password.text}</p>
                           ) : null}
                         </div>
                       )}
                     </div>
 
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-twofa")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-twofa")}>
                         <span>2FA & Passkeys</span>
                         <span>{expandedSettingsPanels["profile-twofa"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["profile-twofa"] && (
-                        <div className="settings-panel-body">
-                          <div className="settings-chip-row">
-                            <span className={`settings-chip ${profileSecurity.twoFactorEnabled ? "success" : "muted"}`}>
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <div className="flex flex-wrap gap-2">
+                            <span className={`px-2.5 py-1 rounded-full text-xs font-medium border border-[var(--color-border)] ${ profileSecurity.twoFactorEnabled ? "success" : "muted" ? "bg-[var(--color-success)]/10 text-[var(--color-success)] border-[var(--color-success)]/20" : "bg-[var(--color-surface-elevated)] text-[var(--color-text-primary)]"}`}>
                               {profileSecurity.twoFactorEnabled ? "2FA Enabled" : "2FA Disabled"}
                             </span>
                             {profileSecurity.twoFactorMethod ? (
-                              <span className="settings-chip">{String(profileSecurity.twoFactorMethod).toUpperCase()}</span>
+                              <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">{String(profileSecurity.twoFactorMethod).toUpperCase()}</span>
                             ) : null}
                             {profileSecurity.twoFactorProvider ? (
-                              <span className="settings-chip">{profileSecurity.twoFactorProvider}</span>
+                              <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">{profileSecurity.twoFactorProvider}</span>
                             ) : null}
                           </div>
                           {isGuestUser ? (
                             <>
-                              <label className="settings-field">
+                              <label className="flex flex-col gap-2 w-full max-w-md">
                                 <span>Security Method</span>
                                 <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                   value={profileForms.twoFactorMethod}
                                   onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorMethod: e.target.value }))}
                                 >
@@ -7146,9 +7153,10 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                               {profileForms.twoFactorMethod === "authenticator" ? (
                                 <>
-                                  <label className="settings-field">
+                                  <label className="flex flex-col gap-2 w-full max-w-md">
                                     <span>Authenticator Service</span>
                                     <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                       value={profileForms.authenticatorService}
                                       onChange={(e) => setProfileForms((prev) => ({ ...prev, authenticatorService: e.target.value }))}
                                     >
@@ -7157,12 +7165,12 @@ const handleOptionTradeClosed = async (tradeId) => {
                                       ))}
                                     </select>
                                   </label>
-                                  <p className="settings-meta">Scan QR in your app, then enter the 6-digit code below.</p>
+                                  <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">Scan QR in your app, then enter the 6-digit code below.</p>
                                   {!isGuestUser && !totpSetup.secret && !totpSetup.loading ? (
-                                    <button className="settings-secondary-btn" style={{ margin: "12px 0" }} onClick={fetchTotpSetup}>Generate QR Code</button>
+                                    <button className={cn(buttonVariants({ variant: "secondary" }))} style={{ margin: "12px 0" }} onClick={fetchTotpSetup}>Generate QR Code</button>
                                   ) : null}
                                   {totpSetup.loading ? (
-                                    <p className="settings-meta" style={{ margin: "12px 0" }}>Generating...</p>
+                                    <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ margin: "12px 0" }}>Generating...</p>
                                   ) : null}
                                   {totpSetup.qrCodeDataUrl && totpSetup.secret ? (
                                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "12px", margin: "16px 0" }}>
@@ -7180,9 +7188,10 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                               {profileForms.twoFactorMethod === "passkey" ? (
                                 <>
-                                  <label className="settings-field">
+                                  <label className="flex flex-col gap-2 w-full max-w-md">
                                     <span>Passkey Service</span>
                                     <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                       value={profileForms.passkeyProvider}
                                       onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyProvider: e.target.value }))}
                                     >
@@ -7191,9 +7200,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                                       ))}
                                     </select>
                                   </label>
-                                  <label className="settings-field">
+                                  <label className="flex flex-col gap-2 w-full max-w-md">
                                     <span>Passkey Name</span>
                                     <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                       type="text"
                                       value={profileForms.passkeyName}
                                       onChange={(e) => setProfileForms((prev) => ({ ...prev, passkeyName: e.target.value }))}
@@ -7204,9 +7214,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ) : null}
 
                               {profileForms.twoFactorMethod === "sms" ? (
-                                <label className="settings-field">
+                                <label className="flex flex-col gap-2 w-full max-w-md">
                                   <span>Phone Number</span>
                                   <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                     type="text"
                                     value={profileForms.phoneNumber}
                                     onChange={(e) => setProfileForms((prev) => ({ ...prev, phoneNumber: e.target.value }))}
@@ -7216,9 +7227,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ) : null}
 
                               {profileForms.twoFactorMethod === "email" ? (
-                                <label className="settings-field">
+                                <label className="flex flex-col gap-2 w-full max-w-md">
                                   <span>Recovery Email</span>
                                   <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                     type="email"
                                     value={profileForms.recoveryEmail}
                                     onChange={(e) => setProfileForms((prev) => ({ ...prev, recoveryEmail: e.target.value }))}
@@ -7228,9 +7240,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ) : null}
 
                               {profileForms.twoFactorMethod !== "passkey" ? (
-                                <label className="settings-field">
+                                <label className="flex flex-col gap-2 w-full max-w-md">
                                   <span>Verification Code</span>
                                   <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                     type="text"
                                     value={profileForms.twoFactorCode}
                                     onChange={(e) => setProfileForms((prev) => ({ ...prev, twoFactorCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
@@ -7239,10 +7252,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 </label>
                               ) : null}
 
-                              <div className="settings-inline-actions">
+                              <div className="flex gap-3 mt-2">
                                 {profileForms.twoFactorMethod === "passkey" ? (
                                   <button
-                                    className="settings-primary-btn"
+                                    className={cn(buttonVariants({ variant: "default" }))}
                                     onClick={registerPasskey}
                                     disabled={!canEnableTwoFactor}
                                   >
@@ -7250,7 +7263,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   </button>
                                 ) : (
                                   <button
-                                    className="settings-primary-btn"
+                                    className={cn(buttonVariants({ variant: "default" }))}
                                     onClick={enableTwoFactor}
                                     disabled={!canEnableTwoFactor}
                                   >
@@ -7258,14 +7271,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   </button>
                                 )}
                                 <button
-                                  className="settings-secondary-btn"
+                                  className={cn(buttonVariants({ variant: "secondary" }))}
                                   onClick={regenerateBackupCodes}
                                   disabled={!profileSecurity.twoFactorEnabled}
                                 >
                                   Regenerate Backup Codes
                                 </button>
                                 <button
-                                  className="settings-secondary-btn"
+                                  className={cn(buttonVariants({ variant: "secondary" }))}
                                   onClick={disableTwoFactor}
                                   disabled={!profileSecurity.twoFactorEnabled}
                                 >
@@ -7274,9 +7287,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                               </div>
 
                               {profileSecurity.passkeys?.length ? (
-                                <div className="settings-passkey-list">
+                                <div className="flex flex-col gap-2 mt-2">
                                   {profileSecurity.passkeys.map((passkey) => (
-                                    <div key={passkey.id} className="settings-passkey-item">
+                                    <div key={passkey.id} className="flex justify-between items-center p-3 rounded-md bg-[var(--color-surface-elevated)] border border-[var(--color-border)]">
                                       <strong>{passkey.name}</strong>
                                       <span>{passkey.provider}</span>
                                     </div>
@@ -7285,27 +7298,27 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ) : null}
 
                               {profileSecurity.backupCodes?.length ? (
-                                <div className="settings-backup-grid">
+                                <div className="grid grid-cols-2 gap-2 mt-2">
                                   {profileSecurity.backupCodes.map((code) => (
                                     <code key={code}>{code}</code>
                                   ))}
                                 </div>
                               ) : (
-                                <p className="settings-meta">Backup codes will appear once 2FA is enabled.</p>
+                                <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">Backup codes will appear once 2FA is enabled.</p>
                               )}
                             </>
                           ) : (
-                            <div className="settings-account-managed-note">
-                                <p className="settings-meta" style={{ marginTop: 0 }}>
+                            <div className="p-4 border border-[var(--color-border)] bg-[var(--color-bg-base)] rounded-md">
+                                <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: 0 }}>
                                 Identity is managed by the backend for this signed-in account. Authenticator MFA and OAuth sign-in methods are managed here; passkey and backup-code management are intentionally not exposed until in-app management surfaces are ready.
                               </p>
 
-                              <div className="settings-chip-row" style={{ marginTop: "12px" }}>
-                                <span className={`settings-chip ${supabaseSecurity.verifiedTotpFactor ? "success" : "muted"}`}>
+                              <div className="flex flex-wrap gap-2" style={{ marginTop: "12px" }}>
+                                <span className={`px-2.5 py-1 rounded-full text-xs font-medium border border-[var(--color-border)] ${ supabaseSecurity.verifiedTotpFactor ? "success" : "muted" ? "bg-[var(--color-success)]/10 text-[var(--color-success)] border-[var(--color-success)]/20" : "bg-[var(--color-surface-elevated)] text-[var(--color-text-primary)]"}`}>
                                   {supabaseSecurity.verifiedTotpFactor ? "Authenticator MFA active" : "Authenticator MFA off"}
                                 </span>
                                 {supabaseSecurity.aal?.currentLevel ? (
-                                  <span className="settings-chip">Session {String(supabaseSecurity.aal.currentLevel).toUpperCase()}</span>
+                                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">Session {String(supabaseSecurity.aal.currentLevel).toUpperCase()}</span>
                                 ) : null}
                               </div>
 
@@ -7313,7 +7326,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 <>
                                   {!totpSetup.factorId ? (
                                     <button
-                                      className="settings-secondary-btn"
+                                      className={cn(buttonVariants({ variant: "secondary" }))}
                                       style={{ marginTop: "14px" }}
                                       onClick={fetchTotpSetup}
                                       disabled={totpSetup.loading || supabaseSecurity.loading}
@@ -7331,9 +7344,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                                         <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Secret Key</span>
                                         <p style={{ fontFamily: "monospace", fontSize: "1.05rem", color: "var(--text)", margin: "4px 0 0 0", letterSpacing: "1px", wordBreak: "break-all" }}>{totpSetup.secret}</p>
                                       </div>
-                                      <label className="settings-field" style={{ width: "100%" }}>
+                                      <label className="flex flex-col gap-2 w-full max-w-md" style={{ width: "100%" }}>
                                         <span>Verification Code</span>
                                         <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                           type="text"
                                           inputMode="numeric"
                                           value={profileForms.twoFactorCode}
@@ -7342,16 +7356,16 @@ const handleOptionTradeClosed = async (tradeId) => {
                                           autoComplete="one-time-code"
                                         />
                                       </label>
-                                      <div className="settings-inline-actions">
+                                      <div className="flex gap-3 mt-2">
                                         <button
-                                          className="settings-primary-btn"
+                                          className={cn(buttonVariants({ variant: "default" }))}
                                           onClick={enableTwoFactor}
                                           disabled={!canEnableTwoFactor}
                                         >
                                           Enable Authenticator MFA
                                         </button>
                                         <button
-                                          className="settings-secondary-btn"
+                                          className={cn(buttonVariants({ variant: "secondary" }))}
                                           onClick={() => {
                                             setTotpSetup({ factorId: "", secret: "", qrCodeDataUrl: "", loading: false });
                                             setProfileForms((prev) => ({ ...prev, twoFactorCode: "" }));
@@ -7364,16 +7378,16 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   ) : null}
                                 </>
                               ) : (
-                                <div className="settings-inline-actions" style={{ marginTop: "14px" }}>
+                                <div className="flex gap-3 mt-2" style={{ marginTop: "14px" }}>
                                   <button
-                                    className="settings-secondary-btn"
+                                    className={cn(buttonVariants({ variant: "secondary" }))}
                                     onClick={disableTwoFactor}
                                     disabled={supabaseSecurity.loading}
                                   >
                                     Disable Authenticator MFA
                                   </button>
                                   <button
-                                    className="settings-secondary-btn"
+                                    className={cn(buttonVariants({ variant: "secondary" }))}
                                     onClick={() => refreshSupabaseSecurity()}
                                     disabled={supabaseSecurity.loading}
                                   >
@@ -7383,44 +7397,44 @@ const handleOptionTradeClosed = async (tradeId) => {
                               )}
 
                               <div style={{ marginTop: "18px" }}>
-                                <p className="settings-meta" style={{ marginBottom: "10px" }}>
+                                <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginBottom: "10px" }}>
                                   Linked sign-in methods
                                 </p>
-                                <div className="settings-passkey-list">
+                                <div className="flex flex-col gap-2 mt-2">
                                   {supabaseSecurity.identities.map((identity) => (
-                                    <div key={identity.id || `${identity.provider}-${identity.provider_id}`} className="settings-passkey-item">
+                                    <div key={identity.id || `${identity.provider}-${identity.provider_id}`} className="flex justify-between items-center p-3 rounded-md bg-[var(--color-surface-elevated)] border border-[var(--color-border)]">
                                       <strong>{formatIdentityProvider(identity.provider)}</strong>
                                       <span>{identity.email || identity.identity_data?.email || "Linked identity"}</span>
                                       {identity.provider !== "email" && supabaseSecurity.identities.length > 1 ? (
-                                        <button className="settings-secondary-btn" onClick={() => unlinkOAuthIdentity(identity)}>
+                                        <button className={cn(buttonVariants({ variant: "secondary" }))} onClick={() => unlinkOAuthIdentity(identity)}>
                                           Unlink
                                         </button>
                                       ) : null}
                                     </div>
                                   ))}
                                   {!supabaseSecurity.identities.length ? (
-                                    <p className="settings-meta">No linked identities were returned.</p>
+                                    <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No linked identities were returned.</p>
                                   ) : null}
                                 </div>
-                                <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
-                                  <button className="settings-secondary-btn" onClick={() => linkOAuthIdentity("google")}>
+                                <div className="flex gap-3 mt-2" style={{ marginTop: "12px" }}>
+                                  <button className={cn(buttonVariants({ variant: "secondary" }))} onClick={() => linkOAuthIdentity("google")}>
                                     Link Google
                                   </button>
-                                  <button className="settings-secondary-btn" onClick={() => refreshSupabaseSecurity()}>
+                                  <button className={cn(buttonVariants({ variant: "secondary" }))} onClick={() => refreshSupabaseSecurity()}>
                                     Refresh
                                   </button>
                                 </div>
                               </div>
 
-                              <div className="settings-inline-actions">
+                              <div className="flex gap-3 mt-2">
                                 <button
-                                  className="settings-secondary-btn"
+                                  className={cn(buttonVariants({ variant: "secondary" }))}
                                   onClick={registerPasskey}
                                 >
                                   Passkey Status
                                 </button>
                                 <button
-                                  className="settings-secondary-btn"
+                                  className={cn(buttonVariants({ variant: "secondary" }))}
                                   onClick={regenerateBackupCodes}
                                 >
                                   Backup-Code Status
@@ -7430,25 +7444,26 @@ const handleOptionTradeClosed = async (tradeId) => {
                           )}
 
                           {profileFeedback.twofa?.text ? (
-                            <p className={`settings-status ${profileFeedback.twofa.type}`}>{profileFeedback.twofa.text}</p>
+                            <p className={`text-[13px] font-medium mt-2 ${ profileFeedback.twofa.type === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>{profileFeedback.twofa.text}</p>
                           ) : null}
                         </div>
                       )}
                     </div>
 
                     <div className="settings-panel settings-danger-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("profile-delete")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-delete")}>
                         <span>Delete Account</span>
                         <span>{expandedSettingsPanels["profile-delete"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["profile-delete"] && (
-                        <div className="settings-panel-body">
-                          <p className="settings-warning">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <p className="text-[13px] text-[var(--color-warning)] font-medium">
                             This permanently deletes your Zenin account, connected-account credentials, workspace data you own, and saved portfolio records. Team workspaces must have other active members removed or transferred first.
                           </p>
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>Current Email</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="email"
                               value={profileForms.deleteConfirmEmail}
                               onChange={(e) => setProfileForms((prev) => ({ ...prev, deleteConfirmEmail: e.target.value }))}
@@ -7456,9 +7471,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                               autoComplete="email"
                             />
                           </label>
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>Current Password</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="password"
                               value={profileForms.deleteCurrentPassword}
                               onChange={(e) => setProfileForms((prev) => ({ ...prev, deleteCurrentPassword: e.target.value }))}
@@ -7466,18 +7482,19 @@ const handleOptionTradeClosed = async (tradeId) => {
                               autoComplete="current-password"
                             />
                           </label>
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>Confirmation Phrase</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="text"
                               value={profileForms.deleteConfirmationPhrase}
                               onChange={(e) => setProfileForms((prev) => ({ ...prev, deleteConfirmationPhrase: e.target.value }))}
                               placeholder="DELETE MY ACCOUNT"
                             />
                           </label>
-                          <div className="settings-inline-actions">
+                          <div className="flex gap-3 mt-2">
                             <button
-                              className="settings-danger-btn"
+                              className={cn(buttonVariants({ variant: "destructive" }))}
                               onClick={deleteAccount}
                               disabled={!canDeleteAccount}
                             >
@@ -7485,7 +7502,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </button>
                           </div>
                           {profileFeedback.delete?.text ? (
-                            <p className={`settings-status ${profileFeedback.delete.type}`}>{profileFeedback.delete.text}</p>
+                            <p className={`text-[13px] font-medium mt-2 ${ profileFeedback.delete.type === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>{profileFeedback.delete.text}</p>
                           ) : null}
                         </div>
                       )}
@@ -7494,20 +7511,20 @@ const handleOptionTradeClosed = async (tradeId) => {
                 )}
 
                 {activeSettingsCategory === "Subscription" && (
-                  <div className="settings-panel">
-                    <button className="settings-panel-header" onClick={() => toggleSettingsPanel("subscription-plan")}>
+                  <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("subscription-plan")}>
                       <span>My Plan</span>
                       <span>{expandedSettingsPanels["subscription-plan"] ? "−" : "+"}</span>
                     </button>
                     {expandedSettingsPanels["subscription-plan"] && (
-                      <div className="settings-panel-body">
-                        <div className="settings-chip-row">
+                      <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                        <div className="flex flex-wrap gap-2">
                           <span className="settings-chip success">Current: {accountPlanLabel}</span>
-                          <span className="settings-chip">
+                          <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
                             {revenueCatState.access?.hasActiveSubscription ? "Subscription active" : "No active paid subscription"}
                           </span>
                         </div>
-                        <p className="settings-meta" style={{ marginTop: "10px" }}>
+                        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "10px" }}>
                           Check your current plan, change plans when options are available, and manage billing from one place.
                         </p>
 
@@ -7517,9 +7534,9 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                         {!isGuestUser ? (
                           <>
-                            <div className="settings-inline-actions" style={{ marginTop: "14px" }}>
+                            <div className="flex gap-3 mt-2" style={{ marginTop: "14px" }}>
                               <button
-                                className="settings-secondary-btn"
+                                className={cn(buttonVariants({ variant: "secondary" }))}
                                 onClick={() => {
                                   void refreshRevenueCatState();
                                 }}
@@ -7528,7 +7545,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 {revenueCatState.loading ? "Refreshing..." : "Refresh Subscription"}
                               </button>
                               <button
-                                className="settings-secondary-btn"
+                                className={cn(buttonVariants({ variant: "secondary" }))}
                                 onClick={() => {
                                   void handleShowRevenueCatPaywall();
                                 }}
@@ -7542,7 +7559,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 {revenueCatState.paywallBusy ? "Opening Billing..." : "Change Plan"}
                               </button>
                               <button
-                                className="settings-secondary-btn"
+                                className={cn(buttonVariants({ variant: "secondary" }))}
                                 onClick={() => {
                                   if (revenueCatState.access?.managementURL) {
                                     window.open(revenueCatState.access.managementURL, "_blank", "noopener,noreferrer");
@@ -7563,7 +7580,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 background: "var(--color-surface-card)"
                               }}
                             >
-                              <p className="settings-meta" style={{ marginTop: 0 }}>
+                              <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: 0 }}>
                                 Subscription status
                               </p>
                               <p style={{ margin: "6px 0 0", fontWeight: 600 }}>
@@ -7571,10 +7588,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   ? `${String(currentPlan || "starter").toUpperCase()} plan`
                                   : "Starter plan"}
                               </p>
-                              <p className="settings-meta" style={{ marginTop: "10px" }}>
+                              <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "10px" }}>
                                 Billing cycle: {currentBillingCycle.toUpperCase()}
                               </p>
-                              <p className="settings-meta" style={{ marginTop: "10px" }}>
+                              <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "10px" }}>
                                 {revenueCatState.access?.managementURL
                                   ? "Use Manage Subscription to open your billing portal."
                                   : "A billing portal link will appear here when it is available for your subscription."}
@@ -7583,7 +7600,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                             {revenueCatPackages.length ? (
                               <div style={{ marginTop: "18px" }}>
-                                <p className="settings-meta" style={{ marginTop: 0 }}>
+                                <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: 0 }}>
                                   Available plans
                                 </p>
                                 <div style={{ display: "grid", gap: "12px", marginTop: "12px" }}>
@@ -7600,7 +7617,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                       <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
                                         <div>
                                           <strong>{pkg.webBillingProduct.title || pkg.identifier}</strong>
-                                          <p className="settings-meta" style={{ marginTop: "6px" }}>
+                                          <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "6px" }}>
                                             {pkg.webBillingProduct.description || "Review this subscription option and choose it if it matches the access you need."}
                                           </p>
                                         </div>
@@ -7608,9 +7625,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                                           <strong>{pkg.webBillingProduct.currentPrice.formattedPrice}</strong>
                                         </div>
                                       </div>
-                                      <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                                      <div className="flex gap-3 mt-2" style={{ marginTop: "12px" }}>
                                         <button
-                                          className="settings-secondary-btn"
+                                          className={cn(buttonVariants({ variant: "secondary" }))}
                                           onClick={() => {
                                             void handleRevenueCatPackagePurchase(pkg);
                                           }}
@@ -7633,7 +7650,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 }}
                               >
                                 <p style={{ margin: 0, fontWeight: 600 }}>Subscription options are not available right now</p>
-                                <p className="settings-meta" style={{ marginTop: "8px" }}>
+                                <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "8px" }}>
                                   Please try again shortly. If this keeps happening, contact support and we’ll help you change your plan.
                                 </p>
                               </div>
@@ -7654,7 +7671,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             {revenueCatState.syncingPlan ? (
                               <p className="settings-status info">Syncing purchased access back into your Zenin account...</p>
                             ) : null}
-                            <p className="settings-meta" style={{ marginTop: "12px" }}>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "12px" }}>
                               Use Change Plan to review upgrades or downgrades, and use Manage Subscription for billing self-service after purchase.
                             </p>
                           </>
@@ -7663,7 +7680,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         {isAdmin && import.meta.env.DEV && (
                           <div style={{ marginTop: "20px", padding: "12px", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: "3px" }}>
                             <h4 style={{ margin: "0 0 10px 0", color: "#f87171" }}>Developer Plan Simulator</h4>
-                            <label className="settings-field">
+                            <label className="flex flex-col gap-2 w-full max-w-md">
                               <span>Simulate Plan Tier</span>
                               <select 
                                 value={simulatePlan} 
@@ -7684,7 +7701,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 <option value="desk">Desk</option>
                               </select>
                             </label>
-                            <p className="settings-meta" style={{ marginTop: "8px" }}>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "8px" }}>
                               Selecting a tier above will reload the app and override your tier in backend requests.
                             </p>
                           </div>
@@ -7696,16 +7713,17 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsCategory === "General" && (
                   <>
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("general-display")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-display")}>
                         <span>Display Preferences</span>
                         <span>{expandedSettingsPanels["general-display"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["general-display"] && (
-                        <div className="settings-panel-body">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           <label className="settings-toggle-row">
                             <span>Hide account values</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="checkbox"
                               checked={preferences.hideValues}
                               onChange={(e) => setPreferences((prev) => ({ ...prev, hideValues: e.target.checked }))}
@@ -7714,6 +7732,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <label className="settings-toggle-row">
                             <span>Hide portfolio PnL</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="checkbox"
                               checked={preferences.hidePortfolioPnl}
                               onChange={(e) => setPreferences((prev) => ({ ...prev, hidePortfolioPnl: e.target.checked }))}
@@ -7723,16 +7742,17 @@ const handleOptionTradeClosed = async (tradeId) => {
                       )}
                     </div>
 
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("general-data")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-data")}>
                         <span>Data & Time</span>
                         <span>{expandedSettingsPanels["general-data"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["general-data"] && (
-                        <div className="settings-panel-body">
-                          <label className="settings-field">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>Timezone</span>
                             <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               value={preferences.timezoneMode}
                               onChange={(e) => {
                                 const mode = e.target.value;
@@ -7749,9 +7769,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                               <option value="london">Europe/London</option>
                             </select>
                           </label>
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>Asset refresh frequency</span>
                             <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               value={preferences.refreshFrequency}
                               onChange={(e) => setPreferences((prev) => ({ ...prev, refreshFrequency: e.target.value }))}
                             >
@@ -7769,49 +7790,51 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsCategory === "Workspace" && (
                   <>
-                    <div className="settings-preview-note">
+                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">
                       Desk workspaces turn Zenin into a shared operating surface: members, seats, shared account ingestion, and recent desk activity all live here.
                     </div>
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("workspace-overview")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-overview")}>
                         <span>Workspace Overview</span>
                         <span>{expandedSettingsPanels["workspace-overview"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["workspace-overview"] && (
-                        <div className="settings-panel-body">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           {activeWorkspace ? (
                             <>
-                              <div className="settings-chip-row">
+                              <div className="flex flex-wrap gap-2">
                                 <span className="settings-chip success">{activeWorkspace.plan?.toUpperCase()} desk</span>
-                                <span className="settings-chip">{`${activeWorkspace.seatCount || 0}/${activeWorkspace.seatLimit || 1} seats used`}</span>
-                                <span className="settings-chip">{`Role: ${activeWorkspace.membership?.role || "member"}`}</span>
+                                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">{`${activeWorkspace.seatCount || 0}/${activeWorkspace.seatLimit || 1} seats used`}</span>
+                                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">{`Role: ${activeWorkspace.membership?.role || "member"}`}</span>
                               </div>
-                              <label className="settings-field" style={{ marginTop: "14px" }}>
+                              <label className="flex flex-col gap-2 w-full max-w-md" style={{ marginTop: "14px" }}>
                                 <span>Workspace Name</span>
                                 <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                   value={workspaceForm.name}
                                   onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, name: e.target.value }))}
                                   placeholder="Zenin Desk"
                                 />
                               </label>
-                              <label className="settings-field">
+                              <label className="flex flex-col gap-2 w-full max-w-md">
                                 <span>Workspace Slug</span>
                                 <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                   value={workspaceForm.slug}
                                   onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, slug: e.target.value }))}
                                   placeholder="zenin-desk"
                                 />
                               </label>
-                              <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                              <div className="flex gap-3 mt-2" style={{ marginTop: "12px" }}>
                                 <button
-                                  className="settings-primary-btn"
+                                  className={cn(buttonVariants({ variant: "default" }))}
                                   onClick={() => { void saveWorkspaceSettings(); }}
                                   disabled={workspaceBusy || !["owner", "admin"].includes(String(activeWorkspace?.membership?.role || "").toLowerCase())}
                                 >
                                   {workspaceBusy ? "Saving..." : "Save Workspace"}
                                 </button>
                                 <button
-                                  className="settings-secondary-btn"
+                                  className={cn(buttonVariants({ variant: "secondary" }))}
                                   onClick={() => { void refreshWorkspacePanel(); }}
                                   disabled={workspaceBusy}
                                 >
@@ -7820,22 +7843,22 @@ const handleOptionTradeClosed = async (tradeId) => {
                               </div>
                             </>
                           ) : (
-                            <p className="settings-meta">Workspace metadata will appear here after the signed-in desk loads.</p>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">Workspace metadata will appear here after the signed-in desk loads.</p>
                           )}
                           {workspaceFeedback ? (
-                            <p className={`settings-status ${workspaceFeedback.type === "error" ? "error" : "success"}`}>{workspaceFeedback.text}</p>
+                            <p className={`text-[13px] font-medium mt-2 ${ workspaceFeedback.type === "error" ? "error" : "success" === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>{workspaceFeedback.text}</p>
                           ) : null}
                         </div>
                       )}
                     </div>
 
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("workspace-team")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-team")}>
                         <span>Members & Invites</span>
                         <span>{expandedSettingsPanels["workspace-team"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["workspace-team"] && (
-                        <div className="settings-panel-body">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           {workspaceMembers.length ? (
                             <div className="connected-accounts-list">
                               {workspaceMembers.map((member) => (
@@ -7847,6 +7870,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   {["owner", "admin"].includes(String(activeWorkspace?.membership?.role || "").toLowerCase()) && member.role !== "owner" ? (
                                     <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                                       <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                         value={member.role}
                                         onChange={(e) => { void updateWorkspaceMemberRole(member, e.target.value); }}
                                         disabled={workspaceBusy}
@@ -7854,7 +7878,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                         <option value="member">Member</option>
                                         <option value="admin">Admin</option>
                                       </select>
-                                      <button className="settings-secondary-btn" onClick={() => { void removeWorkspaceMember(member); }} disabled={workspaceBusy}>
+                                      <button className={cn(buttonVariants({ variant: "secondary" }))} onClick={() => { void removeWorkspaceMember(member); }} disabled={workspaceBusy}>
                                         Remove
                                       </button>
                                     </div>
@@ -7865,23 +7889,25 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ))}
                             </div>
                           ) : (
-                            <p className="settings-meta">No workspace members yet.</p>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No workspace members yet.</p>
                           )}
 
                           {["owner", "admin"].includes(String(activeWorkspace?.membership?.role || "").toLowerCase()) ? (
                             <>
-                              <div className="settings-inline-actions" style={{ marginTop: "14px", alignItems: "flex-end" }}>
-                                <label className="settings-field" style={{ flex: 1 }}>
+                              <div className="flex gap-3 mt-2" style={{ marginTop: "14px", alignItems: "flex-end" }}>
+                                <label className="flex flex-col gap-2 w-full max-w-md" style={{ flex: 1 }}>
                                   <span>Invite Email</span>
                                   <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                     value={workspaceInviteForm.email}
                                     onChange={(e) => setWorkspaceInviteForm((prev) => ({ ...prev, email: e.target.value }))}
                                     placeholder="teammate@zenin.app"
                                   />
                                 </label>
-                                <label className="settings-field" style={{ width: "140px" }}>
+                                <label className="flex flex-col gap-2 w-full max-w-md" style={{ width: "140px" }}>
                                   <span>Role</span>
                                   <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                                     value={workspaceInviteForm.role}
                                     onChange={(e) => setWorkspaceInviteForm((prev) => ({ ...prev, role: e.target.value }))}
                                   >
@@ -7889,7 +7915,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                     <option value="admin">Admin</option>
                                   </select>
                                 </label>
-                                <button className="settings-primary-btn" onClick={() => { void sendWorkspaceInvite(); }} disabled={workspaceBusy}>
+                                <button className={cn(buttonVariants({ variant: "default" }))} onClick={() => { void sendWorkspaceInvite(); }} disabled={workspaceBusy}>
                                   Invite
                                 </button>
                               </div>
@@ -7912,13 +7938,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                       )}
                     </div>
 
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("workspace-activity")}>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-activity")}>
                         <span>Desk Activity</span>
                         <span>{expandedSettingsPanels["workspace-activity"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["workspace-activity"] && (
-                        <div className="settings-panel-body">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           {workspaceActivity.length ? (
                             <div className="connected-accounts-list">
                               {workspaceActivity.map((entry) => (
@@ -7932,7 +7958,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                               ))}
                             </div>
                           ) : (
-                            <p className="settings-meta">No desk activity has been recorded yet.</p>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No desk activity has been recorded yet.</p>
                           )}
                         </div>
                       )}
@@ -7944,16 +7970,16 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsCategory === "Accounts" && (
                   <>
-                    <div className="settings-preview-note">{settingsPreviewNote}</div>
-                    <div className="settings-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("accounts-connected")}>
+                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("accounts-connected")}>
                         <span>Connected Accounts</span>
                         <span>{expandedSettingsPanels["accounts-connected"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["accounts-connected"] && (
-                        <div className="settings-panel-body">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           {connectedAccounts.length === 0 ? (
-                            <p className="settings-meta">No saved CEX, DEX, brokerage, or prediction market sources yet. Add one read-only source to preserve portfolio context; only supported providers can live sync today.</p>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No saved CEX, DEX, brokerage, or prediction market sources yet. Add one read-only source to preserve portfolio context; only supported providers can live sync today.</p>
                           ) : (
                             <div className="connected-accounts-list">
                               {connectedAccounts.map((acc) => {
@@ -7975,7 +8001,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                         {acc.syncAvailable !== false && (
                                           <button
                                             type="button"
-                                            className="settings-mini-btn"
+                                            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                                             disabled={actionState === "syncing"}
                                             onClick={() => handleAccountSync(acc)}
                                           >
@@ -7985,7 +8011,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                         {!isGuestUser && (
                                           <button
                                             type="button"
-                                            className="settings-mini-btn"
+                                            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                                             disabled={actionState === "verifying"}
                                             onClick={() => handleAccountVerifyScope(acc)}
                                           >
@@ -8036,7 +8062,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                               })}
                             </div>
                           )}
-                          <button className="settings-primary-btn" onClick={openConnectWindow}>
+                          <button className={cn(buttonVariants({ variant: "default" }))} onClick={openConnectWindow}>
                             Add Account
                           </button>
                         </div>
@@ -8047,34 +8073,34 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsCategory === "Operations" && (
                   <>
-                    <div className="settings-preview-note">
+                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">
                       Operational checks capture feed health, access posture, conversion blockers, and interface quality in one admin surface.
                     </div>
 
                     <div className="settings-panel settings-ops-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("ops-health")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("ops-health")}>
                         <span>Workspace Health</span>
                         <span>{expandedSettingsPanels["ops-health"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["ops-health"] && (
-                        <div className="settings-panel-body">
-                          <div className="settings-ops-grid">
-                            <div className="settings-ops-card">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
                               <span>Market feed</span>
                               <strong>{liveStreamStatus === "connected" ? "Live" : liveStreamStatus === "degraded" ? "Degraded" : "Saved snapshot"}</strong>
                               <em>{lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}</em>
                             </div>
-                            <div className="settings-ops-card">
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
                               <span>Account posture</span>
                               <strong>{isAdmin ? "Admin" : isGuestUser ? "Guest" : accountPlanLabel}</strong>
                               <em>{isGuestUser ? "Preview workspace" : "Authenticated workspace"}</em>
                             </div>
-                            <div className="settings-ops-card">
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
                               <span>Workspace</span>
                               <strong>{activeWorkspace?.name || "Personal workspace"}</strong>
                               <em>{activeWorkspace?.membership?.role || (isAdmin ? "admin" : "member")}</em>
                             </div>
-                            <div className="settings-ops-card">
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
                               <span>Coverage</span>
                               <strong>{watchlistAssets.length} tracked</strong>
                               <em>{connectedAccounts.length} connected account{connectedAccounts.length === 1 ? "" : "s"}</em>
@@ -8085,13 +8111,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="settings-panel settings-ops-panel">
-                      <button className="settings-panel-header" onClick={() => toggleSettingsPanel("ops-capture")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("ops-capture")}>
                         <span>Issue Capture</span>
                         <span>{expandedSettingsPanels["ops-capture"] ? "−" : "+"}</span>
                       </button>
                       {expandedSettingsPanels["ops-capture"] && (
-                        <div className="settings-panel-body">
-                          <div className="settings-ops-checklist">
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <div className="flex flex-col gap-3 p-4 border border-[var(--color-border)] rounded-md bg-[var(--color-surface-card)] mt-2">
                             <div><strong>Data access</strong><span>Feed status, retry visibility, stale snapshots, and unavailable endpoints.</span></div>
                             <div><strong>Conversion blockers</strong><span>Guest previews, locked modules, billing state, and account creation handoff.</span></div>
                             <div><strong>Trust controls</strong><span>OAuth, passkeys, MFA posture, workspace roles, and notification reachability.</span></div>
@@ -8104,16 +8130,17 @@ const handleOptionTradeClosed = async (tradeId) => {
                 )}
 
                 {activeSettingsCategory === "Layout" && (
-                  <div className="settings-panel">
-                    <button className="settings-panel-header" onClick={() => toggleSettingsPanel("layout-presets")}>
+                  <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("layout-presets")}>
                       <span>Layout Presets</span>
                       <span>{expandedSettingsPanels["layout-presets"] ? "−" : "+"}</span>
                     </button>
                     {expandedSettingsPanels["layout-presets"] && (
-                      <div className="settings-panel-body">
-                        <label className="settings-field">
+                      <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                        <label className="flex flex-col gap-2 w-full max-w-md">
                           <span>Choose layout style</span>
                           <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             value={preferences.layoutPreset}
                             onChange={(e) => setPreferences((prev) => ({ ...prev, layoutPreset: e.target.value }))}
                           >
@@ -8123,23 +8150,24 @@ const handleOptionTradeClosed = async (tradeId) => {
                             <option value="focus">Focus Mode</option>
                           </select>
                         </label>
-                        <p className="settings-meta">Layout preferences are saved to this browser profile.</p>
+                        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">Layout preferences are saved to this browser profile.</p>
                       </div>
                     )}
                   </div>
                 )}
 
                 {activeSettingsCategory === "Notification" && (
-                  <div className="settings-panel">
-                    <button className="settings-panel-header" onClick={() => toggleSettingsPanel("notifications-channels")}>
+                  <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("notifications-channels")}>
                       <span>Notification Channels</span>
                       <span>{expandedSettingsPanels["notifications-channels"] ? "−" : "+"}</span>
                     </button>
                     {expandedSettingsPanels["notifications-channels"] && (
-                      <div className="settings-panel-body">
+                      <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                         <label className="settings-toggle-row">
                           <span>Email notifications</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="checkbox"
                             checked={effectiveEmailNotificationsEnabled}
                             disabled={!canUseEmailNotifications}
@@ -8151,6 +8179,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Browser notifications</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="checkbox"
                             checked={effectiveBrowserNotificationsEnabled}
                             disabled={!browserNotificationsSupported || browserNotificationsBlocked}
@@ -8162,6 +8191,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Price alerts</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="checkbox"
                             checked={preferences.notifyPriceAlerts}
                             onChange={(e) => {
@@ -8172,6 +8202,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Order executions</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="checkbox"
                             checked={preferences.notifyOrderEvents}
                             onChange={(e) => {
@@ -8182,6 +8213,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Market news digests</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="checkbox"
                             checked={preferences.notifyNews}
                             onChange={(e) => {
@@ -8189,19 +8221,19 @@ const handleOptionTradeClosed = async (tradeId) => {
                             }}
                           />
                         </label>
-                        <p className="settings-meta" style={{ marginTop: "12px" }}>
+                        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "12px" }}>
                           Email destination: {isGuestUser
                             ? "Sign in required"
                             : emailNotificationDestination || "Add a profile email"}
                           {!isGuestUser && profileSecurity?.emailVerified === false ? " · Verification required" : ""}
                         </p>
-                        <p className="settings-meta">
+                        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
                           Browser permission: {browserNotificationStatusLabel}
                           {!browserNotificationsSupported ? " · Not supported in this browser" : ""}
                         </p>
-                        <div className="settings-inline-actions" style={{ marginTop: "12px" }}>
+                        <div className="flex gap-3 mt-2" style={{ marginTop: "12px" }}>
                           <button
-                            className="settings-secondary-btn"
+                            className={cn(buttonVariants({ variant: "secondary" }))}
                             onClick={() => {
                               void handleNotificationPreferenceToggle("notifyBrowser", true);
                             }}
@@ -8210,7 +8242,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             {browserNotificationsGranted ? "Browser Ready" : "Enable Browser Alerts"}
                           </button>
                           <button
-                            className="settings-secondary-btn"
+                            className={cn(buttonVariants({ variant: "secondary" }))}
                             onClick={() => {
                               void sendTestBrowserNotification();
                             }}
@@ -8220,7 +8252,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           </button>
                         </div>
                         {notificationFeedback?.text ? (
-                          <p className={`settings-status ${notificationFeedback.type === "error" ? "error" : notificationFeedback.type}`}>
+                          <p className={`text-[13px] font-medium mt-2 ${ notificationFeedback.type === "error" ? "error" : notificationFeedback.type === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>
                             {notificationFeedback.text}
                           </p>
                         ) : null}
@@ -8301,7 +8333,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <span>{connectPromptMode === "onboarding" ? "Finish setup" : "Account link"}</span>
                           <strong>{connectPromptMode === "onboarding" ? "Choose a useful first source" : "Add a read-only source"}</strong>
                         </div>
-                        <button className="close-btn" onClick={() => setIsConnectWindowOpen(false)} aria-label="Close connect account modal">&times;</button>
+                        <button className="text-2xl text-[var(--color-text-muted)] hover:text-white cursor-pointer ml-4 leading-none bg-transparent border-none p-1" onClick={() => setIsConnectWindowOpen(false)} aria-label="Close connect account modal">&times;</button>
                       </div>
 
                       <div className="connect-account-body">
@@ -8408,9 +8440,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                           })}
                         </div>
 
-                        <label className="settings-field">
+                        <label className="flex flex-col gap-2 w-full max-w-md">
                           <span>Provider</span>
                           <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             value={accountForm.provider}
                             onChange={(e) => {
                               setAccountForm((prev) => ({
@@ -8428,9 +8461,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                             ))}
                           </select>
                         </label>
-                        <label className="settings-field">
+                        <label className="flex flex-col gap-2 w-full max-w-md">
                           <span>Account label</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="text"
                             value={accountForm.username}
                             onChange={(e) => {
@@ -8441,9 +8475,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                             placeholder={getDefaultConnectionLabel(accountForm.provider, accountForm.venueType)}
                           />
                         </label>
-                        <label className="settings-field">
+                        <label className="flex flex-col gap-2 w-full max-w-md">
                           <span>{apiKeyFieldLabel}</span>
                           <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type={selectedProviderIsHyperliquid ? "text" : "password"}
                             value={accountForm.apiKey}
                             onChange={(e) => {
@@ -8456,9 +8491,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                           />
                         </label>
                         {showApiSecretField && (
-                          <label className="settings-field">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
                             <span>API Secret</span>
                             <input
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                               type="password"
                               value={accountForm.apiSecret}
                               onChange={(e) => {

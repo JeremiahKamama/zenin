@@ -28,7 +28,7 @@ const forgotPasswordRequestSchema = z.object({
 const forgotPasswordConfirmSchema = z.object({
   token: z.string().min(1),
   newPassword: passwordSchema.optional(),
-  password: passwordSchema.optional(),
+  password: z.string().min(1).optional(),
 }).refine((data) => data.newPassword || data.password, {
   path: ["newPassword"],
   message: "Password is required",
@@ -36,6 +36,16 @@ const forgotPasswordConfirmSchema = z.object({
   token: data.token,
   newPassword: data.newPassword || data.password,
 }));
+
+// 6-digit email verification code (string to preserve leading zeros).
+const verifyEmailSchema = z.object({
+  code: z.string().regex(/^\d{4,8}$/, "Enter the numeric verification code."),
+});
+
+// resend-verification takes no body payload today, but we accept an optional
+// empty object so the validate() contract is consistent and any stray fields
+// are rejected rather than silently ignored.
+const resendVerificationSchema = z.object({}).strict();
 
 const tradeExecutionInputSchema = z.object({
   symbol: symbolSchema,
@@ -389,6 +399,8 @@ module.exports = {
   signinSchema,
   forgotPasswordRequestSchema,
   forgotPasswordConfirmSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
   executeTradeSchema,
   tradeEstimateBatchSchema,
   portfolioUpdateSchema,

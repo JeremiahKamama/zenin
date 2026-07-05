@@ -1,3 +1,16 @@
+// Sentry must initialize before React/ReactDOM so the tracing + React error
+// integrations attach to the correct globals. The module self-initializes on
+// import (no-op when VITE_SENTRY_FRONTEND_DSN is unset).
+import "./sentry";
+import {
+  addBreadcrumb,
+  reportChunkLoadFailure,
+  isChunkLoadError
+} from "./sentry";
+
+// Tailwind v4 entry — must load once, before any component renders. Aliases
+// the Zenin token system into Tailwind's @theme namespace.
+import "./index.css";
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
@@ -17,6 +30,13 @@ function resolveEntry(pathname) {
 const entry = resolveEntry(typeof window !== "undefined" ? window.location.pathname : "/");
 
 async function loadEntryComponent(currentEntry) {
+  // Record the route transition so Sentry replays/traces show entry navigation.
+  addBreadcrumb({
+    category: "navigation",
+    type: "navigation",
+    message: `entry:${currentEntry}`,
+    data: { entry: currentEntry }
+  });
   try {
     if (currentEntry === "app") {
       const mod = await import("./App");
@@ -38,6 +58,25 @@ async function loadEntryComponent(currentEntry) {
     return mod.default;
   } catch (err) {
     console.error("Critical entry component load failure:", err);
+    // Chunk/dynamic-import failures usually mean a new deploy invalidated the
+    // cached bundle. Tag distinctly so the UI can prompt a reload, and surface
+    // a recovery path instead of leaving the user on a blank screen.
+    if (isChunkLoadError(err)) {
+      reportChunkLoadFailure(err, currentEntry);
+      if (typeof window !== "undefined") {
+        // Force a reload once to pick up the freshly deployed bundle. Guarded
+        // by a session flag so we don't reload-loop if the new build is also
+        // broken.
+        try {
+          if (!window.sessionStorage.getItem("zenin_chunk_reload")) {
+            window.sessionStorage.setItem("zenin_chunk_reload", "1");
+            window.location.reload();
+            return () => null; // render nothing while reloading
+          }
+          window.sessionStorage.removeItem("zenin_chunk_reload");
+        } catch {}
+      }
+    }
     throw err;
   }
 }
@@ -83,10 +122,10 @@ loadEntryComponent(entry).then((RootComponent) => {
   console.error("Fatal startup error:", err);
   if (rootElement) {
     rootElement.innerHTML = `
-      <div style="padding: 2rem; color: #ef4444; font-family: system-ui, sans-serif;">
+      <div style="padding: 2rem; color: var(--color-danger); font-family: system-ui, sans-serif;">
         <h1 style="font-size: 1.5rem;">Zenin failed to start</h1>
-        <p style="color: #94a3b8;">${err.message || "Unknown initialization error"}</p>
-        <button onclick="window.location.reload()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer;">
+        <p style="color: var(--color-text-muted);">${err.message || "Unknown initialization error"}</p>
+        <button onclick="window.location.reload()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--color-danger); color: var(--color-text-inverse); border: none; border-radius: 6px; cursor: pointer;">
           Retry Loading
         </button>
       </div>

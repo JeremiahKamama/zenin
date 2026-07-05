@@ -139,10 +139,10 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
               <div className="chart-no-data" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                 <span>Waiting for macro indicators...</span>
                 {snapshot?.diagnostics?.reason === "missing_eodhd_token" && (
-                  <small style={{ color: "#f87171" }}>Error: EODHD_API_TOKEN is missing in backend configuration.</small>
+                  <small style={{ color: "var(--color-data-red-bright)" }}>Error: EODHD_API_TOKEN is missing in backend configuration.</small>
                 )}
                 {snapshot?.stale_reason && !snapshot?.stale_reason.includes("fetch_failed") && (
-                  <small style={{ color: "#64748b" }}>Status: {snapshot.stale_reason}</small>
+                  <small style={{ color: "var(--color-data-slate-dim)" }}>Status: {snapshot.stale_reason}</small>
                 )}
               </div>
             ) : (

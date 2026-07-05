@@ -9,6 +9,7 @@ import {
   LineSeries,
   LineStyle,
 } from 'lightweight-charts';
+import { chartColors } from '../utils/chartTheme';
 
 const normalizeChartTime = (time) => {
   if (time == null) return null;
@@ -152,7 +153,7 @@ export function TradingViewChart({
   const defaultChartOptions = useMemo(() => ({
     layout: {
       background: { type: 'solid', color: 'transparent' },
-      textColor: '#94a3b8',
+      textColor: chartColors.muted(),
       fontFamily: 'Inter, system-ui, sans-serif',
     },
     grid: {
@@ -284,7 +285,7 @@ export function TradingViewChart({
     });
 
     // Add or update series
-    series.forEach(({ name, data, type = 'area', color = '#38bdf8', options: seriesSpecificOptions = {} }) => {
+    series.forEach(({ name, data, type = 'area', color = chartColors.info(), options: seriesSpecificOptions = {} }) => {
       let activeSeries = seriesRef.current[name]?.api;
       const chart = chartRef.current;
       if (!chart) return;
@@ -307,8 +308,8 @@ export function TradingViewChart({
 
         if (type === 'candlestick') {
           const seriesOptions = {
-            upColor: '#22c55e',
-            downColor: '#ef4444',
+            upColor: chartColors.success(),
+            downColor: chartColors.danger(),
             borderVisible: false,
             wickVisible: true,
             lastValueVisible: false,
@@ -420,7 +421,7 @@ export function TradingViewChart({
           normalizedPriceLines.forEach((line) => {
             priceLineRefs.current[name][line.id] = activeSeries.createPriceLine({
               price: line.price,
-              color: line.color || options.textColor || '#94a3b8',
+              color: line.color || options.textColor || chartColors.muted(),
               lineWidth: line.lineWidth,
               lineStyle: line.lineStyle,
               axisLabelVisible: line.axisLabelVisible,

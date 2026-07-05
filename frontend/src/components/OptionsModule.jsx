@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { DataTable } from "./data-table/DataTable";
 import { OptionsCalculator } from "./OptionsCalculator";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { OptionsInstitutionalPanel } from "./InstitutionalPanels";
@@ -200,7 +201,7 @@ const StrategySimulatorCard = ({
             style={{
               fontSize: "0.75rem",
               textTransform: "uppercase",
-              color: "var(--color-text-secondary, #94a3b8)",
+              color: "var(--color-text-secondary)",
               marginRight: 8,
             }}
           >
@@ -1557,77 +1558,89 @@ useEffect(() => {
             <h2>Saved Options Scenarios</h2>
           </div>
           <div className="active-trades-table-container scrollbar-thin">
-            <table className="active-trades-table">
-              <thead>
-                <tr>
-                  <th>Strategy</th>
-                  <th>Asset</th>
-                  <th>Qty</th>
-                  <th>Expiry</th>
-                  <th>Scenario Prem</th>
-                  <th>Live Mark</th>
-                  <th>Delta</th>
-                  <th>Theta</th>
-                  <th>Unrealized PnL</th>
-                  <th>Manage</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeOptionsTrades.map(trade => {
-                  const metrics = getInternalOptionPnL(trade);
-                  const { currentMark, pnl, delta, theta, isStale } = metrics;
-                  
-                  const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
-                  const formattedPnL = (pnl >= 0 ? "+" : "") + (pnl || 0).toFixed(2);
-                  const isLong = String(trade.strategy || "").toLowerCase().includes("long") || 
-                                 String(trade.strategy || "").toLowerCase().includes("bull");
-                  
-                  return (
-                    <tr key={trade.id} className={isStale ? "stale-row" : ""}>
-                      <td className="strategy-name">
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <span style={{ 
-                            width: "4px", 
-                            height: "14px", 
-                            borderRadius: "2px", 
-                            background: isLong ? "#22c55e" : "#ef4444" 
-                          }}></span>
-                          {trade.strategy}
-                        </div>
-                      </td>
-                      <td className="active-trades-symbol">{trade.asset}</td>
-                      <td>{trade.qty || trade.quantity || 1}</td>
-                      <td style={{ fontSize: "11px", color: "var(--color-text-secondary, #94a3b8)" }}>
-                        {trade.legs?.[0]?.expiry || "—"}
-                      </td>
-                      <td style={{ color: "var(--color-text-secondary, #94a3b8)" }}>
-                        ${getTradeEntryPremium(trade).toFixed(2)}
-                      </td>
-                      <td style={{ fontWeight: 600, color: "var(--color-text-primary, #e2e8f0)" }}>
-                        ${(currentMark || 0).toFixed(2)}
-                      </td>
-                      <td style={{ color: (delta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
-                        {(delta || 0).toFixed(2)}
-                      </td>
-                      <td style={{ color: (theta || 0) >= 0 ? "#22c55e" : "#ef4444" }}>
-                        {(theta || 0).toFixed(2)}
-                      </td>
-                      <td className="active-trades-pnl" style={{ color: pnlColor }}>
-                        {formattedPnL}
-                      </td>
-                      <td>
-                        <button 
-                          className="close-trade-btn"
-                          onClick={() => closeOptionTrade(trade.id)}
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                {
+                  key: "strategy",
+                  header: "Strategy",
+                  sortable: false,
+                  cell: (trade) => {
+                    const isLong = String(trade.strategy || "").toLowerCase().includes("long") ||
+                                   String(trade.strategy || "").toLowerCase().includes("bull");
+                    return (
+                      <div className="strategy-name" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{
+                          width: "4px",
+                          height: "14px",
+                          borderRadius: "2px",
+                          background: isLong ? "var(--color-success)" : "var(--color-danger)"
+                        }}></span>
+                        {trade.strategy}
+                      </div>
+                    );
+                  },
+                },
+                { key: "asset", header: "Asset", sortable: false, cell: (t) => <span className="active-trades-symbol">{t.asset}</span> },
+                { key: "qty", header: "Qty", sortable: false, cell: (t) => t.qty || t.quantity || 1 },
+                { key: "expiry", header: "Expiry", sortable: false, cell: (t) => <span style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>{t.legs?.[0]?.expiry || "—"}</span> },
+                {
+                  key: "prem",
+                  header: "Scenario Prem",
+                  sortable: false,
+                  cell: (t) => <span style={{ color: "var(--color-text-secondary)" }}>${getTradeEntryPremium(t).toFixed(2)}</span>,
+                },
+                {
+                  key: "mark",
+                  header: "Live Mark",
+                  sortable: false,
+                  cell: (t) => {
+                    const { currentMark } = getInternalOptionPnL(t);
+                    return <span style={{ fontWeight: 600, color: "var(--color-text-primary)" }}>${(currentMark || 0).toFixed(2)}</span>;
+                  },
+                },
+                {
+                  key: "delta",
+                  header: "Delta",
+                  sortable: false,
+                  cell: (t) => {
+                    const { delta } = getInternalOptionPnL(t);
+                    return <span style={{ color: (delta || 0) >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>{(delta || 0).toFixed(2)}</span>;
+                  },
+                },
+                {
+                  key: "theta",
+                  header: "Theta",
+                  sortable: false,
+                  cell: (t) => {
+                    const { theta } = getInternalOptionPnL(t);
+                    return <span style={{ color: (theta || 0) >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>{(theta || 0).toFixed(2)}</span>;
+                  },
+                },
+                {
+                  key: "pnl",
+                  header: "Unrealized PnL",
+                  sortable: false,
+                  cell: (t) => {
+                    const { pnl } = getInternalOptionPnL(t);
+                    const color = pnl >= 0 ? "var(--color-success)" : "var(--color-danger)";
+                    return <span className="active-trades-pnl" style={{ color }}>{(pnl >= 0 ? "+" : "") + (pnl || 0).toFixed(2)}</span>;
+                  },
+                },
+                {
+                  key: "action",
+                  header: "Manage",
+                  sortable: false,
+                  cell: (t) => <button className="close-trade-btn" onClick={(e) => { e.stopPropagation(); closeOptionTrade(t.id); }}>Remove</button>,
+                },
+              ]}
+              data={activeOptionsTrades}
+              getRowId={(t) => t.id}
+              getRowClassName={(t) => {
+                const { isStale } = getInternalOptionPnL(t);
+                return isStale ? "stale-row" : "";
+              }}
+              className="active-trades-table"
+            />
           </div>
         </div>
       )}
@@ -1652,7 +1665,7 @@ useEffect(() => {
             <select
               value={strikeWindow}
               onChange={(e) => setStrikeWindow(e.target.value)}
-              style={{ background: "var(--color-surface-panel, rgba(5,5,5,0.7))", color: "var(--color-text-primary, #e2e8f0)", border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.25))", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
+              style={{ background: "var(--color-surface-panel)", color: "var(--color-text-primary)", border: "1px solid var(--color-border-subtle)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}
             >
               <option value="all">All Strikes</option>
               <option value="medium">ATM ±20%</option>
@@ -1681,7 +1694,7 @@ useEffect(() => {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
           <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
-            <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>IV / OI Heatmap</div>
+            <div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "6px" }}>IV / OI Heatmap</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {filteredChain.slice(0, 8).map((row) => {
                 const callIv = Number(row?.call?.iv || 0) * 100;
@@ -1702,7 +1715,7 @@ useEffect(() => {
                       display: "flex", 
                       justifyContent: "space-between", 
                       fontSize: "12px",
-                      color: "#e2e8f0",
+                      color: "var(--color-data-slate-bright)",
                       cursor: "pointer",
                       transition: "transform 0.1s"
                     }}
@@ -1717,7 +1730,7 @@ useEffect(() => {
             </div>
           </div>
           <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
-            <div style={{ fontSize: "12px", color: "var(--color-text-secondary, #94a3b8)", marginBottom: "6px" }}>Volatility Term Structure</div>
+            <div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "6px" }}>Volatility Term Structure</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {termStructureRows.slice(0, 8).map((row) => (
                   <button
@@ -1743,11 +1756,11 @@ useEffect(() => {
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(148,163,184,0.08)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
-                  <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit", fontWeight: activeExpiry === row.expiryTs ? "bold" : "normal" }}>{formatDate(row.expiryTs)}</span>
+                  <span style={{ color: activeExpiry === row.expiryTs ? "var(--color-data-primary)" : "inherit", fontWeight: activeExpiry === row.expiryTs ? "bold" : "normal" }}>{formatDate(row.expiryTs)}</span>
                   <div style={{ height: "8px", background: "var(--color-surface-elevated, rgba(5,5,5,0.8))", borderRadius: "999px", overflow: "hidden" }}>
-                    <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: activeExpiry === row.expiryTs ? "linear-gradient(90deg, #38bdf8, #60a5fa)" : "linear-gradient(90deg, #22c55e, #38bdf8)" }} />
+                    <div style={{ width: `${Math.min(100, row.impliedVol * 100)}%`, height: "100%", background: activeExpiry === row.expiryTs ? "linear-gradient(90deg, var(--color-data-primary), var(--color-data-secondary))" : "linear-gradient(90deg, var(--color-success), var(--color-data-primary))" }} />
                   </div>
-                  <span style={{ color: activeExpiry === row.expiryTs ? "#38bdf8" : "inherit" }}>{(row.impliedVol * 100).toFixed(1)}%</span>
+                  <span style={{ color: activeExpiry === row.expiryTs ? "var(--color-data-primary)" : "inherit" }}>{(row.impliedVol * 100).toFixed(1)}%</span>
                 </button>
               ))}
             </div>
@@ -1762,12 +1775,12 @@ useEffect(() => {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {upcomingEarningsForAsset.map((evt, idx) => (
-              <div key={`earnwarn-${idx}`} style={{ border: "1px solid rgba(245,158,11,0.36)", borderRadius: "8px", padding: "8px 10px", color: "var(--options-warning-text, #fbbf24)", fontSize: "12px", background: "var(--options-warning-bg, rgba(120,53,15,0.2))" }}>
+              <div key={`earnwarn-${idx}`} style={{ border: "1px solid rgba(245,158,11,0.36)", borderRadius: "8px", padding: "8px 10px", color: "var(--color-data-amber-bright)", fontSize: "12px", background: "var(--color-warning-soft)" }}>
                 Earnings volatility warning: {activeAsset} has earnings on {evt?.date || evt?.reportDate || "upcoming"}; avoid overlapping expiries unless intentional.
               </div>
             ))}
             {assignmentReminders.map((item) => (
-              <div key={`assign-${item.id}`} style={{ border: "1px solid var(--color-border-subtle, rgba(148,163,184,0.22))", borderRadius: "8px", padding: "8px 10px", color: "var(--color-text-secondary, #cbd5e1)", fontSize: "12px", background: "var(--color-surface-panel, rgba(5,5,5,0.5))" }}>
+              <div key={`assign-${item.id}`} style={{ border: "1px solid var(--color-border-subtle)", borderRadius: "8px", padding: "8px 10px", color: "var(--color-text-secondary)", fontSize: "12px", background: "var(--color-surface-panel)" }}>
                 {item.label}: expires in {item.hoursToExpiry}h{item.inTheMoneyRisk ? " · Assignment risk elevated (ITM)." : ""}.
               </div>
             ))}
@@ -1873,11 +1886,11 @@ useEffect(() => {
                       <td className="bid-ask positive">{formatOptionPx(row.call?.ask)}</td>
                       <td className="strike-col" style={{ position: "relative" }}>
                         {isAtm ? (
-                          <div style={{ position: "absolute", top: "-10px", left: "50%", transform: "translateX(-50%)", background: "#3b82f6", color: "#fff", padding: "1px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: "bold", zIndex: 10, whiteSpace: "nowrap" }}>
+                          <div style={{ position: "absolute", top: "-10px", left: "50%", transform: "translateX(-50%)", background: "var(--color-data-primary)", color: "var(--color-text-inverse)", padding: "1px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: "bold", zIndex: 10, whiteSpace: "nowrap" }}>
                             {activeAsset} {activeSpot.toFixed(2)}
                           </div>
                         ) : null}
-                        <span style={{ color: isAtm ? "#60a5fa" : "inherit", fontWeight: isAtm ? "bold" : "normal" }}>{Number(row.strike || 0).toLocaleString()}</span>
+                        <span style={{ color: isAtm ? "var(--color-data-primary)" : "inherit", fontWeight: isAtm ? "bold" : "normal" }}>{Number(row.strike || 0).toLocaleString()}</span>
                       </td>
                       <td className="bid-ask negative">{formatOptionPx(row.put?.bid)}</td>
                       <td className="bid-ask negative">{formatOptionPx(row.put?.ask)}</td>
@@ -1938,7 +1951,7 @@ useEffect(() => {
         </div>
 
         {whaleSource === "telegram" ? (
-          <div style={{ marginBottom: "10px", fontSize: "12px", color: "#64748b" }}>
+          <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--color-data-slate-dim)" }}>
             Sources: {telegramSourceLabel}
             {telegramTransportLabel ? ` · Transport: ${telegramTransportLabel}` : ""}
             {telegramDebug?.status && telegramDebug.status !== "ok" ? ` · Status: ${telegramDebug.status}` : ""}
@@ -1954,42 +1967,19 @@ useEffect(() => {
           <div className="loading-state">{whaleEmptyStateText}</div>
         ) : (
           <div className="table-scroll options-exec-table-scroll">
-            <table className="option-chain-table whale-trades-table">
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Expiration</th>
-                  <th>Reference Price</th>
-                  <th>Strategy</th>
-                  <th>Total Notional</th>
-                </tr>
-              </thead>
-               <tbody>
-                {pagedWhaleTrades.map((trade) => (
-                  <tr 
-                    key={trade.id} 
-                    onClick={() => handleWhaleTradeClick(trade)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        handleWhaleTradeClick(trade);
-                      }
-                    }}
-                    tabIndex={0}
-                    role="button"
-                    style={{ cursor: "pointer" }}
-                    onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(148,163,184,0.08)'}
-                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    <td className="greek">{trade.symbol}</td>
-                    <td className="greek">{trade.expiration || "—"}</td>
-                    <td className="bid-ask positive">{formatDollar(trade.referencePrice)}</td>
-                    <td className="greek">{trade.strategy}</td>
-                    <td className="bid-ask positive">{formatDollar(trade.totalNotional)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                { key: "symbol", header: "Symbol", sortable: false, cell: (t) => <span className="greek">{t.symbol}</span> },
+                { key: "expiration", header: "Expiration", sortable: false, cell: (t) => <span className="greek">{t.expiration || "—"}</span> },
+                { key: "referencePrice", header: "Reference Price", sortable: false, cell: (t) => <span className="bid-ask positive">{formatDollar(t.referencePrice)}</span> },
+                { key: "strategy", header: "Strategy", sortable: false, cell: (t) => <span className="greek">{t.strategy}</span> },
+                { key: "totalNotional", header: "Total Notional", sortable: false, cell: (t) => <span className="bid-ask positive">{formatDollar(t.totalNotional)}</span> },
+              ]}
+              data={pagedWhaleTrades}
+              getRowId={(t) => t.id}
+              onRowClick={(t) => handleWhaleTradeClick(t)}
+              className="option-chain-table whale-trades-table"
+            />
           </div>
         )}
 

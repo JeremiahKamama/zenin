@@ -8,10 +8,34 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
+# Dependencies
+node_modules/
+**/node_modules/
+
 # Build output
 frontend/dist/
+admin/dist/
 
 # Local runtime artifacts
 backend/*.db
 backend/*.sqlite
 backend/*.log
+
+# OS / editor cruft
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Python venv (backend uses a local venv for python helpers)
+backend/venv/
+__pycache__/
+**/__pycache__/
+
+# Scratch / local tooling artifacts
+.playwright-cli/
+.superdesign/
+.superstack/
+scratch/
+.shot*.cjs
+*.mockup.html
+design_draft.html

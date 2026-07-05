@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DataTable } from "./data-table/DataTable";
 import {
   CompactPageHeader,
   DensePanelHeader,
@@ -2346,41 +2347,47 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
             )}
           />
           <div className="research-doc-table-wrap">
-            <table className="research-doc-table">
-              <thead>
-                <tr>
-                  <th>Document</th>
-                  <th>Source</th>
-                  <th>Status</th>
-                  <th>Tickers</th>
-                  <th>Updated</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredDocuments.map((doc) => (
-                  <tr key={doc.id}>
-                    <td>
+            <DataTable
+              columns={[
+                {
+                  key: "title",
+                  header: "Document",
+                  sortable: false,
+                  cell: (doc) => (
+                    <div>
                       <button type="button" className="research-doc-title" onClick={() => setSelectedDocId(doc.id)}>
                         {doc.title}
                       </button>
                       <span>{doc.summary}</span>
-                    </td>
-                    <td>{doc.sourceName || inferSourceLabel(doc.sourceType)}</td>
-                    <td><span className={`research-status-pill ${doc.status}`}>{toSlugLabel(doc.status)}</span></td>
-                    <td>
-                      <div className="research-symbol-row">
-                        {(doc.symbols || ["Unlinked"]).slice(0, 6).map((symbol) => (
-                          <span key={symbol} className={doc.linkedTrackedSymbols?.includes(symbol) ? "tracked" : ""}>{symbol}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td>{formatDateTime(doc.updatedAt)}</td>
-                    <td><button type="button" className="research-link-btn" onClick={() => setSelectedDocId(doc.id)}>Review</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                  ),
+                },
+                { key: "sourceType", header: "Source", sortable: false, cell: (doc) => doc.sourceName || inferSourceLabel(doc.sourceType) },
+                { key: "status", header: "Status", sortable: false, cell: (doc) => <span className={`research-status-pill ${doc.status}`}>{toSlugLabel(doc.status)}</span> },
+                {
+                  key: "symbols",
+                  header: "Tickers",
+                  sortable: false,
+                  cell: (doc) => (
+                    <div className="research-symbol-row">
+                      {(doc.symbols || ["Unlinked"]).slice(0, 6).map((symbol) => (
+                        <span key={symbol} className={doc.linkedTrackedSymbols?.includes(symbol) ? "tracked" : ""}>{symbol}</span>
+                      ))}
+                    </div>
+                  ),
+                },
+                { key: "updatedAt", header: "Updated", sortable: false, cell: (doc) => formatDateTime(doc.updatedAt) },
+                {
+                  key: "action",
+                  header: "Action",
+                  sortable: false,
+                  cell: (doc) => <button type="button" className="research-link-btn" onClick={() => setSelectedDocId(doc.id)}>Review</button>,
+                },
+              ]}
+              data={filteredDocuments}
+              getRowId={(doc) => doc.id}
+              className="research-doc-table"
+            />
           </div>
         </section>
       </div>
@@ -2551,44 +2558,44 @@ export function ResearchModule({ portfolio = [], watchlistAssets = [], onOpenWat
           <DensePanelHeader title="Coverage Map" subtitle="Research depth, thesis support, and portfolio linkage across all covered symbols." />
           {coverageRows.length ? (
             <div className="research-doc-table-wrap">
-              <table className="research-doc-table">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Exposure</th>
-                    <th>Weight</th>
-                    <th>Health</th>
-                    <th>Research Depth</th>
-                    <th>Thesis</th>
-                    <th>Flags</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {coverageRows.map((row) => (
-                    <tr key={row.symbol}>
-                      <td>
+              <DataTable
+                columns={[
+                  {
+                    key: "symbol",
+                    header: "Symbol",
+                    sortable: false,
+                    cell: (row) => (
+                      <div>
                         <button type="button" className="research-doc-title" onClick={() => { setSelectedTicker(row.symbol); setActiveView("tickers"); }}>
                           {row.symbol}
                         </button>
                         <span>{row.docCount} notes · {row.catalystCount} catalysts · {row.decisionCount} decisions</span>
-                      </td>
-                      <td>{row.exposure > 0 ? formatCurrency(row.exposure) : "—"}</td>
-                      <td>{row.exposure > 0 ? formatPercent(row.weight) : "—"}</td>
-                      <td>{row.coverageHealth.label} · {row.coverageHealth.score}</td>
-                      <td>{row.researchDepth}</td>
-                      <td>{row.thesisState}</td>
-                      <td>
-                        <div className="research-symbol-row">
-                          {row.unsupportedByThesis ? <span className="tracked">Unsupported</span> : null}
-                          {row.catalystDueSoon ? <span className="tracked">Catalyst soon</span> : null}
-                          {row.thesisStale ? <span className="tracked">Thesis stale</span> : null}
-                          {row.inWatchlist ? <span className="tracked">Watchlist</span> : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    ),
+                  },
+                  { key: "exposure", header: "Exposure", sortable: false, cell: (row) => row.exposure > 0 ? formatCurrency(row.exposure) : "—" },
+                  { key: "weight", header: "Weight", sortable: false, cell: (row) => row.exposure > 0 ? formatPercent(row.weight) : "—" },
+                  { key: "health", header: "Health", sortable: false, cell: (row) => `${row.coverageHealth.label} · ${row.coverageHealth.score}` },
+                  { key: "researchDepth", header: "Research Depth", sortable: false },
+                  { key: "thesisState", header: "Thesis", sortable: false },
+                  {
+                    key: "flags",
+                    header: "Flags",
+                    sortable: false,
+                    cell: (row) => (
+                      <div className="research-symbol-row">
+                        {row.unsupportedByThesis ? <span className="tracked">Unsupported</span> : null}
+                        {row.catalystDueSoon ? <span className="tracked">Catalyst soon</span> : null}
+                        {row.thesisStale ? <span className="tracked">Thesis stale</span> : null}
+                        {row.inWatchlist ? <span className="tracked">Watchlist</span> : null}
+                      </div>
+                    ),
+                  },
+                ]}
+                data={coverageRows}
+                getRowId={(row) => row.symbol}
+                className="research-doc-table"
+              />
             </div>
           ) : (
             <GuidedEmptyState eyebrow="Coverage Map" title="No coverage yet" description="The map fills in automatically once notes, theses, or watchlist symbols exist." />

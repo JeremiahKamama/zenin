@@ -113,7 +113,8 @@ export function AssetModal({
   };
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     const fetchHistory = async () => {
       if (!assetSymbol) return;
       const cacheParams = { symbol: assetSymbol, type: assetType, interval: activeInterval };
@@ -136,9 +137,9 @@ export function AssetModal({
           type: assetType,
           interval: activeInterval
         });
-        const res = await zeninFetch(`/history?${params.toString()}`);
+        const res = await zeninFetch(`/history?${params.toString()}`, { signal });
         const data = await res.json();
-        if (cancelled) return;
+        if (signal.aborted) return;
         const nextHistory = Array.isArray(data?.history) ? data.history : [];
         const nextSource = String(data?.source || "");
         if (data?.currency) setFetchedCurrency(data.currency);
@@ -150,7 +151,7 @@ export function AssetModal({
           source: nextSource
         });
       } catch (err) {
-        if (cancelled) return;
+        if (signal.aborted) return;
         console.warn("Asset history unavailable; using cached or local context.", err);
         if (cached?.payload) {
           const cachedHistory = Array.isArray(cached.payload?.history) ? cached.payload.history : [];
@@ -161,14 +162,12 @@ export function AssetModal({
         }
         setHistoryStale(true);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!signal.aborted) setLoading(false);
       }
     };
 
     fetchHistory();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [activeInterval, assetSymbol, assetType]);
 
   useEffect(() => {
@@ -180,15 +179,16 @@ export function AssetModal({
     const hasPrice = Number.isFinite(Number(asset?.price));
     const hasChange = Number.isFinite(Number(asset?.priceChangePercent));
     if (hasPrice && hasChange) return;
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
 
     const fetchQuote = async () => {
       try {
         const quoteType = assetType === "crypto" ? "crypto" : "tradfi";
         const params = new URLSearchParams({ type: quoteType, symbols: assetSymbol });
-        const res = await zeninFetch(`/prices?${params.toString()}`);
+        const res = await zeninFetch(`/prices?${params.toString()}`, { signal });
         const data = await res.json();
-        if (cancelled) return;
+        if (signal.aborted) return;
         const row = data?.prices?.[assetSymbol] || data?.[assetSymbol] || null;
         const price = Number(row?.price);
         const priceChangePercent = Number(row?.priceChangePercent);
@@ -199,19 +199,18 @@ export function AssetModal({
           source: row?.source || data?.providers?.[0]?.source || null
         });
       } catch (error) {
-        if (cancelled) return;
+        if (signal.aborted) return;
         console.warn("[AssetModal] Live quote fetch failed:", error?.message || error);
       }
     };
 
     fetchQuote();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [asset?.price, asset?.priceChangePercent, assetSymbol, assetType]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     const fetchPerformance = async () => {
       if (!assetSymbol) return;
       const cacheParams = { symbol: assetSymbol, type: assetType };
@@ -221,22 +220,20 @@ export function AssetModal({
       }
       try {
         const params = new URLSearchParams({ symbol: assetSymbol, type: assetType });
-        const res = await zeninFetch(`/interval-performance?${params.toString()}`);
+        const res = await zeninFetch(`/interval-performance?${params.toString()}`, { signal });
         const data = await res.json();
-        if (cancelled) return;
+        if (signal.aborted) return;
         const performance = data?.performance && typeof data.performance === "object" ? data.performance : {};
         setPerformanceMap(performance);
         writeResilientCache("asset-performance", cacheParams, { performance });
       } catch (err) {
-        if (cancelled) return;
+        if (signal.aborted) return;
         console.warn("Performance summary unavailable; using local context.", err);
       }
     };
 
     fetchPerformance();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [assetSymbol, assetType]);
 
   useEffect(() => {
@@ -332,22 +329,28 @@ export function AssetModal({
   useEffect(() => {
     if (!isTradFi || !assetSymbol || isForexAsset) return;
 
+    const controller = new AbortController();
+    const { signal } = controller;
+
     const fetchFinviz = async () => {
       setFinvizLoading(true);
       try {
-        const res = await zeninFetch(`/finviz?symbol=${assetSymbol}`);
+        const res = await zeninFetch(`/finviz?symbol=${assetSymbol}`, { signal });
         const data = await res.json();
+        if (signal.aborted) return;
         if (data && !data.error) {
           setFinvizData(data);
         }
       } catch (err) {
+        if (signal.aborted) return;
         console.warn("Finviz data unavailable; showing fundamentals fallback.", err);
       } finally {
-        setFinvizLoading(false);
+        if (!signal.aborted) setFinvizLoading(false);
       }
     };
 
     fetchFinviz();
+    return () => controller.abort();
   }, [isTradFi, assetSymbol, isForexAsset]);
 
   const chartRange = useMemo(() => {
@@ -548,16 +551,16 @@ export function AssetModal({
             priceLineVisible: false
           }
         } : null,
-        visibleIndicators.sma20 ? { name: "SMA 20", type: "line", color: "#f59e0b", data: movingAverage(20), includeInReadout: false, options: indicatorOptions } : null,
-        visibleIndicators.ema20 ? { name: "EMA 20", type: "line", color: "#a78bfa", data: ema(20), includeInReadout: false, options: indicatorOptions } : null,
-        visibleIndicators.vwap && vwap.length ? { name: "VWAP", type: "line", color: "#22d3ee", data: vwap, includeInReadout: false, options: indicatorOptions } : null
+        visibleIndicators.sma20 ? { name: "SMA 20", type: "line", color: "var(--color-warning)", data: movingAverage(20), includeInReadout: false, options: indicatorOptions } : null,
+        visibleIndicators.ema20 ? { name: "EMA 20", type: "line", color: "var(--color-data-secondary)", data: ema(20), includeInReadout: false, options: indicatorOptions } : null,
+        visibleIndicators.vwap && vwap.length ? { name: "VWAP", type: "line", color: "var(--color-data-secondary)", data: vwap, includeInReadout: false, options: indicatorOptions } : null
       ].filter(Boolean);
     }
     return [
       {
         name: "Price",
         type: "area",
-        color: "#38bdf8",
+        color: "var(--color-data-primary)",
         data: priceRows.map((row) => ({
           time: row.time,
           value: row.close
@@ -567,9 +570,9 @@ export function AssetModal({
           priceLineVisible: false
         }
       },
-      visibleIndicators.sma20 ? { name: "SMA 20", type: "line", color: "#f59e0b", data: movingAverage(20), includeInReadout: false, options: indicatorOptions } : null,
-      visibleIndicators.ema20 ? { name: "EMA 20", type: "line", color: "#a78bfa", data: ema(20), includeInReadout: false, options: indicatorOptions } : null,
-      visibleIndicators.vwap && vwap.length ? { name: "VWAP", type: "line", color: "#22d3ee", data: vwap, includeInReadout: false, options: indicatorOptions } : null
+      visibleIndicators.sma20 ? { name: "SMA 20", type: "line", color: "var(--color-warning)", data: movingAverage(20), includeInReadout: false, options: indicatorOptions } : null,
+      visibleIndicators.ema20 ? { name: "EMA 20", type: "line", color: "var(--color-data-secondary)", data: ema(20), includeInReadout: false, options: indicatorOptions } : null,
+      visibleIndicators.vwap && vwap.length ? { name: "VWAP", type: "line", color: "var(--color-data-secondary)", data: vwap, includeInReadout: false, options: indicatorOptions } : null
     ].filter(Boolean);
   }, [history, chartType, visibleIndicators]);
 
@@ -597,7 +600,7 @@ export function AssetModal({
           time: Math.floor(parsed / 1000),
           position: side === "sell" ? "aboveBar" : "belowBar",
           shape: side === "sell" ? "arrowDown" : "arrowUp",
-          color: side === "sell" ? "#ef4444" : "#22c55e",
+          color: side === "sell" ? "var(--color-danger)" : "var(--color-success)",
           text: label,
         };
       })
@@ -624,8 +627,8 @@ export function AssetModal({
     const high52 = Number(earnings?.profile?.fiftyTwoWeekHigh ?? asset?.fiftyTwoWeekHigh ?? asset?.high52);
     const low52 = Number(earnings?.profile?.fiftyTwoWeekLow ?? asset?.fiftyTwoWeekLow ?? asset?.low52);
     return [
-      Number.isFinite(displayedPrice) && displayedPrice > 0 ? { id: "current-price", price: displayedPrice, title: "Current price", color: "#94a3b8" } : null,
-      Number.isFinite(averageEntryPrice) ? { id: "avg-entry", price: averageEntryPrice, title: "Avg entry", color: "#f59e0b" } : null,
+      Number.isFinite(displayedPrice) && displayedPrice > 0 ? { id: "current-price", price: displayedPrice, title: "Current price", color: "var(--color-data-slate)" } : null,
+      Number.isFinite(averageEntryPrice) ? { id: "avg-entry", price: averageEntryPrice, title: "Avg entry", color: "var(--color-warning)" } : null,
       Number.isFinite(high52) && high52 > 0 ? { id: "52w-high", price: high52, title: "52W high", color: "rgba(34,197,94,0.72)" } : null,
       Number.isFinite(low52) && low52 > 0 ? { id: "52w-low", price: low52, title: "52W low", color: "rgba(239,68,68,0.72)" } : null
     ].filter(Boolean);
@@ -939,9 +942,9 @@ export function AssetModal({
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                     <thead>
                       <tr style={{ background: "rgba(148,163,184,0.06)" }}>
-                        <th style={{ padding: "8px 12px", textAlign: "left", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Metric</th>
-                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Value</th>
-                        <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748b", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Finviz Info</th>
+                        <th style={{ padding: "8px 12px", textAlign: "left", color: "var(--color-data-slate-dim)", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Metric</th>
+                        <th style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-data-slate-dim)", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Value</th>
+                        <th style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-data-slate-dim)", fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em" }}>Finviz Info</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -961,7 +964,7 @@ export function AssetModal({
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
                         <td style={{ padding: "8px 12px", color: "var(--color-text-secondary)" }}>Analyst Target</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "#38bdf8", fontWeight: 600 }}>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-text-primary)", fontWeight: 600 }}>
                           {finvizData?.summary?.["Target Price"] || (earnings?.targetPrice != null ? `$${Number(earnings.targetPrice).toFixed(2)}` : "—")}
                         </td>
                         <td style={{ padding: "8px 12px", textAlign: "right" }}>
@@ -969,7 +972,7 @@ export function AssetModal({
                              <span style={{
                                fontSize: "10px", padding: "2px 6px", borderRadius: "4px", fontWeight: 700, textTransform: "uppercase",
                                background: (finvizData.ratings[0].rating?.toLowerCase().includes("buy") || finvizData.ratings[0].rating?.toLowerCase().includes("outperform")) ? "rgba(34,197,94,0.15)" : finvizData.ratings[0].rating?.toLowerCase().includes("sell") ? "rgba(239,68,68,0.15)" : "rgba(148,163,184,0.1)",
-                               color: (finvizData.ratings[0].rating?.toLowerCase().includes("buy") || finvizData.ratings[0].rating?.toLowerCase().includes("outperform")) ? "#22c55e" : finvizData.ratings[0].rating?.toLowerCase().includes("sell") ? "#ef4444" : "#94a3b8"
+                               color: (finvizData.ratings[0].rating?.toLowerCase().includes("buy") || finvizData.ratings[0].rating?.toLowerCase().includes("outperform")) ? "var(--color-success)" : finvizData.ratings[0].rating?.toLowerCase().includes("sell") ? "var(--color-danger)" : "var(--color-data-slate)"
                              }}>
                                {finvizData.ratings[0].rating}
                              </span>
@@ -978,7 +981,7 @@ export function AssetModal({
                       </tr>
                       <tr style={{ borderTop: "1px solid rgba(148,163,184,0.08)" }}>
                         <td style={{ padding: "8px 12px", color: "var(--color-text-secondary)" }}>Next Earnings</td>
-                        <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 600, fontSize: "11px" }}>
+                        <td colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: "var(--color-warning)", fontWeight: 600, fontSize: "11px" }}>
                           {finvizData?.summary?.["Earnings"] || earnings?.nextEarnings || "—"}
                         </td>
                       </tr>
@@ -996,7 +999,7 @@ export function AssetModal({
                   ) : null}
                 </div>
               ) : (
-                <div className="fundamentals-empty-hint" style={{ padding: "16px", textAlign: "center", color: "#64748b" }}>
+                <div className="fundamentals-empty-hint" style={{ padding: "16px", textAlign: "center", color: "var(--color-data-slate-dim)" }}>
                   <p style={{ margin: 0 }}>Detailed fundamentals unavailable for this ticker.</p>
                   {asset.symbol.includes(".") && (
                     <p style={{ margin: "8px 0 0", fontSize: "11px", opacity: 0.8 }}>
@@ -1118,7 +1121,7 @@ export function AssetModal({
         .currency-pill-toggle {
           display: flex;
           gap: 2px;
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--color-surface-hover);
           padding: 2px;
           border-radius: 6px;
         }
@@ -1133,11 +1136,11 @@ export function AssetModal({
           transition: all 0.2s ease;
         }
         .currency-pill-toggle button.active {
-          background: var(--color-accent-primary);
-          color: #fff;
+          background: var(--color-interactive);
+          color: var(--color-text-primary);
         }
         .currency-pill-toggle button:hover:not(.active) {
-          background: rgba(255, 255, 255, 0.1);
+          background: var(--color-border-medium);
         }
       `}</style>
     </div>

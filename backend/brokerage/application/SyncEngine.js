@@ -28,6 +28,8 @@ const {
 } = require("./persistenceMappers");
 const { withRetry } = require("./retry");
 const { getRateLimiter } = require("./rateLimiter");
+// Observability — safe no-ops when Sentry is unconfigured.
+const sentry = require("../../sentry");
 
 const DEFAULT_TX_LOOKBACK_DAYS = 90;
 
@@ -81,8 +83,25 @@ function createSyncEngine(options) {
 
     const callProvider = async (label, fn) => {
       await limiter.acquire();
-      return withRetry(fn, { ...retryOptions, signal });
+      // Wrap each provider call in a span so retries/rate-limits are visible
+      // in the trace. Spans are no-ops when tracing is disabled.
+      return sentry.withSpan(
+        { op: "brokerage.provider.call", name: `${provider.providerKey}.${label}` },
+        () => withRetry(fn, { ...retryOptions, signal })
+      );
     };
+
+    sentry.addBreadcrumb({
+      category: "brokerage.sync",
+      type: "default",
+      message: `sync start: provider=${provider.providerKey} mode=${mode}`,
+      data: {
+        provider: provider.providerKey,
+        mode,
+        connectionId: connection.id,
+        workspaceId: connection.workspaceId || null
+      }
+    });
 
     let accountsCount = 0;
     let holdingsCount = 0;
@@ -185,6 +204,14 @@ function createSyncEngine(options) {
         meta: nextMeta
       });
 
+      sentry.addBreadcrumb({
+        category: "brokerage.sync",
+        type: "default",
+        level: "info",
+        message: `sync ok: provider=${provider.providerKey} accounts=${accountsCount}`,
+        data: { provider: provider.providerKey, accountsCount, holdingsCount, transactionsInserted }
+      });
+
       return {
         success: true,
         accountsCount,
@@ -209,6 +236,25 @@ function createSyncEngine(options) {
           retryable: brokerageError.retryable
         }
       }).catch(() => {});
+
+      // Report sync failures to Sentry with provider/connection context so the
+      // team can alert on broken connections or provider outages. Auth errors
+      // (expired/revoked tokens) are captured distinctly so users can be
+      // prompted to reconnect. No credentials are attached.
+      sentry.captureException(brokerageError, {
+        tags: {
+          provider: provider.providerKey,
+          errorCode: String(brokerageError.code || "BROKERAGE_ERROR"),
+          retryable: brokerageError.retryable === true,
+          workspaceId: String(connection.workspaceId || "unknown"),
+          connectionId: String(connection.id)
+        },
+        extra: {
+          mode,
+          statusCode: brokerageError.statusCode || null,
+          retryAfterMs: brokerageError.retryAfter || null
+        }
+      });
 
       throw brokerageError;
     }

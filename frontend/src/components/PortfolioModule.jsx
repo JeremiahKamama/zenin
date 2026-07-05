@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
+import { DataTable } from "./data-table/DataTable";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { chartColors } from "../utils/chartTheme";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
@@ -330,7 +332,7 @@ const totalAccountEquity =
 const currentAccountEquity = totalAccountEquity;
 
 const isProfitable = currentAccountEquity >= initialBalance;
-  const chartColor = chartMode === "pnl" ? (isProfitable ? "#22c55e" : "#ef4444") : "#38bdf8";
+  const chartColor = chartMode === "pnl" ? (isProfitable ? "var(--color-success)" : "var(--color-danger)") : "var(--color-data-primary)";
 
   const chartData = useMemo(() => {
     const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
@@ -800,7 +802,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       {
         name: benchmarkSymbol,
         type: "line",
-        color: "#f59e0b",
+        color: "var(--color-warning)",
         data: toData(benchmarkSeries),
         includeInReadout: false,
         options: { lineWidth: 1, priceFormat }
@@ -1772,7 +1774,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const rebalanceDonutOptions = useMemo(() => ({
     chart: { type: "donut", background: "transparent", sparkline: { enabled: true } },
     labels: ["Overweight", "Underweight", "In Range"],
-    colors: ["#f87171", "#67e8f9", "#1f2937"],
+    colors: [chartColors.danger(), chartColors.info(), chartColors.muted()],
     stroke: { show: false },
     legend: { show: false },
     dataLabels: { enabled: false },
@@ -1790,13 +1792,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
             show: true,
             name: {
               show: true,
-              color: "#94a3b8",
+              color: "var(--color-data-slate)",
               fontSize: "12px",
               offsetY: -6,
             },
             value: {
               show: true,
-              color: "#f8fafc",
+              color: "var(--color-text-primary)",
               fontSize: "24px",
               fontWeight: 700,
               offsetY: 10,
@@ -1805,7 +1807,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             total: {
               show: true,
               label: "Alignment",
-              color: "#94a3b8",
+              color: "var(--color-data-slate)",
               fontSize: "12px",
               formatter: () => "Projected",
             },
@@ -2053,28 +2055,27 @@ const isProfitable = currentAccountEquity >= initialBalance;
             })}
           </div>
           <div className="portfolio-command-table-wrap">
-            <table className="portfolio-command-table compact">
-              <thead>
-                <tr>
-                  <th>Bucket</th>
-                  <th>Leader</th>
-                  <th>Contribution</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.flatMap((group) => (attributionRows?.[group.key] || []).slice(0, 3).map((row) => (
-                  <tr key={`${group.key}-${row.name}`}>
-                    <td>{group.label}</td>
-                    <td>{row.name}</td>
-                    <td className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.pnl)}</td>
-                    <td>
-                      <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution", row)}>Review</button>
-                    </td>
-                  </tr>
-                )))}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                { key: "bucket", header: "Bucket", sortable: false },
+                { key: "name", header: "Leader", sortable: false },
+                {
+                  key: "pnl",
+                  header: "Contribution",
+                  sortable: false,
+                  cell: (row) => <span className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.pnl)}</span>,
+                },
+                {
+                  key: "action",
+                  header: "Action",
+                  sortable: false,
+                  cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution", row)}>Review</button>,
+                },
+              ]}
+              data={groups.flatMap((group) => (attributionRows?.[group.key] || []).slice(0, 3).map((row) => ({ ...row, bucket: group.label })))}
+              getRowId={(row) => `${row.bucket}-${row.name}`}
+              className="portfolio-command-table compact"
+            />
           </div>
         </div>
       );
@@ -2105,30 +2106,23 @@ const isProfitable = currentAccountEquity >= initialBalance;
             ))}
           </div>
           <div className="portfolio-command-table-wrap">
-            <table className="portfolio-command-table compact">
-              <thead>
-                <tr>
-                  <th>Bucket</th>
-                  <th>Name</th>
-                  <th>Weight</th>
-                  <th>Risk</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(exposureRows || []).slice(0, 10).map((row) => (
-                  <tr key={`exp-${row.bucket}-${row.name}`}>
-                    <td>{row.bucket}</td>
-                    <td>{row.name}</td>
-                    <td>{row.weight.toFixed(1)}%</td>
-                    <td>{formatRiskLabel(row.risk)}</td>
-                    <td>
-                      <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure", row)}>Inspect</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                { key: "bucket", header: "Bucket", sortable: false },
+                { key: "name", header: "Name", sortable: false },
+                { key: "weight", header: "Weight", sortable: false, cell: (row) => `${row.weight.toFixed(1)}%` },
+                { key: "risk", header: "Risk", sortable: false, cell: (row) => formatRiskLabel(row.risk) },
+                {
+                  key: "action",
+                  header: "Action",
+                  sortable: false,
+                  cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure", row)}>Inspect</button>,
+                },
+              ]}
+              data={(exposureRows || []).slice(0, 10)}
+              getRowId={(row) => `exp-${row.bucket}-${row.name}`}
+              className="portfolio-command-table compact"
+            />
           </div>
         </div>
       );
@@ -2197,44 +2191,49 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
 
           <div className="portfolio-command-table-wrap portfolio-history-table-wrap">
-            <table className="portfolio-command-table compact portfolio-history-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Platform</th>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Quantity</th>
-                  <th>Price</th>
-                  <th>Fee</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiExecutionRows.slice(0, 100).map((execution) => (
-                  <tr key={`${execution.platform}-${execution.platformFillId || execution.id}`} onClick={() => setSelectedExecution(execution)}>
-                    <td>
-                      <strong>{formatExecutionTimestamp(execution.executedAt)}</strong>
-                      <span>{execution.platformFillId || "Fill ID pending"}</span>
-                    </td>
-                    <td>{formatVenueLabel(execution.platform)}</td>
-                    <td><strong>{execution.symbol}</strong><span>{execution.marketType}</span></td>
-                    <td className={execution.side === "buy" ? "positive" : "negative"}>{execution.side.toUpperCase()}</td>
-                    <td>{formatExecutionQuantity(execution.quantity)}</td>
-                    <td>{formatMoney(execution.price)}</td>
-                    <td>{execution.feeAmount ? `${formatExecutionQuantity(execution.feeAmount)} ${execution.feeCurrency}` : "N/A"}</td>
-                    <td><span>API connection</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!apiExecutionRows.length ? (
-              <div className="portfolio-command-empty">
-                <h3>No API executions yet</h3>
-                <p>Connect Binance, Bybit, Hyperliquid, or another supported account to import previous executions.</p>
-                <button type="button" className="portfolio-command-primary-cta subtle" onClick={handleOpenConnections}>Connect Account</button>
-              </div>
-            ) : null}
+            <DataTable
+              columns={[
+                {
+                  key: "executedAt",
+                  header: "Time",
+                  sortable: false,
+                  cell: (e) => (
+                    <div>
+                      <strong>{formatExecutionTimestamp(e.executedAt)}</strong>
+                      <span>{e.platformFillId || "Fill ID pending"}</span>
+                    </div>
+                  ),
+                },
+                { key: "platform", header: "Platform", sortable: false, cell: (e) => formatVenueLabel(e.platform) },
+                {
+                  key: "symbol",
+                  header: "Symbol",
+                  sortable: false,
+                  cell: (e) => (<div><strong>{e.symbol}</strong><span>{e.marketType}</span></div>),
+                },
+                {
+                  key: "side",
+                  header: "Side",
+                  sortable: false,
+                  cell: (e) => <span className={e.side === "buy" ? "positive" : "negative"}>{e.side.toUpperCase()}</span>,
+                },
+                { key: "quantity", header: "Quantity", sortable: false, cell: (e) => formatExecutionQuantity(e.quantity) },
+                { key: "price", header: "Price", sortable: false, cell: (e) => formatMoney(e.price) },
+                { key: "feeAmount", header: "Fee", sortable: false, cell: (e) => e.feeAmount ? `${formatExecutionQuantity(e.feeAmount)} ${e.feeCurrency}` : "N/A" },
+                { key: "source", header: "Source", sortable: false, cell: () => <span>API connection</span> },
+              ]}
+              data={apiExecutionRows.slice(0, 100)}
+              getRowId={(e) => `${e.platform}-${e.platformFillId || e.id}`}
+              onRowClick={(e) => setSelectedExecution(e)}
+              emptyState={
+                <div className="portfolio-command-empty">
+                  <h3>No API executions yet</h3>
+                  <p>Connect Binance, Bybit, Hyperliquid, or another supported account to import previous executions.</p>
+                  <button type="button" className="portfolio-command-primary-cta subtle" onClick={handleOpenConnections}>Connect Account</button>
+                </div>
+              }
+              className="portfolio-command-table compact portfolio-history-table"
+            />
           </div>
 
           {recentExecutionNotifications.length ? (
@@ -2377,60 +2376,72 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         </div>
         <div className="portfolio-command-table-wrap">
-          <table className="portfolio-command-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Name</th>
-                <th>Asset Class</th>
-                <th>Allocation</th>
-                <th>Unrealized PnL</th>
-                <th>vs Benchmark</th>
-                <th>Weight vs Bench</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {holdingsTableRows.length ? holdingsTableRows.map((row) => {
-                const benchDelta = row.kind === "spot"
-                  ? Number(row?.raw?.priceChangePercent || 0) - Number(benchmarkSnapshot.returnPct || 0)
-                  : null;
-                const driftRow = rebalanceActionMap.get(String(row.symbol || "").toUpperCase());
-                return (
-                  <tr key={row.key}>
-                    <td>{row.symbol}</td>
-                    <td>{row.name}</td>
-                    <td>{row.kind === "options" ? "Options" : String(row?.raw?.marketType || row?.raw?.type || "Asset").replace(/_/g, " ")}</td>
-                    <td>
-                      <div className="portfolio-command-allocation-cell">
-                        <strong>{row.allocation.toFixed(1)}%</strong>
-                        <div className="portfolio-command-allocation-bar"><i style={{ width: `${Math.min(100, Math.max(4, row.allocation))}%` }} /></div>
-                      </div>
-                    </td>
-                    <td className={row.pnlPositive ? "positive" : "negative"}>{row.pnlMain}</td>
-                    <td className={benchDelta == null ? "" : benchDelta >= 0 ? "positive" : "negative"}>
-                      {benchDelta == null ? "—" : formatSignedPercent(benchDelta, 1)}
-                    </td>
-                    <td className={Number(driftRow?.drift || 0) <= 0 ? "positive" : "negative"}>
-                      {driftRow ? formatSignedPercent(driftRow.drift, 1) : "—"}
-                    </td>
-                    <td>
-                      <button type="button" className="portfolio-v2-link" onClick={() => openHoldingSnapshot(row)}>Open</button>
-                    </td>
-                  </tr>
-                );
-              }) : (
-                <tr>
-                  <td colSpan={8}>
-                    <div className="portfolio-command-empty">
-                      <h3>No positions found</h3>
-                      <p>Add holdings or connect accounts to unlock portfolio analysis.</p>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <DataTable
+            columns={[
+              { key: "symbol", header: "Symbol", sortable: false },
+              { key: "name", header: "Name", sortable: false },
+              {
+                key: "kind",
+                header: "Asset Class",
+                sortable: false,
+                cell: (row) => row.kind === "options" ? "Options" : String(row?.raw?.marketType || row?.raw?.type || "Asset").replace(/_/g, " "),
+              },
+              {
+                key: "allocation",
+                header: "Allocation",
+                sortable: false,
+                cell: (row) => (
+                  <div className="portfolio-command-allocation-cell">
+                    <strong>{row.allocation.toFixed(1)}%</strong>
+                    <div className="portfolio-command-allocation-bar"><i style={{ width: `${Math.min(100, Math.max(4, row.allocation))}%` }} /></div>
+                  </div>
+                ),
+              },
+              {
+                key: "pnl",
+                header: "Unrealized PnL",
+                sortable: false,
+                cell: (row) => <span className={row.pnlPositive ? "positive" : "negative"}>{row.pnlMain}</span>,
+              },
+              {
+                key: "benchDelta",
+                header: "vs Benchmark",
+                sortable: false,
+                cell: (row) => {
+                  const benchDelta = row.kind === "spot"
+                    ? Number(row?.raw?.priceChangePercent || 0) - Number(benchmarkSnapshot.returnPct || 0)
+                    : null;
+                  if (benchDelta == null) return "—";
+                  return <span className={benchDelta >= 0 ? "positive" : "negative"}>{formatSignedPercent(benchDelta, 1)}</span>;
+                },
+              },
+              {
+                key: "drift",
+                header: "Weight vs Bench",
+                sortable: false,
+                cell: (row) => {
+                  const driftRow = rebalanceActionMap.get(String(row.symbol || "").toUpperCase());
+                  if (!driftRow) return "—";
+                  return <span className={Number(driftRow?.drift || 0) <= 0 ? "positive" : "negative"}>{formatSignedPercent(driftRow.drift, 1)}</span>;
+                },
+              },
+              {
+                key: "action",
+                header: "",
+                sortable: false,
+                cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openHoldingSnapshot(row)}>Open</button>,
+              },
+            ]}
+            data={holdingsTableRows}
+            getRowId={(row) => row.key}
+            emptyState={
+              <div className="portfolio-command-empty">
+                <h3>No positions found</h3>
+                <p>Add holdings or connect accounts to unlock portfolio analysis.</p>
+              </div>
+            }
+            className="portfolio-command-table"
+          />
         </div>
       </div>
     );
@@ -2870,7 +2881,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         const donutOptions = {
           chart: { type: 'donut', background: 'transparent' },
           labels: ['Current Allocation', 'Target Allocation'],
-          colors: ['#3b82f6', '#1e293b'],
+          colors: [chartColors.info(), chartColors.textPrimary()],
           stroke: { show: false },
           legend: { show: false },
           dataLabels: { enabled: false },
@@ -2908,7 +2919,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <div className="portfolio-v2-flow-mini-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
                   <span style={{ fontSize: '10px' }}>Portfolio Drift</span>
-                  <strong style={{ fontSize: '18px', color: '#f59e0b' }}>{totalDrift.toFixed(1)}%</strong>
+                  <strong style={{ fontSize: '18px', color: 'var(--color-warning)' }}>{totalDrift.toFixed(1)}%</strong>
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
                   <span style={{ fontSize: '10px' }}>Changes Required</span>
@@ -2920,7 +2931,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
                   <span style={{ fontSize: '10px' }}>Expected Slippage</span>
-                  <strong style={{ fontSize: '18px', color: '#38bdf8' }}>{formatMoney(estimatedSlippage)}</strong>
+                  <strong style={{ fontSize: '18px', color: 'var(--color-data-primary)' }}>{formatMoney(estimatedSlippage)}</strong>
                 </div>
               </div>
             </div>
@@ -2955,7 +2966,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <div key={s.symbol} className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <div className="portfolio-v2-activity-dot" style={{
-                        color: s.action === "Trim" ? '#f59e0b' : '#22c55e',
+                        color: s.action === "Trim" ? 'var(--color-warning)' : 'var(--color-success)',
                         background: s.action === "Trim" ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)'
                       }}>
                         {s.action === "Trim" ? "↘" : "↗"}
@@ -2966,7 +2977,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       </div>
                    </div>
                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Reduce" : "Increase"}</div>
+                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? 'var(--color-warning)' : 'var(--color-success)' }}>{s.action === "Trim" ? "Reduce" : "Increase"}</div>
                       <div style={{ fontSize: '12px', color: 'var(--color-text-primary)' }}>{formatMoney(s.tradeValue)}</div>
                       <div style={{ fontSize: '11px', color: 'var(--color-text-secondary)' }}>{Number(s.tradeQuantity || 0).toFixed(6)} {s.symbol}</div>
                    </div>
@@ -3033,7 +3044,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         ) : (
           <div className="portfolio-v2-flow-card" style={{ alignItems: 'center', textAlign: 'center' }}>
             <div className="portfolio-v2-flow-status-inline success" style={{ flexDirection: 'column', padding: '20px', gap: '16px' }}>
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: flowOutcome.tone === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>{flowOutcome.tone === 'success' ? '✓' : '!'}</div>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: flowOutcome.tone === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: flowOutcome.tone === 'success' ? 'var(--color-success)' : 'var(--color-warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>{flowOutcome.tone === 'success' ? '✓' : '!'}</div>
               <div style={{ textAlign: 'center' }}>
                 <h3 style={{ fontSize: '20px', color: 'var(--color-text-primary)', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance update"}</h3>
                 <p style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>{flowOutcome.message || "Zenin saved the latest rebalance workflow status."}</p>
@@ -3045,7 +3056,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <span>Projected Drift</span><strong className={flowOutcome.tone === "success" ? "positive" : ""}>{flowOutcome.tone === "success" ? "0.0%" : `${Number(totalDrift || 0).toFixed(1)}%`}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b' }}>{flowOutcome.tone === 'success' ? 'Saved' : 'Preview / Partial'}</strong>
+                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? 'var(--color-success)' : 'var(--color-warning)' }}>{flowOutcome.tone === 'success' ? 'Saved' : 'Preview / Partial'}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
                   <span>Platform Fees</span><strong>{formatMoney(Number(rebalanceEstimate?.summary?.fees || 0))}</strong>
@@ -3507,15 +3518,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <div className="journal-stat-card"><span className="journal-stat-label">Price</span><span className="journal-stat-value">{formatMoney(selectedHolding.price)}</span></div>
             </div>
             <div style={{ borderTop: "1px solid rgba(148,163,184,0.14)", paddingTop: "10px", marginTop: "10px" }}>
-              <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>Tax Lot Optimizer</div>
+              <div style={{ fontSize: "12px", color: "var(--color-data-slate)", marginBottom: "6px" }}>Tax Lot Optimizer</div>
               <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
+                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "var(--color-data-slate-bright)", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
                   <option value="fifo">FIFO</option>
                   <option value="lifo">LIFO</option>
                   <option value="hifo">HIFO</option>
                   <option value="average">Average Cost</option>
                 </select>
-                <span style={{ fontSize: "12px", color: "#cbd5e1" }}>
+                <span style={{ fontSize: "12px", color: "var(--color-data-slate-bright)" }}>
                   Suggested lot method: <strong>{selectedTaxLotMethod.toUpperCase()}</strong> for this sale.
                 </span>
               </div>

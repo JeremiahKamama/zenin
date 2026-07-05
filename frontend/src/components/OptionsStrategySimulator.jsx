@@ -47,23 +47,23 @@ const TIER_META = {
   high: {
     label: "High probability",
     sub: "65–85% win rate",
-    color: "#22c55e",
+    color: "var(--color-success)",
     bg: "rgba(34,197,94,0.10)",
     border: "rgba(34,197,94,0.28)",
   },
   medium: {
     label: "Moderate probability",
     sub: "40–65% win rate",
-    color: "#f59e0b",
+    color: "var(--color-warning)",
     bg: "rgba(245,158,11,0.10)",
     border: "rgba(245,158,11,0.28)",
   },
   speculative: {
     label: "Speculative",
     sub: "20–40% win rate",
-    color: "#38bdf8",
-    bg: "rgba(56,189,248,0.10)",
-    border: "rgba(56,189,248,0.28)",
+    color: "var(--color-text-muted)",
+    bg: "rgba(115,115,115,0.10)",
+    border: "rgba(115,115,115,0.28)",
   },
 };
 
@@ -529,7 +529,7 @@ const OptionsStrategySimulator = ({
           </div>
         ) : loading && chain.length === 0 ? (
           <div style={{ borderRadius: 3, border: "1px dashed var(--options-sim-accent-border)", padding: 24, fontSize: 13, color: "var(--options-sim-accent)", background: "var(--options-sim-loading-bg)", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-             <div className="spinner" style={{ width: 24, height: 24, border: "2px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8", borderRadius: "50%" }}></div>
+             <div className="spinner" style={{ width: 24, height: 24, border: "2px solid rgba(115,115,115,0.2)", borderTopColor: "var(--color-text-muted)", borderRadius: "50%" }}></div>
              Syncing real-time market data for {underlying}...
           </div>
         ) : visible.length === 0 ? (
@@ -664,7 +664,7 @@ const OptionsStrategySimulator = ({
                                     <button
                                       onClick={handleExecute}
                                       disabled={isSubmitting || !generateLegs.length}
-                                      style={{ background: "var(--color-primary, #38bdf8)", color: "var(--options-sim-primary-text)", border: "none", borderRadius: "6px", padding: "0 16px", height: "35px", fontWeight: "600", fontSize: "0.85rem", cursor: generateLegs.length ? "pointer" : "not-allowed", opacity: generateLegs.length ? 1 : 0.55, transition: "opacity 0.2s" }}
+                                      style={{ background: "var(--color-interactive)", color: "var(--options-sim-primary-text)", border: "none", borderRadius: "6px", padding: "0 16px", height: "35px", fontWeight: "600", fontSize: "0.85rem", cursor: generateLegs.length ? "pointer" : "not-allowed", opacity: generateLegs.length ? 1 : 0.55, transition: "opacity 0.2s" }}
                                     >
                                       {isSubmitting ? "..." : "Execute"}
                                     </button>
@@ -676,7 +676,7 @@ const OptionsStrategySimulator = ({
                                       background: "rgba(245,158,11,0.1)",
                                       border: "1px solid rgba(245,158,11,0.24)",
                                       borderRadius: "6px",
-                                      color: "var(--options-sim-warning-text, #fbbf24)",
+                                      color: "var(--color-data-amber-bright)",
                                       fontSize: "0.75rem"
                                     }}>
                                       Strategy execution waits for a source-backed options chain. No synthetic strikes are used here.

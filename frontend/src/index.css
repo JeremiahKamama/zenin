@@ -1,0 +1,110 @@
+/* ════════════════════════════════════════════════════════════════════
+   Zenin — Tailwind v4 entry (Brand System v2 monochrome)
+   ────────────────────────────────────────────────────────────────────
+   - Tailwind v4 is CSS-first: no tailwind.config.js.
+   - Token source of truth lives in styles.css (:root + .light-theme-active).
+   - This file ALIASES those tokens into Tailwind's namespace via @theme inline
+     so utility classes like bg-background / text-muted-foreground resolve to
+     Zenin's monochrome palette.
+   - shadcn's `.dark` convention is replaced with a custom variant bound to the
+     existing `.page-dark-theme` class. Zenin is dark-first.
+   ═══════════════════════════════════════════════════════════════════ */
+
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+/* Zenin is dark-first: the `dark:` variant resolves against the existing
+   .page-dark-theme class toggled by main.jsx:applyGlobalTheme(). */
+@custom-variant dark (&:where(.page-dark-theme, .page-dark-theme *));
+
+@theme inline {
+  /* ── shadcn semantic palette → Zenin tokens ─────────────────────── */
+  --color-background:            var(--color-bg-base);
+  --color-foreground:            var(--color-text-primary);
+  --color-card:                  var(--color-surface-card);
+  --color-card-foreground:       var(--color-text-primary);
+  --color-popover:               var(--color-surface-elevated);
+  --color-popover-foreground:    var(--color-text-primary);
+
+  --color-border:                var(--color-border-default);
+  --color-input:                 var(--color-border-strong);
+  --color-ring:                  var(--color-focus);
+
+  /* shadcn "primary" = the neutral interaction token (white on dark,
+     near-black on light). NOT a saturated accent. */
+  --color-primary:               var(--color-interactive);
+  --color-primary-foreground:    var(--color-text-inverse);
+
+  --color-secondary:             var(--color-surface-elevated);
+  --color-secondary-foreground:  var(--color-text-primary);
+
+  --color-muted:                 var(--color-surface-elevated);
+  --color-muted-foreground:      var(--color-text-muted);
+
+  /* "accent" in shadcn = hover/selected backdrop → neutral white-alpha. */
+  --color-accent:                var(--color-selected);
+  --color-accent-foreground:     var(--color-text-primary);
+
+  --color-destructive:           var(--color-danger);
+  --color-destructive-foreground: var(--color-text-primary);
+  --color-success:               var(--color-success);
+  --color-success-foreground:    var(--color-text-inverse);
+  --color-warning:               var(--color-warning);
+  --color-warning-foreground:    var(--color-text-inverse);
+
+  /* ── Chart series aliases ───────────────────────────────────────── */
+  --color-chart-primary:         var(--color-data-primary);
+  --color-chart-secondary:       var(--color-data-secondary);
+  --color-chart-muted:           var(--color-data-muted);
+  --color-chart-up:              var(--color-data-up);
+  --color-chart-down:            var(--color-data-down);
+
+  /* ── Sidebar (shadcn sidebar tokens) ────────────────────────────── */
+  --color-sidebar:               var(--color-surface-panel);
+  --color-sidebar-foreground:    var(--color-text-primary);
+  --color-sidebar-border:        var(--color-border-default);
+  --color-sidebar-accent:        var(--color-selected);
+  --color-sidebar-accent-foreground: var(--color-text-primary);
+  --color-sidebar-ring:          var(--color-focus);
+
+  /* ── Shape & type ───────────────────────────────────────────────── */
+  --radius:                      var(--card-radius-standard);
+  --radius-sm:                   calc(var(--card-radius-standard) - 1px);
+  --radius-md:                   var(--card-radius-standard);
+  --radius-lg:                   calc(var(--card-radius-standard) + 2px);
+
+  --font-sans:                   var(--font-brand);
+  --font-mono:                   var(--font-mono);
+
+  /* ── shadcn animate ─────────────────────────────────────────────── */
+  --animate-accordion-down:      accordion-down 0.2s ease-out;
+  --animate-accordion-up:        accordion-up 0.2s ease-out;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border-default);
+  }
+
+  html, body {
+    background: var(--color-bg-base);
+    color: var(--color-text-primary);
+    font-family: var(--font-brand);
+  }
+
+  /* Neutral white focus ring — never cyan. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes accordion-down {
+  from { height: 0; }
+  to   { height: var(--radix-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to   { height: 0; }
+}

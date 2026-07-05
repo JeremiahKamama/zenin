@@ -716,9 +716,9 @@ function PayoffChart({ series }) {
         </linearGradient>
       </defs>
       <path d={areaPath} fill="url(#perps-payoff-grad)" />
-      <polyline points={points.join(" ")} fill="none" stroke="#10b981" strokeWidth="2" />
-      <text x={padding} y={height - 5} fontSize="9" fill="rgba(255,255,255,0.4)" fontFamily="monospace">0d</text>
-      <text x={width - padding - 20} y={height - 5} fontSize="9" fill="rgba(255,255,255,0.4)" fontFamily="monospace">{series[series.length - 1]?.day}d</text>
+      <polyline points={points.join(" ")} fill="none" stroke="var(--color-success)" strokeWidth="2" />
+      <text x={padding} y={height - 5} fontSize="9" fill="var(--color-icon-muted)" fontFamily="monospace">0d</text>
+      <text x={width - padding - 20} y={height - 5} fontSize="9" fill="var(--color-icon-muted)" fontFamily="monospace">{series[series.length - 1]?.day}d</text>
     </svg>
   );
 }

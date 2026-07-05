@@ -16,6 +16,8 @@
 
 const { CACHE_TTL } = require("../infrastructure/cache");
 const { MarketIntelligenceError } = require("../domain/errors");
+// Observability — safe no-ops when Sentry is unconfigured.
+const sentry = require("../../sentry");
 
 class MarketIntelligenceService {
   /**
@@ -32,19 +34,64 @@ class MarketIntelligenceService {
     this._eventBus = deps.eventBus || null;
   }
 
+  /**
+   * Wraps a provider fetch in a Sentry span and captures provider failures.
+   * Cache hits/misses are recorded as breadcrumbs so traces show whether a
+   * slow response came from the cache or the upstream provider. Safe no-op
+   * when Sentry is unconfigured.
+   *
+   * @template T
+   * @param {string} op           Span/breadcrumb op label (e.g. "market-intel.quote").
+   * @param {() => Promise<T>} fn Provider fetch.
+   * @returns {Promise<T>}
+   */
+  async _fetchWithTelemetry(op, fn) {
+    return sentry.withSpan({ op: "market-intel.fetch", name: op }, async () => {
+      try {
+        const result = await fn();
+        sentry.addBreadcrumb({
+          category: "market-intel.fetch",
+          type: "default",
+          message: `${op} ok`,
+          data: { operation: op, cache: "miss" }
+        });
+        return result;
+      } catch (error) {
+        sentry.captureException(error, {
+          tags: {
+            provider: "fmp",
+            operation: op,
+            errorCode: String(error?.code || error?.name || "MARKET_DATA_ERROR")
+          }
+        });
+        throw error;
+      }
+    });
+  }
+
   // -----------------------------------------------------------------------
   // Quotes
   // -----------------------------------------------------------------------
 
   async getQuote(symbol) {
     const cacheKey = `quote:${symbol}`;
-    return this._cache.getOrSet(cacheKey, CACHE_TTL.QUOTE, async () => {
-      const quote = await this._provider.getQuote({ symbol });
-      if (this._eventBus) {
-        this._eventBus.emit("quote:updated", quote);
-      }
-      return quote;
-    });
+    const cached = this._cache.get(cacheKey);
+    if (cached) {
+      sentry.addBreadcrumb({
+        category: "market-intel.cache",
+        message: `quote:${symbol} cache hit`,
+        data: { operation: "quote", cache: "hit" }
+      });
+      return cached;
+    }
+    const quote = await this._fetchWithTelemetry("quote", () =>
+      this._provider.getQuote({ symbol })
+    );
+    this._cache.set(cacheKey, quote, CACHE_TTL.QUOTE);
+    if (this._eventBus) {
+      this._eventBus.emit("quote:updated", quote);
+    }
+    return quote;
   }
 
   async getQuotes(symbols) {
@@ -61,7 +108,9 @@ class MarketIntelligenceService {
     }
 
     if (uncached.length > 0) {
-      const fresh = await this._provider.getQuotes({ symbols: uncached });
+      const fresh = await this._fetchWithTelemetry("quotes.batch", () =>
+        this._provider.getQuotes({ symbols: uncached })
+      );
       for (const quote of fresh) {
         this._cache.set(`quote:${quote.symbol}`, quote, CACHE_TTL.QUOTE);
         results.push(quote);
