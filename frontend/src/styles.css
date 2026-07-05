@@ -11702,8 +11702,6 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
   /* Scrim behind the open mobile sidebar — dims main content + closes on tap. */
 
 
-    to   { opacity: 1; }
-  }
 
   .sidebar {
     position: fixed !important;
@@ -37670,7 +37668,6 @@ body.page-dark-theme .search-type-buttons {
 @media (pointer: coarse) {
   .nav-btn,
   .category-tabs button,
-
   .watchlist-header-actions button { min-height: 44px; padding: 10px 12px; }
   .close-btn { min-width: 44px; min-height: 44px; }
 }
