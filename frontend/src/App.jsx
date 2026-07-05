@@ -7575,8 +7575,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                               style={{
                                 marginTop: "16px",
                                 padding: "14px",
-                                border: "1px solid rgba(255,255,255,0.08)",
-                                borderRadius: "3px",
+                                border: "1px solid var(--color-border-medium)",
+                                borderRadius: "var(--radius)",
                                 background: "var(--color-surface-card)"
                               }}
                             >

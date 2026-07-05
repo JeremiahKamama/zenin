@@ -180,31 +180,17 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
   };
 
   return (
-    <div className="home-v3-drawer-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, position: 'fixed', inset: 0, background: 'var(--color-surface-overlay)', padding: '16px' }}>
-      <div className="auth-v2-card auth-v2-modal-card" style={{ width: 'min(420px, 100%)', position: 'relative' }}>
+    <div className="home-v3-drawer-overlay">
+      <div className="auth-v2-card auth-v2-modal-card">
         <button 
           onClick={onClose}
-          style={{
-            position: 'absolute',
-            top: '14px',
-            right: '14px',
-            background: 'var(--color-surface-hover)',
-            border: '1px solid var(--color-border-medium)',
-            color: 'var(--muted)',
-            width: '30px',
-            height: '30px',
-            borderRadius: '8px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            zIndex: 10
-          }}
+          className="auth-v2-close-btn"
+          aria-label="Close"
         >
           &times;
         </button>
 
-        <div className="auth-v2-logo" style={{ display: 'flex', justifyContent: 'center' }}>
+        <div className="auth-v2-logo">
           <ZeninLogo size="md" />
         </div>
 

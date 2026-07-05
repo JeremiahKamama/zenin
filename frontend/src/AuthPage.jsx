@@ -380,32 +380,32 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative bg-[#0A0A0A] font-sans text-[#A3A3A3]">
+    <div className="min-h-screen flex flex-col relative bg-[var(--color-bg-base)] font-sans text-[var(--color-text-secondary)]">
       <main className="flex-1 flex items-center justify-center relative z-10 p-6">
-        <section className="w-full max-w-[400px] flex flex-col bg-[#111111] backdrop-blur-xl border border-[#262626] rounded-2xl p-8 shadow-2xl relative mx-auto my-auto">
-          <button className="absolute top-6 left-6 text-[#737373] hover:text-white transition-colors bg-transparent border-none cursor-pointer flex items-center gap-2" onClick={() => { window.location.href = "/"; }}>
+        <section className="w-full max-w-[400px] flex flex-col bg-[var(--color-surface-card)] backdrop-blur-xl border border-[var(--color-border-medium)] rounded-2xl p-8 shadow-2xl relative mx-auto my-auto">
+          <button className="absolute top-6 left-6 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors bg-transparent border-none cursor-pointer flex items-center gap-2" onClick={() => { window.location.href = "/"; }}>
             <span>←</span> Back to home
           </button>
 
           {mode === "signup" ? (
             <>
-              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Create your workspace</h1>
-              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">Secure sign-in, email confirmation, and recovery for Zenin Capital.</p>
+              <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-2 text-center">Create your workspace</h1>
+              <p className="text-sm text-[var(--color-text-muted)] mb-6 leading-relaxed text-center">Secure sign-in, email confirmation, and recovery for Zenin Capital.</p>
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signup-name">Display name</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="signup-name">Display name</label>
               <input
                 id="signup-name"
-                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                 value={signupForm.displayName}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, displayName: e.target.value }))}
                 placeholder="Your name"
                 autoComplete="name"
               />
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signup-email">Email address</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="signup-email">Email address</label>
               <input
                 id="signup-email"
-                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                 type="email"
                 value={signupForm.email}
                 onChange={(e) => setSignupForm((prev) => ({ ...prev, email: e.target.value }))}
@@ -413,11 +413,11 @@ export default function AuthPage() {
                 autoComplete="email"
               />
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signup-password">Password</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="signup-password">Password</label>
               <div className="relative flex items-center w-full">
                 <input
                   id="signup-password"
-                  className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                  className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                   type={visiblePasswords.signup ? "text" : "password"}
                   value={signupForm.password}
                   onChange={(e) => setSignupForm((prev) => ({ ...prev, password: e.target.value }))}
@@ -426,7 +426,7 @@ export default function AuthPage() {
                 />
                 <button
                   type="button"
-                  className="absolute right-3 text-[#737373] hover:text-white bg-transparent border-none cursor-pointer p-1"
+                  className="absolute right-3 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-transparent border-none cursor-pointer p-1"
                   onClick={() => togglePasswordVisibility("signup")}
                   aria-label={visiblePasswords.signup ? "Hide password" : "Show password"}
                   title={visiblePasswords.signup ? "Hide password" : "Show password"}
@@ -455,19 +455,19 @@ export default function AuthPage() {
                 Continue as Guest
               </button>
 
-              <p className="mt-8 text-center text-sm text-[#737373]">Already have an account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Sign in</button></p>
+              <p className="mt-8 text-center text-sm text-[var(--color-text-muted)]">Already have an account? <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors underline decoration-[var(--color-border-medium)] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Sign in</button></p>
             </>
           ) : null}
 
           {mode === "signin" ? (
             <>
-              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Sign in</h1>
-              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">Continue to your Zenin workspace with secure authentication.</p>
+              <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-2 text-center">Sign in</h1>
+              <p className="text-sm text-[var(--color-text-muted)] mb-6 leading-relaxed text-center">Continue to your Zenin workspace with secure authentication.</p>
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signin-email">Email address</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="signin-email">Email address</label>
               <input
                 id="signin-email"
-                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                 type="email"
                 value={signinForm.email}
                 onChange={(e) => setSigninForm((prev) => ({ ...prev, email: e.target.value }))}
@@ -475,11 +475,11 @@ export default function AuthPage() {
                 autoComplete="email"
               />
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="signin-password">Password</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="signin-password">Password</label>
               <div className="relative flex items-center w-full">
                 <input
                   id="signin-password"
-                  className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                  className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                   type={visiblePasswords.signin ? "text" : "password"}
                   value={signinForm.password}
                   onChange={(e) => setSigninForm((prev) => ({ ...prev, password: e.target.value }))}
@@ -488,7 +488,7 @@ export default function AuthPage() {
                 />
                 <button
                   type="button"
-                  className="absolute right-3 text-[#737373] hover:text-white bg-transparent border-none cursor-pointer p-1"
+                  className="absolute right-3 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-transparent border-none cursor-pointer p-1"
                   onClick={() => togglePasswordVisibility("signin")}
                   aria-label={visiblePasswords.signin ? "Hide password" : "Show password"}
                   title={visiblePasswords.signin ? "Hide password" : "Show password"}
@@ -498,11 +498,11 @@ export default function AuthPage() {
               </div>
 
               <div className="flex items-center justify-between mt-4 mb-6 text-sm">
-                <label className="flex items-center gap-2 text-[#A3A3A3] cursor-pointer">
+                <label className="flex items-center gap-2 text-[var(--color-text-secondary)] cursor-pointer">
                   <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
                   <span>Keep this device signed in</span>
                 </label>
-                <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("forgot")}>Forgot password?</button>
+                <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors underline decoration-[var(--color-border-medium)] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("forgot")}>Forgot password?</button>
               </div>
 
               <button className={cn(buttonVariants({ variant: "default" }), "w-full mt-2")} disabled={loading} onClick={onSignIn}>
@@ -519,7 +519,7 @@ export default function AuthPage() {
                 Continue as Guest
               </button>
 
-              <div className="flex items-center text-xs text-[#525252] my-6 uppercase tracking-wider before:content-[''] before:flex-1 before:border-t before:border-[#262626] before:mr-4 after:content-[''] after:flex-1 after:border-t after:border-[#262626] after:ml-4">Or continue with</div>
+              <div className="flex items-center text-xs text-[var(--color-text-dim)] my-6 uppercase tracking-wider before:content-[''] before:flex-1 before:border-t before:border-[var(--color-border-medium)] before:mr-4 after:content-[''] after:flex-1 after:border-t after:border-[var(--color-border-medium)] after:ml-4">Or continue with</div>
               <div className="flex flex-col gap-3">
                 <button className={cn(buttonVariants({ variant: "outline" }), "w-full flex items-center gap-2")} disabled={loading} onClick={() => onOAuth("google")}>
                   Continue with Google
@@ -529,21 +529,21 @@ export default function AuthPage() {
                 </button>
               </div>
 
-              <p className="mt-8 text-center text-sm text-[#737373]">Need an account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signup")}>Create one</button></p>
+              <p className="mt-8 text-center text-sm text-[var(--color-text-muted)]">Need an account? <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors underline decoration-[var(--color-border-medium)] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signup")}>Create one</button></p>
             </>
           ) : null}
 
           {mode === "verify" ? (
             <>
-              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Verify your email</h1>
-              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">
+              <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-2 text-center">Verify your email</h1>
+              <p className="text-sm text-[var(--color-text-muted)] mb-6 leading-relaxed text-center">
                 Enter the 6-digit code Zenin sent to {signinForm.email ? <strong>{signinForm.email}</strong> : "your inbox"}.
               </p>
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="verification-code">Verification code</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="verification-code">Verification code</label>
               <input
                 id="verification-code"
-                className="flex h-12 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all text-center tracking-[0.5em] font-mono text-xl"
+                className="flex h-12 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all text-center tracking-[0.5em] font-mono text-xl"
                 type="text"
                 inputMode="numeric"
                 value={verificationForm.code}
@@ -560,16 +560,16 @@ export default function AuthPage() {
                 Resend code
               </button>
 
-              <p className="mt-8 text-center text-sm text-[#737373]">
-                Need another account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Back to sign in</button>
+              <p className="mt-8 text-center text-sm text-[var(--color-text-muted)]">
+                Need another account? <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors underline decoration-[var(--color-border-medium)] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Back to sign in</button>
               </p>
             </>
           ) : null}
 
           {mode === "forgot" ? (
             <>
-              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">{recoveryReady ? "Set a new password" : "Reset password"}</h1>
-              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">
+              <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-2 text-center">{recoveryReady ? "Set a new password" : "Reset password"}</h1>
+              <p className="text-sm text-[var(--color-text-muted)] mb-6 leading-relaxed text-center">
                 {recoveryReady
                   ? "Choose a new password for your Zenin account."
                   : "Send a recovery link to your email, then return here to complete the reset."}
@@ -577,10 +577,10 @@ export default function AuthPage() {
 
               {!recoveryReady ? (
                 <>
-                  <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="forgot-email">Email address</label>
+                  <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="forgot-email">Email address</label>
                   <input
                     id="forgot-email"
-                    className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                    className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                     type="email"
                     value={forgotForm.email}
                     onChange={(e) => setForgotForm((prev) => ({ ...prev, email: e.target.value }))}
@@ -594,11 +594,11 @@ export default function AuthPage() {
                 </>
               ) : (
                 <>
-                  <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="reset-password">New password</label>
+                  <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="reset-password">New password</label>
                   <div className="relative flex items-center w-full">
                     <input
                       id="reset-password"
-                      className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                      className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                       type={visiblePasswords.reset ? "text" : "password"}
                       value={forgotForm.newPassword}
                       onChange={(e) => setForgotForm((prev) => ({ ...prev, newPassword: e.target.value }))}
@@ -607,7 +607,7 @@ export default function AuthPage() {
                     />
                     <button
                       type="button"
-                      className="absolute right-3 text-[#737373] hover:text-white bg-transparent border-none cursor-pointer p-1"
+                      className="absolute right-3 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-transparent border-none cursor-pointer p-1"
                       onClick={() => togglePasswordVisibility("reset")}
                       aria-label={visiblePasswords.reset ? "Hide password" : "Show password"}
                       title={visiblePasswords.reset ? "Hide password" : "Show password"}
@@ -622,19 +622,19 @@ export default function AuthPage() {
                 </>
               )}
 
-              <p className="mt-8 text-center text-sm text-[#737373]">Back to <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>sign in</button></p>
+              <p className="mt-8 text-center text-sm text-[var(--color-text-muted)]">Back to <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors underline decoration-[var(--color-border-medium)] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>sign in</button></p>
             </>
           ) : null}
 
           {mode === "mfa" ? (
             <>
-              <h1 className="text-2xl font-semibold text-white tracking-tight mb-2 text-center">Verify it is you</h1>
-              <p className="text-sm text-[#737373] mb-6 leading-relaxed text-center">This account has authenticator app MFA enabled.</p>
+              <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-2 text-center">Verify it is you</h1>
+              <p className="text-sm text-[var(--color-text-muted)] mb-6 leading-relaxed text-center">This account has authenticator app MFA enabled.</p>
 
-              <label className="block text-xs font-medium text-[#A3A3A3] mb-1.5 mt-4" htmlFor="mfa-code">Authenticator code</label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 mt-4" htmlFor="mfa-code">Authenticator code</label>
               <input
                 id="mfa-code"
-                className="flex h-10 w-full rounded-md border border-[#262626] bg-[#171717] px-3 py-2 text-sm text-white placeholder:text-[#525252] focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all"
+                className="flex h-10 w-full rounded-md border border-[var(--color-border-medium)] bg-[var(--color-surface-elevated)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:ring-2 focus:ring-[var(--color-focus)] focus:border-transparent transition-all"
                 type="text"
                 inputMode="numeric"
                 value={mfaForm.code}
@@ -647,16 +647,16 @@ export default function AuthPage() {
                 {loading ? "Verifying..." : "Verify and continue"}
               </button>
 
-              <p className="mt-8 text-center text-sm text-[#737373]">
-                Need to use another account? <button className="text-[#A3A3A3] hover:text-white transition-colors underline decoration-[#262626] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Back to sign in</button>
+              <p className="mt-8 text-center text-sm text-[var(--color-text-muted)]">
+                Need to use another account? <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors underline decoration-[var(--color-border-medium)] underline-offset-4 bg-transparent border-none cursor-pointer text-sm p-0" onClick={() => updateMode("signin")}>Back to sign in</button>
               </p>
             </>
           ) : null}
 
-          {error ? <p className="mt-4 p-3 bg-red-950/50 border border-red-900 rounded-md text-red-200 text-sm">{error}</p> : null}
-          {message ? <p className="mt-4 p-3 bg-green-950/50 border border-green-900 rounded-md text-green-200 text-sm">✓ {message}</p> : null}
+          {error ? <p className="mt-4 p-3 bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.3)] rounded-md text-[var(--color-danger)] text-sm">{error}</p> : null}
+          {message ? <p className="mt-4 p-3 bg-[rgba(16,185,129,0.1)] border border-[rgba(16,185,129,0.3)] rounded-md text-[var(--color-success)] text-sm">✓ {message}</p> : null}
           {!isSupabaseConfigured() ? (
-            <p className="mt-4 p-3 bg-red-950/50 border border-red-900 rounded-md text-red-200 text-sm">Authentication environment variables are missing on this frontend build.</p>
+            <p className="mt-4 p-3 bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.3)] rounded-md text-[var(--color-danger)] text-sm">Authentication environment variables are missing on this frontend build.</p>
           ) : null}
         </section>
       </main>
