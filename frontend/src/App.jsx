@@ -195,7 +195,7 @@ const Analytics = lazyWithReloadRetry(
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
-const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid"]);
+const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid", "lighter", "variational"]);
 
 function normalizeProviderId(value) {
   return String(value || "")

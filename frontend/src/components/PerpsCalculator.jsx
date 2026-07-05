@@ -747,6 +747,7 @@ function SavedScenariosDrawer({ open, onClose, scenarios, onDelete }) {
 const CRYPTO_VENUE_OPTIONS = [
   { label: "Hyperliquid", value: "hyperliquid" },
   { label: "Lighter", value: "lighter" },
+  { label: "Variational", value: "variational" },
   { label: "Binance", value: "binance" },
   { label: "Bybit", value: "bybit" },
   { label: "dYdX v4", value: "dydx_v4" },

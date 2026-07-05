@@ -13,7 +13,7 @@ import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
 import { zeninFetchJson } from "../utils/zeninFetch";
 
 const CATEGORY_TABS = [
-  { id: "crypto", label: "Crypto Desk", shortLabel: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter + Dune analytics" },
+  { id: "crypto", label: "Crypto Desk", shortLabel: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter, Variational + Dune analytics" },
   { id: "options", label: "Options Desk", shortLabel: "Options", icon: "O", description: "Binance + Deribit options data" },
   { id: "equities", label: "Equities Desk", shortLabel: "Equities", icon: "E", description: "Asset Classes, Industries, Regions" },
   { id: "macro", label: "Macro Desk", shortLabel: "Macro", icon: "M", description: "Macro indicators, FX and risk context" },
@@ -406,7 +406,7 @@ function normalizeCryptoPayload(payload) {
     unavailable: Boolean(payload?.unavailable),
     isFallback: Boolean(payload?.isFallback),
     stale_reason: payload?.stale_reason || null,
-    source: payload?.source || "Hyperliquid + Aster + Lighter + Dune + Farside",
+    source: payload?.source || "Hyperliquid + Aster + Lighter + Variational + Dune + Farside",
     perpMetrics: Array.isArray(payload?.perpMetrics)
       ? payload.perpMetrics
       : Array.isArray(payload?.oiAndFunding)
@@ -2579,6 +2579,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
@@ -2621,6 +2623,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
@@ -2661,6 +2665,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
@@ -2810,6 +2816,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                             : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                             : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
+                            : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                            : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                             : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
 
                           return (
