@@ -1,5 +1,5 @@
 import { Children, cloneElement, isValidElement } from "react";
-import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useMediaQuery } from "../hooks/useMediaQuery.js";
 
 /**
  * DashboardLayout - Expandable grid layout for dashboards

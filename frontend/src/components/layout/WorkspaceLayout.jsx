@@ -1,5 +1,5 @@
 import { Children, cloneElement, isValidElement } from "react";
-import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useMediaQuery } from "../hooks/useMediaQuery.js";
 
 /**
  * WorkspaceLayout - Full workspace layout for data-intensive modules
