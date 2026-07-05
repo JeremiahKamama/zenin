@@ -935,6 +935,48 @@ button {
   }
 }
 
+/* Compact Workspace: 960-1280px */
+@media (min-width: 960px) and (max-width: 1280px) {
+  .app-layout {
+    padding: 0 16px;
+    gap: 20px;
+  }
+}
+
+/* Standard Workspace: 1280-1600px */
+@media (min-width: 1280px) and (max-width: 1600px) {
+  .app-layout {
+    padding: 0 var(--workspace-padding-x-standard);
+    gap: var(--workspace-gap-standard);
+  }
+}
+
+/* Professional Workspace: 1600-1920px */
+@media (min-width: 1600px) and (max-width: 1920px) {
+  .app-layout {
+    padding: 0 var(--workspace-padding-x-professional);
+    gap: var(--workspace-gap-professional);
+  }
+}
+
+/* Analyst Workspace: 1920-2560px */
+@media (min-width: 1920px) and (max-width: 2560px) {
+  .app-layout {
+    padding: 0 var(--workspace-padding-x-analyst);
+    gap: var(--workspace-gap-analyst);
+  }
+}
+
+/* Ultrawide Workspace: 2560px+ */
+@media (min-width: 2560px) {
+  .app-layout {
+    padding: 0 var(--workspace-padding-x-ultrawide);
+    gap: 48px;
+    max-width: 2400px;
+    margin: 0 auto;
+  }
+}
+
 .app-access-loading {
   min-height: 100vh;
   display: grid;
@@ -24412,7 +24454,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 
 /* Final sidebar override: restore the flatter operator-console overhaul */
 .sidebar {
-  width: 282px;
+  width: var(--workspace-sidebar-width-expanded);
   gap: 14px;
   padding: 16px 14px 14px;
   background: linear-gradient(180deg, rgba(4, 7, 13, 0.98) 0%, rgba(1, 3, 8, 0.98) 100%);
@@ -24422,9 +24464,214 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 }
 
 .sidebar.collapsed {
-  width: 92px;
+  width: var(--workspace-sidebar-width-collapsed);
 }
 
+/* ========================================
+   Layout Primitives - Desktop Workspace
+   ======================================== */
+
+/* WorkspaceLayout - Full workspace for data-intensive modules */
+.workspace-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-layout.with-context-panel {
+  grid-template-columns: 1fr minmax(320px, 380px);
+}
+
+.workspace-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.workspace-context {
+  border-left: 1px solid var(--color-border-subtle);
+  padding-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 320px;
+}
+
+/* Workspace mode adjustments */
+.workspace-mode-professional .workspace-layout {
+  gap: 28px;
+}
+
+.workspace-mode-analyst .workspace-layout {
+  gap: 32px;
+}
+
+.workspace-mode-analyst .workspace-context {
+  min-width: 360px;
+  padding-left: 32px;
+}
+
+.workspace-mode-ultrawide .workspace-layout {
+  gap: 40px;
+}
+
+.workspace-mode-ultrawide .workspace-context {
+  min-width: 400px;
+  padding-left: 40px;
+}
+
+/* DashboardLayout - Expandable grid for dashboards */
+.dashboard-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  min-width: 0;
+}
+
+.dashboard-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dashboard-grid {
+  display: grid;
+  gap: 20px;
+}
+
+/* Default dashboard grid: 2 columns */
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1.8fr) minmax(320px, 1fr);
+}
+
+/* Professional workspace: wider columns */
+.workspace-mode-professional .dashboard-grid {
+  grid-template-columns: minmax(0, 2fr) minmax(380px, 1fr);
+  gap: 24px;
+}
+
+/* Analyst workspace: even wider */
+.workspace-mode-analyst .dashboard-grid {
+  grid-template-columns: minmax(0, 2.2fr) minmax(420px, 1fr);
+  gap: 28px;
+}
+
+/* Ultrawide: maximum expansion */
+.workspace-mode-ultrawide .dashboard-grid {
+  grid-template-columns: minmax(0, 2.4fr) minmax(480px, 1fr);
+  gap: 32px;
+}
+
+.dashboard-main {
+  min-width: 0;
+}
+
+/* ReadingLayout - Constrained width for readable content */
+.reading-layout {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 32px;
+}
+
+.reading-layout.with-sidebar {
+  grid-template-columns: 1fr minmax(280px, 320px);
+}
+
+.reading-content {
+  max-width: 900px;
+  min-width: 0;
+}
+
+.reading-sidebar {
+  border-left: 1px solid var(--color-border-subtle);
+  padding-left: 24px;
+}
+
+/* FormLayout - Centered constrained layout for forms */
+.form-layout {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+.form-layout.with-sidebar {
+  grid-template-columns: 1fr minmax(240px, 280px);
+}
+
+.form-content {
+  max-width: 700px;
+  min-width: 0;
+}
+
+.form-sidebar {
+  border-left: 1px solid var(--color-border-subtle);
+  padding-left: 24px;
+}
+
+/* Density modes */
+.density-compact .dashboard-grid,
+.density-compact .workspace-layout {
+  gap: 16px;
+}
+
+.density-compact .dashboard-hero {
+  gap: 12px;
+}
+
+.density-terminal .dashboard-grid,
+.density-terminal .workspace-layout {
+  gap: 12px;
+}
+
+.density-terminal .dashboard-hero {
+  gap: 8px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1280px) {
+  .workspace-layout.with-context-panel {
+    grid-template-columns: 1fr;
+  }
+  
+  .workspace-context {
+    display: none;
+  }
+  
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .reading-layout.with-sidebar,
+  .form-layout.with-sidebar {
+    grid-template-columns: 1fr;
+  }
+  
+  .reading-sidebar,
+  .form-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .workspace-layout,
+  .dashboard-layout {
+    gap: 16px;
+  }
+  
+  .dashboard-grid {
+    gap: 16px;
+  }
+}
 
 
 /* Home Draft Fidelity Override */

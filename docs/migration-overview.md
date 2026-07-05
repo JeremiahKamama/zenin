@@ -46,7 +46,7 @@
 | 5.6 | AuthPage / PublicHomepage | ✅ Done | Migrated to Brand v2 monochrome; removed gradient backgrounds and cyan/purple colors; updated public.css tokens |
 | 5.7 | HomeModule | ✅ Done | Replaced color-data-sky/purple/teal/info with Brand v2 neutral tokens (primary/secondary/muted) |
 | 5.8 | Remaining modules | ✅ Done | Migrated IndicatorMetricModal, OptionsCalculator, FullMetricsPage, OptionsModule, PortfolioModule, IndicatorMetricsTable to Brand v2 neutral tokens |
-| 6 | Cleanup | 🟡 Partial | `brand.md` ✅ done; legacy color deletion ✅ done; boot-screen ✅ done; bundle check pending |
+| 6 | Cleanup | 🟡 Partial | `brand.md` ✅ done; legacy color deletion ✅ done; boot-screen ✅ done; icons ✅ done; bundle check ✅ done |
 
 ---
 
@@ -331,13 +331,17 @@ rename residue to `theme.css` and merge into `index.css`.
 #### 6.2 Shrink `styles.css`
 Rename residue to `theme.css`, merge into `index.css`.
 
-#### 6.3 Icons
-Replace generic icons in `SidebarIcons.jsx` with `lucide-react`. Keep branded
-`LineZMark` / `ZeninLogo` (now monochrome).
+#### 6.3 Icons ✅
+Replaced generic icons in `SidebarIcons.jsx` with `lucide-react`:
+- 18 icon components migrated from custom SVG to lucide-react
+- Maintains 20px size and monochrome styling
+- Reduces bundle size by eliminating custom SVG definitions
+- Kept branded `LineZMark` / `ZeninLogo` (now monochrome).
 
-#### 6.4 Bundle check
-`scripts/check-production-bundle.mjs`. Expect net win: Tailwind purge +
-`styles.css` shrink + recharts removed.
+#### 6.4 Bundle check ✅
+`scripts/check-production-bundle.mjs`. 
+- Bundle passes local fallback and stale auth checks
+- Expect net win: Tailwind purge + `styles.css` shrink + recharts removed.
 
 ---
 
