@@ -890,21 +890,37 @@ button {
   white-space: nowrap;
 }
 
+/* Workspace Mode CSS Variables */
+:root {
+  --workspace-min-width: 960px;
+  --workspace-padding-x-compact: 12px;
+  --workspace-padding-x-standard: 24px;
+  --workspace-padding-x-professional: 32px;
+  --workspace-padding-x-analyst: clamp(32px, 4vw, 64px);
+  --workspace-padding-x-ultrawide: clamp(40px, 5vw, 80px);
+  --workspace-sidebar-width-expanded: 220px;
+  --workspace-sidebar-width-collapsed: 72px;
+  --workspace-gap-compact: 16px;
+  --workspace-gap-standard: 24px;
+  --workspace-gap-professional: 32px;
+  --workspace-gap-analyst: 40px;
+}
+
 .app-layout {
-  padding: 24px;
-  max-width: 1400px;
-  margin: 0 auto;
+  padding: 0 var(--workspace-padding-x-standard);
+  max-width: none;
+  margin: 0;
   display: flex;
-  gap: 32px;
+  gap: var(--workspace-gap-standard);
   min-height: 100vh;
   overflow-x: hidden;
   position: relative;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 960px) {
   .app-layout {
-    padding: 12px;
-    gap: 0;
+    padding: 0 var(--workspace-padding-x-compact);
+    gap: var(--workspace-gap-compact);
     flex-direction: column;
     overflow-x: hidden;
   }
