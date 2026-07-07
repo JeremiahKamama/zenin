@@ -1,4 +1,10 @@
 import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
 import "./styles.css";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
@@ -6142,17 +6148,19 @@ const handleOptionTradeClosed = async (tradeId) => {
       <aside id="zenin-primary-sidebar" className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header sidebar-brand-row">
           {!isSidebarVisuallyCollapsed ? (
-            <div className="sidebar-console-topbar">
-              <strong>ZENIN</strong>
-              <span className="sidebar-console-live"><i /> Live</span>
-              <span className="sidebar-console-plan">{accountPlanLabel}</span>
+            <div className="sidebar-brand-row">
+              <div className="sidebar-brand-mark"><ZeninLogo size="sm" showText={false} /></div>
+              <div className="sidebar-brand-type">
+                <span className="sidebar-brand-name">ZENIN</span>
+              </div>
               <button
-                className="sidebar-toggle-btn mobile-close-btn"
+                type="button"
+                className="sidebar-collapse-toggle"
                 onClick={toggleSidebarCollapse}
                 aria-label="Collapse sidebar"
                 title="Collapse sidebar"
               >
-                ‹
+                <PanelLeftClose size={18} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
           ) : (
@@ -6193,26 +6201,20 @@ const handleOptionTradeClosed = async (tradeId) => {
                       title={section}
                       aria-current={isActiveSection ? "page" : undefined}
                     >
-                      {!isSidebarVisuallyCollapsed ? (
-                        <span className="nav-code" aria-hidden="true">{navCode}</span>
-                      ) : null}
                       <span className="nav-icon-wrap">
                         <span className="nav-icon">{sectionIcon(section)}</span>
                       </span>
                       <span className="nav-copy">
-                        <span className="nav-label-row">
-                          <span className="nav-full">{section}</span>
-                          {section === "Watchlist" && watchlistAssets.length > 0 && (
-                            <span className="nav-badge">{watchlistAssets.length}</span>
-                          )}
+                        <span className="nav-full">
+                          {section}
+                          {section === "Watchlist" && watchlistAssets.length > 0
+                            ? ` (${watchlistAssets.length})`
+                            : ""}
                         </span>
                         {isActiveSection && !isSidebarVisuallyCollapsed ? (
                           <span className="nav-description">{meta.description}</span>
                         ) : null}
                       </span>
-                      {isActiveSection && !isSidebarVisuallyCollapsed ? (
-                        <span className="nav-kicker">{meta.eyebrow}</span>
-                      ) : null}
                     </a>
                   );
                 })}
@@ -6260,7 +6262,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           )}
         </div>
         <div className="sidebar-bottom">
-          {!isSidebarVisuallyCollapsed ? <div className="sidebar-section-header">Control Bay</div> : null}
+          {!isSidebarVisuallyCollapsed ? <div className="sidebar-section-header">SYSTEM</div> : null}
           <button
             className="sidebar-theme-row sidebar-utility-row"
             onClick={toggleTheme}
@@ -6286,15 +6288,17 @@ const handleOptionTradeClosed = async (tradeId) => {
             onClick={() => setIsSettingsOpen(true)}
             title="Open settings"
           >
-            <div className="user-icon" aria-hidden="true">
-              <AccountIcon />
-            </div>
-            <div className="sidebar-account-meta">
-              <span className="sidebar-theme-label">Account</span>
-              {!isSidebarVisuallyCollapsed && (
-                <span className="sidebar-account-chevron">›</span>
-              )}
-            </div>
+            <span className="sidebar-utility-left">
+              <span className="user-icon" aria-hidden="true">
+                <AccountIcon />
+              </span>
+              <span className="sidebar-account-meta">
+                <span className="sidebar-theme-label">Account</span>
+              </span>
+            </span>
+            {!isSidebarVisuallyCollapsed && (
+              <span className="sidebar-account-chevron">›</span>
+            )}
           </button>
 
           <button
@@ -6315,7 +6319,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
       </aside>
 
-      <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
+<main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
         {routeState.type === "company" ? (
           <div className="view-container">
             <Suspense fallback={moduleLoadingFallback}>
@@ -6835,36 +6839,38 @@ const handleOptionTradeClosed = async (tradeId) => {
               <button className="close-btn" onClick={() => setWatchlistPrompt(null)}>&times;</button>
             </div>
             <div className="watchlist-add-body">
-              <label className="settings-field">
-                <span>Category</span>
-                <select
-                  value={watchlistPrompt.category}
-                  onChange={(e) =>
-                    setWatchlistPrompt((prev) => ({ ...prev, category: e.target.value, error: "" }))
-                  }
-                >
-                  {tradfiCategoryOptions.map((category) => (
-                    <option key={category} value={category}>
-                      {category.charAt(0).toUpperCase() + category.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="watchlist-add-field-row">
+                <label className="settings-field">
+                  <span>Category</span>
+                  <select
+                    value={watchlistPrompt.category}
+                    onChange={(e) =>
+                      setWatchlistPrompt((prev) => ({ ...prev, category: e.target.value, error: "" }))
+                    }
+                  >
+                    {tradfiCategoryOptions.map((category) => (
+                      <option key={category} value={category}>
+                        {category.charAt(0).toUpperCase() + category.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-              <label className="settings-field">
-                <span>Theme</span>
-                <select
-                  value={watchlistPrompt.theme}
-                  onChange={(e) =>
-                    setWatchlistPrompt((prev) => ({ ...prev, theme: e.target.value, customTheme: "", error: "" }))
-                  }
-                >
-                  <option value="">Select a theme</option>
-                  {stockThemes.map((theme) => (
-                    <option key={theme} value={theme}>{theme}</option>
-                  ))}
-                </select>
-              </label>
+                <label className="settings-field">
+                  <span>Theme</span>
+                  <select
+                    value={watchlistPrompt.theme}
+                    onChange={(e) =>
+                      setWatchlistPrompt((prev) => ({ ...prev, theme: e.target.value, customTheme: "", error: "" }))
+                    }
+                  >
+                    <option value="">Select a theme</option>
+                    {stockThemes.map((theme) => (
+                      <option key={theme} value={theme}>{theme}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
               <label className="settings-field">
                 <span>Or create a new theme</span>
