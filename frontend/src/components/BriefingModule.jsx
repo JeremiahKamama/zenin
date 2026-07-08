@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CompactPageHeader, GuidedEmptyState, MetricStrip } from "./CompactWorkspaceUI";
+import { CompactPageHeader, DensePanelHeader, MetricStrip } from "./CompactWorkspaceUI";
 import { zeninFetch } from "../utils/zeninFetch";
 
 const REVIEW_DUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -149,7 +149,7 @@ export function BriefingModule({
       onOpenSection?.("Portfolio", { symbol: item?.symbol });
       return;
     }
-    if (sectionType === "recent_executions") {
+    if (sectionType === "executions") {
       onOpenSection?.("Journal", { symbol: item?.symbol, preThesis: item?.title || `Trade: ${item?.symbol || ""}` });
       return;
     }
@@ -242,13 +242,79 @@ export function BriefingModule({
       {generating || loading ? (
         <SkeletonSections />
       ) : !localBriefing ? (
-        <GuidedEmptyState
-          title="No briefing yet for today"
-          body="Generate a daily briefing to see your portfolio snapshot, open alerts, watchlist, decision queue, and recent executions in one place."
-          actionLabel={generating ? "Generating…" : "Generate briefing"}
-          onAction={handleGenerate}
-          disabled={generating || isGuestUser}
-        />
+        <div className="briefing-guided-workspace">
+          <section className="briefing-guided-block">
+            <DensePanelHeader title="Market Snapshot" meta="Live" />
+            <div className="briefing-guided-placeholder">
+              <p>Generate today&apos;s briefing to populate the live market snapshot — indices, BTC, ETH and your tracked assets.</p>
+            </div>
+          </section>
+
+          <section className="briefing-guided-block">
+            <DensePanelHeader title="Recent Decisions" meta="Decision loop" />
+            <div className="briefing-guided-placeholder">
+              <p>Your open and recently completed decision threads appear here once the briefing runs.</p>
+              <button
+                type="button"
+                className="settings-mini-btn"
+                onClick={() => onOpenSection?.("Decisions")}
+              >
+                Open Decision Threads
+              </button>
+            </div>
+          </section>
+
+          <section className="briefing-guided-block">
+            <DensePanelHeader title="Open Research" meta="Research desk" />
+            <div className="briefing-guided-placeholder">
+              <p>Active research notes and open investigations surface here.</p>
+              <button
+                type="button"
+                className="settings-mini-btn"
+                onClick={() => onOpenSection?.("Research")}
+              >
+                Open Research
+              </button>
+            </div>
+          </section>
+
+          <section className="briefing-guided-block">
+            <DensePanelHeader title="Watchlist Summary" meta="Tracked assets" />
+            <div className="briefing-guided-placeholder">
+              <p>A condensed view of your watchlist and price moves appears here.</p>
+              <button
+                type="button"
+                className="settings-mini-btn"
+                onClick={() => onOpenSection?.("Watchlist")}
+              >
+                Open Watchlist
+              </button>
+            </div>
+          </section>
+
+          <section className="briefing-guided-block briefing-guided-cta">
+            <DensePanelHeader title="Quick Prompt Templates" meta="Generate" />
+            <div className="briefing-guided-prompts">
+              <button type="button" className="journal-btn secondary" onClick={handleGenerate} disabled={generating || isGuestUser}>
+                Morning market brief
+              </button>
+              <button type="button" className="journal-btn secondary" onClick={handleGenerate} disabled={generating || isGuestUser}>
+                Risk &amp; earnings watch
+              </button>
+              <button type="button" className="journal-btn secondary" onClick={handleGenerate} disabled={generating || isGuestUser}>
+                Catalyst rundown
+              </button>
+            </div>
+            <button
+              type="button"
+              className="settings-primary-btn briefing-guided-generate"
+              disabled={generating || loading || isGuestUser}
+              onClick={handleGenerate}
+            >
+              {generating || loading ? "Generating…" : "Generate today's briefing"}
+            </button>
+          </section>
+        </div>
       ) : (
         <div className="briefing-content">
           {localBriefing.summary ? (

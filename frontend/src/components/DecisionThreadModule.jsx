@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CompactPageHeader, GuidedEmptyState, InlineControlGroup } from "./CompactWorkspaceUI";
+import { CompactPageHeader, DensePanelHeader, GuidedEmptyState, InlineControlGroup } from "./CompactWorkspaceUI";
 import { zeninFetch } from "../utils/zeninFetch";
 
 const STATUS_COLUMNS = [
@@ -11,7 +11,20 @@ const STATUS_COLUMNS = [
   { key: "reviewed", label: "Reviewed" }
 ];
 
-const REVIEW_RESULTS = ["win", "loss", "breakeven", "avoided", "missed", "reviewed"];
+const REVIEW_RESULTS = ["win", "loss", "breakeven", "avoided", "missed"];
+
+// User-selectable thread sources. trade_execution is intentionally excluded:
+// no frontend flow sets linkedTradeExecutionId, so offering it invites
+// self-classification with no execution linked. Kept in SOURCE_LABELS so any
+// server-side record still renders.
+const SOURCE_OPTIONS = ["manual", "daily_briefing", "alert", "research"];
+const SOURCE_LABELS = {
+  manual: "Manual",
+  daily_briefing: "Daily briefing",
+  alert: "Alert",
+  trade_execution: "Trade execution",
+  research: "Research"
+};
 
 function formatRelativeTime(iso) {
   if (!iso) return null;
@@ -50,7 +63,7 @@ export function DecisionThreadModule({
   const [feedback, setFeedback] = useState(null);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ title: "", symbol: "", priority: "medium", sourceType: "manual" });
-  const [reviewDraft, setReviewDraft] = useState({ result: "reviewed", pnl: "", lesson: "", mistakeTag: "" });
+  const [reviewDraft, setReviewDraft] = useState({ result: "", pnl: "", lesson: "", mistakeTag: "" });
   // Phase 5: drag-and-drop between Kanban columns + WIP limit indicator.
   const [dragSource, setDragSource] = useState(null);
   const [dragOverColumn, setDragOverColumn] = useState(null);
@@ -180,7 +193,7 @@ export function DecisionThreadModule({
     }
   }, [refreshThreads]);
 
-  const handleLinkResearch = useCallback(async (thread) => {
+  const handleOpenResearch = useCallback((thread) => {
     onOpenSection?.("Research");
   }, [onOpenSection]);
 
@@ -284,11 +297,9 @@ export function DecisionThreadModule({
           <InlineControlGroup>
             <select value={boardFilter} onChange={(e) => setBoardFilter(e.target.value)} title="Filter board by source">
               <option value="all">All sources</option>
-              <option value="manual">Manual</option>
-              <option value="daily_briefing">Daily briefing</option>
-              <option value="alert">Alert</option>
-              <option value="trade_execution">Trade execution</option>
-              <option value="research">Research</option>
+              {SOURCE_OPTIONS.map((s) => (
+                <option key={s} value={s}>{SOURCE_LABELS[s]}</option>
+              ))}
             </select>
             <button
               type="button"
@@ -414,11 +425,9 @@ export function DecisionThreadModule({
           value={draft.sourceType}
           onChange={(e) => setDraft((d) => ({ ...d, sourceType: e.target.value }))}
         >
-          <option value="manual">Manual</option>
-          <option value="daily_briefing">Daily briefing</option>
-          <option value="alert">Alert</option>
-          <option value="trade_execution">Trade execution</option>
-          <option value="research">Research</option>
+          {SOURCE_OPTIONS.map((s) => (
+            <option key={s} value={s}>{SOURCE_LABELS[s]}</option>
+          ))}
         </select>
       </div>
 
@@ -442,13 +451,74 @@ export function DecisionThreadModule({
           ))}
         </div>
       ) : threads.length === 0 ? (
-        <GuidedEmptyState
-          title="No decision threads yet"
-          body="Start a decision from an alert, research note, or the daily briefing. Each decision moves through research → journal → review."
-          actionLabel="Create your first decision"
-          onAction={handleCreate}
-          disabled={creating || isGuestUser}
-        />
+        <div className="decision-guided-workspace">
+          <section className="decision-guided-block decision-guided-cta">
+            <DensePanelHeader title="Start a Decision" meta="New" />
+            <div className="decision-guided-create-row">
+              <input
+                type="text"
+                className="decision-thread-input"
+                placeholder="Decision title (e.g. Long BTC on ETF inflow strength)"
+                value={draft.title}
+                onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+              />
+              <input
+                type="text"
+                className="decision-thread-input decision-thread-input-symbol"
+                placeholder="Symbol"
+                value={draft.symbol}
+                onChange={(e) => setDraft((d) => ({ ...d, symbol: e.target.value }))}
+              />
+              <select
+                className="decision-thread-select"
+                value={draft.priority}
+                onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <button type="button" className="settings-primary-btn" disabled={creating || isGuestUser} onClick={handleCreate}>
+                {creating ? "Creating…" : "Create decision"}
+              </button>
+            </div>
+          </section>
+
+          <section className="decision-guided-block">
+            <DensePanelHeader title="Decision Templates" meta="Templates" />
+            <div className="decision-guided-templates">
+              <button type="button" className="journal-btn secondary" onClick={() => setDraft((d) => ({ ...d, title: "Long thesis", priority: "medium" }))}>Long thesis</button>
+              <button type="button" className="journal-btn secondary" onClick={() => setDraft((d) => ({ ...d, title: "Hedge / risk-off", priority: "high" }))}>Hedge / risk-off</button>
+              <button type="button" className="journal-btn secondary" onClick={() => setDraft((d) => ({ ...d, title: "Earnings play", priority: "medium" }))}>Earnings play</button>
+              <button type="button" className="journal-btn secondary" onClick={() => setDraft((d) => ({ ...d, title: "Macro allocation shift", priority: "high" }))}>Macro allocation shift</button>
+            </div>
+          </section>
+
+          <section className="decision-guided-block">
+            <DensePanelHeader title="Recent Decisions" meta="History" />
+            <div className="decision-guided-placeholder">
+              <p>Your reviewed and archived decisions appear here. The decision loop keeps every journaled decision tied to a review due date.</p>
+            </div>
+          </section>
+
+          <section className="decision-guided-block">
+            <DensePanelHeader title="Quick Actions" meta="Shortcuts" />
+            <div className="decision-guided-actions">
+              <button type="button" className="settings-mini-btn" onClick={() => onOpenSection?.("Briefing")}>Open Briefing</button>
+              <button type="button" className="settings-mini-btn" onClick={() => onOpenSection?.("Research")}>Open Research</button>
+              <button type="button" className="settings-mini-btn" onClick={() => onOpenSection?.("Journal")}>Open Journal</button>
+            </div>
+          </section>
+
+          <section className="decision-guided-block">
+            <DensePanelHeader title="Decision Statistics" meta="Loop" />
+            <div className="decision-guided-stats">
+              <div><strong>0</strong><span>Open</span></div>
+              <div><strong>0</strong><span>Reviewed</span></div>
+              <div><strong>0</strong><span>Win rate</span></div>
+            </div>
+          </section>
+        </div>
       ) : (
         <div className="decision-threads-board">
           {STATUS_COLUMNS.map((col) => {
@@ -501,7 +571,7 @@ export function DecisionThreadModule({
                         <strong>{thread.title}</strong>
                         {thread.symbol ? <span className="decision-thread-card-symbol">{thread.symbol}</span> : null}
                         <span className="decision-thread-card-meta">
-                          {thread.sourceType ? thread.sourceType.replace(/_/g, " ") : "manual"}
+                          {thread.sourceType ? (SOURCE_LABELS[thread.sourceType] || thread.sourceType.replace(/_/g, " ")) : "manual"}
                           {due ? ` · ${due}` : ""}
                         </span>
                       </button>
@@ -543,7 +613,7 @@ export function DecisionThreadModule({
                 ))}
                 <option value="archived">Archived</option>
               </select>
-              <button type="button" className="settings-mini-btn" onClick={() => handleLinkResearch(selectedThread)}>Open research</button>
+              <button type="button" className="settings-mini-btn" onClick={() => handleOpenResearch(selectedThread)}>Find research</button>
               {selectedThread.status !== "reviewed" ? (
                 <button type="button" className="settings-mini-btn" onClick={() => handleCreateJournal(selectedThread)}>Create journal entry</button>
               ) : null}
@@ -575,6 +645,7 @@ export function DecisionThreadModule({
                     value={reviewDraft.result}
                     onChange={(e) => setReviewDraft((d) => ({ ...d, result: e.target.value }))}
                   >
+                    <option value="">Pick an outcome…</option>
                     {REVIEW_RESULTS.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                   <input
@@ -596,7 +667,15 @@ export function DecisionThreadModule({
                   onChange={(e) => setReviewDraft((d) => ({ ...d, lesson: e.target.value }))}
                   rows={3}
                 />
-                <button type="button" className="settings-primary-btn" onClick={() => handleMarkReviewed(selectedThread)}>
+                {!reviewDraft.result ? (
+                  <p className="decision-review-hint">Pick an outcome to record this review.</p>
+                ) : null}
+                <button
+                  type="button"
+                  className="settings-primary-btn"
+                  disabled={!reviewDraft.result}
+                  onClick={() => handleMarkReviewed(selectedThread)}
+                >
                   Mark reviewed
                 </button>
               </div>

@@ -3367,7 +3367,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
       if (requestedSection) return requestedSection;
     }
-    // New users land on the daily briefing; returning users keep their saved section.
+    // New users land on Home; returning users keep their saved section.
     return sections.includes(savedSection) ? savedSection : "Home";
   });
   const [guestInteraction, setGuestInteraction] = useState("");
@@ -6402,6 +6402,9 @@ const handleOptionTradeClosed = async (tradeId) => {
 
         {activeSection === "Briefing" && !shouldRenderGuestPreview && (
           <div className="view-container">
+            {isExplicitGuestMode ? (
+              <GuestContextualSignupNudge section={activeSection} interaction={guestInteraction || "Briefing"} />
+            ) : null}
             <BriefingModule
               briefing={todayBriefing}
               decisionThreads={decisionThreads}

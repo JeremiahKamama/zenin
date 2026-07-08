@@ -2836,6 +2836,12 @@ html.light-theme-active .settings-secondary-btn:hover {
   color: var(--color-text-secondary);
 }
 
+.decision-review-hint {
+  margin: 0 0 8px;
+  font-size: 0.76rem;
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+
 .decision-thread-review-form textarea {
   width: 100%;
   background: color-mix(in srgb, var(--color-surface-elevated) 60%, transparent);
