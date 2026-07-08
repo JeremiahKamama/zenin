@@ -2372,7 +2372,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <option value="risk">Risk</option>
               </select>
             </label>
-            <button type="button" className="portfolio-v2-link" onClick={() => exportExposureReport()}>Export</button>
+            <button type="button" className="portfolio-v2-link" onClick={() => exportExposureReport()}>Export Exposure</button>
           </div>
         </div>
         <div className="portfolio-command-table-wrap">
