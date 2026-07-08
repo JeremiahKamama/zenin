@@ -3209,6 +3209,22 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 </button>
               ))}
             </div>
+            <div className="portfolio-v2-range" role="group" aria-label="Chart mode">
+              {[
+                { value: "equity", label: "Equity" },
+                { value: "percentage", label: "% Gain" },
+                { value: "pnl", label: "Cash PnL" }
+              ].map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  className={`portfolio-v2-range-btn ${chartMode === mode.value ? "active" : ""}`}
+                  onClick={() => setChartMode(mode.value)}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
             <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>Open Rebalance Flow</button>
           </div>
         </div>
