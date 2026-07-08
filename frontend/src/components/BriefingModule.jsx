@@ -409,7 +409,7 @@ export function BriefingModule({
                                 ) : null}
                                 {section?.type === "decision_queue" ? (
                                   <>
-                                    <button type="button" className="settings-mini-btn" onClick={handleOpenResearch}>Open research</button>
+                                    <button type="button" className="settings-mini-btn" onClick={handleOpenResearch}>Find research</button>
                                     <button type="button" className="settings-mini-btn" onClick={() => onOpenSection?.("Journal", { symbol: item?.symbol, preThesis: item?.title, decisionThreadId: item?.id })}>Open journal</button>
                                   </>
                                 ) : null}
