@@ -2,8 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { CompactPageHeader, DensePanelHeader, MetricStrip } from "./CompactWorkspaceUI";
 import { zeninFetch } from "../utils/zeninFetch";
 
-const REVIEW_DUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
 function formatRelativeTime(iso) {
   if (!iso) return null;
   const then = new Date(iso).getTime();
@@ -56,7 +54,6 @@ export function BriefingModule({
     const t = setInterval(() => setNow(Date.now()), autoRefreshMs);
     return () => clearInterval(t);
   }, [autoRefreshMs]);
-  void now; // keep dependency wired even if downstream consumers use it
 
   const handleGenerate = useCallback(async () => {
     setGenerating(true);
@@ -204,6 +201,10 @@ export function BriefingModule({
     </div>
   );
 
+  const hasPrioritized = (localBriefing?.sections || []).some(
+    (s) => Array.isArray(s?.items) && s.items.some((it) => it?.priority)
+  );
+
   return (
     <div className="view-container briefing-module">
       <CompactPageHeader
@@ -293,23 +294,12 @@ export function BriefingModule({
           </section>
 
           <section className="briefing-guided-block briefing-guided-cta">
-            <DensePanelHeader title="Quick Prompt Templates" meta="Generate" />
-            <div className="briefing-guided-prompts">
-              <button type="button" className="journal-btn secondary" onClick={handleGenerate} disabled={generating || isGuestUser}>
-                Morning market brief
-              </button>
-              <button type="button" className="journal-btn secondary" onClick={handleGenerate} disabled={generating || isGuestUser}>
-                Risk &amp; earnings watch
-              </button>
-              <button type="button" className="journal-btn secondary" onClick={handleGenerate} disabled={generating || isGuestUser}>
-                Catalyst rundown
-              </button>
-            </div>
+            <DensePanelHeader title="Generate today's briefing" meta="Generate" />
             <button
               type="button"
-              className="settings-primary-btn briefing-guided-generate"
-              disabled={generating || loading || isGuestUser}
+              className="zenin-btn primary briefing-generate-cta"
               onClick={handleGenerate}
+              disabled={generating || loading || isGuestUser}
             >
               {generating || loading ? "Generating…" : "Generate today's briefing"}
             </button>
@@ -330,9 +320,13 @@ export function BriefingModule({
             {localBriefing.generatedAt ? (
               <span className="briefing-tag briefing-tag-meta">Generated {formatRelativeTime(localBriefing.generatedAt)}</span>
             ) : null}
-            {!localBriefing.readAt ? (
+            {localBriefing.readAt ? (
+              <span className="briefing-read-tag" title={`Read ${new Date(localBriefing.readAt).toLocaleString()}`}>
+                Read · {formatRelativeTime(localBriefing.readAt)}
+              </span>
+            ) : (
               <button type="button" className="briefing-mark-read-link" onClick={handleMarkRead}>Mark as read</button>
-            ) : null}
+            )}
           </div>
 
           <div className="briefing-sort-row">
@@ -345,15 +339,17 @@ export function BriefingModule({
           >
             Default
           </button>
-          <button
-            type="button"
-            className={`briefing-sort-chip ${sortMode === "priority" ? "active" : ""}`}
-            onClick={() => setSortMode("priority")}
-            aria-pressed={sortMode === "priority"}
-            title="High → Medium → Low"
-          >
-            Priority
-          </button>
+          {hasPrioritized ? (
+            <button
+              type="button"
+              className={`briefing-sort-chip ${sortMode === "priority" ? "active" : ""}`}
+              onClick={() => setSortMode("priority")}
+              aria-pressed={sortMode === "priority"}
+              title="High → Medium → Low"
+            >
+              Priority
+            </button>
+          ) : null}
         </div>
         <MetricStrip items={metricItems} />
 
@@ -407,7 +403,7 @@ export function BriefingModule({
                               <div className="briefing-section-item-actions">
                                 {section?.type === "alerts" ? (
                                   <>
-                                    <button type="button" className="settings-mini-btn" onClick={() => handleCreateThreadFromItem(item, "alert")}>Turn into research</button>
+                                    <button type="button" className="settings-mini-btn" onClick={() => handleCreateThreadFromItem(item, "alert")}>Start a decision</button>
                                     <button type="button" className="settings-mini-btn" onClick={() => handleCreateThreadFromItem(item, "alert", { title: `Journal: ${item?.alertKey || "alert"}`, journalDecision: true, symbol: item?.symbol })}>Journal decision</button>
                                   </>
                                 ) : null}
@@ -418,7 +414,7 @@ export function BriefingModule({
                                   </>
                                 ) : null}
                                 {section?.type === "watchlist" && item?.symbol ? (
-                                  <button type="button" className="settings-mini-btn" onClick={() => handleCreateThreadFromItem(item, "manual", { title: `Research: ${item.symbol}`, symbol: item.symbol })}>Promote to decision</button>
+                                  <button type="button" className="settings-mini-btn" onClick={() => handleCreateThreadFromItem(item, "manual", { title: `Research: ${item.symbol}`, symbol: item.symbol })}>Start a decision</button>
                                 ) : null}
                               </div>
                             </li>

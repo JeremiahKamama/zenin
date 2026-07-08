@@ -193,6 +193,21 @@ export function DecisionThreadModule({
     }
   }, [refreshThreads]);
 
+  const handleUpdatePriority = useCallback(async (thread, priority) => {
+    if (!thread?.id) return;
+    try {
+      const res = await zeninFetch(`/decision-threads/${thread.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ priority })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to update priority");
+      await refreshThreads();
+    } catch (error) {
+      setFeedback(error.message || "Failed to update priority.");
+    }
+  }, [refreshThreads]);
+
   const handleOpenResearch = useCallback((thread) => {
     onOpenSection?.("Research");
   }, [onOpenSection]);
@@ -235,7 +250,7 @@ export function DecisionThreadModule({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Failed to mark reviewed");
-      setReviewDraft({ result: "reviewed", pnl: "", lesson: "", mistakeTag: "" });
+      setReviewDraft({ result: "", pnl: "", lesson: "", mistakeTag: "" });
       await refreshThreads();
     } catch (error) {
       setFeedback(error.message || "Failed to mark reviewed.");
@@ -306,7 +321,7 @@ export function DecisionThreadModule({
               className={`settings-mini-btn ${showActivity ? "active" : ""}`}
               onClick={() => setShowActivity((value) => !value)}
             >
-              {showActivity ? "Hide activity" : "Activity"}
+              {showActivity ? "Hide workspace activity" : "Workspace activity"}
             </button>
             <button
               type="button"
@@ -374,7 +389,7 @@ export function DecisionThreadModule({
       {showActivity ? (
         <section className="decision-outcomes-panel">
           <div className="decision-outcomes-head">
-            <strong>Recent activity</strong>
+            <strong>Workspace activity</strong>
             <button type="button" className="settings-mini-btn" onClick={loadActivity} disabled={activityLoading}>
               {activityLoading ? "Loading…" : "Refresh"}
             </button>
@@ -477,6 +492,15 @@ export function DecisionThreadModule({
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
+              </select>
+              <select
+                className="decision-thread-select"
+                value={draft.sourceType}
+                onChange={(e) => setDraft((d) => ({ ...d, sourceType: e.target.value }))}
+              >
+                {SOURCE_OPTIONS.map((s) => (
+                  <option key={s} value={s}>{SOURCE_LABELS[s]}</option>
+                ))}
               </select>
               <button type="button" className="settings-primary-btn" disabled={creating || isGuestUser} onClick={handleCreate}>
                 {creating ? "Creating…" : "Create decision"}
@@ -612,6 +636,15 @@ export function DecisionThreadModule({
                   <option key={col.key} value={col.key}>{col.label}</option>
                 ))}
                 <option value="archived">Archived</option>
+              </select>
+              <select
+                value={selectedThread.priority}
+                onChange={(e) => handleUpdatePriority(selectedThread, e.target.value)}
+                title="Priority"
+              >
+                <option value="low">Low priority</option>
+                <option value="medium">Medium priority</option>
+                <option value="high">High priority</option>
               </select>
               <button type="button" className="settings-mini-btn" onClick={() => handleOpenResearch(selectedThread)}>Find research</button>
               {selectedThread.status !== "reviewed" ? (
