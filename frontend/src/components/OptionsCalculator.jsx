@@ -378,7 +378,7 @@ export function OptionsCalculator({   spotPrice = 0,
     }))
   ].filter(Boolean);
   const payoffPriceLines = [
-    { id: "zero", price: 0, title: "Break-even", color: "rgba(148,163,184,0.7)" },
+    { id: "zero", price: 0, title: "Break-even", color: "rgba(160, 160, 160, 0.7)" },
     Number.isFinite(maxProfit) && maxProfit > 0 && maxProfit < 9999 ? { id: "max-profit", price: maxProfit, title: "Max profit", color: "rgba(34,197,94,0.7)" } : null,
     Number.isFinite(maxLoss) && maxLoss < 0 && maxLoss > -9999 ? { id: "max-loss", price: maxLoss, title: "Max loss", color: "rgba(239,68,68,0.7)" } : null
   ].filter(Boolean);
@@ -513,21 +513,21 @@ export function OptionsCalculator({   spotPrice = 0,
   };
 
   return (
-    <div className="options-calculator options-exec-calculator" style={{ marginTop: "32px", borderTop: "1px solid var(--color-border-medium)", paddingTop: "24px" }}>
-      <h2 className="options-calculator-title" style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 500, color: "var(--color-text-primary)" }}>
+    <div className="options-calculator options-exec-calculator options-calc-root">
+      <h2 className="options-calculator-title">
         Options Calculator
       </h2>
 
-      <div className="options-calculator-layout" style={{ marginBottom: "16px" }}>
+      <div className="options-calculator-layout">
         <div className="options-calculator-side">
-          <div className="watchlist-panel glass options-calculator-symbol-panel options-exec-panel" style={{ padding: "16px" }}>
-            <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "var(--color-data-slate)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Symbol</p>
+          <div className="watchlist-panel glass options-calculator-symbol-panel options-exec-panel options-calc-panel">
+            <p className="options-calc-label">Symbol</p>
             {isRfqSymbol ? (
-              <div className="options-calculator-mode-pill rfq" style={{ marginBottom: "10px" }}>
+              <div className="options-calculator-mode-pill rfq options-calc-pill-mb">
                 RFQ market
               </div>
             ) : null}
-            <div style={{ position: "relative" }}>
+            <div className="options-calc-rel">
               <input
                 value={symbolSearch}
                 onChange={e => { setSymbolSearch(e.target.value.toUpperCase()); setShowSymbolDropdown(true); }}
@@ -544,24 +544,10 @@ export function OptionsCalculator({   spotPrice = 0,
                 }}
                 placeholder="Search symbol..."
                 className="options-calculator-symbol-input"
-                style={{ width: "100%", padding: "8px 12px", background: "var(--color-surface-panel)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "8px", color: "var(--color-data-slate-bright)", fontSize: "14px", outline: "none" }}
               />
               {showSymbolDropdown && filteredSymbols.length > 0 && (
                 <div
                   className="options-calculator-symbol-dropdown"
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 0,
-                    right: 0,
-                    background: "var(--color-surface-elevated)",
-                    border: "1px solid rgba(148,163,184,0.2)",
-                    borderRadius: "8px",
-                    marginTop: "4px",
-                    zIndex: 50,
-                    maxHeight: "180px",
-                    overflowY: "auto"
-                  }}
                 >
                   {filteredSymbols.map((s) => (
                     <button
@@ -571,15 +557,9 @@ export function OptionsCalculator({   spotPrice = 0,
                       onClick={() => {
                         commitSymbolSelection(s);
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(148,163,184,0.08)")}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(148, 163, 184, 0.08)")}
                       onMouseLeave={(e) => (e.currentTarget.style.background = s === symbol ? "rgba(255, 255, 255, 0.08)" : "transparent")}
                       style={{
-                        padding: "10px 14px",
-                        width: "100%",
-                        border: "none",
-                        textAlign: "left",
-                        cursor: "pointer",
-                        fontSize: "14px",
                         color: s === symbol ? "var(--color-data-primary)" : "var(--color-data-slate-bright)",
                         background: s === symbol ? "rgba(255, 255, 255, 0.08)" : "transparent"
                       }}
@@ -590,24 +570,24 @@ export function OptionsCalculator({   spotPrice = 0,
                 </div>
               )}
             </div>
-            <div className="options-calculator-spot-box" style={{ marginTop: "12px", padding: "10px", background: "rgba(255, 255, 255, 0.04)", borderRadius: "8px", border: "1px solid rgba(255, 255, 255, 0.08)" }}>
-              <p className="options-calculator-spot-label" style={{ margin: 0, fontSize: "11px", color: "var(--color-data-slate-dim)" }}>
+            <div className="options-calculator-spot-box">
+              <p className="options-calc-spot-label">
                 Last Available Price
               </p>
-              <p className="options-calculator-spot-value" style={{ margin: "2px 0 0", fontSize: "18px", fontWeight: 700, color: "var(--color-data-primary)" }}>
+              <p className="options-calc-spot-value">
                 {Number.isFinite(effectiveSpot) && effectiveSpot > 0 ? `$${effectiveSpot.toLocaleString()}` : "Unavailable"}
               </p>
-              <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>
+              <p className="options-calc-aux">
                 Source: {spotSource === "lyra" ? "Lyra" : spotSource === "hyperliquid" ? "Hyperliquid (fallback)" : "Unavailable"}
               </p>
               {isRfqMarket ? (
-                <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--color-data-amber-bright)" }}>
+                <p className="options-calc-aux amber">
                   Market mode: {marketStructureLabel}. {marketStructureNote || "A full ladder snapshot may not be available for every quote."}
                 </p>
               ) : null}
             </div>
             {!hasCalculatorMarketData ? (
-              <p style={{ margin: "10px 0 0", fontSize: "11px", lineHeight: 1.45, color: "var(--color-warning)" }}>
+              <p className="options-calc-warn">
                 {isRfqSymbol
                   ? `${normalizedSymbol} is currently exposed through RFQ on Derive, so prefilled strikes, IV, and premiums may be sparse here. Switch the chain asset to ${normalizedSymbol} or search another asset for a full ladder-driven calculation.`
                   : `No options market data is available for ${normalizedSymbol || "this asset"} right now. Search another asset to continue calculations.`}
@@ -615,8 +595,8 @@ export function OptionsCalculator({   spotPrice = 0,
             ) : null}
           </div>
 
-          <div className="watchlist-panel glass options-calculator-strategy-panel options-exec-panel" style={{ padding: "16px" }}>
-            <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "var(--color-data-slate)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strategy Presets</p>
+          <div className="watchlist-panel glass options-calculator-strategy-panel options-exec-panel options-calc-panel">
+            <p className="options-calc-label">Strategy Presets</p>
             <div className="options-calculator-strategy-grid">
               {strategies.map((s) => (
                 <button
@@ -632,7 +612,7 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
         </div>
 
-        <div className="watchlist-panel glass options-calculator-position-panel options-exec-panel" style={{ padding: "16px" }}>
+        <div className="watchlist-panel glass options-calculator-position-panel options-exec-panel options-calc-panel">
           <div className="options-calculator-section-head">
             <p className="options-calculator-section-kicker">Position Legs</p>
             <button type="button" className="options-calculator-add-leg-btn" onClick={addLeg}>
@@ -646,7 +626,7 @@ export function OptionsCalculator({   spotPrice = 0,
                 <div className="options-leg-header">
                   <div className="options-leg-title">Leg {i + 1}</div>
                   <div className="options-leg-header-actions">
-                    <button type="button" className="options-leg-link-btn" onClick={() => refreshLeg(i)}>Refresh</button>
+                    <button type="button" className="options-leg-link-btn" onClick={() => refreshLeg(i)}>Re-apply cached values</button>
                     <button type="button" className="options-leg-link-btn danger" onClick={() => removeLeg(i)}>Remove</button>
                   </div>
                 </div>
@@ -669,7 +649,7 @@ export function OptionsCalculator({   spotPrice = 0,
                     ))}
                   </datalist>
                   <div
-                    style={{ position: 'relative' }}
+                    className="options-calc-rel"
                   >
                     <input
                       type="date"
@@ -684,7 +664,7 @@ export function OptionsCalculator({   spotPrice = 0,
                       className="options-leg-input"
                     />
                     {deribitGreeksLoading[i] && (
-                      <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--color-data-primary)', pointerEvents: 'none' }}>⟳ Deribit</span>
+                      <span className="options-calc-deribit-spin">⟳ Deribit</span>
                     )}
                   </div>
                 </div>
@@ -762,7 +742,7 @@ export function OptionsCalculator({   spotPrice = 0,
             ))}
           </div>
 
-          <div className="options-calculator-greeks-grid" style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid var(--color-border-medium)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
+          <div className="options-calculator-greeks-grid">
             {[
               { label: "Net P&L", value: `$${totals.pnl.toFixed(2)}`, color: isProfitColor(totals.pnl) },
               { label: "Delta", value: totals.delta.toFixed(4), color: totals.delta >= 0 ? "var(--color-data-primary)" : "var(--color-warning)" },
@@ -770,14 +750,14 @@ export function OptionsCalculator({   spotPrice = 0,
               { label: "Theta", value: totals.theta.toFixed(4), color: totals.theta >= 0 ? "var(--color-success)" : "var(--color-danger)" },
               { label: "Vega", value: totals.vega.toFixed(4), color: "var(--color-data-secondary)" },
             ].map(({ label, value, color }) => (
-              <div className="options-calculator-greek-card" key={label} style={{ background: "var(--color-surface-elevated)", borderRadius: "8px", padding: "10px", textAlign: "center" }}>
-                <p style={{ margin: "0 0 4px", fontSize: "10px", color: "var(--color-data-slate-dim)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</p>
-                <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color }}>{value}</p>
+              <div className="options-calculator-greek-card" key={label}>
+                <p className="options-calc-greek-label">{label}</p>
+                <p className="options-calc-greek-value" style={{ color }}>{value}</p>
               </div>
             ))}
           </div>
 
-          <div className="options-calculator-save-row" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <div className="options-calculator-save-row">
               <button type="button" onClick={saveCalculation} className="options-calculator-action-btn primary">
                 Save Calculation
               </button>
@@ -801,28 +781,28 @@ export function OptionsCalculator({   spotPrice = 0,
         </div>
       </div>
 
-      <div className="watchlist-panel glass options-calculator-pnl-panel options-exec-panel options-exec-pnl-panel" style={{ padding: "20px" }}>
-        <div className="options-calculator-pnl-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+      <div className="watchlist-panel glass options-calculator-pnl-panel options-exec-panel options-exec-pnl-panel options-calc-panel">
+        <div className="options-calculator-pnl-head">
           <div>
-            <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 600, color: "var(--color-data-slate)", textTransform: "uppercase", letterSpacing: "0.05em" }}>P&L Diagram</p>
-            <p style={{ margin: 0, fontSize: "11px", color: "var(--color-data-slate-dim)" }}>At expiration - underlying price vs profit/loss</p>
+            <p className="options-calc-label">P&L Diagram</p>
+            <p className="options-calc-aux">At expiration - underlying price vs profit/loss</p>
           </div>
-          <div className="options-calculator-pnl-stats" style={{ display: "flex", gap: "20px" }}>
-            <div style={{ textAlign: "center" }}>
-              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>MAX PROFIT</p>
-              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: maxProfit === Infinity ? "var(--color-success)" : isProfitColor(maxProfit) }}>
+          <div className="options-calculator-pnl-stats">
+            <div className="options-calc-stat">
+              <p className="options-calc-stat-label">MAX PROFIT</p>
+              <p className="options-calc-stat-value" style={{ color: maxProfit === Infinity ? "var(--color-success)" : isProfitColor(maxProfit) }}>
                 {maxProfit > 9999 ? "Unlimited" : `$${maxProfit.toFixed(2)}`}
               </p>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>MAX LOSS</p>
-              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "var(--color-danger)" }}>
+            <div className="options-calc-stat">
+              <p className="options-calc-stat-label">MAX LOSS</p>
+              <p className="options-calc-stat-value" style={{ color: "var(--color-danger)" }}>
                 {maxLoss < -9999 ? "Unlimited" : `$${maxLoss.toFixed(2)}`}
               </p>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <p style={{ margin: "0 0 2px", fontSize: "10px", color: "var(--color-data-slate-dim)" }}>BREAKEVEN</p>
-              <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "var(--color-warning)" }}>
+            <div className="options-calc-stat">
+              <p className="options-calc-stat-label">BREAKEVEN</p>
+              <p className="options-calc-stat-value" style={{ color: "var(--color-warning)" }}>
                 {breakevenPoints.length > 0 ? `$${breakevenPoints.map((point) => point.toLocaleString()).join(" / $")}` : "—"}
               </p>
             </div>
@@ -840,7 +820,7 @@ export function OptionsCalculator({   spotPrice = 0,
             width="100%"
           />
         ) : (
-          <div className="chart-no-data" style={{ minHeight: "220px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div className="chart-no-data options-calc-chart-empty">
             Search another asset with available options market data to plot the calculator.
           </div>
         )}
@@ -848,7 +828,7 @@ export function OptionsCalculator({   spotPrice = 0,
 
       {savedCalculationsOpen ? (
         <div className="modal-overlay" onClick={() => setSavedCalculationsOpen(false)}>
-          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()} style={{ width: "95%", maxWidth: "1200px", padding: "24px", overflowX: "auto" }}>
+          <div className="modal-content options-calculation-history-modal" onClick={(event) => event.stopPropagation()}>
             <div className="options-calculation-history-head">
               <div>
                 <p className="options-calculation-history-kicker">Saved Calculations</p>
@@ -861,11 +841,11 @@ export function OptionsCalculator({   spotPrice = 0,
             </div>
 
             {savedCalculationsLoading ? (
-              <div className="loading-state" style={{ marginTop: "8px" }}>Loading saved calculations...</div>
+              <div className="loading-state options-calc-loading">Loading saved calculations...</div>
             ) : savedCalculationsError ? (
-              <div className="loading-state" style={{ marginTop: "8px", color: "var(--color-warning)" }}>{savedCalculationsError}</div>
+              <div className="loading-state options-calc-loading warn">{savedCalculationsError}</div>
             ) : savedCalculations.length === 0 ? (
-              <div className="loading-state" style={{ marginTop: "8px" }}>No saved calculations for {normalizedSymbol || "this asset"} yet.</div>
+              <div className="loading-state options-calc-loading">No saved calculations for {normalizedSymbol || "this asset"} yet.</div>
             ) : (
               <>
                 <div className="table-scroll options-calculation-history-scroll">
@@ -920,7 +900,7 @@ export function OptionsCalculator({   spotPrice = 0,
                 </div>
 
                 {totalSavedCalculationsPages > 1 ? (
-                  <div className="pagination-controls" style={{ marginTop: "12px" }}>
+                  <div className="pagination-controls">
                     <button
                       type="button"
                       className="pagination-button"
