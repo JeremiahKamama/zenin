@@ -3414,6 +3414,8 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   const [bootPhase, setBootPhase] = useState("checking_session");
   const [showDetailedBootPhase, setShowDetailedBootPhase] = useState(false);
+  // Reserved shell slot: future right-hand context panel. Defaults off — renders nothing today.
+  const [showContextPanel, setShowContextPanel] = useState(false);
   const [accountPlanLabel, setAccountPlanLabel] = useState(() => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
@@ -6284,7 +6286,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           </button>
 
           <button
-            className="sidebar-footer sidebar-utility-row sidebar-account-row settings-launcher"
+            className="sidebar-utility-row sidebar-account-row settings-launcher"
             onClick={() => setIsSettingsOpen(true)}
             title="Open settings"
           >
@@ -6292,7 +6294,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               <span className="user-icon" aria-hidden="true">
                 <AccountIcon />
               </span>
-              <span className="sidebar-account-meta">
+              <span className="sidebar-utility-copy">
                 <span className="sidebar-theme-label">Account</span>
               </span>
             </span>
@@ -6792,6 +6794,10 @@ const handleOptionTradeClosed = async (tradeId) => {
           </GenericErrorBoundary>
         )}
       </main>
+
+      {showContextPanel && (
+        <aside className="context-panel" aria-label="Context panel" />
+      )}
 
       {selectedAsset && (
         <Suspense fallback={null}>
@@ -8367,7 +8373,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </div>
                             <div className="connect-account-actions">
                               <button
-                                className="settings-secondary-btn connect-account-secondary"
+                                className="portfolio-command-primary-cta subtle connect-account-secondary"
                                 onClick={() => {
                                   const provider = cexOptions[0] || "Binance";
                                   setAccountForm({
@@ -8383,7 +8389,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                 Add another
                               </button>
                               <button
-                                className="settings-primary-btn connect-account-primary"
+                                className="portfolio-command-primary-cta subtle primary-emphasis connect-account-primary"
                                 onClick={() => {
                                   setIsConnectWindowOpen(false);
                                   setConnectAccountSuccess(null);
@@ -8400,11 +8406,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <div className="connect-account-status-strip">
                           <div>
                             <span>Access</span>
-                            <strong>{selectedProviderIsHyperliquid ? "Verified watch-only address" : "Read-only required, scope unverified"}</strong>
+                            <strong className="status-value">{selectedProviderIsHyperliquid ? "Verified watch-only address" : "Read-only required, scope unverified"}</strong>
                           </div>
                           <div>
                             <span>{selectedProviderSyncLabel}</span>
-                            <strong>{selectedProviderSyncHelp}</strong>
+                            <strong className="status-value">{selectedProviderSyncHelp}</strong>
                           </div>
                         </div>
 
@@ -8447,7 +8453,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         </div>
 
                         <label className="flex flex-col gap-2 w-full max-w-md">
-                          <span>Provider</span>
+                          <span className="field-label-strong">Provider</span>
                           <select
                                 className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             value={accountForm.provider}
@@ -8468,7 +8474,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           </select>
                         </label>
                         <label className="flex flex-col gap-2 w-full max-w-md">
-                          <span>Account label</span>
+                          <span className="field-label-strong">Account label</span>
                           <input
                                 className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type="text"
@@ -8482,7 +8488,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           />
                         </label>
                         <label className="flex flex-col gap-2 w-full max-w-md">
-                          <span>{apiKeyFieldLabel}</span>
+                          <span className="field-label-strong">{apiKeyFieldLabel}</span>
                           <input
                                 className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
                             type={selectedProviderIsHyperliquid ? "text" : "password"}
@@ -8528,14 +8534,14 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                         <div className="connect-account-actions">
                           <button
-                            className="settings-secondary-btn connect-account-secondary"
+                            className="portfolio-command-primary-cta subtle connect-account-secondary"
                             onClick={() => setIsConnectWindowOpen(false)}
                             disabled={isSyncingAccount}
                           >
                             {connectPromptMode === "onboarding" ? "Skip for now" : "Cancel"}
                           </button>
                           <button
-                            className="settings-primary-btn connect-account-primary"
+                            className="portfolio-command-primary-cta subtle primary-emphasis connect-account-primary"
                             onClick={connectAccount}
                             disabled={isSyncingAccount || !accountForm.apiKey.trim() || (showApiSecretField && !accountForm.apiSecret.trim())}
                           >

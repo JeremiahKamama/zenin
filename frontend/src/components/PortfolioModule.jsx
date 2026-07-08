@@ -814,7 +814,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     id: "portfolio-baseline",
     price: chartMode === "equity" ? initialBalance : 0,
     title: chartMode === "equity" ? "Start" : "Break-even",
-    color: "rgba(148,163,184,0.72)"
+    color: "rgba(160, 160, 160, 0.72)"
   }], [chartMode, initialBalance]);
 
   const portfolioChartOptions = useMemo(() => ({
@@ -2913,7 +2913,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   options={donutOptions}
                   series={[100 - totalDrift, totalDrift]}
                   type="donut"
-                  width={200}
                 />
               </div>
               <div className="portfolio-v2-flow-mini-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
@@ -3517,10 +3516,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <div className="journal-stat-card"><span className="journal-stat-label">Quantity</span><span className="journal-stat-value">{Number(selectedHolding.quantity || 0).toFixed(2)}</span></div>
               <div className="journal-stat-card"><span className="journal-stat-label">Price</span><span className="journal-stat-value">{formatMoney(selectedHolding.price)}</span></div>
             </div>
-            <div style={{ borderTop: "1px solid rgba(148,163,184,0.14)", paddingTop: "10px", marginTop: "10px" }}>
+            <div style={{ borderTop: "1px solid rgba(160, 160, 160, 0.14)", paddingTop: "10px", marginTop: "10px" }}>
               <div style={{ fontSize: "12px", color: "var(--color-data-slate)", marginBottom: "6px" }}>Tax Lot Optimizer</div>
               <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "var(--color-data-slate-bright)", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
+                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "var(--color-data-slate-bright)", border: "1px solid rgba(160, 160, 160, 0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
                   <option value="fifo">FIFO</option>
                   <option value="lifo">LIFO</option>
                   <option value="hifo">HIFO</option>

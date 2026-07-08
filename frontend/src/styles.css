@@ -986,10 +986,59 @@ button {
   .app-layout {
     padding: 0 var(--workspace-padding-x-ultrawide);
     gap: 48px;
-    max-width: 2400px;
+    max-width: 3000px;
     margin: 0 auto;
   }
 }
+
+/* ── Grid expansion for large/ultrawide workspaces ───────────────────────
+   Page-level width caps are removed (Phase 1); these overrides raise the
+   content+rail ceilings so the rail keeps growing instead of capping. */
+@media (min-width: 1600px) {
+  .home-v2-main-grid,
+  .portfolio-v2-main-grid,
+  .journal-v2-main-grid,
+  .home-exec-top-grid,
+  .home-exec-main-grid {
+    grid-template-columns: minmax(0, 2.4fr) minmax(360px, 1fr);
+  }
+}
+
+@media (min-width: 1920px) {
+  .home-v2-main-grid,
+  .portfolio-v2-main-grid,
+  .journal-v2-main-grid,
+  .home-exec-top-grid,
+  .home-exec-main-grid {
+    grid-template-columns: minmax(0, 2.6fr) minmax(420px, 1fr);
+  }
+
+  .analytics-factor-main,
+  .analytics-macro-grid,
+  .analytics-commodity-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
+  }
+
+  .analytics-macro-topline,
+  .analytics-options-topline {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+  }
+}
+
+/* Reserved shell slot: right-hand context panel. Introducible later without
+   restructuring .app-layout — .main-content already has flex:1; min-width:0. */
+.context-panel {
+  flex: 0 0 var(--context-panel-width, 360px);
+  min-width: 0;
+  align-self: stretch;
+}
+
+@media (min-width: 1920px) {
+  .context-panel {
+    flex-basis: 380px;
+  }
+}
+
 
 .app-access-loading {
   min-height: 100vh;
@@ -1019,8 +1068,8 @@ button {
 }
 
 .analytics-layout {
-  width: min(100%, 1460px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 22px clamp(12px, 2vw, 28px) 36px;
   display: flex;
   flex-direction: column;
@@ -1890,6 +1939,37 @@ button {
   outline-offset: 2px;
 }
 
+/* Compact secondary action — recedes next to a primary CTA. Monochrome,
+   reused across empty-state scaffolds and inline panel actions (Brandv2). */
+.settings-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 3px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-medium);
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.settings-mini-btn:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.settings-mini-btn:focus-visible {
+  outline: 2px solid var(--color-focus, #FFFFFF);
+  outline-offset: 2px;
+}
+
 /* Keep spacing inside the connect nudge consistent. */
 .connect-empty-actions .settings-primary-btn,
 .connect-empty-actions .settings-secondary-btn {
@@ -2350,6 +2430,190 @@ html.light-theme-active .settings-secondary-btn:hover {
   color: var(--color-text-muted);
   font-size: 0.76rem;
   font-style: italic;
+}
+
+/* ── Briefing guided workspace (empty / first-run state) ───────────
+   Matches the populated .briefing-section card vocabulary so the empty
+   state reads as intentional scaffolding, not raw markup. Monochrome,
+   semantic tokens only — no cyan, no gradients (Brandv2). */
+.briefing-guided-workspace {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.briefing-guided-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-medium);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-surface-elevated) 40%, transparent);
+}
+
+.briefing-guided-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 2px;
+  flex: 1 1 auto;
+}
+
+.briefing-guided-placeholder p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+/* The final "Quick Prompt Templates" block is the conversion CTA — give it a
+   subtle primary emphasis via a left accent rule and a stronger surface,
+   without introducing color. */
+.briefing-guided-cta {
+  grid-column: 1 / -1;
+  border-color: var(--color-border-strong);
+  background: color-mix(in srgb, var(--color-surface-elevated) 72%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-interactive);
+}
+
+.briefing-guided-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.briefing-guided-generate {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* Narrow viewports collapse to a single column. */
+@media (max-width: 880px) {
+  .briefing-guided-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Decision threads guided workspace (empty / first-run state) ────
+   Shares the briefing guided card vocabulary so both empty states read
+   as the same intentional scaffold. Monochrome, semantic tokens only. */
+.decision-guided-workspace {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.decision-guided-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-medium);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-surface-elevated) 40%, transparent);
+}
+
+/* The primary "Start a Decision" CTA spans the full width and carries the
+   left accent rule — the monochrome emphasis cue reused from the briefing. */
+.decision-guided-cta {
+  grid-column: 1 / -1;
+  border-color: var(--color-border-strong);
+  background: color-mix(in srgb, var(--color-surface-elevated) 72%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-interactive);
+}
+
+.decision-guided-create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.decision-guided-create-row .decision-thread-input {
+  flex: 1 1 220px;
+}
+.decision-guided-create-row .decision-thread-input-symbol {
+  flex: 0 0 120px;
+}
+.decision-guided-create-row .decision-thread-select {
+  flex: 0 0 auto;
+}
+.decision-guided-create-row .settings-primary-btn {
+  flex: 0 0 auto;
+}
+
+.decision-guided-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 2px;
+  flex: 1 1 auto;
+}
+
+.decision-guided-placeholder p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.decision-guided-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.decision-guided-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Statistics: three-up metric strip inside the card. Echoes the workspace
+   MetricStrip — strong value over a muted, tracked label. */
+.decision-guided-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 2px;
+  border: 1px solid var(--color-border-medium);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-border-medium);
+}
+
+.decision-guided-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--color-surface-elevated) 40%, transparent);
+}
+
+.decision-guided-stats strong {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  line-height: 1;
+}
+
+.decision-guided-stats span {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 880px) {
+  .decision-guided-workspace {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Decision threads module */
@@ -10781,8 +11045,8 @@ html.light-theme-active .settings-secondary-btn:hover {
   --options-exec-green: var(--color-success);
   --options-exec-red: var(--color-danger);
   --options-exec-amber: var(--color-warning);
-  width: min(100%, 1460px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 22px clamp(12px, 2vw, 28px) 36px;
   gap: 16px;
   color: var(--options-exec-text);
@@ -14571,6 +14835,7 @@ body:not(.light-theme-active) .indicator-metric-modal {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .journal-debrief-sync-box {
@@ -15673,8 +15938,8 @@ body.light-theme-active .journal-v2-heat-stats .negative {
 
 /* Premium Journal */
 .journal-page {
-  width: min(100%, 1400px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 24px;
   display: grid;
   gap: 16px;
@@ -17636,8 +17901,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
 
 /* Premium Home / Portfolio Overview */
 .home-v2 {
-  width: min(100%, 1400px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 24px;
   display: grid;
   gap: 24px;
@@ -18267,8 +18532,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
 
 .home-exec {
   --home-exec-ease: cubic-bezier(0.23, 1, 0.32, 1);
-  width: min(100%, 1460px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 22px clamp(12px, 2vw, 28px) 36px;
   display: grid;
   gap: 20px;
@@ -19165,7 +19430,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-metrics-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .home-exec-metric-row {
@@ -20314,8 +20579,8 @@ body.light-theme-active .home-v2-attention-card .home-v3-btn.secondary {
 
 /* Market Context detail page */
 .market-context-page {
-  width: min(100%, 1500px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 18px 20px;
   display: grid;
   gap: 12px;
@@ -21018,7 +21283,7 @@ body.light-theme-active .market-mover-tabs {
 
 /* Market Context refinement */
 .market-context-page {
-  width: min(100%, 1560px);
+  width: 100%;
   padding: 16px 18px;
   gap: 14px;
   color: var(--color-text-secondary);
@@ -22696,8 +22961,8 @@ body.light-theme-active .tax-v2-global-total strong {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  width: min(100%, 1480px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 8px 0 32px;
   color: var(--home-exec-text);
 }
@@ -23655,7 +23920,7 @@ body.light-theme-active .tax-v2-global-total strong {
 }
 
 .home-exec-metrics-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .home-exec-market-context .home-exec-market-grid {
@@ -23907,8 +24172,8 @@ html.portfolio-active,
   --portfolio-exec-green: #10b981;
   --portfolio-exec-red: #ef4444;
   --portfolio-exec-amber: #f59e0b;
-  width: min(100%, 1480px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -24129,7 +24394,7 @@ html.portfolio-active,
 
 .portfolio-exec-hero-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px 40px;
 }
 
@@ -24930,8 +25195,8 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
   --home-draft-green: #10b981;
   --home-draft-red: #ef4444;
   --home-draft-amber: #f59e0b;
-  width: min(100%, 1400px);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 0 0 40px;
   gap: 0;
   color: var(--home-draft-text);
@@ -25636,7 +25901,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 
 /* Superdesign Home compact card sizing */
 .view-container.home-dashboard.home-exec {
-  width: min(100%, 1320px);
+  width: 100%;
   padding-bottom: 28px;
 }
 
@@ -27691,8 +27956,8 @@ body.light-theme-active .tax-workbench-inline-select input {
 
 /* Tax Estimator Workbench Visual Match Pass */
 .tax-workbench {
-  max-width: 1430px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   padding-top: 4px;
 }
 
@@ -30891,7 +31156,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 
 /* Tax Estimator Reference Command Desk */
 .tax-workbench {
-  max-width: 1500px;
+  max-width: none;
 }
 
 .tax-workbench-shell {
@@ -31606,17 +31871,49 @@ body.light-theme-active .tax-workbench-primary-btn {
   margin-top: 4px;
 }
 
+/* Action buttons now match the Portfolio "Connect Account" CTA
+   (portfolio-command-primary-cta) so the overlay feels part of the same
+   surface and stays theme-aware. `subtle` keeps them from stretching full
+   width inside the form. */
 .connect-account-primary,
 .connect-account-secondary {
   min-height: 42px;
 }
-
-.connect-account-primary {
+.connect-account-actions .portfolio-command-primary-cta {
+  min-height: 42px;
+  font-size: 0.84rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 0 18px;
+}
+.connect-account-actions .portfolio-command-primary-cta.subtle {
+  min-width: 138px;
+}
+.connect-account-actions .portfolio-command-primary-cta.primary-emphasis {
   min-width: 190px;
 }
+.connect-account-actions .portfolio-command-primary-cta:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
-.connect-account-secondary {
-  min-width: 138px;
+/* Field labels (Provider / Account label / Wallet address) read as labels,
+   not values — so they're bolded while the status-strip value is not. */
+.connect-account-body .field-label-strong {
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* "Verified watch-only address" / sync-help should NOT be bold — it's a
+   status value, not a heading. Scoped so other <strong>s are untouched. */
+.connect-account-status-strip .status-value {
+  color: var(--color-text-primary);
+  font-size: 0.92rem;
+  font-weight: 480;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
 }
 
 .connect-account-window.is-onboarding .close-btn {
@@ -32534,7 +32831,7 @@ body.light-theme-active .journal-review-mode-banner {
 
 /* Portfolio Command Center */
 .portfolio-command-page {
-  max-width: 1520px;
+  max-width: none;
   gap: 14px;
 }
 
@@ -32806,14 +33103,14 @@ body.light-theme-active .journal-review-mode-banner {
 .portfolio-command-drift-visual {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
   gap: 8px;
   padding: 16px 12px 12px;
 }
 
 .portfolio-command-drift-visual .apexcharts-canvas,
 .portfolio-command-drift-visual svg {
-  max-width: 228px !important;
+  width: 100% !important;
+  max-width: none !important;
 }
 
 .portfolio-command-drift-legend {
@@ -35600,7 +35897,7 @@ body.light-theme-active .analytics-commodity-controls button {
 .guest-workspace-preview {
   display: grid;
   gap: 16px;
-  max-width: 1180px;
+  max-width: none;
 }
 
 .guest-data-banner {
@@ -36549,14 +36846,14 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .journal-decision-layer {
-  grid-template-columns: minmax(260px, 1.2fr) minmax(140px, 0.42fr) minmax(340px, 1.5fr);
+  grid-template-columns: minmax(260px, 1.2fr) minmax(128px, 0.36fr) minmax(340px, 1.5fr);
 }
 
 .journal-decision-score {
   display: grid;
   align-content: center;
   gap: 4px;
-  padding: 12px;
+  padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   background: color-mix(in srgb, var(--color-surface-elevated) 62%, transparent);
@@ -36564,7 +36861,7 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 
 .journal-decision-score strong {
   color: var(--color-text-primary);
-  font-size: 30px;
+  font-size: 26px;
   line-height: 1;
 }
 
@@ -36573,11 +36870,24 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   font-size: 11px;
 }
 
+/* Action buttons sit at the bottom-right of the primary column and match the
+   header Save Snapshot button height (40px) so the two CTAs read as one set. */
 .journal-decision-actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.journal-decision-actions .journal-btn {
+  height: 40px;
+  min-height: 40px;
+  min-width: 146px;
+  padding: 0 14px;
+  white-space: nowrap;
 }
 
 .tax-scenario-workbench {
@@ -37257,8 +37567,8 @@ body.page-dark-theme .search-type-buttons {
   flex-direction: column;
   gap: 0;
   width: 100%;
-  max-width: 1400px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
 }
 
 .tax-subview-tabs {
