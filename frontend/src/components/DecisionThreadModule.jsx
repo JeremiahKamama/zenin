@@ -328,7 +328,7 @@ export function DecisionThreadModule({
               className={`settings-mini-btn ${showOutcomes ? "active" : ""}`}
               onClick={() => setShowOutcomes((value) => !value)}
             >
-              {showOutcomes ? "Hide outcomes" : "Outcomes"}
+              {showOutcomes ? "Hide trade outcomes" : "Trade Outcomes"}
             </button>
             <button type="button" className="settings-primary-btn" disabled={creating || isGuestUser} onClick={handleCreate}>
               {creating ? "Creating…" : "New decision"}
@@ -336,6 +336,10 @@ export function DecisionThreadModule({
           </InlineControlGroup>
         }
       />
+
+      <p className="decision-loop-glossary" aria-label="Loop glossary">
+        <strong>Decision</strong> — an idea you&apos;re weighing · <strong>Trade</strong> — the action you journal · <strong>Outcome</strong> — the review result (win / loss / breakeven / avoided / missed)
+      </p>
 
       {feedback ? (
         <div className="decision-error-state" role="status" aria-live="polite">
@@ -347,7 +351,7 @@ export function DecisionThreadModule({
       {showOutcomes ? (
         <section className="decision-outcomes-panel">
           <div className="decision-outcomes-head">
-            <strong>Reviewed outcomes</strong>
+            <strong>Trade outcomes</strong>
             <InlineControlGroup>
               <select value={outcomeFilter} onChange={(e) => setOutcomeFilter(e.target.value)}>
                 <option value="all">All results</option>
@@ -359,7 +363,7 @@ export function DecisionThreadModule({
             </InlineControlGroup>
           </div>
           <div className="decision-outcomes-summary">
-            <div><strong>{outcomes.aggregated.total}</strong><span>Reviewed</span></div>
+            <div><strong>{outcomes.aggregated.total}</strong><span>Outcomes</span></div>
             <div><strong className={outcomes.aggregated.totalPnl >= 0 ? "positive" : "negative"}>{outcomes.aggregated.totalPnl >= 0 ? "+" : ""}${outcomes.aggregated.totalPnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong><span>Total PnL</span></div>
             <div><strong className="positive">{outcomes.aggregated.winCount}</strong><span>Wins</span></div>
             <div><strong className="negative">{outcomes.aggregated.lossCount}</strong><span>Losses</span></div>
@@ -370,7 +374,7 @@ export function DecisionThreadModule({
                 <li key={thread.id} className="decision-outcome-row">
                   <div>
                     <strong>{thread.title}</strong>
-                    <span>{thread.symbol || "No symbol"} · {thread.outcome?.result || "reviewed"}</span>
+                    <span>{thread.symbol || "No symbol"} · {thread.outcome?.result || "no outcome"}</span>
                   </div>
                   {thread.outcome?.pnl != null ? (
                     <span className={`decision-outcome-pnl ${Number(thread.outcome.pnl) >= 0 ? "positive" : "negative"}`}>
@@ -381,7 +385,7 @@ export function DecisionThreadModule({
               ))}
             </ul>
           ) : (
-            <p className="decision-outcomes-empty">No reviewed outcomes yet. Mark decisions as reviewed to build this history.</p>
+            <p className="decision-outcomes-empty">No trade outcomes yet. Mark decisions as reviewed to record an outcome.</p>
           )}
         </section>
       ) : null}
@@ -672,7 +676,7 @@ export function DecisionThreadModule({
 
             {selectedThread.status === "review_due" || selectedThread.status === "journaled" ? (
               <div className="decision-thread-review-form">
-                <h4>Record review outcome</h4>
+                <h4>Record outcome</h4>
                 <InlineControlGroup>
                   <select
                     value={reviewDraft.result}
@@ -709,7 +713,7 @@ export function DecisionThreadModule({
                   disabled={!reviewDraft.result}
                   onClick={() => handleMarkReviewed(selectedThread)}
                 >
-                  Mark reviewed
+                  Record outcome
                 </button>
               </div>
             ) : null}
