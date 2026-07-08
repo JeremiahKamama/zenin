@@ -2581,7 +2581,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                          : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                          : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
                             {v || "—"}
@@ -2625,7 +2625,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                          : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                          : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
                             {v || "—"}
@@ -2667,7 +2667,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                           : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                          : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                          : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
                             {v || "—"}
@@ -2706,7 +2706,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   <div style={{ overflowX: "auto" }}>
                     <table className="analytics-inline-table">
                       <thead>
-                        <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                        <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                           <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Instrument</th>
                           <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Delta</th>
                           <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Gamma</th>
@@ -2732,7 +2732,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                   <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: "bold", color: barColor }}>{num.toFixed(3)}</span>
                                 </div>
-                                <div style={{ position: "relative", height: 6, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.08)" }}>
+                                <div style={{ position: "relative", height: 6, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(160, 160, 160, 0.08)" }}>
                                   <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: barGrad, borderRadius: 99, transition: "width 0.3s ease" }} />
                                 </div>
                               </div>
@@ -2742,7 +2742,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           return (
                             <tr
                               key={`grk-row-${i}`}
-                              style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
+                              style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.06)", transition: "background 0.15s" }}
                               onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-hover)"}
                               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                             >
@@ -2778,7 +2778,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   <div style={{ overflowX: "auto" }}>
                     <table className="analytics-inline-table">
                       <thead>
-                        <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                        <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                           <th style={{ padding: "8px 12px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Asset</th>
                           <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>Strike</th>
                           <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expiry</th>
@@ -2796,7 +2796,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           const isCall = typeRaw.includes("C") || typeRaw.includes("CALL");
 
                           let moneyness = "—";
-                          let moneyStyle = { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.12)" };
+                          let moneyStyle = { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.12)" };
                           if (spotNum > 0 && Number.isFinite(strikeNum)) {
                             if (isCall) {
                               moneyness = strikeNum < spotNum ? "ITM" : strikeNum > spotNum ? "OTM" : "ATM";
@@ -2818,12 +2818,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                             : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
                             : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                            : { color: "var(--color-data-slate)", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
+                            : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
 
                           return (
                             <tr
                               key={`oi-row-${i}`}
-                              style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
+                              style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.06)", transition: "background 0.15s" }}
                               onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-hover)"}
                               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                             >
@@ -3401,7 +3401,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 style={{
                                   padding: "2px 8px",
                                   borderRadius: 999,
-                                  border: "1px solid rgba(148,163,184,0.25)",
+                                  border: "1px solid rgba(160, 160, 160, 0.25)",
                                   background: selected ? "rgba(255,255,255,0.16)" : "rgba(5,5,5,0.4)",
                                   color: selected ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                                   fontSize: 11,
@@ -3561,7 +3561,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 style={{
                                   padding: "2px 8px",
                                   borderRadius: 999,
-                                  border: "1px solid rgba(148,163,184,0.25)",
+                                  border: "1px solid rgba(160, 160, 160, 0.25)",
                                   background: selected ? "rgba(255,255,255,0.16)" : "rgba(5,5,5,0.4)",
                                   color: selected ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                                   fontSize: 11,
@@ -3647,7 +3647,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <select
                         value={selectedMMFCountry}
                         onChange={(e) => setSelectedMMFCountry(e.target.value)}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                       >
                         <option value="ALL">All Countries</option>
                         <option value="KE">Kenya (KE)</option>
@@ -3725,7 +3725,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <select
                         value={selectedREITCountry}
                         onChange={(e) => setSelectedREITCountry(e.target.value)}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                       >
                         <option value="ALL">All Countries</option>
                         <option value="KE">Kenya (KE)</option>
@@ -3811,7 +3811,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           style={{
                             padding: "6px 10px",
                             borderRadius: 8,
-                            border: `1px solid ${selectedMarketView === item.key ? "rgba(255,255,255,0.5)" : "rgba(148,163,184,0.2)"}`,
+                            border: `1px solid ${selectedMarketView === item.key ? "rgba(255,255,255,0.5)" : "rgba(160, 160, 160, 0.2)"}`,
                             background: selectedMarketView === item.key ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)",
                             color: selectedMarketView === item.key ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                             cursor: "pointer",
@@ -3952,7 +3952,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 padding: "4px 8px",
                                 borderRadius: 6,
                                 background: "rgba(5,5,5,0.7)",
-                                border: "1px solid rgba(148,163,184,0.2)",
+                                border: "1px solid rgba(160, 160, 160, 0.2)",
                                 color: annualReturnsPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                                 cursor: annualReturnsPageIndex === 0 ? "default" : "pointer",
                                 fontSize: 12
@@ -3967,7 +3967,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 padding: "4px 8px",
                                 borderRadius: 6,
                                 background: "rgba(5,5,5,0.7)",
-                                border: "1px solid rgba(148,163,184,0.2)",
+                                border: "1px solid rgba(160, 160, 160, 0.2)",
                                 color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                                 cursor: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "default" : "pointer",
                                 fontSize: 12
@@ -4018,7 +4018,6 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 <ControlPanel
                   title="Dashboard controls"
                   subtitle="Choose the geography, indicator family, display mode, and timeframe."
-                  footer={<button type="button" className="analytics-btn primary" onClick={() => setMacroView("chart")}>Update Dashboard</button>}
                 >
                   <div className="analytics-control-column">
                     <div className="analytics-card-label">Geography</div>
@@ -4198,7 +4197,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         multiple
                         value={compareGeos}
                         onChange={(e) => setCompareGeos(Array.from(e.target.selectedOptions).map((o) => o.value))}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
+                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
                       >
                         {macroGeographies
                           .filter((g) => selectedGeoType === "Global" ? g.type === "Global" : g.type === selectedGeoType)
@@ -4212,7 +4211,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             key={`cmp-chip-${code}`}
                             type="button"
                             onClick={() => setCompareGeos((prev) => prev.filter((c) => c !== code))}
-                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(5,5,5,0.55)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
+                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(160, 160, 160, 0.25)", background: "rgba(5,5,5,0.55)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
                           >
                             {code} ×
                           </button>
@@ -4236,11 +4235,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No map rows."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         {(macroIndicators || []).map((ind) => <option key={`map-ind-${ind.code}`} value={ind.code}>{ind.name || ind.code}</option>)}
                       </select>
-                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="choropleth">Choropleth</option>
                         <option value="bubble">Bubble</option>
                       </select>
@@ -4261,19 +4260,19 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No calendar events."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Importance</option>
                         <option value="high">High</option>
                         <option value="medium">Medium</option>
                         <option value="low">Low</option>
                       </select>
-                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Geographies</option>
                         {macroGeographies.map((geo) => <option key={`cal-geo-${geo.code}`} value={geo.code}>{geo.code}</option>)}
                       </select>
-                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Types</option>
                         {macroCategoryOptions.map((cat) => <option key={`cal-type-${cat.key}`} value={cat.key}>{cat.label}</option>)}
                       </select>
@@ -4297,13 +4296,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No rankings rows."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">Scope: All</option>
                         <option value="g20">G20</option>
                         <option value="dm">Developed</option>
                         <option value="em">Emerging</option>
                       </select>
-                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="value_desc">Sort: Highest</option>
                         <option value="value_asc">Sort: Lowest</option>
                         <option value="delta_desc">Sort: Delta</option>
@@ -4329,14 +4328,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <button
                         type="button"
                         onClick={() => setForecastToggle((v) => !v)}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: forecastToggle ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: forecastToggle ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(160, 160, 160, 0.25)", background: forecastToggle ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: forecastToggle ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
                       >
                         Forecast {forecastToggle ? "On" : "Off"}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConsensusVisible((v) => !v)}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.25)", background: consensusVisible ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: consensusVisible ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(160, 160, 160, 0.25)", background: consensusVisible ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: consensusVisible ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
                       >
                         Consensus {consensusVisible ? "Shown" : "Hidden"}
                       </button>
@@ -4365,7 +4364,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 <div style={{ overflowX: "auto" }}>
                   <table className="analytics-inline-table">
                     <thead>
-                      <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                      <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                         <th style={{ padding: "8px 16px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Indicator</th>
                         <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Market</th>
                         <th style={{ padding: "8px 8px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right" }}>As-Of</th>
@@ -4404,7 +4403,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         return (
                           <tr
                             key={`macro-row-${idx}`}
-                            style={{ borderBottom: "1px solid rgba(148,163,184,0.06)", transition: "background 0.15s" }}
+                            style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.06)", transition: "background 0.15s" }}
                             onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-hover)"}
                             onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                           >
@@ -4419,7 +4418,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
                             {/* As-of period */}
                             <td style={{ padding: "10px 8px", textAlign: "right" }}>
-                              <span style={{ fontFamily: "monospace", fontSize: 10, padding: "2px 5px", borderRadius: 3, background: "rgba(148,163,184,0.06)", color: "var(--color-text-secondary)", border: "1px solid rgba(148,163,184,0.12)" }}>
+                              <span style={{ fontFamily: "monospace", fontSize: 10, padding: "2px 5px", borderRadius: 3, background: "rgba(160, 160, 160, 0.06)", color: "var(--color-text-secondary)", border: "1px solid rgba(160, 160, 160, 0.12)" }}>
                                 {asOf}
                               </span>
                             </td>
@@ -4775,7 +4774,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       flex: "1 1 280px",
                       minWidth: 220,
                       background: "rgba(5,5,5,0.75)",
-                      border: "1px solid rgba(148,163,184,0.2)",
+                      border: "1px solid rgba(160, 160, 160, 0.2)",
                       color: "var(--color-data-slate-bright)",
                       borderRadius: 8,
                       padding: "8px 10px",
@@ -4862,7 +4861,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         padding: "4px 8px",
                         borderRadius: 6,
                         background: "rgba(5,5,5,0.7)",
-                        border: "1px solid rgba(148,163,184,0.2)",
+                        border: "1px solid rgba(160, 160, 160, 0.2)",
                         color: commodityAssetsPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                         cursor: commodityAssetsPageIndex === 0 ? "default" : "pointer",
                         fontSize: 12
@@ -4878,7 +4877,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         padding: "4px 8px",
                         borderRadius: 6,
                         background: "rgba(5,5,5,0.7)",
-                        border: "1px solid rgba(148,163,184,0.2)",
+                        border: "1px solid rgba(160, 160, 160, 0.2)",
                         color: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                         cursor: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "default" : "pointer",
                         fontSize: 12
@@ -4940,7 +4939,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           padding: "4px 8px",
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
-                          border: "1px solid rgba(148,163,184,0.2)",
+                          border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: commodityPriceSeriesPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: commodityPriceSeriesPageIndex === 0 ? "default" : "pointer",
                           fontSize: 12
@@ -4956,7 +4955,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           padding: "4px 8px",
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
-                          border: "1px solid rgba(148,163,184,0.2)",
+                          border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "default" : "pointer",
                           fontSize: 12
@@ -4992,7 +4991,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Flow Ledger</div>
                       <table className="analytics-inline-table">
                         <thead>
-                          <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                          <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                             <th style={{ padding: "6px 4px" }}>Date</th>
                             <th style={{ padding: "6px 4px" }}>Allocation Type</th>
                             <th style={{ padding: "6px 4px", textAlign: "right" }}>Net Flow</th>
@@ -5004,7 +5003,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             const isPositive = valNum > 0;
                             const isNegative = valNum < 0;
                             return (
-                              <tr key={`fl-row-${idx}`} style={{ borderBottom: "1px solid rgba(148,163,184,0.08)" }}>
+                              <tr key={`fl-row-${idx}`} style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.08)" }}>
                                 <td style={{ padding: "8px 4px", color: "var(--color-text-secondary)", fontSize: 11 }}>{row.date}</td>
                                 <td style={{ padding: "8px 4px", fontWeight: "bold" }}>
                                   <span style={{
@@ -5060,7 +5059,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 <span style={{ color: "var(--color-text-primary)", fontWeight: "bold" }}>{row.type}</span>
                                 <span style={{ color: "var(--color-text-secondary)" }}>{row.date}</span>
                               </div>
-                              <div style={{ position: "relative", height: 10, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(148,163,184,0.1)" }}>
+                              <div style={{ position: "relative", height: 10, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(160, 160, 160, 0.1)" }}>
                                 <div
                                   style={{
                                     position: "absolute",
@@ -5072,7 +5071,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                     borderRadius: 99
                                   }}
                                 />
-                                <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: "100%", background: "rgba(148,163,184,0.3)" }} />
+                                <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: "100%", background: "rgba(160, 160, 160, 0.3)" }} />
                               </div>
                               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: isPositive ? "var(--color-data-up)" : "var(--color-data-down)" }}>
                                 <span>{isPositive ? "NET BUYING" : "NET SELLING"}</span>
@@ -5115,7 +5114,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           padding: "4px 8px",
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
-                          border: "1px solid rgba(148,163,184,0.2)",
+                          border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: commoditySeasonalityPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: commoditySeasonalityPageIndex === 0 ? "default" : "pointer",
                           fontSize: 12
@@ -5131,7 +5130,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           padding: "4px 8px",
                           borderRadius: 6,
                           background: "rgba(5,5,5,0.7)",
-                          border: "1px solid rgba(148,163,184,0.2)",
+                          border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "default" : "pointer",
                           fontSize: 12
@@ -5197,7 +5196,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Curve Ladder</div>
                       <table className="analytics-inline-table">
                         <thead>
-                          <tr style={{ borderBottom: "1px solid rgba(148,163,184,0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
+                          <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                             <th style={{ padding: "6px 4px" }}>Contract</th>
                             <th style={{ padding: "6px 4px", textAlign: "right" }}>Price</th>
                             <th style={{ padding: "6px 4px", textAlign: "right" }}>Spread</th>
@@ -5212,8 +5211,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               <tr
                                 key={`cv-row-${idx}`}
                                 style={{
-                                  borderBottom: "1px solid rgba(148,163,184,0.08)",
-                                  background: isPrompt ? "rgba(56,189,248,0.06)" : "transparent",
+                                  borderBottom: "1px solid rgba(160, 160, 160, 0.08)",
+                                  background: isPrompt ? "rgba(255,255,255,0.06)" : "transparent",
                                   fontWeight: isPrompt ? "bold" : "normal",
                                 }}
                               >
@@ -5284,9 +5283,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
                               <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: "visible" }}>
                                 {/* Horizontal gridlines */}
-                                <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
-                                <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
-                                <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="rgba(148,163,184,0.06)" strokeDasharray="3,3" />
+                                <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="rgba(160, 160, 160, 0.06)" strokeDasharray="3,3" />
+                                <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="rgba(160, 160, 160, 0.06)" strokeDasharray="3,3" />
+                                <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="rgba(160, 160, 160, 0.06)" strokeDasharray="3,3" />
 
                                 {/* Curve line */}
                                 <path d={linePath} fill="none" stroke="var(--color-data-primary)" strokeWidth="2" />
@@ -5443,7 +5442,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     </button>
                   </div>
 
-                  <div style={{ position: "relative", paddingLeft: 20, borderLeft: "2px solid rgba(148, 163, 184, 0.15)", margin: "8px 0 8px 10px", display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ position: "relative", paddingLeft: 20, borderLeft: "2px solid rgba(160, 160, 160, 0.15)", margin: "8px 0 8px 10px", display: "flex", flexDirection: "column", gap: 14 }}>
                     {(() => {
                       const calEvents = (commoditiesData.calendar || []).map((row, idx) => ({
                         id: row.id || `cmd-cal-${idx}`,
@@ -5493,7 +5492,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               }}
                             />
 
-                            <div style={{ display: "flex", flexDirection: "column", gap: 3, background: "var(--color-surface-hover)", border: "1px solid rgba(148,163,184,0.08)", borderRadius: 6, padding: "8px 10px" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3, background: "var(--color-surface-hover)", border: "1px solid rgba(160, 160, 160, 0.08)", borderRadius: 6, padding: "8px 10px" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                                 <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)" }}>{row.event}</div>
                                 <span style={{
@@ -5501,9 +5500,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   fontWeight: "bold",
                                   padding: "2px 5px",
                                   borderRadius: 4,
-                                  background: isHigh ? "rgba(239,68,68,0.1)" : "rgba(148,163,184,0.08)",
+                                  background: isHigh ? "rgba(239,68,68,0.1)" : "rgba(160, 160, 160, 0.08)",
                                   color: isHigh ? "var(--color-data-red-bright)" : "var(--color-text-secondary)",
-                                  border: isHigh ? "1px solid rgba(239,68,68,0.2)" : "1px solid rgba(148,163,184,0.15)"
+                                  border: isHigh ? "1px solid rgba(239,68,68,0.2)" : "1px solid rgba(160, 160, 160, 0.15)"
                                 }}>
                                   {importanceBadge}
                                 </span>
@@ -6996,7 +6995,7 @@ function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore
             style={{
               padding: "6px 12px",
               borderRadius: 8,
-              border: `1px solid ${selectedGeoType === type ? "rgba(255,255,255,0.5)" : "rgba(148,163,184,0.2)"}`,
+              border: `1px solid ${selectedGeoType === type ? "rgba(255,255,255,0.5)" : "rgba(160, 160, 160, 0.2)"}`,
               background: selectedGeoType === type ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)",
               color: selectedGeoType === type ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
               cursor: "pointer",
@@ -7055,7 +7054,7 @@ function GeographySearch({
         placeholder={`Search ${selectedGeoType.toLowerCase()}...`}
         value={searchQuery}
         onChange={(e) => onSearchChange(e.target.value)}
-        style={{ width: "100%", background: "rgba(5,5,5,0.7)", border: "1px solid rgba(148,163,184,0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
+        style={{ width: "100%", background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
       />
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
         {recentGeoCodes.slice(0, 5).map((code) => (
@@ -7063,7 +7062,7 @@ function GeographySearch({
             key={`recent-${code}`}
             type="button"
             onClick={() => onSelectGeo(code)}
-            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(5,5,5,0.5)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
+            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(160, 160, 160, 0.25)", background: "rgba(5,5,5,0.5)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
           >
             Recent: {code}
           </button>
@@ -7083,8 +7082,8 @@ function GeographySearch({
                 gap: 8,
                 borderRadius: 8,
                 padding: "7px 8px",
-                border: `1px solid ${active ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.16)"}`,
-                background: active ? "rgba(56,189,248,0.12)" : "rgba(5,5,5,0.45)"
+                border: `1px solid ${active ? "rgba(255,255,255,0.5)" : "rgba(160, 160, 160, 0.16)"}`,
+                background: active ? "rgba(255,255,255,0.12)" : "rgba(5,5,5,0.45)"
               }}
             >
               <button
