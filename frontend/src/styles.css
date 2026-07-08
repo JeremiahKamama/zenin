@@ -30849,7 +30849,6 @@ body.light-theme-active .tax-workbench-primary-btn {
   .analytics-equities-watch-row,
   .analytics-equities-movers-row,
   .analytics-equities-risk-row {
-    grid-template-columns: 1fr;
     gap: 4px;
   }
 
