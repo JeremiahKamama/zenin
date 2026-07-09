@@ -33843,6 +33843,140 @@ body.light-theme-active .journal-review-mode-banner {
   }
 }
 
+/* ── Workspace Scope selector (account-level context; coexists with asset-class filter) ── */
+.workspace-scope {
+  position: relative;
+  display: inline-flex;
+}
+
+.workspace-scope-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  padding: 0 12px;
+  height: 30px;
+  cursor: pointer;
+}
+
+.workspace-scope-trigger:hover {
+  border-color: var(--color-border-strong, var(--color-border-subtle));
+  color: var(--color-text-primary);
+}
+
+.workspace-scope-trigger-label {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-scope-caret {
+  font-size: 0.7em;
+  opacity: 0.7;
+}
+
+.workspace-scope-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1200;
+  min-width: 240px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  box-shadow: var(--color-shadow, 0 12px 32px rgba(0, 0, 0, 0.45));
+}
+
+.workspace-scope-group + .workspace-scope-option,
+.workspace-scope-group {
+  margin-top: 2px;
+}
+
+.workspace-scope-group-label {
+  padding: 6px 8px 2px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted, var(--color-text-secondary));
+}
+
+.workspace-scope-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text-primary);
+  font-size: 0.82rem;
+}
+
+.workspace-scope-option:hover {
+  background: var(--color-surface-card);
+}
+
+.workspace-scope-option.is-selected {
+  background: var(--color-surface-card);
+}
+
+.workspace-scope-option-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-scope-option-meta {
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+}
+
+.workspace-scope-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--color-text-secondary);
+}
+
+.workspace-scope-dot--success {
+  background: var(--color-data-positive, #4ade80);
+}
+
+.workspace-scope-dot--sync_unavailable,
+.workspace-scope-dot--unknown {
+  background: transparent;
+  border: 1px solid var(--color-text-secondary);
+}
+
+.workspace-scope-empty {
+  padding: 10px 8px;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 760px) {
+  .workspace-scope-trigger {
+    min-width: 120px;
+  }
+}
+
 @media (max-width: 760px) {
   .portfolio-command-page {
     gap: 12px;

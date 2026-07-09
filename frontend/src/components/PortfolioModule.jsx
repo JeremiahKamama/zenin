@@ -6,8 +6,10 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { chartColors } from "../utils/chartTheme";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
+import { formatPercent } from "../utils/format";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -972,7 +974,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           markValueMain: holding.kind === "spot" ? formatCurrency(holding.rawValue, holding.currency) : formatCurrency(holding.positionValue, "USD"),
           markValueSub: `${quantity.toFixed(4)} ${symbol}`,
           pnlMain: formatSignedMoney(holding.positionGain),
-          pnlSub: `${Number(item?.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(item?.priceChangePercent || 0).toFixed(2)}%`,
+          pnlSub: formatPercent(Number(item?.priceChangePercent || 0), { sign: true }),
           pnlPositive: Number(holding.positionGain || 0) >= 0,
           status,
           statusClass: status.toLowerCase(),
@@ -1001,7 +1003,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         markValueMain: formatMoney(holding.positionValue),
         markValueSub: `${qty.toFixed(5)} Units`,
         pnlMain: formatSignedMoney(pnl),
-        pnlSub: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+        pnlSub: formatPercent(pct, { sign: true }),
         pnlPositive: pnl >= 0,
         status: "Options",
         statusClass: "options",
@@ -1262,10 +1264,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const best = returns.length ? Math.max(...returns) : 0;
     const worst = returns.length ? Math.min(...returns) : 0;
     return {
-      bestPeriod: `${best >= 0 ? "+" : ""}${best.toFixed(2)}%`,
-      worstPeriod: `${worst >= 0 ? "+" : ""}${worst.toFixed(2)}%`,
-      maxDrawdown: `${Number(metrics.maxDrawdown || maxDrawdown || 0).toFixed(2)}%`,
-      currentDrawdown: `${Number(currentDrawdown || 0).toFixed(2)}%`
+      bestPeriod: formatPercent(best, { sign: true }),
+      worstPeriod: formatPercent(worst, { sign: true }),
+      maxDrawdown: formatPercent(Number(metrics.maxDrawdown || maxDrawdown || 0)),
+      currentDrawdown: formatPercent(Number(currentDrawdown || 0))
     };
   }, [chartData, chartMode, metrics.maxDrawdown]);
 
@@ -1324,14 +1326,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
       {
         kind: "Alpha",
         title: bestPerformer ? `${bestPerformer.symbol || bestPerformer.name} contribution` : "Wash sale potential",
-        detail: bestPerformer ? `${Number(bestPerformer.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer.priceChangePercent || 0).toFixed(2)}% leads current marked performance.` : "Tax-lot signals appear when realized loss candidates exist.",
+        detail: bestPerformer ? `${formatPercent(Number(bestPerformer.priceChangePercent || 0), { sign: true })} leads current marked performance.` : "Tax-lot signals appear when realized loss candidates exist.",
         action: "Review",
         onClick: () => bestPerformer ? onSelectAsset?.(bestPerformer) : setShowDiversificationModal(true)
       },
       {
         kind: feeTone,
         title: topRebalance ? `${topRebalance.symbol} drift update` : "Theta update",
-        detail: topRebalance ? `${topRebalance.action} ${Math.abs(topRebalance.drift).toFixed(2)}% drift against equal-weight target.` : "Options greek and rebalance alerts update with connected holdings.",
+        detail: topRebalance ? `${topRebalance.action} ${formatPercent(Math.abs(topRebalance.drift))} drift against equal-weight target.` : "Options greek and rebalance alerts update with connected holdings.",
         action: "Open",
         onClick: () => openInsightFlow("rebalancing", topRebalance)
       }
@@ -1942,7 +1944,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     { label: "Benchmark YTD", value: formatSignedPercent(benchmarkSnapshot.returnPct, 2), tone: benchmarkSnapshot.returnPct >= 0 ? "positive" : "negative" },
     { label: "YTD Relative", value: formatSignedPercent(benchmarkSnapshot.relativePct, 2), tone: benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative" },
     { label: "Beta", value: String(metrics.beta || "N/A") },
-    { label: "Tracking Error", value: `${Math.abs(Number(benchmarkSnapshot.relativePct || 0)).toFixed(2)}%` },
+        { label: "Tracking Error", value: formatPercent(Math.abs(Number(benchmarkSnapshot.relativePct || 0))) },
     { label: "Sharpe Ratio", value: String(metrics.sharpe || "N/A") },
   ]), [benchmarkSnapshot.relativePct, benchmarkSnapshot.returnPct, benchmarkSymbol, metrics.beta, metrics.sharpe, totalReturnPct]);
 
@@ -3113,6 +3115,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <p>Actionable intelligence. Clear next step.</p>
         </div>
         <div className="portfolio-command-header-actions">
+          <WorkspaceScopeSelector />
           <select
             value={assetClassFilter}
             onChange={(event) => setAssetClassFilter(event.target.value)}

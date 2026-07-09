@@ -5,6 +5,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
+import { ToastProvider, Toaster } from "@/components/ui/toast";
+import { WorkspaceScopeProvider } from "./components/WorkspaceScopeContext";
 import "./styles.css";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
@@ -6127,6 +6129,8 @@ const handleOptionTradeClosed = async (tradeId) => {
   }
 
   return (
+    <ToastProvider>
+    <WorkspaceScopeProvider accounts={connectedAccounts}>
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
       {isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <button
@@ -8571,7 +8575,10 @@ const handleOptionTradeClosed = async (tradeId) => {
         <SpeedInsights />
         <Analytics />
       </Suspense>
-    </div>
+      <Toaster />
+      </div>
+    </WorkspaceScopeProvider>
+    </ToastProvider>
   );
 }
 
