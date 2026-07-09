@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
+import { DataTable } from "./data-table/DataTable";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
+import { chartColors } from "../utils/chartTheme";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
+import { formatPercent } from "../utils/format";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import {
+  fetchPerformanceHistory,
+  buildEquitySeries,
+  buildBenchmarkSeries,
+  computePerformanceMetrics
+} from "../utils/performanceHistory";
+import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -150,6 +160,10 @@ export function PortfolioModule({
   const [holdingsSortBy, setHoldingsSortBy] = useState("value");
   const [selectedHolding, setSelectedHolding] = useState(null);
   const [benchmarkSymbol, setBenchmarkSymbol] = useState("SPY");
+  // Immutable snapshot history (single source of truth for the Performance
+  // Curve). Fetched from GET /api/history/range — never reconstructed from trades.
+  const [snapshotHistory, setSnapshotHistory] = useState([]);
+  const [historyStatus, setHistoryStatus] = useState("idle"); // idle|loading|ready|empty|error
   const [selectedTaxLotMethod, setSelectedTaxLotMethod] = useState("hifo");
   const [activeInsightFlow, setActiveInsightFlow] = useState(null);
   const [insightFlowStep, setInsightFlowStep] = useState(1);
@@ -330,85 +344,60 @@ const totalAccountEquity =
 const currentAccountEquity = totalAccountEquity;
 
 const isProfitable = currentAccountEquity >= initialBalance;
-  const chartColor = chartMode === "pnl" ? (isProfitable ? "#22c55e" : "#ef4444") : "#38bdf8";
+  const chartColor = chartMode === "pnl" ? (isProfitable ? "var(--color-success)" : "var(--color-danger)") : "var(--color-data-primary)";
+
+  // Fetch immutable daily snapshots for the selected interval. This is the ONLY
+  // source for the Performance Curve — no trade reconstruction, no interpolation.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    setHistoryStatus("loading");
+    fetchPerformanceHistory(chartInterval, { signal: controller?.signal })
+      .then((rows) => {
+        if (cancelled) return;
+        setSnapshotHistory(rows);
+        setHistoryStatus(rows.length ? "ready" : "empty");
+      })
+      .catch((err) => {
+        if (cancelled || err?.name === "AbortError") return;
+        setSnapshotHistory([]);
+        setHistoryStatus("error");
+      });
+    return () => {
+      cancelled = true;
+      controller?.abort();
+    };
+  }, [chartInterval]);
+
+  // Base value = first snapshot's portfolio value (for %/PnL rebasing). Falls
+  // back to initialBalance when history is empty.
+  const historyBaseValue = useMemo(() => {
+    if (snapshotHistory.length > 0) return snapshotHistory[0].portfolioValue;
+    return initialBalance;
+  }, [snapshotHistory, initialBalance]);
 
   const chartData = useMemo(() => {
-    const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
-    const points = pointCountMap[chartInterval] || 24;
-    const now = Date.now();
-    const start = (() => {
-      if (chartInterval === "1D") return now - 24 * 60 * 60 * 1000;
-      if (chartInterval === "1W") return now - 7 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "1M") return now - 30 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "ALL") {
-        const firstTradeTs = tradeTimeline[0]?.t;
-        return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
+    // Equity curve from immutable snapshots at REAL dates (no fake buckets).
+    const series = buildEquitySeries(snapshotHistory, chartMode, { baseValue: historyBaseValue });
+    // Live overlay: append today's live equity as a SEPARATE trailing point
+    // without overwriting the last immutable snapshot. Only when the last
+    // snapshot predates today (market open / pre-EOD).
+    if (series.length > 0 && Number.isFinite(currentAccountEquity)) {
+      const todayTs = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z").getTime();
+      const lastTs = snapshotHistory[snapshotHistory.length - 1]?.ts;
+      if (lastTs != null && todayTs > lastTs) {
+        const liveUsd = currentAccountEquity;
+        const liveConverted = displayCurrency === "USD" ? liveUsd : convertFromUSD(liveUsd, displayCurrency, spotPrices);
+        let value;
+        if (chartMode === "percentage") value = historyBaseValue ? ((liveUsd - historyBaseValue) / historyBaseValue) * 100 : 0;
+        else if (chartMode === "pnl") value = liveConverted - (displayCurrency === "USD" ? historyBaseValue : convertFromUSD(historyBaseValue, displayCurrency, spotPrices));
+        else value = liveConverted;
+        series.push([Date.now(), Number(Number(value).toFixed(2))]);
       }
-      if (chartInterval === "YTD") {
-        const d = new Date(now);
-        return new Date(d.getFullYear(), 0, 1).getTime();
-      }
-      if (chartInterval === "5Y") return now - 5 * 365 * 24 * 60 * 60 * 1000;
-      const firstTradeTs = tradeTimeline[0]?.t;
-      return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 30 * 24 * 60 * 60 * 1000;
-    })();
+    }
+    return series;
+  }, [snapshotHistory, chartMode, historyBaseValue, currentAccountEquity, displayCurrency, spotPrices]);
 
-    const inRangeTrades = tradeTimeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
-    const beforeRangeTrade = [...tradeTimeline]
-      .reverse()
-      .find((trade) => trade.t < start && Number.isFinite(trade.equity));
-    const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
-
-    const optionOpenAnchors = optionTimelineAdjustments.map((entry, idx) => ({
-      t: entry.openedAt,
-      equity: Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : startEquity,
-      id: `opt-open-${idx}`
-    }));
-
-    const anchors = [
-      { t: start, equity: startEquity },
-      ...inRangeTrades.map((trade) => ({ t: trade.t, equity: trade.equity })),
-      ...optionOpenAnchors.filter((entry) => entry.t >= start && entry.t <= now),
-      { t: now, equity: currentAccountEquity }
-    ].sort((a, b) => a.t - b.t);
-
-    let anchorIdx = 0;
-    const step = points > 1 ? (now - start) / (points - 1) : 0;
-
-    const getOptionAdjustmentAt = (timestamp) => {
-      return optionTimelineAdjustments.reduce((sum, entry) => {
-        if (timestamp <= entry.openedAt) return sum;
-        const horizon = Math.max(1, now - entry.openedAt);
-        const progress = Math.max(0, Math.min(1, (timestamp - entry.openedAt) / horizon));
-        return sum + (entry.currentPnl * progress);
-      }, 0);
-    };
-
-    const toSeriesValue = (equity) => {
-      // Convert equity from USD to displayCurrency
-      const convertedEquity = displayCurrency === "USD" ? equity : convertFromUSD(equity, displayCurrency, spotPrices);
-      const convertedInitial = displayCurrency === "USD" ? initialBalance : convertFromUSD(initialBalance, displayCurrency, spotPrices);
-
-      if (chartMode === "percentage") return ((equity - initialBalance) / initialBalance) * 100;
-      if (chartMode === "equity") return convertedEquity;
-      return convertedEquity - convertedInitial;
-    };
-
-    return Array.from({ length: points }, (_, i) => {
-      const t = start + step * i;
-      while (anchorIdx + 1 < anchors.length && anchors[anchorIdx + 1].t <= t) {
-        anchorIdx += 1;
-      }
-      const baseEquity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
-      const equity = baseEquity + getOptionAdjustmentAt(t);
-      return [
-        t,
-        Number(toSeriesValue(equity).toFixed(2))
-      ];
-    });
-  }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity, optionTimelineAdjustments, initialBalance, displayCurrency, spotPrices]);
   const cashBalances = useMemo(() => {
     const balances = { USD: liveAvailableBalance };
     (Array.isArray(trades) ? trades : []).forEach(t => {
@@ -754,28 +743,17 @@ const isProfitable = currentAccountEquity >= initialBalance;
     return [...combinedHoldings].sort((a, b) => score(b) - score(a));
   }, [combinedHoldings, holdingsSortBy]);
 
+  // Benchmark series from REAL stored benchmark closes (portfolio_daily_snapshots
+  // .benchmark_value). Rebased to the portfolio's start. Returns [] when the
+  // engine has no benchmark feed configured — the curve shows no fake benchmark.
   const benchmarkSeries = useMemo(() => {
-    const drift = benchmarkSymbol === "SPY" ? 0.0008 : benchmarkSymbol === "ACWI" ? 0.0006 : 0.0005;
-    if (!Array.isArray(chartData) || chartData.length === 0) return [];
+    return buildBenchmarkSeries(snapshotHistory, chartMode, { baseValue: historyBaseValue });
+  }, [snapshotHistory, chartMode, historyBaseValue]);
 
-    return chartData.map((point, idx) => {
-      const t = point[0];
-      const multiplier = Math.pow(1 + drift, idx);
-      let value = 0;
-
-      if (chartMode === "equity") {
-        const startValue = displayCurrency === "USD" ? initialBalance : convertFromUSD(initialBalance, displayCurrency, spotPrices);
-        value = startValue * multiplier;
-      } else if (chartMode === "percentage") {
-        value = (multiplier - 1) * 100;
-      } else {
-        // Cash PnL mode
-        const benchmarkPnL = initialBalance * (multiplier - 1);
-        value = displayCurrency === "USD" ? benchmarkPnL : convertFromUSD(benchmarkPnL, displayCurrency, spotPrices);
-      }
-      return [t, Number(value.toFixed(2))];
-    });
-  }, [chartData, benchmarkSymbol, chartMode, displayCurrency, initialBalance, spotPrices]);
+  // Snapshot-derived performance metrics (TWR, MWR, Sharpe, drawdown, ...).
+  const performanceMetrics = useMemo(() => {
+    return computePerformanceMetrics(snapshotHistory);
+  }, [snapshotHistory]);
 
   const portfolioPerformanceSeries = useMemo(() => {
     const toData = (points) => points
@@ -800,7 +778,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       {
         name: benchmarkSymbol,
         type: "line",
-        color: "#f59e0b",
+        color: "var(--color-warning)",
         data: toData(benchmarkSeries),
         includeInReadout: false,
         options: { lineWidth: 1, priceFormat }
@@ -812,7 +790,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     id: "portfolio-baseline",
     price: chartMode === "equity" ? initialBalance : 0,
     title: chartMode === "equity" ? "Start" : "Break-even",
-    color: "rgba(148,163,184,0.72)"
+    color: "rgba(160, 160, 160, 0.72)"
   }], [chartMode, initialBalance]);
 
   const portfolioChartOptions = useMemo(() => ({
@@ -970,7 +948,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           markValueMain: holding.kind === "spot" ? formatCurrency(holding.rawValue, holding.currency) : formatCurrency(holding.positionValue, "USD"),
           markValueSub: `${quantity.toFixed(4)} ${symbol}`,
           pnlMain: formatSignedMoney(holding.positionGain),
-          pnlSub: `${Number(item?.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(item?.priceChangePercent || 0).toFixed(2)}%`,
+          pnlSub: formatPercent(Number(item?.priceChangePercent || 0), { sign: true }),
           pnlPositive: Number(holding.positionGain || 0) >= 0,
           status,
           statusClass: status.toLowerCase(),
@@ -999,7 +977,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         markValueMain: formatMoney(holding.positionValue),
         markValueSub: `${qty.toFixed(5)} Units`,
         pnlMain: formatSignedMoney(pnl),
-        pnlSub: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+        pnlSub: formatPercent(pct, { sign: true }),
         pnlPositive: pnl >= 0,
         status: "Options",
         statusClass: "options",
@@ -1260,10 +1238,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
     const best = returns.length ? Math.max(...returns) : 0;
     const worst = returns.length ? Math.min(...returns) : 0;
     return {
-      bestPeriod: `${best >= 0 ? "+" : ""}${best.toFixed(2)}%`,
-      worstPeriod: `${worst >= 0 ? "+" : ""}${worst.toFixed(2)}%`,
-      maxDrawdown: `${Number(metrics.maxDrawdown || maxDrawdown || 0).toFixed(2)}%`,
-      currentDrawdown: `${Number(currentDrawdown || 0).toFixed(2)}%`
+      bestPeriod: formatPercent(best, { sign: true }),
+      worstPeriod: formatPercent(worst, { sign: true }),
+      maxDrawdown: formatPercent(Number(metrics.maxDrawdown || maxDrawdown || 0)),
+      currentDrawdown: formatPercent(Number(currentDrawdown || 0))
     };
   }, [chartData, chartMode, metrics.maxDrawdown]);
 
@@ -1322,14 +1300,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
       {
         kind: "Alpha",
         title: bestPerformer ? `${bestPerformer.symbol || bestPerformer.name} contribution` : "Wash sale potential",
-        detail: bestPerformer ? `${Number(bestPerformer.priceChangePercent || 0) >= 0 ? "+" : ""}${Number(bestPerformer.priceChangePercent || 0).toFixed(2)}% leads current marked performance.` : "Tax-lot signals appear when realized loss candidates exist.",
+        detail: bestPerformer ? `${formatPercent(Number(bestPerformer.priceChangePercent || 0), { sign: true })} leads current marked performance.` : "Tax-lot signals appear when realized loss candidates exist.",
         action: "Review",
         onClick: () => bestPerformer ? onSelectAsset?.(bestPerformer) : setShowDiversificationModal(true)
       },
       {
         kind: feeTone,
         title: topRebalance ? `${topRebalance.symbol} drift update` : "Theta update",
-        detail: topRebalance ? `${topRebalance.action} ${Math.abs(topRebalance.drift).toFixed(2)}% drift against equal-weight target.` : "Options greek and rebalance alerts update with connected holdings.",
+        detail: topRebalance ? `${topRebalance.action} ${formatPercent(Math.abs(topRebalance.drift))} drift against equal-weight target.` : "Options greek and rebalance alerts update with connected holdings.",
         action: "Open",
         onClick: () => openInsightFlow("rebalancing", topRebalance)
       }
@@ -1772,7 +1750,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const rebalanceDonutOptions = useMemo(() => ({
     chart: { type: "donut", background: "transparent", sparkline: { enabled: true } },
     labels: ["Overweight", "Underweight", "In Range"],
-    colors: ["#f87171", "#67e8f9", "#1f2937"],
+    colors: [chartColors.danger(), chartColors.info(), chartColors.muted()],
     stroke: { show: false },
     legend: { show: false },
     dataLabels: { enabled: false },
@@ -1790,13 +1768,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
             show: true,
             name: {
               show: true,
-              color: "#94a3b8",
+              color: "var(--color-data-slate)",
               fontSize: "12px",
               offsetY: -6,
             },
             value: {
               show: true,
-              color: "#f8fafc",
+              color: "var(--color-text-primary)",
               fontSize: "24px",
               fontWeight: 700,
               offsetY: 10,
@@ -1805,7 +1783,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             total: {
               show: true,
               label: "Alignment",
-              color: "#94a3b8",
+              color: "var(--color-data-slate)",
               fontSize: "12px",
               formatter: () => "Projected",
             },
@@ -1822,12 +1800,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
         label: "Total Value",
         value: formatMoney(currentAccountEquity),
         detail: `${formatSignedMoney(totalGainLoss)} (${formatSignedPercent(totalReturnPct, 2)})`,
-        tone: totalGainLoss >= 0 ? "positive" : "negative",
-      },
-      {
-        label: "Day Change",
-        value: formatSignedMoney(totalGainLoss),
-        detail: formatSignedPercent(totalReturnPct, 2),
         tone: totalGainLoss >= 0 ? "positive" : "negative",
       },
       {
@@ -1940,7 +1912,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     { label: "Benchmark YTD", value: formatSignedPercent(benchmarkSnapshot.returnPct, 2), tone: benchmarkSnapshot.returnPct >= 0 ? "positive" : "negative" },
     { label: "YTD Relative", value: formatSignedPercent(benchmarkSnapshot.relativePct, 2), tone: benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative" },
     { label: "Beta", value: String(metrics.beta || "N/A") },
-    { label: "Tracking Error", value: `${Math.abs(Number(benchmarkSnapshot.relativePct || 0)).toFixed(2)}%` },
+        { label: "Tracking Error", value: formatPercent(Math.abs(Number(benchmarkSnapshot.relativePct || 0))) },
     { label: "Sharpe Ratio", value: String(metrics.sharpe || "N/A") },
   ]), [benchmarkSnapshot.relativePct, benchmarkSnapshot.returnPct, benchmarkSymbol, metrics.beta, metrics.sharpe, totalReturnPct]);
 
@@ -2053,28 +2025,27 @@ const isProfitable = currentAccountEquity >= initialBalance;
             })}
           </div>
           <div className="portfolio-command-table-wrap">
-            <table className="portfolio-command-table compact">
-              <thead>
-                <tr>
-                  <th>Bucket</th>
-                  <th>Leader</th>
-                  <th>Contribution</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.flatMap((group) => (attributionRows?.[group.key] || []).slice(0, 3).map((row) => (
-                  <tr key={`${group.key}-${row.name}`}>
-                    <td>{group.label}</td>
-                    <td>{row.name}</td>
-                    <td className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.pnl)}</td>
-                    <td>
-                      <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution", row)}>Review</button>
-                    </td>
-                  </tr>
-                )))}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                { key: "bucket", header: "Bucket", sortable: false },
+                { key: "name", header: "Leader", sortable: false },
+                {
+                  key: "pnl",
+                  header: "Contribution",
+                  sortable: false,
+                  cell: (row) => <span className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.pnl)}</span>,
+                },
+                {
+                  key: "action",
+                  header: "Action",
+                  sortable: false,
+                  cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution", row)}>Review</button>,
+                },
+              ]}
+              data={groups.flatMap((group) => (attributionRows?.[group.key] || []).slice(0, 3).map((row) => ({ ...row, bucket: group.label })))}
+              getRowId={(row) => `${row.bucket}-${row.name}`}
+              className="portfolio-command-table compact"
+            />
           </div>
         </div>
       );
@@ -2105,30 +2076,23 @@ const isProfitable = currentAccountEquity >= initialBalance;
             ))}
           </div>
           <div className="portfolio-command-table-wrap">
-            <table className="portfolio-command-table compact">
-              <thead>
-                <tr>
-                  <th>Bucket</th>
-                  <th>Name</th>
-                  <th>Weight</th>
-                  <th>Risk</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(exposureRows || []).slice(0, 10).map((row) => (
-                  <tr key={`exp-${row.bucket}-${row.name}`}>
-                    <td>{row.bucket}</td>
-                    <td>{row.name}</td>
-                    <td>{row.weight.toFixed(1)}%</td>
-                    <td>{formatRiskLabel(row.risk)}</td>
-                    <td>
-                      <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure", row)}>Inspect</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              columns={[
+                { key: "bucket", header: "Bucket", sortable: false },
+                { key: "name", header: "Name", sortable: false },
+                { key: "weight", header: "Weight", sortable: false, cell: (row) => `${row.weight.toFixed(1)}%` },
+                { key: "risk", header: "Risk", sortable: false, cell: (row) => formatRiskLabel(row.risk) },
+                {
+                  key: "action",
+                  header: "Action",
+                  sortable: false,
+                  cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure", row)}>Inspect</button>,
+                },
+              ]}
+              data={(exposureRows || []).slice(0, 10)}
+              getRowId={(row) => `exp-${row.bucket}-${row.name}`}
+              className="portfolio-command-table compact"
+            />
           </div>
         </div>
       );
@@ -2197,44 +2161,49 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
 
           <div className="portfolio-command-table-wrap portfolio-history-table-wrap">
-            <table className="portfolio-command-table compact portfolio-history-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Platform</th>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Quantity</th>
-                  <th>Price</th>
-                  <th>Fee</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiExecutionRows.slice(0, 100).map((execution) => (
-                  <tr key={`${execution.platform}-${execution.platformFillId || execution.id}`} onClick={() => setSelectedExecution(execution)}>
-                    <td>
-                      <strong>{formatExecutionTimestamp(execution.executedAt)}</strong>
-                      <span>{execution.platformFillId || "Fill ID pending"}</span>
-                    </td>
-                    <td>{formatVenueLabel(execution.platform)}</td>
-                    <td><strong>{execution.symbol}</strong><span>{execution.marketType}</span></td>
-                    <td className={execution.side === "buy" ? "positive" : "negative"}>{execution.side.toUpperCase()}</td>
-                    <td>{formatExecutionQuantity(execution.quantity)}</td>
-                    <td>{formatMoney(execution.price)}</td>
-                    <td>{execution.feeAmount ? `${formatExecutionQuantity(execution.feeAmount)} ${execution.feeCurrency}` : "N/A"}</td>
-                    <td><span>API connection</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!apiExecutionRows.length ? (
-              <div className="portfolio-command-empty">
-                <h3>No API executions yet</h3>
-                <p>Connect Binance, Bybit, Hyperliquid, or another supported account to import previous executions.</p>
-                <button type="button" className="portfolio-command-primary-cta subtle" onClick={handleOpenConnections}>Connect Account</button>
-              </div>
-            ) : null}
+            <DataTable
+              columns={[
+                {
+                  key: "executedAt",
+                  header: "Time",
+                  sortable: false,
+                  cell: (e) => (
+                    <div>
+                      <strong>{formatExecutionTimestamp(e.executedAt)}</strong>
+                      <span>{e.platformFillId || "Fill ID pending"}</span>
+                    </div>
+                  ),
+                },
+                { key: "platform", header: "Platform", sortable: false, cell: (e) => formatVenueLabel(e.platform) },
+                {
+                  key: "symbol",
+                  header: "Symbol",
+                  sortable: false,
+                  cell: (e) => (<div><strong>{e.symbol}</strong><span>{e.marketType}</span></div>),
+                },
+                {
+                  key: "side",
+                  header: "Side",
+                  sortable: false,
+                  cell: (e) => <span className={e.side === "buy" ? "positive" : "negative"}>{e.side.toUpperCase()}</span>,
+                },
+                { key: "quantity", header: "Quantity", sortable: false, cell: (e) => formatExecutionQuantity(e.quantity) },
+                { key: "price", header: "Price", sortable: false, cell: (e) => formatMoney(e.price) },
+                { key: "feeAmount", header: "Fee", sortable: false, cell: (e) => e.feeAmount ? `${formatExecutionQuantity(e.feeAmount)} ${e.feeCurrency}` : "N/A" },
+                { key: "source", header: "Source", sortable: false, cell: () => <span>API connection</span> },
+              ]}
+              data={apiExecutionRows.slice(0, 100)}
+              getRowId={(e) => `${e.platform}-${e.platformFillId || e.id}`}
+              onRowClick={(e) => setSelectedExecution(e)}
+              emptyState={
+                <div className="portfolio-command-empty">
+                  <h3>No API executions yet</h3>
+                  <p>Connect Binance, Bybit, Hyperliquid, or another supported account to import previous executions.</p>
+                  <button type="button" className="portfolio-command-primary-cta subtle" onClick={handleOpenConnections}>Connect Account</button>
+                </div>
+              }
+              className="portfolio-command-table compact portfolio-history-table"
+            />
           </div>
 
           {recentExecutionNotifications.length ? (
@@ -2373,64 +2342,76 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <option value="risk">Risk</option>
               </select>
             </label>
-            <button type="button" className="portfolio-v2-link" onClick={() => exportExposureReport()}>Export</button>
+            <button type="button" className="portfolio-v2-link" onClick={() => exportExposureReport()}>Export Exposure</button>
           </div>
         </div>
         <div className="portfolio-command-table-wrap">
-          <table className="portfolio-command-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Name</th>
-                <th>Asset Class</th>
-                <th>Allocation</th>
-                <th>Unrealized PnL</th>
-                <th>vs Benchmark</th>
-                <th>Weight vs Bench</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {holdingsTableRows.length ? holdingsTableRows.map((row) => {
-                const benchDelta = row.kind === "spot"
-                  ? Number(row?.raw?.priceChangePercent || 0) - Number(benchmarkSnapshot.returnPct || 0)
-                  : null;
-                const driftRow = rebalanceActionMap.get(String(row.symbol || "").toUpperCase());
-                return (
-                  <tr key={row.key}>
-                    <td>{row.symbol}</td>
-                    <td>{row.name}</td>
-                    <td>{row.kind === "options" ? "Options" : String(row?.raw?.marketType || row?.raw?.type || "Asset").replace(/_/g, " ")}</td>
-                    <td>
-                      <div className="portfolio-command-allocation-cell">
-                        <strong>{row.allocation.toFixed(1)}%</strong>
-                        <div className="portfolio-command-allocation-bar"><i style={{ width: `${Math.min(100, Math.max(4, row.allocation))}%` }} /></div>
-                      </div>
-                    </td>
-                    <td className={row.pnlPositive ? "positive" : "negative"}>{row.pnlMain}</td>
-                    <td className={benchDelta == null ? "" : benchDelta >= 0 ? "positive" : "negative"}>
-                      {benchDelta == null ? "—" : formatSignedPercent(benchDelta, 1)}
-                    </td>
-                    <td className={Number(driftRow?.drift || 0) <= 0 ? "positive" : "negative"}>
-                      {driftRow ? formatSignedPercent(driftRow.drift, 1) : "—"}
-                    </td>
-                    <td>
-                      <button type="button" className="portfolio-v2-link" onClick={() => openHoldingSnapshot(row)}>Open</button>
-                    </td>
-                  </tr>
-                );
-              }) : (
-                <tr>
-                  <td colSpan={8}>
-                    <div className="portfolio-command-empty">
-                      <h3>No positions found</h3>
-                      <p>Add holdings or connect accounts to unlock portfolio analysis.</p>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <DataTable
+            columns={[
+              { key: "symbol", header: "Symbol", sortable: false },
+              { key: "name", header: "Name", sortable: false },
+              {
+                key: "kind",
+                header: "Asset Class",
+                sortable: false,
+                cell: (row) => row.kind === "options" ? "Options" : String(row?.raw?.marketType || row?.raw?.type || "Asset").replace(/_/g, " "),
+              },
+              {
+                key: "allocation",
+                header: "Allocation",
+                sortable: false,
+                cell: (row) => (
+                  <div className="portfolio-command-allocation-cell">
+                    <strong>{row.allocation.toFixed(1)}%</strong>
+                    <div className="portfolio-command-allocation-bar"><i style={{ width: `${Math.min(100, Math.max(4, row.allocation))}%` }} /></div>
+                  </div>
+                ),
+              },
+              {
+                key: "pnl",
+                header: "Unrealized PnL",
+                sortable: false,
+                cell: (row) => <span className={row.pnlPositive ? "positive" : "negative"}>{row.pnlMain}</span>,
+              },
+              {
+                key: "benchDelta",
+                header: "vs Benchmark",
+                sortable: false,
+                cell: (row) => {
+                  const benchDelta = row.kind === "spot"
+                    ? Number(row?.raw?.priceChangePercent || 0) - Number(benchmarkSnapshot.returnPct || 0)
+                    : null;
+                  if (benchDelta == null) return "—";
+                  return <span className={benchDelta >= 0 ? "positive" : "negative"}>{formatSignedPercent(benchDelta, 1)}</span>;
+                },
+              },
+              {
+                key: "drift",
+                header: "Weight vs Bench",
+                sortable: false,
+                cell: (row) => {
+                  const driftRow = rebalanceActionMap.get(String(row.symbol || "").toUpperCase());
+                  if (!driftRow) return "—";
+                  return <span className={Number(driftRow?.drift || 0) <= 0 ? "positive" : "negative"}>{formatSignedPercent(driftRow.drift, 1)}</span>;
+                },
+              },
+              {
+                key: "action",
+                header: "",
+                sortable: false,
+                cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openHoldingSnapshot(row)}>Open</button>,
+              },
+            ]}
+            data={holdingsTableRows}
+            getRowId={(row) => row.key}
+            emptyState={
+              <div className="portfolio-command-empty">
+                <h3>No positions found</h3>
+                <p>Add holdings or connect accounts to unlock portfolio analysis.</p>
+              </div>
+            }
+            className="portfolio-command-table"
+          />
         </div>
       </div>
     );
@@ -2870,7 +2851,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         const donutOptions = {
           chart: { type: 'donut', background: 'transparent' },
           labels: ['Current Allocation', 'Target Allocation'],
-          colors: ['#3b82f6', '#1e293b'],
+          colors: [chartColors.info(), chartColors.textPrimary()],
           stroke: { show: false },
           legend: { show: false },
           dataLabels: { enabled: false },
@@ -2902,13 +2883,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   options={donutOptions}
                   series={[100 - totalDrift, totalDrift]}
                   type="donut"
-                  width={200}
                 />
               </div>
               <div className="portfolio-v2-flow-mini-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
                   <span style={{ fontSize: '10px' }}>Portfolio Drift</span>
-                  <strong style={{ fontSize: '18px', color: '#f59e0b' }}>{totalDrift.toFixed(1)}%</strong>
+                  <strong style={{ fontSize: '18px', color: 'var(--color-warning)' }}>{totalDrift.toFixed(1)}%</strong>
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
                   <span style={{ fontSize: '10px' }}>Changes Required</span>
@@ -2920,7 +2900,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 </div>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
                   <span style={{ fontSize: '10px' }}>Expected Slippage</span>
-                  <strong style={{ fontSize: '18px', color: '#38bdf8' }}>{formatMoney(estimatedSlippage)}</strong>
+                  <strong style={{ fontSize: '18px', color: 'var(--color-data-primary)' }}>{formatMoney(estimatedSlippage)}</strong>
                 </div>
               </div>
             </div>
@@ -2955,7 +2935,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <div key={s.symbol} className="portfolio-v2-flow-action-row" style={{ cursor: 'default' }}>
                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <div className="portfolio-v2-activity-dot" style={{
-                        color: s.action === "Trim" ? '#f59e0b' : '#22c55e',
+                        color: s.action === "Trim" ? 'var(--color-warning)' : 'var(--color-success)',
                         background: s.action === "Trim" ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)'
                       }}>
                         {s.action === "Trim" ? "↘" : "↗"}
@@ -2966,7 +2946,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       </div>
                    </div>
                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? '#f59e0b' : '#22c55e' }}>{s.action === "Trim" ? "Reduce" : "Increase"}</div>
+                      <div style={{ fontWeight: 600, color: s.action === "Trim" ? 'var(--color-warning)' : 'var(--color-success)' }}>{s.action === "Trim" ? "Reduce" : "Increase"}</div>
                       <div style={{ fontSize: '12px', color: 'var(--color-text-primary)' }}>{formatMoney(s.tradeValue)}</div>
                       <div style={{ fontSize: '11px', color: 'var(--color-text-secondary)' }}>{Number(s.tradeQuantity || 0).toFixed(6)} {s.symbol}</div>
                    </div>
@@ -3033,7 +3013,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         ) : (
           <div className="portfolio-v2-flow-card" style={{ alignItems: 'center', textAlign: 'center' }}>
             <div className="portfolio-v2-flow-status-inline success" style={{ flexDirection: 'column', padding: '20px', gap: '16px' }}>
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: flowOutcome.tone === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>{flowOutcome.tone === 'success' ? '✓' : '!'}</div>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: flowOutcome.tone === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: flowOutcome.tone === 'success' ? 'var(--color-success)' : 'var(--color-warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' }}>{flowOutcome.tone === 'success' ? '✓' : '!'}</div>
               <div style={{ textAlign: 'center' }}>
                 <h3 style={{ fontSize: '20px', color: 'var(--color-text-primary)', margin: '0 0 8px' }}>{flowOutcome.title || "Rebalance update"}</h3>
                 <p style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>{flowOutcome.message || "Zenin saved the latest rebalance workflow status."}</p>
@@ -3045,7 +3025,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   <span>Projected Drift</span><strong className={flowOutcome.tone === "success" ? "positive" : ""}>{flowOutcome.tone === "success" ? "0.0%" : `${Number(totalDrift || 0).toFixed(1)}%`}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
-                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? '#22c55e' : '#f59e0b' }}>{flowOutcome.tone === 'success' ? 'Saved' : 'Preview / Partial'}</strong>
+                  <span>Status</span><strong style={{ color: flowOutcome.tone === 'success' ? 'var(--color-success)' : 'var(--color-warning)' }}>{flowOutcome.tone === 'success' ? 'Saved' : 'Preview / Partial'}</strong>
                </div>
                <div className="portfolio-v2-flow-action-row" style={{ padding: '8px 12px' }}>
                   <span>Platform Fees</span><strong>{formatMoney(Number(rebalanceEstimate?.summary?.fees || 0))}</strong>
@@ -3103,6 +3083,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <p>Actionable intelligence. Clear next step.</p>
         </div>
         <div className="portfolio-command-header-actions">
+          <WorkspaceScopeSelector />
           <select
             value={assetClassFilter}
             onChange={(event) => setAssetClassFilter(event.target.value)}
@@ -3196,6 +3177,22 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   onClick={() => setChartInterval(int)}
                 >
                   {int}
+                </button>
+              ))}
+            </div>
+            <div className="portfolio-v2-range" role="group" aria-label="Chart mode">
+              {[
+                { value: "equity", label: "Equity" },
+                { value: "percentage", label: "% Gain" },
+                { value: "pnl", label: "Cash PnL" }
+              ].map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  className={`portfolio-v2-range-btn ${chartMode === mode.value ? "active" : ""}`}
+                  onClick={() => setChartMode(mode.value)}
+                >
+                  {mode.label}
                 </button>
               ))}
             </div>
@@ -3506,16 +3503,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <div className="journal-stat-card"><span className="journal-stat-label">Quantity</span><span className="journal-stat-value">{Number(selectedHolding.quantity || 0).toFixed(2)}</span></div>
               <div className="journal-stat-card"><span className="journal-stat-label">Price</span><span className="journal-stat-value">{formatMoney(selectedHolding.price)}</span></div>
             </div>
-            <div style={{ borderTop: "1px solid rgba(148,163,184,0.14)", paddingTop: "10px", marginTop: "10px" }}>
-              <div style={{ fontSize: "12px", color: "#94a3b8", marginBottom: "6px" }}>Tax Lot Optimizer</div>
+            <div style={{ borderTop: "1px solid rgba(160, 160, 160, 0.14)", paddingTop: "10px", marginTop: "10px" }}>
+              <div style={{ fontSize: "12px", color: "var(--color-data-slate)", marginBottom: "6px" }}>Tax Lot Optimizer</div>
               <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
+                <select value={selectedTaxLotMethod} onChange={(e) => setSelectedTaxLotMethod(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", color: "var(--color-data-slate-bright)", border: "1px solid rgba(160, 160, 160, 0.25)", borderRadius: "8px", padding: "4px 8px", fontSize: "12px" }}>
                   <option value="fifo">FIFO</option>
                   <option value="lifo">LIFO</option>
                   <option value="hifo">HIFO</option>
                   <option value="average">Average Cost</option>
                 </select>
-                <span style={{ fontSize: "12px", color: "#cbd5e1" }}>
+                <span style={{ fontSize: "12px", color: "var(--color-data-slate-bright)" }}>
                   Suggested lot method: <strong>{selectedTaxLotMethod.toUpperCase()}</strong> for this sale.
                 </span>
               </div>
