@@ -12308,9 +12308,9 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
   }
 
   .nav-btn {
-    min-height: 46px;
+    min-height: 34px;
     padding: 0 12px;
-    font-size: 1rem;
+    font-size: 0.92rem;
   }
 
   .nav-full {
@@ -25136,10 +25136,11 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: auto;
+  max-height: 100%;
   overflow-y: auto;
-  gap: 8px;
-  padding: 10px 14px 8px;
+  gap: 6px;
+  padding: 6px 14px 6px;
   background: var(--color-surface-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: 20px;
@@ -35309,20 +35310,20 @@ body.light-theme-active .research-workspace {
 }
 
 .sidebar.sidebar-overhaul-v2 .sidebar-nav {
-  gap: 10px;
-  flex: 1 1 auto;
+  gap: 7px;
+  flex: 0 1 auto;
 }
 
 /* ── Sidebar overhaul v2 — structural repair (Brand.md conformant) ── */
 .sidebar.sidebar-overhaul-v2 {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
 }
 
 /* Navigation groups — whitespace rhythm, no heavy separators */
 .sidebar.sidebar-overhaul-v2 .sidebar-nav-group + .sidebar-nav-group {
-  margin-top: 5px;
+  margin-top: 3px;
 }
 .sidebar.sidebar-overhaul-v2 .sidebar-section-header {
   margin: 0 0 0;
@@ -35339,7 +35340,7 @@ body.light-theme-active .research-workspace {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 20px;
+  min-height: 34px;
   padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -35407,8 +35408,10 @@ body.light-theme-active .research-workspace {
 .sidebar.sidebar-overhaul-v2 .sidebar-live-status {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 5px;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 6px 5px 5px;
+  border-top: 1px solid var(--color-border-subtle);
   border-radius: 4px;
   background: var(--color-surface-overlay);
 }
@@ -35443,8 +35446,8 @@ body.light-theme-active .research-workspace {
 
 /* Footer — single divider, whitespace separation from nav */
 .sidebar.sidebar-overhaul-v2 .sidebar-bottom {
-  margin-top: auto;
-  padding-top: 12px;
+  margin-top: 4px;
+  padding-top: 6px;
   border-top: 1px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
@@ -35593,9 +35596,9 @@ body.light-theme-active .research-workspace {
 }
 
 .sidebar.sidebar-overhaul-v2 .nav-btn {
-  min-height: 42px;
-  padding-top: 8px;
-  padding-bottom: 8px;
+  min-height: 34px;
+  padding-top: 5px;
+  padding-bottom: 5px;
 }
 
 .sidebar.sidebar-overhaul-v2 .nav-btn.active .nav-description {
@@ -39020,7 +39023,7 @@ body.light-theme-active .analytics-equities-toolbar-btn:focus-visible {
 .home-exec-log-table tbody tr[role=button]:hover td,.home-exec-log-table tbody tr[role=button]:focus-visible td { border-color:var(--color-border-subtle);background:#ffffff08}
 
 /* covers: .sidebar-brand-row */
-.sidebar-brand-row { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 4px 14px}
+.sidebar-brand-row { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 8px}
 
 /* covers: .sidebar-brand-mark */
 .sidebar-brand-mark { display:inline-flex;align-items:center;gap:10px}
