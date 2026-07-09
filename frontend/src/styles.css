@@ -27,8 +27,8 @@
   /* ── Text (dark) ────────────────────────────────────────────────── */
   --color-text-primary:         #FFFFFF;
   --color-text-secondary:       #A3A3A3;
-  --color-text-muted:           #737373;
-  --color-text-dim:             #525252;   /* disabled */
+  --color-text-muted:           #9a9a9a;   /* AA 6.9:1 on #080808 */
+  --color-text-dim:             #808080;   /* disabled / AA 5.0:1 on #080808 */
   --color-text-inverse:         #0A0A0A;
   --color-text-danger:          #ef4444;
   /* ── Icons (dark — inherit text tokens) ─────────────────────────── */
@@ -56,10 +56,10 @@
   /* ── Data-text aliases (monochrome + semantic only — Brand v2) ──── */
   --color-data-primary:         #FFFFFF;
   --color-data-secondary:       #A3A3A3;
-  --color-data-muted:           #525252;
+  --color-data-muted:           #808080;
   --color-data-slate:           #A3A3A3;   /* alias of secondary — legacy  */
   --color-data-slate-bright:    #FFFFFF;   /* alias of primary  — legacy  */
-  --color-data-slate-dim:       #525252;   /* alias of muted    — legacy  */
+  --color-data-slate-dim:       #808080;   /* alias of muted    — legacy  */
   --color-data-up:              var(--color-success);
   --color-data-green:           var(--color-success);
   --color-data-green-bright:    #34d399;
@@ -98,6 +98,7 @@
   /* ── Font-size Scale ────────────────────────────────────────────── */
   --fs-xs:       10px;
   --fs-sm:       11px;
+  --fs-12:       12px;   /* canonical 12px step — formerly an off-scale orphan */
   --fs-body:     13px;
   --fs-base:     14px;
   --fs-md:       15px;
@@ -105,6 +106,14 @@
   --fs-xl:       18px;
   --fs-2xl:      22px;
   --fs-display:  32px;
+
+  /* ── Font-weight Scale (Brand v2: headings use 500/600 only) ─────── */
+  --fw-regular:   400;
+  --fw-medium:    500;
+  --fw-semibold:  600;
+  /* NOTE: 700/800/900 are intentionally NOT tokenized. Brandv2.md L188
+     restricts headings to font-medium/font-semibold. Existing heavier
+     weights are legacy drift to be migrated, not endorsed. */
 
   /* ── Density Modes (row heights) ───────────────────────────────── */
   --row-height-compact:     28px;
@@ -123,6 +132,39 @@
   --bp-xl:  1280px;
   --bp-2xl: 1500px;
 
+  /* ── Radius Scale (canonical 2/4/8/12/16) ──────────────────────── */
+  --radius-sm:    2px;
+  --radius-md:    4px;
+  --radius-lg:    8px;
+  --radius-xl:    12px;
+  --radius-2xl:   16px;
+  --radius-full:  999px;
+  /* Legacy card-radius-* tokens retained as aliases (all were 3px);
+     migrate consumers to --radius-* over time. */
+  --card-radius-compact:   var(--radius-md);
+  --card-radius-standard:  var(--radius-md);
+  --card-radius-large:     var(--radius-md);
+
+  /* ── Z-index Layers (semantic stacking contract) ──────────────────
+     Consumers MUST use these instead of raw integers. Order enforces:
+     base < dropdown < sticky < overlay < modal < toast < tooltip.    */
+  --z-base:      1;
+  --z-dropdown:  100;
+  --z-sticky:    140;
+  --z-overlay:   1000;
+  --z-modal:     1300;
+  --z-toast:     2000;
+  --z-tooltip:   2100;
+
+  /* ── Motion (duration + easing) ─────────────────────────────────── */
+  --duration-instant: 80ms;
+  --duration-fast:    120ms;   /* hover, small state changes */
+  --duration-base:    180ms;   /* open / close (modals, drawers) */
+  --duration-slow:    240ms;
+  --ease-standard:    cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in:          cubic-bezier(0.4, 0, 1, 1);
+  --ease-out:         cubic-bezier(0, 0, 0.2, 1);
+
   /* ── Sidebar metrics ────────────────────────────────────────────  */
   --sidebar-width:        270px;
   --sidebar-width-collapsed: 100px;
@@ -131,7 +173,7 @@
   font-family: var(--font-brand);
   background:  var(--color-bg-base);
   color: var(--color-text-primary);
-  font-size: 90%;
+  font-size: 81.25%; /* 13px base — dense institutional scale (was 90%/14.4px) */
 }
 
 .cardCompact {
@@ -190,6 +232,30 @@ p, li, span, td, th, label, button, a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Financial numeric typography (Phase 5 standard) ──────────────────
+   Apply `.numeric` to every financial figure: mono stack + tabular
+   figures + right alignment. This guarantees decimal/column alignment
+   across all financial surfaces (Phase 5 of the design-system plan).  */
+.numeric,
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+.numeric--right,
+.num-right {
+  text-align: right;
+}
+.numeric--positive,
+.num-positive {
+  color: var(--color-success);
+}
+.numeric--negative,
+.num-negative {
+  color: var(--color-danger);
 }
 
 /* ── Tables: prevent layout blow-out ──────────────────────────────────
@@ -364,10 +430,10 @@ select option {
   background: rgba(255, 255, 255, 0.018);
 }
 .zenin-table tbody tr:hover {
-  background: rgba(0, 212, 255, 0.05);
+  background: rgba(255, 255, 255, 0.05);
 }
 .zenin-table tbody tr[aria-selected="true"] {
-  background: rgba(0, 212, 255, 0.08);
+  background: rgba(255, 255, 255, 0.08);
 }
 /* Sticky first column — keeps anchor (symbol) visible during horizontal scroll. */
 .zenin-table thead th:first-child,
@@ -582,7 +648,7 @@ select option {
   font-weight: 800 !important;
   letter-spacing: 0.18em !important;
   text-transform: uppercase !important;
-  color: rgba(255, 255, 255, 0.32) !important;
+  color: var(--color-text-muted) !important;
 }
 
 /* ── Global Label / Eyebrow Typography ─────────────────────────────── */
@@ -600,7 +666,7 @@ select option {
   font-weight: 800 !important;
   letter-spacing: 0.18em !important;
   text-transform: uppercase !important;
-  color: rgba(255, 255, 255, 0.32) !important;
+  color: var(--color-text-muted) !important;
 }
 
 /* ── Global Metric Values ───────────────────────────────────────────── */
@@ -785,15 +851,15 @@ html.light-theme-active {
   --color-border-default:       var(--color-border-medium);
   /* ── Text (light) ───────────────────────────────────────────────── */
   --color-text-primary:         #0A0A0A;
-  --color-text-secondary:       #525252;
-  --color-text-muted:           #737373;
-  --color-text-dim:             #A3A3A3;
+  --color-text-secondary:       #595959;   /* AA 7.4:1 on #fff */
+  --color-text-muted:           #707070;   /* AA 4.7:1 on #fff */
+  --color-text-dim:             #808080;   /* disabled / large only */
   --color-text-inverse:         #FFFFFF;
   --color-text-danger:          #dc2626;
   /* ── Icons (light) ──────────────────────────────────────────────── */
   --color-icon-primary:         #0A0A0A;
-  --color-icon-secondary:       #525252;
-  --color-icon-muted:           #737373;
+  --color-icon-secondary:       #595959;
+  --color-icon-muted:           #707070;
   /* ── Interaction (light) ────────────────────────────────────────── */
   --color-interactive:          #0A0A0A;
   --color-interactive-hover:    #262626;
@@ -813,9 +879,9 @@ html.light-theme-active {
   --color-warning-soft:         rgba(217, 119, 6, 0.12);
   /* ── Data-text aliases (light — monochrome + semantic) ──────────── */
   --color-data-primary:         #0A0A0A;
-  --color-data-secondary:       #525252;
-  --color-data-muted:           #A3A3A3;
-  --color-data-slate:           #525252;
+  --color-data-secondary:       #595959;
+  --color-data-muted:           #707070;
+  --color-data-slate:           #595959;
   --color-data-slate-bright:    #0A0A0A;
   --color-data-slate-dim:       #737373;
   --color-data-up:              var(--color-success);
@@ -823,7 +889,7 @@ html.light-theme-active {
   --color-data-green-bright:    #15803d;
   --color-data-down:            var(--color-danger);
   --color-data-red:             #dc2626;
-  --color-data-red-bright:      #b91c1c;
+  --color-data-red-bright:      #f87171;
   --color-data-amber:           #b45309;
   --color-data-amber-bright:    #d97706;
 }
@@ -3061,12 +3127,12 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .persona-onboarding-option:hover {
-  border-color: rgba(103, 232, 249, 0.4);
+  border-color: var(--color-border-strong);
 }
 
 .persona-onboarding-option-selected {
-  border-color: rgba(103, 232, 249, 0.6);
-  box-shadow: 0 0 0 1px rgba(103, 232, 249, 0.25);
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 1px var(--color-border-strong);
 }
 
 .persona-onboarding-option strong {
@@ -3088,6 +3154,40 @@ html.light-theme-active .settings-secondary-btn:hover {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* Light-theme hardening: the modal previously hardcoded a dark navy surface
+   and cyan accents that broke against the light page. Route to tokens so it
+   reads correctly in both themes. */
+html.light-theme-active .persona-onboarding-overlay {
+  background: rgba(15, 23, 42, 0.45);
+}
+html.light-theme-active .persona-onboarding-modal {
+  background: var(--color-surface-card);
+  border-color: var(--color-border-medium);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18);
+}
+html.light-theme-active .persona-onboarding-head p,
+html.light-theme-active .persona-onboarding-detail {
+  color: var(--color-text-secondary);
+}
+html.light-theme-active .persona-onboarding-skip {
+  color: var(--color-text-secondary);
+}
+html.light-theme-active .persona-onboarding-option {
+  background: var(--color-surface-overlay);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+html.light-theme-active .persona-onboarding-option:hover {
+  border-color: var(--color-border-strong);
+}
+html.light-theme-active .persona-onboarding-option-selected {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 1px var(--color-border-strong);
+}
+html.light-theme-active .persona-onboarding-flow {
+  color: var(--color-data-primary);
 }
 
 .connect-account-overlay {
@@ -3154,7 +3254,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .search-controls:focus-within {
   border-color: var(--color-data-secondary);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.1);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1);
 }
 
 .search-input {
@@ -3233,8 +3333,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .search-type-select:focus {
-  outline: 1px solid rgba(56, 189, 248, 0.55);
-  border-color: rgba(56, 189, 248, 0.5);
+  outline: 1px solid rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 .search-type-select-caret {
@@ -3270,7 +3370,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .search-context-hint-button:focus-visible {
-  outline: 1px solid rgba(56, 189, 248, 0.55);
+  outline: 1px solid rgba(255, 255, 255, 0.55);
   outline-offset: 3px;
   border-radius: 4px;
 }
@@ -3799,8 +3899,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .data-health-badge.loading {
   color: var(--color-data-primary);
-  border-color: rgba(56, 189, 248, 0.45);
-  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .data-health-badge.hazard {
@@ -3835,8 +3935,8 @@ html.light-theme-active .settings-secondary-btn:hover {
   width: 32px;
   height: 32px;
   border-radius: 999px;
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  background: rgba(2, 6, 23, 0.82);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-elevated);
   color: var(--color-data-primary);
 }
 
@@ -3919,7 +4019,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 .company-page-subtitle span {
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.62);
+  background: var(--color-surface-elevated);
   border: 1px solid rgba(148, 163, 184, 0.15);
   color: var(--color-text-secondary);
   font-size: 0.78rem;
@@ -4004,7 +4104,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .company-finviz-cell {
-  background: rgba(0, 0, 0, 0.94);
+  background: var(--color-surface-card);
   padding: 6px 10px;
   display: flex;
   justify-content: space-between;
@@ -4565,9 +4665,9 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .asset-modal-window {
-  width: min(860px, 100%);
-  max-width: min(860px, calc(100vw - 32px));
-  max-height: min(88vh, 840px);
+  width: min(720px, 100%);
+  max-width: min(720px, calc(100vw - 32px));
+  max-height: min(88vh, 760px);
   overflow-y: auto;
 }
 
@@ -4688,8 +4788,8 @@ html.light-theme-active .settings-secondary-btn:hover {
   width: 56px;
   height: 56px;
   border-radius: 999px;
-  border: 1px solid rgba(56, 189, 248, 0.28);
-  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-elevated);
   color: var(--color-data-primary);
   font-size: 1.2rem;
 }
@@ -4709,10 +4809,15 @@ html.light-theme-active .settings-secondary-btn:hover {
   border-top: 1px solid rgba(148, 163, 184, 0.1);
 }
 
+.asset-modal-window .modal-header {
+  padding: 14px 18px;
+}
+
 .asset-modal-window .modal-footer {
   position: sticky;
   bottom: 0;
   z-index: 2;
+  padding: 12px 18px;
   backdrop-filter: blur(10px);
 }
 
@@ -4897,8 +5002,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .asset-chart-tool-btn:hover,
 .asset-chart-tool-btn.active {
-  background: rgba(56, 189, 248, 0.13);
-  border-color: rgba(56, 189, 248, 0.34);
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.34);
   color: #e0f2fe;
 }
 
@@ -5098,7 +5203,7 @@ html.light-theme-active .settings-secondary-btn:hover {
   gap: 10px;
   padding: 12px;
   border-top: 1px solid rgba(148, 163, 184, 0.08);
-  background: rgba(15, 23, 42, 0.44);
+  background: var(--color-surface-elevated);
 }
 
 .asset-modal-fundamentals-stat {
@@ -5106,7 +5211,7 @@ html.light-theme-active .settings-secondary-btn:hover {
   gap: 4px;
   padding: 10px 12px;
   border-radius: 3px;
-  background: rgba(2, 6, 23, 0.4);
+  background: var(--color-surface-elevated);
   border: 1px solid rgba(148, 163, 184, 0.08);
 }
 
@@ -5122,6 +5227,85 @@ html.light-theme-active .settings-secondary-btn:hover {
   color: var(--color-text-primary);
   font-size: 0.98rem;
   font-weight: 700;
+}
+
+.asset-modal-fundamentals-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.asset-modal-fundamentals-thead-row {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.asset-modal-fundamentals-th {
+  text-align: left;
+  padding: 5px 10px;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.asset-modal-fundamentals-th-right {
+  text-align: right;
+}
+
+.asset-modal-fundamentals-row {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.asset-modal-fundamentals-td {
+  padding: 5px 10px;
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+}
+
+.asset-modal-fundamentals-td-right {
+  text-align: right;
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.asset-modal-fundamentals-td-muted {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.asset-modal-fundamentals-td-warning {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.asset-modal-rating-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+
+.asset-modal-rating-badge--buy {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.asset-modal-rating-badge--sell {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.asset-modal-rating-badge--neutral {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-muted);
 }
 
 .asset-modal-empty-copy {
@@ -5985,7 +6169,7 @@ html.light-theme-active .settings-secondary-btn:hover {
   min-width: 56px;
 }
 .prediction-fee-toggle button.on {
-  background: rgba(0, 212, 255, 0.12);
+  background: rgba(255, 255, 255, 0.12);
   border-color: var(--color-interactive);
   color: var(--color-text-primary);
 }
@@ -6684,7 +6868,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 .pagination-button.active {
   border-color: var(--color-data-secondary);
   color: var(--color-data-secondary);
-  background: rgba(56, 189, 248, 0.12);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 /* ── Home Dashboard Styles ───────────────────────────────────────── */
@@ -6779,7 +6963,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .payment-method-btn:hover {
   border-color: var(--color-data-secondary);
-  background: rgba(56, 189, 248, 0.1);
+  background: rgba(255, 255, 255, 0.1);
   transform: translateY(-1px);
 }
 
@@ -9678,26 +9862,22 @@ html.light-theme-active .settings-secondary-btn:hover {
   font-size: 0.6rem;
   padding: 2px 6px;
   background: rgba(239, 68, 68, 0.2);
-  color: var(--color-danger);
+  color: var(--color-data-red-bright);
   border-radius: 4px;
   margin-left: 8px;
   vertical-align: middle;
   text-transform: uppercase;
   border: 1px solid rgba(239, 68, 68, 0.3);
-  animation: pulse 2s infinite;
+  animation: live-pill-glow 2s infinite ease-in-out;
 }
 
-@keyframes pulse {
-  0% {
-    opacity: 1;
+@keyframes live-pill-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
   }
 
   50% {
-    opacity: 0.6;
-  }
-
-  100% {
-    opacity: 1;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.22);
   }
 }
 
@@ -9799,7 +9979,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 .asset-dropdown-container select:focus {
   outline: none;
   border-color: var(--color-data-secondary);
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
 }
 
 .asset-dropdown-container select option {
@@ -9914,7 +10094,7 @@ html.light-theme-active .settings-secondary-btn:hover {
   overflow-x: auto;
   padding-bottom: 8px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(56, 189, 248, 0.4) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.4) transparent;
 }
 
 .expiry-tabs::-webkit-scrollbar {
@@ -9922,7 +10102,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .expiry-tabs::-webkit-scrollbar-thumb {
-  background: rgba(56, 189, 248, 0.4);
+  background: rgba(255, 255, 255, 0.4);
   border-radius: 4px;
 }
 
@@ -9941,15 +10121,15 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .expiry-pill:hover {
   background: rgba(15, 15, 15, 0.8);
-  border-color: rgba(56, 189, 248, 0.4);
+  border-color: rgba(255, 255, 255, 0.4);
   color: var(--color-text-secondary);
 }
 
 .expiry-pill.active {
-  background: rgba(56, 189, 248, 0.1);
+  background: rgba(255, 255, 255, 0.1);
   border-color: var(--color-data-secondary);
   color: var(--color-data-secondary);
-  box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
 }
 
 /* ── Star Active Highlight ────────────────────────────────────────── */
@@ -9976,8 +10156,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 .modal-action-btn {
   padding: 7px 16px;
   border-radius: 3px;
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--color-data-secondary);
   font-size: 0.85rem;
   font-weight: 700;
@@ -9986,8 +10166,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .modal-action-btn:hover {
-  background: rgba(56, 189, 248, 0.16);
-  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.55);
 }
 
 .modal-action-btn.active {
@@ -10043,7 +10223,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .indicator-metric-row:hover td {
-  background: rgba(56, 189, 248, 0.06);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .indicator-metric-cell {
@@ -10093,7 +10273,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .indicator-metric-stat:hover {
   transform: translateY(-2px);
-  border-color: rgba(56, 189, 248, 0.25);
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
 .indicator-metric-stat span {
@@ -10238,10 +10418,6 @@ html.light-theme-active .settings-secondary-btn:hover {
   background: var(--color-interactive-soft);
 }
 
-.tax-v2-kpi-icon.cyan {
-  color: var(--color-data-secondary);
-  background: var(--color-interactive-soft);
-}
 
 .tax-v2-kpi-icon.violet {
   color: var(--color-data-secondary);
@@ -11071,7 +11247,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 .options-exec :is(button, input, select, textarea):focus-visible,
 .options-calculator-symbol-option:focus-visible,
 .options-exec [role="button"]:focus-visible {
-  outline: 2px solid rgba(0, 212, 255, 0.92);
+  outline: 2px solid rgba(255, 255, 255, 0.92);
   outline-offset: 2px;
 }
 
@@ -11110,7 +11286,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .options-exec-header p {
   margin: 6px 0 0;
-  color: rgba(255, 255, 255, 0.34);
+  color: var(--color-text-muted);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -11214,8 +11390,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 }
 
 .options-exec-mode-toggle button.active {
-  background: rgba(0, 212, 255, 0.1);
-  border-color: rgba(0, 212, 255, 0.34);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.34);
   color: var(--options-exec-accent);
 }
 
@@ -11284,8 +11460,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 .options-equity-refresh {
   min-height: 40px;
   border-radius: 3px;
-  border: 1px solid rgba(0, 212, 255, 0.34);
-  background: rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.1);
   color: var(--options-exec-accent);
   padding: 0 14px;
   font-size: 10px;
@@ -11553,7 +11729,7 @@ html.light-theme-active .settings-secondary-btn:hover {
 .options-exec .metric-card label,
 .options-exec-metric-card label {
   display: block;
-  color: rgba(255, 255, 255, 0.38) !important;
+  color: var(--color-text-muted) !important;
   font-size: 10px !important;
   font-weight: 800 !important;
   letter-spacing: 0.18em !important;
@@ -11686,9 +11862,9 @@ html.light-theme-active .settings-secondary-btn:hover {
 .options-exec-simulator {
   --options-sim-choice-bg: var(--options-exec-surface-2);
   --options-sim-choice-border: var(--options-exec-border-strong);
-  --options-sim-active-bg: rgba(0, 212, 255, 0.1);
-  --options-sim-active-border: rgba(0, 212, 255, 0.34);
-  --options-sim-row-selected: rgba(0, 212, 255, 0.08);
+  --options-sim-active-bg: rgba(255, 255, 255, 0.1);
+  --options-sim-active-border: rgba(255, 255, 255, 0.34);
+  --options-sim-row-selected: rgba(255, 255, 255, 0.08);
   --options-sim-details-bg: var(--color-surface-elevated);
   --options-sim-divider: rgba(255, 255, 255, 0.06);
   --options-sim-greek-bg: var(--color-surface-elevated);
@@ -11708,8 +11884,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 
 .options-exec .sim-choice-btn.active,
 .options-exec .sim-choice-btn.horizon.active {
-  border-color: rgba(0, 212, 255, 0.36) !important;
-  background: rgba(0, 212, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.36) !important;
+  background: rgba(255, 255, 255, 0.09) !important;
 }
 
 .options-exec .sim-choice-label {
@@ -11849,8 +12025,8 @@ html.light-theme-active .settings-secondary-btn:hover {
 .options-exec .options-leg-segment-btn.active,
 .options-exec .options-calculator-add-leg-btn,
 .options-exec .options-calculator-action-btn.primary {
-  border-color: rgba(0, 212, 255, 0.34) !important;
-  background: rgba(0, 212, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.34) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
   color: var(--options-exec-accent) !important;
 }
 
@@ -12689,8 +12865,8 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
 }
 
 .options-calculator-add-leg-btn {
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
   color: var(--color-data-secondary);
 }
 
@@ -12793,7 +12969,7 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
 
 .options-leg-segment-btn.active.info {
   background: rgba(8, 47, 73, 0.92);
-  border-color: rgba(56, 189, 248, 0.45);
+  border-color: rgba(255, 255, 255, 0.45);
   color: var(--color-data-secondary);
 }
 
@@ -12836,8 +13012,8 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
 }
 
 .options-calculator-action-btn.primary {
-  background: rgba(56, 189, 248, 0.1);
-  border-color: rgba(56, 189, 248, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
   color: var(--color-data-secondary);
 }
 
@@ -13307,7 +13483,7 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
 
 .intel-summary-card:hover {
   background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(56, 189, 248, 0.3);
+  border-color: rgba(255, 255, 255, 0.3);
   transform: translateY(-2px);
 }
 
@@ -13365,8 +13541,8 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
   }
 
   .intel-news-item:hover {
-    background: rgba(56, 189, 248, 0.08);
-    border-color: rgba(56, 189, 248, 0.4);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.4);
     transform: translateX(4px);
   }
 
@@ -13523,7 +13699,7 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
   width: 100%;
   overflow-x: auto;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--color-surface-elevated);
   border: 1px solid rgba(148, 163, 184, 0.1);
 }
 
@@ -13659,7 +13835,7 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
   gap: 16px;
   padding: 12px;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.42);
+  background: var(--color-surface-card);
   border: 1px solid rgba(148, 163, 184, 0.1);
   transition: all 0.2s ease;
 }
@@ -13709,15 +13885,15 @@ body.light-theme-active .options-exec .options-calculator-add-leg-btn {
   --options-sim-active-bg: rgba(15, 118, 110, 0.22);
   --options-sim-active-border: rgba(94, 234, 212, 0.65);
   --options-sim-dashed-border: rgba(148, 163, 184, 0.4);
-  --options-sim-accent-border: rgba(56, 189, 248, 0.28);
+  --options-sim-accent-border: rgba(255, 255, 255, 0.28);
   --options-sim-loading-bg: rgba(15, 23, 42, 0.6);
   --options-sim-error-bg: rgba(127, 29, 29, 0.25);
   --options-sim-error-border: rgba(248, 113, 113, 0.6);
   --options-sim-error-text: #fecaca;
-  --options-sim-row-selected: rgba(56, 189, 248, 0.1);
+  --options-sim-row-selected: rgba(255, 255, 255, 0.1);
   --options-sim-details-bg: rgba(15, 23, 42, 0.4);
   --options-sim-divider: rgba(148, 163, 184, 0.1);
-  --options-sim-chip-bg: rgba(56, 189, 248, 0.05);
+  --options-sim-chip-bg: rgba(255, 255, 255, 0.05);
   --options-sim-greek-bg: rgba(15, 23, 42, 0.6);
   --options-sim-input-bg: rgba(15, 23, 42, 0.6);
   --options-sim-input-border: rgba(148, 163, 184, 0.3);
@@ -13800,7 +13976,7 @@ body.light-theme-active .options-strategy-simulator {
 .sim-choice-btn.bearish.active .sim-choice-label { color: var(--color-danger); }
 
 .sim-choice-btn.protect.active {
-  background: rgba(56, 189, 248, 0.12);
+  background: rgba(255, 255, 255, 0.12);
   border-color: var(--color-data-secondary);
 }
 .sim-choice-btn.protect.active .sim-choice-label { color: var(--color-interactive); }
@@ -13852,8 +14028,8 @@ body.light-theme-active .options-strategy-simulator .strategy-details-row td {
 }
 
 .greek-box:hover {
-  background: rgba(56, 189, 248, 0.08);
-  border-color: rgba(56, 189, 248, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .greek-box label {
@@ -14649,6 +14825,9 @@ body:not(.light-theme-active) .indicator-metric-modal {
 
 .watchlist-symbol-cell strong {
   display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
 }
 
 .watchlist-symbol-cell span {
@@ -16247,7 +16426,7 @@ body.light-theme-active .journal-v2-heat-stats .negative {
   display: flex;
   gap: 20px;
   overflow-x: auto;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  border-bottom: 1px solid var(--color-border-subtle);
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
@@ -18608,7 +18787,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-signal-row p,
 .home-exec-empty p {
   margin: 0;
-  color: #7f8ba3;
+  color: var(--color-text-secondary);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -18628,7 +18807,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
   text-transform: uppercase;
   letter-spacing: 0.18em;
   font-weight: 800;
-  color: rgba(255, 255, 255, 0.32);
+  color: var(--color-text-muted);
 }
 
 .home-exec-sync-block {
@@ -18638,7 +18817,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-sync-block strong {
-  color: rgba(255, 255, 255, 0.52);
+  color: var(--color-text-secondary);
   font-size: 11px;
   font-family: "JetBrains Mono", monospace;
   letter-spacing: -0.02em;
@@ -18660,7 +18839,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
   padding: 0 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.02);
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--color-text-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -18715,8 +18894,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-btn.primary {
-  background: rgba(0, 212, 255, 0.1);
-  border-color: rgba(0, 212, 255, 0.22);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.22);
   color: #b9f6ff;
 }
 
@@ -18738,9 +18917,9 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-timeframe-strip button:hover,
 .home-exec-toggle:hover,
 .home-exec-triage-tools button:hover {
-  border-color: rgba(0, 212, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.22);
   color: var(--color-text-primary);
-  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.05);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05);
 }
 
 .home-exec-link {
@@ -18779,9 +18958,9 @@ body.light-theme-active .portfolio-v2-empty h3 {
 
 .home-exec-command-deck {
   background:
-    radial-gradient(circle at top left, rgba(0, 212, 255, 0.08), transparent 32%),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 32%),
     linear-gradient(180deg, rgba(23, 29, 37, 0.96), rgba(18, 23, 31, 0.94));
-  border-color: rgba(0, 212, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .home-exec-command-head {
@@ -18862,7 +19041,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 
 .home-exec-monitor-row span,
 .home-exec-health-card span {
-  color: rgba(255, 255, 255, 0.34);
+  color: var(--color-text-muted);
   font-size: 10px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -18936,8 +19115,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
 
 .home-exec-timeframe-strip button.active,
 .home-exec-toggle.active {
-  background: rgba(0, 212, 255, 0.12);
-  border-color: rgba(0, 212, 255, 0.28);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
   color: var(--color-data-primary);
 }
 
@@ -19027,7 +19206,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-health-card {
   background: transparent;
   border: 0;
-  border-top: 1px solid rgba(0, 212, 255, 0.12);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -19042,7 +19221,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-health-card em {
-  color: rgba(255, 255, 255, 0.38);
+  color: var(--color-text-muted);
   font-size: 11px;
   font-style: normal;
   max-width: 120px;
@@ -19208,7 +19387,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
   border-radius: 999px;
   border: 1px solid var(--color-border-medium);
   background: rgba(255, 255, 255, 0.02);
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--color-text-muted);
   font-size: 10px;
   font-weight: 700;
   cursor: pointer;
@@ -19313,7 +19492,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-log-table tbody tr:focus-visible {
-  outline: 2px solid rgba(0, 212, 255, 0.55);
+  outline: 2px solid rgba(255, 255, 255, 0.55);
   outline-offset: -2px;
 }
 
@@ -19495,8 +19674,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 212, 255, 0.12);
-  background: rgba(0, 212, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
   color: #72d8ee !important;
   font-size: 9px !important;
   font-weight: 800 !important;
@@ -19515,7 +19694,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-triage-tools button:focus-visible,
 .home-exec-holding-row:focus-visible,
 .home-exec-mover-row:focus-visible {
-  outline: 2px solid rgba(0, 212, 255, 0.6);
+  outline: 2px solid rgba(255, 255, 255, 0.6);
   outline-offset: 3px;
 }
 
@@ -19691,7 +19870,7 @@ html.light-theme-active {
 
 /* --- Yahoo Style Asset Header --- */
 .yahoo-header {
-  padding: 24px 24px 16px !important;
+  padding: 16px 20px 12px !important;
   border-bottom: 1px solid rgba(148, 163, 184, 0.1);
   display: block !important;
 }
@@ -19709,7 +19888,7 @@ html.light-theme-active {
 }
 
 .yahoo-name {
-  font-size: 1.25rem;
+  font-size: 1.05rem;
   font-weight: 500;
   color: var(--color-text-secondary);
   margin: 0;
@@ -19723,14 +19902,14 @@ html.light-theme-active {
 }
 
 .yahoo-price {
-  font-size: 2.5rem;
+  font-size: 1.9rem;
   font-weight: 700;
   color: var(--color-text-primary);
   line-height: 1;
 }
 
 .yahoo-change {
-  font-size: 1.25rem;
+  font-size: 0.95rem;
   font-weight: 600;
 }
 
@@ -24033,7 +24212,7 @@ body.light-theme-active .home-exec {
   --home-exec-text: #0f172a;
   --home-exec-muted: #475569;
   --home-exec-soft: #64748b;
-  --home-exec-accent: #0891b2;
+  --home-exec-accent: var(--color-interactive);
 }
 
 body.light-theme-active .home-exec-heading h2,
@@ -24570,8 +24749,8 @@ html.portfolio-active,
 
 .triage-badge-model {
   color: var(--color-interactive) !important;
-  background: rgba(0, 212, 255, 0.05);
-  border-color: rgba(0, 212, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .portfolio-exec-triage-card strong {
@@ -25194,10 +25373,8 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
   --home-draft-border: rgba(255, 255, 255, 0.05);
   --home-draft-border-strong: rgba(255, 255, 255, 0.08);
   --home-draft-text: rgba(255, 255, 255, 0.9);
-  --home-draft-muted: rgba(255, 255, 255, 0.3);
+  --home-draft-muted: var(--color-text-secondary);
   --home-draft-soft: rgba(255, 255, 255, 0.2);
-  --home-draft-cyan: var(--color-interactive);
-  --home-draft-cyan-soft: rgba(255, 255, 255, 0.1);
   --home-draft-green: #10b981;
   --home-draft-red: #ef4444;
   --home-draft-amber: #f59e0b;
@@ -25234,7 +25411,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 }
 
 .view-container.home-dashboard.home-exec .home-exec-eyebrow {
-  color: var(--home-draft-cyan);
+  color: var(--color-interactive);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.25em;
@@ -25297,7 +25474,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 .view-container.home-dashboard.home-exec .home-exec-sync-block strong {
   font-size: 12px;
   font-family: "JetBrains Mono", monospace;
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--color-text-secondary);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-btn,
@@ -25312,7 +25489,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 }
 
 .view-container.home-dashboard.home-exec .home-exec-btn.primary {
-  border-color: rgba(0, 212, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.18);
   background: #3aaed2;
   color: #f5fcff;
 }
@@ -25331,7 +25508,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 
 .view-container.home-dashboard.home-exec .home-exec-btn.primary:hover {
   background: #4bb8db;
-  border-color: rgba(0, 212, 255, 0.28);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-link {
@@ -25445,9 +25622,9 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 
 .view-container.home-dashboard.home-exec .home-exec-timeframe-strip button.active,
 .view-container.home-dashboard.home-exec .home-exec-toggle.active {
-  border-color: rgba(0, 212, 255, 0.22);
-  background: var(--home-draft-cyan-soft);
-  color: #7fe7ff;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: var(--color-interactive-soft);
+  color: var(--color-interactive);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-hero-side-grid {
@@ -25484,7 +25661,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
   margin-top: -6px;
   margin-left: -3px;
   border-radius: 999px;
-  background: var(--home-draft-cyan);
+  background: var(--color-interactive);
   box-shadow: none;
 }
 
@@ -25510,14 +25687,14 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 }
 
 .view-container.home-dashboard.home-exec .home-exec-health-card {
-  background: rgba(0, 212, 255, 0.03);
-  border-color: rgba(0, 212, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-health-card span,
 .view-container.home-dashboard.home-exec .home-exec-health-card strong,
 .view-container.home-dashboard.home-exec .home-exec-health-card em {
-  color: #79e6ff;
+  color: var(--color-text-muted);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-health-card em {
@@ -26208,11 +26385,11 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
 }
 
 .view-container.home-dashboard.home-exec .home-exec-monitor-panel .home-exec-health-card strong {
-  color: #7fe7ff;
+  color: var(--color-interactive);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-monitor-panel .home-exec-health-card em {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--color-text-muted);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-signal-tape {
@@ -28010,7 +28187,7 @@ body.light-theme-active .tax-workbench-inline-select input {
   font-size: 0.64rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.28);
+  color: var(--color-text-muted);
 }
 
 .tax-workbench-btn,
@@ -28613,7 +28790,6 @@ body.light-theme-active .tax-workbench-primary-btn {
   --analytics-text: var(--color-text-primary);
   --analytics-muted: var(--color-text-muted);
   --analytics-dim: var(--color-text-dim);
-  --analytics-cyan: var(--color-data-primary);
   --analytics-green: var(--color-data-green-bright);
   --analytics-red: var(--color-data-red-bright);
   --analytics-amber: var(--color-data-amber-bright);
@@ -28662,7 +28838,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 .analytics-research-note span,
 .analytics-research-compact-status span {
   display: block;
-  color: var(--analytics-cyan);
+  color: var(--color-data-primary);
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.18em;
@@ -28769,7 +28945,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 }
 
 .analytics-research-metric.info strong {
-  color: var(--analytics-cyan);
+  color: var(--color-data-primary);
 }
 
 .analytics-research-main {
@@ -28886,7 +29062,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 
 .analytics-research-signal.info {
   border-color: var(--color-border-medium);
-  color: var(--analytics-cyan);
+  color: var(--color-data-primary);
 }
 
 .analytics-research-rail {
@@ -28927,7 +29103,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 }
 
 .analytics-research-compact-status strong {
-  color: var(--analytics-cyan);
+  color: var(--color-data-primary);
   font-size: 0.86rem;
 }
 
@@ -28939,7 +29115,7 @@ body.light-theme-active .tax-workbench-primary-btn {
 .analytics-research-equities .analytics-research-panel-head span,
 .analytics-research-macro .analytics-research-panel-head span,
 .analytics-research-commodities .analytics-research-panel-head span {
-  color: var(--analytics-cyan);
+  color: var(--color-data-primary);
 }
 
 .analytics-desk-shell {
@@ -29050,7 +29226,7 @@ body.light-theme-active .tax-workbench-primary-btn {
   color: #ffb86b;
 }
 
-.analytics-desk-command.cyan span,
+.analytics-desk-command.accent-primary span,
 .analytics-options-command .analytics-desk-hero span,
 .analytics-options-command .analytics-desk-panel-head span,
 .analytics-options-watch-section > span {
@@ -32337,7 +32513,7 @@ body.light .institutional-form-grid input {
   width: 20px;
   height: 20px;
   border-radius: 999px;
-  background: rgba(56, 189, 248, 0.14);
+  background: rgba(255, 255, 255, 0.14);
   color: var(--color-data-primary);
   font-size: 11px;
 }
@@ -32407,7 +32583,7 @@ body.light .institutional-form-grid input {
 body.light .guided-empty-state,
 body.light-theme-active .guided-empty-state {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.94));
-  border-color: rgba(56, 189, 248, 0.24);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 [data-theme="light"] .guided-empty-state.warning,
@@ -34941,7 +35117,7 @@ body.light-theme-active .research-workspace {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 4px 5px;
+  padding: 4px 4px 6px;
 }
 
 .sidebar.sidebar-overhaul-v2 .sidebar-brand-mark {
@@ -35120,6 +35296,7 @@ body.light-theme-active .research-workspace {
 .sidebar.sidebar-overhaul-v2 .sidebar-live-row strong {
   color: var(--color-text-secondary);
   font-weight: 600;
+  font-size: 0.95rem;
 }
 .sidebar.sidebar-overhaul-v2 .sidebar-live-dot {
   display: inline-block;
@@ -35214,6 +35391,32 @@ body.light-theme-active .research-workspace {
   color: var(--color-text-primary);
 }
 
+/* Collapsed rail: the expand control has no default chrome, so give it a
+   visible button affordance in both themes. */
+.sidebar.sidebar-overhaul-v2.collapsed .sidebar-collapsed-brand {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+.sidebar.sidebar-overhaul-v2.collapsed .sidebar-collapsed-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.sidebar.sidebar-overhaul-v2.collapsed .sidebar-collapsed-mark:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-strong);
+}
+
 /* Collapse toggle */
 .sidebar.sidebar-overhaul-v2 .sidebar-collapse-toggle {
   display: inline-flex;
@@ -35222,11 +35425,11 @@ body.light-theme-active .research-workspace {
   width: 28px;
   height: 28px;
   border-radius: 4px;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 1px solid transparent;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-border-subtle);
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 .sidebar.sidebar-overhaul-v2 .sidebar-collapse-toggle:hover {
   background: var(--color-surface-overlay);
@@ -36388,10 +36591,10 @@ body.light-theme-active .guest-workspace-hero span,
 body.light-theme-active .guest-preview-card header span,
 body.light-theme-active .guest-workflow-card header span,
 body.light-theme-active .guest-mission-copy span,
-body.light-theme-active .journal-decision-primary span,
+body.light-theme-activespan,
 body.light-theme-active .tax-scenario-command span,
 body.light-theme-active .watchlist-intent-main span,
-body.light-theme-active .journal-decision-score span,
+body.light-theme-activespan,
 body.light-theme-active .tax-scenario-delta span {
   color: var(--color-interactive);
 }
@@ -36414,7 +36617,6 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 
 .guest-mission-bar,
 .watchlist-intent-panel,
-.journal-decision-layer,
 .tax-scenario-workbench {
   border: 1px solid var(--color-border-medium);
   border-radius: 8px;
@@ -36435,7 +36637,6 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .guest-mission-copy,
-.journal-decision-primary,
 .tax-scenario-command,
 .watchlist-intent-main {
   display: grid;
@@ -36443,10 +36644,8 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .guest-mission-copy span,
-.journal-decision-primary span,
 .tax-scenario-command span,
 .watchlist-intent-main span,
-.journal-decision-score span,
 .tax-scenario-delta span {
   color: var(--color-data-primary);
   font: 800 10px/1.2 "JetBrains Mono", "SFMono-Regular", monospace;
@@ -36456,7 +36655,6 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 
 .guest-mission-copy strong,
 .watchlist-intent-main h3,
-.journal-decision-primary h3,
 .tax-scenario-command h3 {
   margin: 0;
   color: var(--color-text-primary);
@@ -36465,7 +36663,6 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .guest-mission-steps,
-.journal-decision-templates,
 .tax-scenario-delta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -36473,7 +36670,7 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .guest-mission-steps button,
-.journal-decision-templates button {
+button {
   min-height: 56px;
   padding: 10px;
   border: 1px solid rgba(255, 255, 255, 0.135);
@@ -36485,15 +36682,15 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   min-width: 0;
 }
 
-.journal-decision-templates button {
+button {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
 }
 
 .guest-mission-steps button.active,
-.journal-decision-templates button:hover,
-.journal-decision-templates button:focus-visible {
+button:hover,
+button:focus-visible {
   border-color: color-mix(in srgb, var(--color-border-strong) 44%, transparent);
   background: color-mix(in srgb, var(--color-border-medium) 22%, transparent);
   color: var(--color-text-primary);
@@ -36513,7 +36710,7 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .guest-mission-steps span,
-.journal-decision-templates strong {
+strong {
   display: block;
   color: inherit;
   font-size: 12px;
@@ -36521,9 +36718,7 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
 }
 
 .guest-mission-steps small,
-.journal-decision-templates span,
 .watchlist-intent-main p,
-.journal-decision-primary p,
 .tax-scenario-command p {
   color: var(--color-text-secondary);
   font-size: 11px;
@@ -36843,7 +37038,6 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   color: #020617;
 }
 
-.journal-decision-layer,
 .tax-scenario-workbench {
   display: grid;
   gap: 12px;
@@ -36851,11 +37045,11 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   padding: 14px;
 }
 
-.journal-decision-layer {
+{
   grid-template-columns: minmax(260px, 1.2fr) minmax(128px, 0.36fr) minmax(340px, 1.5fr);
 }
 
-.journal-decision-score {
+{
   display: grid;
   align-content: center;
   gap: 4px;
@@ -36865,20 +37059,14 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   background: color-mix(in srgb, var(--color-surface-elevated) 62%, transparent);
 }
 
-.journal-decision-score strong {
-  color: var(--color-text-primary);
-  font-size: 26px;
-  line-height: 1;
-}
-
-.journal-decision-score small {
-  color: rgba(255, 255, 255, 0.54);
+small {
+  color: var(--color-text-muted);
   font-size: 11px;
 }
 
 /* Action buttons sit at the bottom-right of the primary column and match the
    header Save Snapshot button height (40px) so the two CTAs read as one set. */
-.journal-decision-actions {
+{
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -36888,7 +37076,7 @@ body.light-theme-active .guest-onboarding-checklist .complete i {
   padding-top: 6px;
 }
 
-.journal-decision-actions .journal-btn {
+.journal-btn {
   height: 40px;
   min-height: 40px;
   min-width: 146px;
@@ -36956,16 +37144,16 @@ body.light-theme-active .tax-scenario-workbench {
 
 body.light-theme-active .guest-mission-copy strong,
 body.light-theme-active .watchlist-intent-main h3,
-body.light-theme-active .journal-decision-primary h3,
-body.light-theme-active .journal-decision-score strong,
+body.light-theme-activeh3,
+body.light-theme-activestrong,
 body.light-theme-active .tax-scenario-command h3,
 body.light-theme-active .tax-scenario-delta strong {
   color: var(--color-text-primary);
 }
 
 body.light-theme-active .guest-mission-steps button,
-body.light-theme-active .journal-decision-templates button,
-body.light-theme-active .journal-decision-score,
+body.light-theme-activebutton,
+body.light-theme-active
 body.light-theme-active .tax-scenario-delta > div,
 body.light-theme-active .tax-scenario-controls select {
   background: var(--color-surface-elevated);
@@ -36974,17 +37162,16 @@ body.light-theme-active .tax-scenario-controls select {
 }
 
 body.light-theme-active .guest-mission-steps small,
-body.light-theme-active .journal-decision-templates span,
+body.light-theme-activespan,
 body.light-theme-active .watchlist-intent-main p,
-body.light-theme-active .journal-decision-primary p,
+body.light-theme-activep,
 body.light-theme-active .tax-scenario-command p,
-body.light-theme-active .journal-decision-score small {
+body.light-theme-activesmall {
   color: var(--color-text-secondary);
 }
 
 @media (max-width: 1100px) {
   .guest-mission-bar,
-  .journal-decision-layer,
   .tax-scenario-workbench {
     grid-template-columns: 1fr;
   }
@@ -36997,7 +37184,7 @@ body.light-theme-active .journal-decision-score small {
 
 @media (max-width: 720px) {
   .guest-mission-steps,
-  .journal-decision-templates {
+{
     grid-template-columns: 1fr;
   }
 
@@ -37217,6 +37404,10 @@ body.light-theme-active .guest-status-chip {
 
 .prediction-market-title {
   margin: 0;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: var(--color-text-secondary);
   font-size: 0.88rem;
   font-weight: 780;
@@ -37328,7 +37519,7 @@ body.light-theme-active .prediction-desk-strip span,
 body.light-theme-active .prediction-risk-card span,
 body.light-theme-active .prediction-filter-bar label > span,
 body.light-theme-active .prediction-filter-bar .asset-dropdown-container span {
-  color: #0e7490;
+  color: var(--color-text-secondary);
 }
 
 body.light-theme-active .prediction-desk-copy p,
@@ -37410,7 +37601,6 @@ body.light-theme-active .prediction-filter-bar select {
 
 .options-exec-metrics .metric-card,
 .watchlist-panel-compact,
-.journal-decision-layer,
 .tax-scenario-workbench,
 .portfolio-command-summary,
 .portfolio-command-analysis,
@@ -37423,11 +37613,10 @@ body.light-theme-active .prediction-filter-bar select {
   white-space: nowrap;
 }
 
-.journal-decision-layer {
+{
   align-items: stretch;
 }
 
-.journal-decision-primary h3,
 .tax-scenario-command h3,
 
 
@@ -37707,7 +37896,7 @@ body.page-dark-theme .search-type-buttons {
 
 .perps-field-input:focus {
   outline: none;
-  border-color: rgba(0, 212, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 .perps-field-select {
@@ -37758,16 +37947,16 @@ body.page-dark-theme .search-type-buttons {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  background: rgba(0, 212, 255, 0.15);
+  background: rgba(255, 255, 255, 0.15);
   color: var(--color-interactive);
-  border: 1px solid rgba(0, 212, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 2px;
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .perps-recalc-btn:hover:not(:disabled) {
-  background: rgba(0, 212, 255, 0.25);
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .perps-recalc-btn:disabled {
@@ -38022,9 +38211,9 @@ body.page-dark-theme .search-type-buttons {
 }
 
 .perps-mode-toggle button.active {
-  background: rgba(0, 212, 255, 0.1);
+  background: rgba(255, 255, 255, 0.1);
   color: var(--color-interactive);
-  border-color: rgba(0, 212, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
 .perps-fee-table-wrap {
@@ -38195,7 +38384,7 @@ body.page-dark-theme .search-type-buttons {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.3);
   line-height: 1.6;
-  border-left: 2px solid rgba(0, 212, 255, 0.3);
+  border-left: 2px solid rgba(255, 255, 255, 0.3);
   padding-left: 12px;
 }
 
@@ -38255,8 +38444,8 @@ body.page-dark-theme .search-type-buttons {
 
 .perps-save-feedback {
   padding: 8px 14px;
-  background: rgba(0, 212, 255, 0.08);
-  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 2px;
   color: var(--color-interactive);
   font-size: 11px;
@@ -38599,7 +38788,7 @@ body.light-theme-active .analytics-desk-command em {
 body.light-theme-active .analytics-desk-command span,
 body.light-theme-active .analytics-desk-command.amber span,
 body.light-theme-active .analytics-desk-command.orange span,
-body.light-theme-active .analytics-desk-command.cyan span {
+body.light-theme-active .analytics-desk-command.accent-primary span {
   color: var(--color-text-secondary) !important;
 }
 
@@ -38655,3 +38844,248 @@ body.light-theme-active .analytics-equities-toolbar-btn:focus-visible {
 .watchlist-table-wrap .watchlist-table [data-state] {
   /* Keep the existing row hover/flash behaviors from styles.css. */
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   MIGRATED FROM theme.css (appended custom section)
+   These selectors existed only in theme.css, not in styles.css.
+   Ported as part of the theme.css → styles.css consolidation.
+   Each rule is annotated with the matched selector(s).
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Cleanup applied during migration:
+   - Dropped 15 dead class selectors never referenced in JSX.
+   - Dropped all [data-theme=light] rules (app toggles theme via
+     body.light-theme-active, never via a data-theme attribute).
+   - Replaced off-palette cyan (#67e8f9 / #38bdf8) hover/focus values
+     with monochrome tokens (--color-interactive-soft, --color-focus,
+     --color-border-subtle) per brand.md "no cyan" directive.
+   - Fixed pre-existing broken refs: --light-border → --color-border-medium,
+     --light-text-strong → --color-text-primary (both were undefined in theme.css).
+   - Dropped one bogus bare-h3 grid rule (minification artifact; the real rule
+     for .tax-workbench-scenario-row already exists in styles.css).
+   - Tokenized stray slate borders/text ported from theme.css (#64748b, #5f7d8b,
+     #334155) to --color-border-subtle / --analytics-line / --color-text-secondary. */
+
+/* covers: .home-exec-log-table tbody tr[role=button] */
+.home-exec-btn,.home-exec-link,.home-exec-toggle,.home-exec-timeframe-strip button,.home-exec-market-controls select,.home-exec-log-table tbody tr[role=button],.home-exec-mover-row,.home-exec-holding-row { transition:background-color .15s ease,border-color .15s ease,color .15s ease,transform .15s ease}
+
+/* covers: .home-exec-log-table tbody tr[role=button]:hover */
+.home-exec-btn:hover,.home-exec-link:hover,.home-exec-toggle:hover,.home-exec-timeframe-strip button:hover,.home-exec-market-controls select:hover,.home-exec-mover-row:hover,.home-exec-holding-row:hover,.home-exec-log-table tbody tr[role=button]:hover { border-color:var(--color-border-subtle);background:#ffffff0a}
+
+/* covers: .home-exec-log-table tbody tr[role=button]:focus-visible */
+.home-exec-btn:focus-visible,.home-exec-link:focus-visible,.home-exec-toggle:focus-visible,.home-exec-timeframe-strip button:focus-visible,.home-exec-market-controls select:focus-visible,.home-exec-log-table tbody tr[role=button]:focus-visible,.home-exec-mover-row:focus-visible,.home-exec-holding-row:focus-visible,.home-exec-triage-tools button:focus-visible { outline:none;box-shadow:0 0 0 2px #070b14f5,0 0 0 4px var(--color-focus)}
+
+/* covers: .home-exec-market-preview-chip:nth-child(2n) */
+.home-exec-market-preview-chip:nth-child(2n) { padding-left:18px;border-left:1px solid var(--color-border-subtle)}
+
+/* covers: .home-exec-log-table tbody tr[role=button] */
+.home-exec-log-table tbody tr[role=button] { cursor:pointer}
+
+/* covers: .home-exec-log-table tbody tr[role=button]:hover td, .home-exec-log-table tbody tr[role=button]:focus-visible td */
+.home-exec-log-table tbody tr[role=button]:hover td,.home-exec-log-table tbody tr[role=button]:focus-visible td { border-color:var(--color-border-subtle);background:#ffffff08}
+
+/* covers: .sidebar-brand-row */
+.sidebar-brand-row { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 4px 14px}
+
+/* covers: .sidebar-brand-mark */
+.sidebar-brand-mark { display:inline-flex;align-items:center;gap:10px}
+
+/* covers: .sidebar-brand-type */
+.sidebar-brand-type { display:inline-flex;flex-direction:column;align-items:flex-start;line-height:1.1}
+
+/* covers: .sidebar-section-header */
+.sidebar-section-header { display:flex;align-items:center;font-size:.7rem;text-transform:uppercase;letter-spacing:.18em;color:var(--color-text-muted);padding:8px 4px 6px}
+
+/* covers: .sidebar-section-header:before */
+.sidebar-section-header:before { content:"";flex:1 1 auto;order:2;height:1px;margin-left:10px;background:var(--color-border-subtle)}
+
+/* covers: .sidebar-nav-group, .sidebar-nav-stack */
+.sidebar-nav-group,.sidebar-nav-stack { display:flex;flex-direction:column;gap:4px}
+
+/* covers: .nav-btn */
+.nav-btn { display:inline-flex;align-items:center;gap:12px;min-height:36px;padding:7px 10px;font-size:.92rem;color:var(--color-text-secondary);border-radius:4px;transition:background-color .14s ease,color .14s ease}
+
+/* covers: .nav-icon-wrap */
+.nav-icon-wrap { display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:0 0 20px;opacity:.85}
+
+/* covers: .nav-icon */
+.nav-icon { display:inline-flex;width:16px;height:16px}
+
+/* covers: .nav-copy */
+.nav-copy { display:inline-flex;align-items:center;min-width:0;line-height:1.2}
+
+/* covers: .nav-full */
+.nav-full { white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* covers: .sidebar-brand-row+.sidebar-nav, .sidebar-nav+.sidebar-live-status, .sidebar-live-status+.sidebar-bottom, .sidebar-nav+.sidebar-statusbar, .sidebar-statusbar+.sidebar-footer */
+.sidebar-brand-row+.sidebar-nav,.sidebar-nav+.sidebar-live-status,.sidebar-live-status+.sidebar-bottom,.sidebar-nav+.sidebar-statusbar,.sidebar-statusbar+.sidebar-footer { margin-top:4px}
+
+/* covers: .sidebar-bottom */
+.sidebar-bottom { display:flex;flex-direction:column;gap:2px}
+
+/* covers: .sidebar-live-title */
+.sidebar-live-title { display:flex;align-items:center;font-size:.7rem;text-transform:uppercase;letter-spacing:.18em;color:var(--color-text-muted);padding:0 4px 6px}
+
+/* covers: .sidebar-live-title:before */
+.sidebar-live-title:before { content:"";flex:1 1 auto;order:2;height:1px;margin-left:10px;background:var(--color-border-subtle)}
+
+/* covers: .sidebar-live-row */
+.sidebar-live-row { display:inline-flex;align-items:center;justify-content:space-between;gap:12px;padding:3px 4px;color:var(--color-text-muted);font-size:.82rem}
+
+/* covers: .sidebar-live-row.primary */
+.sidebar-live-row.primary { color:var(--color-success)}
+
+/* covers: .sidebar-live-dot */
+.sidebar-live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.9}
+
+/* covers: .sidebar-utility-row */
+.sidebar-utility-row { -webkit-appearance:none;-moz-appearance:none;appearance:none;border:0;background:transparent;color:var(--color-text-secondary);width:100%;min-height:34px;padding:6px 10px;border-radius:4px}
+
+/* covers: .sidebar-utility-left */
+.sidebar-utility-left { display:inline-flex;align-items:center;gap:12px;min-width:0}
+
+/* covers: .sidebar-utility-copy */
+.sidebar-utility-copy { display:inline-flex;flex-direction:column;align-items:flex-start;min-width:0}
+
+/* covers: .sidebar-theme-icon */
+.sidebar-theme-icon { display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;opacity:.85}
+
+/* covers: .sidebar-theme-right */
+.sidebar-theme-right { display:inline-flex;align-items:center;gap:8px;margin-left:auto;opacity:.8}
+
+/* covers: .sidebar-theme-chip */
+.sidebar-theme-chip { font-size:.8rem;color:var(--color-text-muted)}
+
+/* covers: .sidebar-theme-arrow */
+.sidebar-theme-arrow { opacity:.7;color:var(--color-text-muted)}
+
+/* covers: .user-icon */
+.user-icon { display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;opacity:.85}
+
+/* covers: .sidebar-account-chevron */
+.sidebar-account-chevron { opacity:.7;color:var(--color-text-muted)}
+
+/* covers: .sidebar-theme-row:hover, .sidebar-account-row:hover, .sidebar-logout-row:hover */
+.sidebar-theme-row:hover,.sidebar-account-row:hover,.sidebar-logout-row:hover { background:#ffffff0f;color:var(--color-text-primary)}
+
+/* covers: .sidebar-theme-label */
+.sidebar-theme-label { font-size:.92rem}
+
+/* covers: .view-container.home-dashboard.home-exec .home-exec-market-preview-chip:nth-child(2n) */
+.view-container.home-dashboard.home-exec .home-exec-market-preview-chip:nth-child(2n),.view-container.home-dashboard.home-exec .home-exec-market-preview-chip:nth-child(n+3) { padding:11px 12px;border:1px solid var(--home-draft-border)}
+
+/* covers: .view-container.home-dashboard.home-exec .home-exec-market-preview-chip:nth-child(2n) */
+.view-container.home-dashboard.home-exec .home-exec-market-preview-chip:nth-child(2n),.view-container.home-dashboard.home-exec .home-exec-market-preview-chip:nth-child(n+3) { padding:10px;border:1px solid var(--home-card-row)}
+
+/* covers: body.light-theme-active [aria-disabled=true] */
+body.light-theme-active button:disabled,body.light-theme-active button[disabled],body.light-theme-active [aria-disabled=true] { color:var(--color-text-secondary)!important;border-color:var(--color-border-subtle)!important;background:var(--color-surface-elevated)!important;opacity:1!important;cursor:not-allowed}
+
+/* covers: .tax-workbench .journal-btn */
+.tax-workbench .journal-btn { padding:7px 14px;min-height:0;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;border-radius:2px;background:var(--color-interactive-soft);color:var(--color-text-secondary);border-color:var(--color-border-subtle)}
+
+/* covers: .tax-workbench .journal-btn:hover */
+.tax-workbench .journal-btn:hover { border-color:var(--color-border-strong);background:var(--color-interactive-soft);color:var(--color-text-primary)}
+
+/* covers: .tax-workbench .journal-btn.primary */
+.tax-workbench .journal-btn.primary { background:var(--color-interactive);color:var(--color-text-inverse);border-color:var(--color-border-medium)}
+
+/* covers: .tax-workbench .journal-btn.primary:hover:not(:disabled) */
+.tax-workbench .journal-btn.primary:hover:not(:disabled) { background:var(--color-interactive);color:var(--color-text-inverse)}
+
+/* covers: .tax-workbench .journal-btn.danger */
+.tax-workbench .journal-btn.danger { color:var(--color-data-red-bright);border-color:#ef44444d;background:#7f1d1d4d}
+
+/* covers: body.light-theme-active .tax-workbench .journal-btn */
+body.light-theme-active .tax-workbench .journal-btn { background:var(--color-interactive-soft);color:var(--color-text-secondary);border-color:var(--color-border-subtle)}
+
+/* covers: body.light-theme-active .tax-workbench .journal-btn.primary */
+body.light-theme-active .tax-workbench .journal-btn.primary { background:var(--color-interactive);color:var(--color-text-inverse);border-color:var(--color-border-medium)}
+
+/* covers: .tax-workbench-idea-apply[aria-pressed=true] */
+.tax-workbench-idea-apply[aria-pressed=true] { background:var(--color-interactive-soft);border-color:var(--color-border-medium);color:var(--color-interactive)}
+
+/* covers: .tax-workbench-cell:before */
+.tax-workbench-cell:before { display:none;content:attr(data-label);font-size:.58rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#ffffff5c}
+
+/* covers: .analytics-curve-row em:before */
+.analytics-curve-row em:before { content:"";position:absolute;left:0;right:96px;top:6px;height:2px;border-radius:999px;background:var(--analytics-line)}
+
+/* covers: body.light-theme-active .analytics-equities-matrix-table tbody tr:nth-child(2n), body.light-theme-active .analytics-commodity-table tbody tr:nth-child(2n) */
+body.light-theme-active .analytics-equities-matrix-table tbody tr:nth-child(2n),body.light-theme-active .analytics-commodity-table tbody tr:nth-child(2n) { background:var(--color-surface-panel)!important}
+
+/* covers: .guest-data-banner button[aria-busy=true] */
+.guest-data-banner button:disabled,.guest-data-banner button[aria-busy=true] { opacity:.72;cursor:progress;transform:none}
+
+/* covers: body.light-theme-active span, body.light-theme-active span */
+body.light-theme-active .guest-workspace-hero span,body.light-theme-active .guest-preview-card header span,body.light-theme-active .guest-workflow-card header span,body.light-theme-active .guest-mission-copy span,body.light-theme-active  span,body.light-theme-active .tax-scenario-command span,body.light-theme-active .watchlist-intent-main span,body.light-theme-active  span,body.light-theme-active .tax-scenario-delta span { color:var(--color-text-secondary)}
+
+/* covers: h3 */
+.guest-mission-copy strong,.watchlist-intent-main h3, h3,.tax-scenario-command h3 { margin:0;color:var(--color-text-primary);font-size:15px;line-height:1.25}
+
+/* covers: .tax-jurisdiction-combobox */
+.tax-jurisdiction-combobox { display:grid;gap:5px;position:relative}
+
+/* covers: .tax-jurisdiction-combobox>span */
+.tax-jurisdiction-combobox>span { color:var(--color-text-muted);font-size:10px;font-weight:800;text-transform:uppercase}
+
+/* covers: .tax-jurisdiction-trigger */
+.tax-jurisdiction-trigger { display:inline-flex;align-items:center;gap:8px;min-height:38px;width:100%;padding:0 12px;border:1px solid var(--color-border-medium);border-radius:7px;background:var(--color-surface-elevated);color:var(--color-text-primary);font-weight:700;cursor:pointer;text-align:left}
+
+/* covers: .tax-jurisdiction-trigger:hover */
+.tax-jurisdiction-trigger:hover { border-color:var(--color-border-strong)}
+
+/* covers: .tax-jurisdiction-caret */
+.tax-jurisdiction-caret { margin-left:auto;color:var(--color-text-muted);font-size:10px}
+
+/* covers: .tax-jurisdiction-popover */
+.tax-jurisdiction-popover { position:absolute;z-index:40;top:calc(100% + 6px);left:0;right:0;min-width:240px;padding:8px;border:1px solid var(--color-border-medium);border-radius:10px;background:var(--color-surface-card);box-shadow:0 12px 32px #0006}
+
+/* covers: .tax-jurisdiction-search */
+.tax-jurisdiction-search { width:100%;min-height:34px;margin-bottom:6px;padding:0 10px;border:1px solid var(--color-border-medium);border-radius:7px;background:var(--color-surface-elevated);color:var(--color-text-primary)}
+
+/* covers: .tax-jurisdiction-options */
+.tax-jurisdiction-options { list-style:none;margin:0;padding:0;max-height:240px;overflow-y:auto;display:grid;gap:2px}
+
+/* covers: .tax-jurisdiction-options button */
+.tax-jurisdiction-options button { display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:0;border-radius:7px;background:transparent;color:var(--color-text-secondary);cursor:pointer;text-align:left}
+
+/* covers: .tax-jurisdiction-options button:hover */
+.tax-jurisdiction-options button:hover { background:var(--color-interactive-soft);color:var(--color-text-primary)}
+
+/* covers: .tax-jurisdiction-options em */
+.tax-jurisdiction-options em { margin-left:auto;font-style:normal;font-size:10px;color:var(--color-text-muted);text-transform:uppercase}
+
+/* covers: .tax-jurisdiction-empty */
+.tax-jurisdiction-empty { padding:10px;color:var(--color-text-muted);font-size:12px}
+
+/* covers: body.light-theme-active .tax-jurisdiction-trigger */
+body.light-theme-active .tax-jurisdiction-trigger { background:var(--color-surface-elevated);border-color:var(--color-border-medium);color:var(--color-text-primary)}
+
+/* covers: body.light-theme-active .tax-jurisdiction-popover */
+body.light-theme-active .tax-jurisdiction-popover { background:var(--color-surface-card);border-color:var(--color-border-medium);box-shadow:0 12px 32px #0000001f}
+
+/* covers: body.light-theme-active .tax-jurisdiction-search */
+body.light-theme-active .tax-jurisdiction-search { background:var(--color-surface-elevated);border-color:var(--color-border-medium);color:var(--color-text-primary)}
+
+/* covers: body.light-theme-active .guest-mission-bar, body.light-theme-active .watchlist-intent-panel */
+body.light-theme-active .guest-mission-bar,body.light-theme-active .watchlist-intent-panel,body.light-theme-active ,body.light-theme-active .tax-scenario-workbench { border-color:var(--color-border-medium);background:var(--color-surface-card)}
+
+/* covers: body.light-theme-active strong */
+body.light-theme-active .guest-mission-copy strong,body.light-theme-active .watchlist-intent-main h3,body.light-theme-active  h3,body.light-theme-active  strong,body.light-theme-active .tax-scenario-command h3,body.light-theme-active .tax-scenario-delta strong { color:var(--color-text-primary)}
+
+/* covers: body.light-theme-active button, body.light-theme-active .tax-scenario-delta>div */
+body.light-theme-active .guest-mission-steps button,body.light-theme-active  button,body.light-theme-active ,body.light-theme-active .tax-scenario-delta>div,body.light-theme-active .tax-scenario-controls select { background:var(--color-surface-card);border-color:var(var(--color-border-medium));color:var(var(--color-text-primary));opacity:1}
+
+/* covers: body.light-theme-active span */
+body.light-theme-active .guest-mission-steps small,body.light-theme-active  span,body.light-theme-active .watchlist-intent-main p,body.light-theme-active  p,body.light-theme-active .tax-scenario-command p,body.light-theme-active  small { color:var(--color-text-secondary)}
+
+/* covers: body.page-dark-theme input:not([type=checkbox]):not([type=radio]) */
+body.page-dark-theme input:not([type=checkbox]):not([type=radio]),body.page-dark-theme select,body.page-dark-theme textarea,body.page-dark-theme .search-controls,body.page-dark-theme .search-type-buttons { background:var(--color-surface-card)!important;border-color:var(--color-border-medium)!important}
+
+/* covers: body.light-theme-active .journal-debrief-head .journal-btn, body.light-theme-active .journal-review-grid .journal-btn, body.light-theme-active .journal-day-view .journal-btn */
+body.light-theme-active  .journal-btn,body.light-theme-active .journal-debrief-head .journal-btn,body.light-theme-active .journal-review-grid .journal-btn,body.light-theme-active .journal-day-view .journal-btn { background:var(--color-interactive)!important;border-color:var(--color-border-medium)!important;color:var(--color-text-inverse)!important}
+
+/* covers: body.light-theme-active .journal-debrief-head .journal-btn:hover, body.light-theme-active .journal-review-grid .journal-btn:hover, body.light-theme-active .journal-day-view .journal-btn:hover */
+body.light-theme-active  .journal-btn:hover,body.light-theme-active .journal-debrief-head .journal-btn:hover,body.light-theme-active .journal-review-grid .journal-btn:hover,body.light-theme-active .journal-day-view .journal-btn:hover { background:var(--color-interactive)!important;border-color:var(--color-border-strong)!important;color:var(--color-text-inverse)!important}
+
