@@ -6196,10 +6196,12 @@ const handleOptionTradeClosed = async (tradeId) => {
       <aside id="zenin-primary-sidebar" className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
         <header className="sidebar-header sidebar-brand-row">
           {!isSidebarVisuallyCollapsed ? (
-            <div className="sidebar-brand-row">
-              <div className="sidebar-brand-mark"><ZeninLogo size="sm" showText={false} /></div>
-              <div className="sidebar-brand-type">
-                <span className="sidebar-brand-name">ZENIN</span>
+            <>
+              <div className="sidebar-brand-left">
+                <div className="sidebar-brand-mark"><ZeninLogo size="sm" showText={false} /></div>
+                <div className="sidebar-brand-type">
+                  <span className="sidebar-brand-name">ZENIN</span>
+                </div>
               </div>
               <button
                 type="button"
@@ -6210,7 +6212,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               >
                 <PanelLeftClose size={18} strokeWidth={2} aria-hidden="true" />
               </button>
-            </div>
+            </>
           ) : (
             <div className="sidebar-collapsed-brand">
               <button
@@ -6298,15 +6300,12 @@ const handleOptionTradeClosed = async (tradeId) => {
               </span>
             </>
           ) : (
-            <>
-              <span className="sidebar-live-rail" aria-hidden="true">
-                <span className="sidebar-live-dot" />
-                <span className="sidebar-live-mini-icon">
-                  <LiveRailIcon />
-                </span>
+            <span className="sidebar-live-rail" aria-hidden="true">
+              <span className="sidebar-live-dot" />
+              <span className="sidebar-live-mini-icon">
+                <LiveRailIcon />
               </span>
-              <span className="sidebar-live-label">Live status</span>
-            </>
+            </span>
           )}
         </div>
         <div className="sidebar-bottom">

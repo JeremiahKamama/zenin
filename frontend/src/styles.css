@@ -35813,6 +35813,13 @@ body.light-theme-active .research-workspace {
   padding: 4px 4px 6px;
 }
 
+.sidebar.sidebar-overhaul-v2 .sidebar-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .sidebar.sidebar-overhaul-v2 .sidebar-brand-mark {
   display: inline-flex;
   align-items: center;
