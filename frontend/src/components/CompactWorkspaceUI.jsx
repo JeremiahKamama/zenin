@@ -214,3 +214,386 @@ export function RightRailDrawer({
     </div>
   );
 }
+
+/**
+ * WorkspaceLayout — shared 3-column workspace shell (header / sidebar / main / rail).
+ * Used by the Asset Research Workspace (ARW). Pure flexbox; no bespoke styling
+ * beyond the monochrome tokens in styles.css (.workspace-layout et al).
+ */
+export function WorkspaceLayout({ header, sidebar, children, rail, className = "" }) {
+  return (
+    <div className={`workspace-layout ${className}`.trim()}>
+      {header ? <div className="workspace-layout-header">{header}</div> : null}
+      <div className="workspace-layout-body">
+        {sidebar ? <nav className="workspace-layout-sidebar" aria-label="Workspace sections">{sidebar}</nav> : null}
+        <main className="workspace-layout-main">{children}</main>
+        {rail ? <aside className="workspace-layout-rail" aria-label="Intelligence">{rail}</aside> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Panel — a bordered content surface (card). */
+export function Panel({ title, meta, actions, footer, children, className = "", as: Tag = "section" }) {
+  return (
+    <Tag className={`ws-panel ${className}`.trim()}>
+      {(title || actions) ? (
+        <div className="ws-panel-head">
+          <div className="ws-panel-head-copy">
+            {title ? <h3>{title}</h3> : null}
+            {meta ? <span className="ws-panel-meta">{meta}</span> : null}
+          </div>
+          {actions ? <div className="ws-panel-actions">{actions}</div> : null}
+        </div>
+      ) : null}
+      <div className="ws-panel-body">{children}</div>
+      {footer ? <div className="ws-panel-footer">{footer}</div> : null}
+    </Tag>
+  );
+}
+
+/** Section — an in-page region with a heading. */
+export function Section({ title, description, actions, children, className = "" }) {
+  return (
+    <section className={`ws-section ${className}`.trim()}>
+      {(title || actions) ? (
+        <div className="ws-section-head">
+          <div>
+            {title ? <h2>{title}</h2> : null}
+            {description ? <p>{description}</p> : null}
+          </div>
+          {actions ? <div className="ws-section-actions">{actions}</div> : null}
+        </div>
+      ) : null}
+      <div className="ws-section-body">{children}</div>
+    </section>
+  );
+}
+
+/** MetricCard — a single labelled metric. */
+export function MetricCard({ label, value, helper, tone = "neutral", className = "" }) {
+  return (
+    <div className={`ws-metric-card ${tone} ${className}`.trim()}>
+      <span className="ws-metric-label">{label}</span>
+      <strong className="ws-metric-value">{value}</strong>
+      {helper ? <span className="ws-metric-helper">{helper}</span> : null}
+    </div>
+  );
+}
+
+/** Badge — small status/label pill. Never color-only: pair with text. */
+export function Badge({ children, tone = "neutral", className = "" }) {
+  return <span className={`ws-badge ${tone} ${className}`.trim()}>{children}</span>;
+}
+
+/** Tag — removable/static keyword chip. */
+export function Tag({ children, onRemove, className = "" }) {
+  return (
+    <span className={`ws-tag ${className}`.trim()}>
+      {children}
+      {onRemove ? (
+        <button type="button" className="ws-tag-remove" onClick={onRemove} aria-label={`Remove ${typeof children === "string" ? children : "tag"}`}>×</button>
+      ) : null}
+    </span>
+  );
+}
+
+/** InsightCard — a compact insight (thesis line, catalyst, note). */
+export function InsightCard({ title, meta, tone = "neutral", actions, children, className = "" }) {
+  return (
+    <article className={`ws-insight-card ${tone} ${className}`.trim()}>
+      {(title || meta || actions) ? (
+        <header className="ws-insight-head">
+          <div>
+            {title ? <h4>{title}</h4> : null}
+            {meta ? <span className="ws-insight-meta">{meta}</span> : null}
+          </div>
+          {actions ? <div className="ws-insight-actions">{actions}</div> : null}
+        </header>
+      ) : null}
+      {children ? <div className="ws-insight-body">{children}</div> : null}
+    </article>
+  );
+}
+
+/** Skeleton — neutral loading placeholder (no color-only comms). */
+export function Skeleton({ lines = 3, className = "" }) {
+  return (
+    <div className={`ws-skeleton ${className}`.trim()} aria-hidden="true">
+      {Array.from({ length: lines }).map((_, i) => (
+        <span key={i} className="ws-skeleton-line" style={{ width: `${90 - (i % 3) * 18}%` }} />
+      ))}
+    </div>
+  );
+}
+
+/** Table — minimal accessible table built from column defs (no bespoke CSS). */
+export function Table({ columns, rows, rowKey = (r, i) => String(i), emptyState }) {
+  return (
+    <div className="ws-table-wrap table-scroll">
+      <table className="ws-table">
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key} scope="col">{c.header}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length ? (
+            rows.map((row, i) => (
+              <tr key={rowKey(row, i)}>
+                {columns.map((c) => (
+                  <td key={c.key}>{c.cell ? c.cell(row) : row[c.key]}</td>
+                ))}
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={columns.length} className="empty-table-msg">
+                {emptyState || "No data."}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * CONTRACT: the eight primitives below are the shared vocabulary for the
+ * vNext Asset Research Workspace (ARW) and Compare Workspace. They are
+ * presentation-only and data-source-agnostic (accept plain items/rows/
+ * children); both workspaces compose them so the two screens share layouts,
+ * spacing, typography, and interactions per the vNext design spec.
+ */
+
+/**
+ * ResearchCard — a linked research object (thesis / note / brief).
+ * Supports the vNext Research Object contract: author, status, confidence,
+ * priority, linked objects, last reviewed.
+ */
+export function ResearchCard({
+  title,
+  meta,
+  author,
+  status,
+  confidence,
+  priority,
+  tags = [],
+  links = [],
+  onOpen,
+  className = "",
+}) {
+  return (
+    <article
+      className={`ws-research-card ${status ? `status-${status}` : ""} ${className}`.trim()}
+      onClick={onOpen ? () => onOpen() : undefined}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={onOpen ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } } : undefined}
+    >
+      <header className="ws-research-card-head">
+        <h4>{title}</h4>
+        {status ? <Badge tone={status === "approved" ? "positive" : status === "rejected" ? "negative" : "warning"}>{status}</Badge> : null}
+      </header>
+      {meta ? <p className="ws-research-card-meta">{meta}</p> : null}
+      <div className="ws-research-card-facts">
+        {author ? <span><em>Author</em>{author}</span> : null}
+        {confidence != null ? <span><em>Confidence</em>{confidence}</span> : null}
+        {priority ? <span><em>Priority</em>{priority}</span> : null}
+      </div>
+      {tags.length ? (
+        <div className="ws-research-card-tags">{tags.map((t) => <Tag key={t}>{t}</Tag>)}</div>
+      ) : null}
+      {links.length ? (
+        <div className="ws-research-card-links">
+          {links.map((l) => <span key={l.label} className="ws-link-chip">{l.label}</span>)}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+/**
+ * EvidenceCard — a single piece of supporting evidence with provenance.
+ * `weight` is qualitative (low/med/high) so scoring stays evidence-backed.
+ */
+export function EvidenceCard({ title, source, detail, weight, verdict, className = "" }) {
+  return (
+    <article className={`ws-evidence-card weight-${weight || "med"} ${className}`.trim()}>
+      <header className="ws-evidence-head">
+        <h5>{title}</h5>
+        {verdict ? <Badge tone={verdict === "supports" ? "positive" : verdict === "contradicts" ? "negative" : "warning"}>{verdict}</Badge> : null}
+      </header>
+      {detail ? <p>{detail}</p> : null}
+      <footer className="ws-evidence-foot">
+        {source ? <span className="ws-evidence-source">{source}</span> : null}
+        {weight ? <span className="ws-evidence-weight">weight: {weight}</span> : null}
+      </footer>
+    </article>
+  );
+}
+
+/**
+ * RiskCard — a risk with severity, likelihood, and mitigation.
+ */
+export function RiskCard({ title, severity = "med", likelihood, mitigation, className = "" }) {
+  return (
+    <article className={`ws-risk-card severity-${severity} ${className}`.trim()}>
+      <header className="ws-risk-head">
+        <h5>{title}</h5>
+        <Badge tone={severity === "high" ? "negative" : severity === "med" ? "warning" : "neutral"}>{severity}</Badge>
+      </header>
+      {likelihood ? <p className="ws-risk-likelihood"><em>Likelihood</em> {likelihood}</p> : null}
+      {mitigation ? <p className="ws-risk-mitigation">{mitigation}</p> : null}
+    </article>
+  );
+}
+
+/**
+ * CatalystCard — a dated catalyst event with state.
+ */
+export function CatalystCard({ title, date, status = "upcoming", note, className = "" }) {
+  const tone = status === "complete" ? "positive" : status === "watching" ? "warning" : "neutral";
+  return (
+    <article className={`ws-catalyst-card status-${status} ${className}`.trim()}>
+      <header className="ws-catalyst-head">
+        <h5>{title}</h5>
+        <Badge tone={tone}>{status}</Badge>
+      </header>
+      {date ? <time className="ws-catalyst-date">{date}</time> : null}
+      {note ? <p className="ws-catalyst-note">{note}</p> : null}
+    </article>
+  );
+}
+
+/**
+ * NewsCard — a news item with source + timestamp.
+ */
+export function NewsCard({ title, source, time, summary, url, className = "" }) {
+  const body = (
+    <>
+      <header className="ws-news-head">
+        <h5>{title}</h5>
+        <span className="ws-news-source">{source}{time ? ` · ${time}` : ""}</span>
+      </header>
+      {summary ? <p className="ws-news-summary">{summary}</p> : null}
+    </>
+  );
+  return (
+    <article className={`ws-news-card ${className}`.trim()}>
+      {url ? <a href={url} target="_blank" rel="noreferrer" className="ws-news-link">{body}</a> : body}
+    </article>
+  );
+}
+
+/**
+ * DocumentCard — a reference document (filing / report / note) with type.
+ */
+export function DocumentCard({ title, docType, meta, url, onOpen, className = "" }) {
+  const inner = (
+    <>
+      <header className="ws-doc-head">
+        <h5>{title}</h5>
+        {docType ? <Badge>{docType}</Badge> : null}
+      </header>
+      {meta ? <p className="ws-doc-meta">{meta}</p> : null}
+    </>
+  );
+  return (
+    <article
+      className={`ws-doc-card ${className}`.trim()}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen ? () => onOpen() : undefined}
+      onKeyDown={onOpen ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } } : undefined}
+    >
+      {url ? <a href={url} target="_blank" rel="noreferrer" className="ws-doc-link">{inner}</a> : inner}
+    </article>
+  );
+}
+
+/**
+ * Timeline — chronological research timeline mixing journal/decisions/news/
+ * catalysts/earnings/filings/price events. `items` = [{ id, kind, title,
+ * meta, time }]; `kind` drives the monochrome marker style (no color-only).
+ */
+export function Timeline({ items = [], className = "" }) {
+  if (!items.length) return <p className="ws-timeline-empty">No timeline events yet.</p>;
+  return (
+    <ol className={`ws-timeline ${className}`.trim()} aria-label="Research timeline">
+      {items.map((it) => (
+        <li key={it.id} className={`ws-timeline-item kind-${it.kind || "event"}`.trim()}>
+          <span className="ws-timeline-marker" aria-hidden="true" />
+          <div className="ws-timeline-content">
+            <div className="ws-timeline-row">
+              <span className="ws-timeline-kind">{it.kind}</span>
+              {it.time ? <time className="ws-timeline-time">{it.time}</time> : null}
+            </div>
+            <h5>{it.title}</h5>
+            {it.meta ? <p className="ws-timeline-meta">{it.meta}</p> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/**
+ * ComparisonMatrix — the Compare Workspace decision-matrix centerpiece.
+ * Rows are scored dimensions; the winner is derived from evidence, never
+ * asserted arbitrarily. `rows` = [{
+ *   id, label, weight,
+ *   a: { score, display, evidence }, b: { score, display, evidence },
+ *   winner: "A" | "B" | "tie", confidence, explanation
+ * }].
+ * `showEvidence` toggles the evidence/explanations column.
+ */
+export function ComparisonMatrix({ rows = [], assetA, assetB, showEvidence = true, className = "" }) {
+  if (!rows.length) return <p className="ws-matrix-empty">No comparison dimensions scored yet.</p>;
+  return (
+    <div className={`ws-comparison-matrix ${className}`.trim()}>
+      <div className="ws-matrix-grid" role="table" aria-label="Decision matrix">
+        <div className="ws-matrix-head" role="row">
+          <span role="columnheader" className="ws-matrix-dim">Dimension</span>
+          <span role="columnheader" className="ws-matrix-asset-a">{assetA || "Asset A"}</span>
+          <span role="columnheader" className="ws-matrix-winner">Winner</span>
+          <span role="columnheader" className="ws-matrix-asset-b">{assetB || "Asset B"}</span>
+        </div>
+        {rows.map((r) => (
+          <div key={r.id} className={`ws-matrix-row ${r.winner === "A" ? "win-a" : r.winner === "B" ? "win-b" : "win-tie"}`.trim()} role="row">
+            <span role="cell" className="ws-matrix-dim">
+              <strong>{r.label}</strong>
+              {r.weight != null ? <em className="ws-matrix-weight">w {r.weight}</em> : null}
+            </span>
+            <span role="cell" className={`ws-matrix-score a ${r.winner === "A" ? "is-winner" : ""}`.trim()}>
+              <strong>{r.a?.display ?? r.a?.score ?? "—"}</strong>
+              {showEvidence && r.a?.evidence ? <em className="ws-matrix-evidence">{r.a.evidence}</em> : null}
+            </span>
+            <span role="cell" className="ws-matrix-winner-cell">
+              <Badge tone={r.winner === "tie" ? "warning" : "neutral"}>
+                {r.winner === "A" ? (assetA || "A") : r.winner === "B" ? (assetB || "B") : "Tie"}
+              </Badge>
+              {r.confidence != null ? <em className="ws-matrix-confidence">{r.confidence}</em> : null}
+            </span>
+            <span role="cell" className={`ws-matrix-score b ${r.winner === "B" ? "is-winner" : ""}`.trim()}>
+              <strong>{r.b?.display ?? r.b?.score ?? "—"}</strong>
+              {showEvidence && r.b?.evidence ? <em className="ws-matrix-evidence">{r.b.evidence}</em> : null}
+            </span>
+          </div>
+        ))}
+      </div>
+      {showEvidence ? (
+        <div className="ws-matrix-explanations">
+          {rows.filter((r) => r.explanation).map((r) => (
+            <p key={r.id} className="ws-matrix-explanation-row">
+              <strong>{r.label}:</strong> {r.explanation}
+            </p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
