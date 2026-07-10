@@ -187,16 +187,23 @@ export function ComparisonPortfolioImpact({ assetA, assetB }) {
   );
 }
 
-export function ComparisonDecisionPanel({ assetA, assetB }) {
+export function ComparisonScenario({ assetA, assetB }) {
   if (!assetA || !assetB) return <div className="cmp-section-empty">Select two assets to compare.</div>;
-  const actions = ["Save Decision", "Watch Later", "Replace Holding", "Add to Watchlist", "Ignore", "Journal Note", "Research Note", "Generate Briefing"];
+  const pa = assetA.price, pb = assetB.price;
+  const band = (price, pct) => (price != null ? `$${(price * (1 + pct / 100)).toFixed(2)}` : "—");
   return (
     <div className="cmp-section">
-      <h2 className="cmp-section-title">Decision</h2>
-      <div className="cmp-section-note">Decision actions feed into Decisions / Journal / Briefings (wired in a later pass).</div>
-      <div className="cmp-decision-actions">
-        {actions.map((a) => <button key={a} className="cmp-decision-btn" disabled>{a}</button>)}
-      </div>
+      <h2 className="cmp-section-title">Scenario Analysis</h2>
+      <ComparisonMetricTable
+        rows={[
+          { label: "Bear −20%", a: band(pa, -20), b: band(pb, -20) },
+          { label: "Base 0%", a: band(pa, 0), b: band(pb, 0) },
+          { label: "Bull +20%", a: band(pa, 20), b: band(pb, 20) },
+          { label: "Bull +40%", a: band(pa, 40), b: band(pb, 40) },
+        ]}
+        caption="Illustrative price bands from current reference price (not a forecast)"
+      />
+      <div className="cmp-section-note">Scenario bands are client-side projections from the current reference price. A probabilities/factor model requires the scenario service.</div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useComparisonAsset } from "./useComparisonAsset";
+import { buildDecisionMatrix, aggregateVerdict } from "./comparisonUtils";
 import { ComparisonHeader } from "./ComparisonHeader";
 import { ComparisonSidebar } from "./ComparisonSidebar";
 import { ComparisonCanvas } from "./ComparisonCanvas";
@@ -7,6 +8,7 @@ import { ComparisonInsights } from "./ComparisonInsights";
 import { ComparisonPicker } from "./ComparisonPicker";
 
 const SECTIONS = [
+  { key: "decision", label: "Decision Matrix" },
   { key: "overview", label: "Overview" },
   { key: "price", label: "Price" },
   { key: "performance", label: "Performance" },
@@ -23,9 +25,10 @@ const SECTIONS = [
   { key: "catalysts", label: "Catalysts" },
   { key: "risks", label: "Risks" },
   { key: "portfolioImpact", label: "Portfolio Impact" },
+  { key: "shared", label: "Shared Intelligence" },
+  { key: "scenario", label: "Scenario" },
   { key: "ai", label: "AI Analysis" },
   { key: "timeline", label: "Timeline" },
-  { key: "decision", label: "Decision" },
   { key: "journal", label: "Journal" }
 ];
 
@@ -43,7 +46,7 @@ function loadSaved() {
 // assume two forever). Renders a full-page workspace, not a modal.
 export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, onCloseModal }) {
   const [list, setList] = useState(() => (assets.length ? assets : []));
-  const [section, setSection] = useState("overview");
+  const [section, setSection] = useState("decision");
   const [picking, setPicking] = useState(null); // "A" | "B" | null
   const [saved, setSaved] = useState(false);
   const [toast, setToast] = useState(null);
@@ -113,22 +116,11 @@ export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, on
     flash("Opened AI Analysis (backend prompt layer not wired in this environment)");
   };
 
-  const verdict = useMemo(() => {
-    if (!a.data || !b.data) return null;
-    const reasons = [];
-    const growthA = a.data.earnings?.growth?.revenueGrowth ?? a.data.finviz?.revenueGrowth ?? null;
-    const growthB = b.data.earnings?.growth?.revenueGrowth ?? b.data.finviz?.revenueGrowth ?? null;
-    const marginA = a.data.earnings?.profitability?.operatingMargin ?? a.data.finviz?.operatingMargin ?? null;
-    const marginB = b.data.earnings?.profitability?.operatingMargin ?? b.data.finviz?.operatingMargin ?? null;
-    if (growthA != null && growthB != null) {
-      reasons.push(growthA >= growthB ? `${a.data.symbol} higher growth` : `${b.data.symbol} higher growth`);
-    }
-    if (marginA != null && marginB != null) {
-      reasons.push(marginA >= marginB ? `${a.data.symbol} better margins` : `${b.data.symbol} better margins`);
-    }
-    const winner = reasons.length ? (reasons[0].startsWith(a.data.symbol) ? a.data.symbol : b.data.symbol) : "—";
-    return { winner, confidence: reasons.length ? 70 + reasons.length * 5 : 50, reasons: reasons.length ? reasons : ["Insufficient data to decide"] };
-  }, [a.data, b.data]);
+  const matrixRows = useMemo(() => buildDecisionMatrix(a.data, b.data), [a.data, b.data]);
+  const verdict = useMemo(
+    () => (matrixRows.length ? aggregateVerdict(matrixRows, a.data?.symbol, b.data?.symbol) : null),
+    [matrixRows, a.data, b.data]
+  );
 
   const onDecision = (action) => flash(`${action} — wired to Decisions/Journal in a later pass`);
 
@@ -167,7 +159,6 @@ export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, on
         )}
       </div>
     );
-
   }
 
   return (
@@ -192,6 +183,8 @@ export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, on
           assetB={b.data}
           loadingA={a.loading}
           loadingB={b.loading}
+          matrixRows={matrixRows}
+          verdict={verdict}
           onOpenSection={setSection}
         />
         <ComparisonInsights assetA={a.data} assetB={b.data} verdict={verdict} onDecision={onDecision} />

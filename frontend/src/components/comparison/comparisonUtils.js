@@ -129,3 +129,85 @@ export function riskLevel(score) {
   if (s < 67) return "Medium";
   return "High";
 }
+
+// Build the vNext Decision Matrix from two comparison-asset payloads.
+// Each row's `winner` is DERIVED from the data (never asserted), with an
+// evidence string and confidence. Rows are ordered by spec weight.
+// Returns rows consumable by ComparisonMatrix: { id, label, weight, winner,
+// confidence, a:{display,evidence}, b:{display,evidence}, explanation }.
+export function buildDecisionMatrix(a, b) {
+  if (!a || !b) return [];
+  const defs = [
+    { id: "valuation", label: "Valuation", weight: 3, higher: false,
+      a: (x) => x.earnings?.valuation?.trailingPe ?? x.finviz?.pe ?? null,
+      b: (x) => x.earnings?.valuation?.fwdPe ?? x.finviz?.forwardPe ?? null,
+      fmt: fmtMultiple, ev: (v) => (v != null ? `${fmtMultiple(v)} P/E` : "no P/E") },
+    { id: "growth", label: "Growth", weight: 4, higher: true,
+      a: (x) => x.earnings?.growth?.revenueGrowth ?? x.finviz?.revenueGrowth ?? null,
+      b: (x) => x.earnings?.growth?.earningsGrowth ?? x.finviz?.earningsGrowth ?? null,
+      fmt: fmtPct, ev: (v) => (v != null ? `rev growth ${fmtPct(v)}` : "no growth") },
+    { id: "profitability", label: "Profitability", weight: 4, higher: true,
+      a: (x) => x.earnings?.profitability?.operatingMargin ?? x.finviz?.operatingMargin ?? null,
+      b: (x) => x.earnings?.profitability?.netMargin ?? x.finviz?.netMargin ?? null,
+      fmt: fmtPct, ev: (v) => (v != null ? `margin ${fmtPct(v)}` : "no margin") },
+    { id: "moat", label: "Moat", weight: 5, higher: true,
+      a: (x) => x.finviz?.moatScore ?? x.earnings?.quality?.moatScore ?? null,
+      b: (x) => x.finviz?.moatScore ?? x.earnings?.quality?.moatScore ?? null,
+      fmt: (v) => (v == null ? "—" : `${v}/100`),
+      ev: (v) => (v != null ? `moat ${v}/100` : "no moat score") },
+    { id: "execution", label: "Execution", weight: 4, higher: true,
+      a: (x) => x.earnings?.quality?.roe ?? x.finviz?.roe ?? null,
+      b: (x) => x.earnings?.quality?.roe ?? x.finviz?.roe ?? null,
+      fmt: fmtPct, ev: (v) => (v != null ? `ROE ${fmtPct(v)}` : "no ROE") },
+    { id: "risk", label: "Risk", weight: 3, higher: false,
+      a: (x) => x.beta ?? x.finviz?.beta ?? null,
+      b: (x) => x.beta ?? x.finviz?.beta ?? null,
+      fmt: (v) => (v == null ? "—" : v.toFixed(2)),
+      ev: (v) => (v != null ? `beta ${v.toFixed(2)}` : "no beta") },
+    { id: "volatility", label: "Volatility", weight: 2, higher: false,
+      a: (x) => (x.returns?.YTD != null ? Math.abs(x.returns.YTD) : null),
+      b: (x) => (x.returns?.YTD != null ? Math.abs(x.returns.YTD) : null),
+      fmt: (v) => (v == null ? "—" : `${(v).toFixed(1)}%`),
+      ev: (v) => (v != null ? `YTD move ${v.toFixed(1)}%` : "no history") },
+    { id: "liquidity", label: "Liquidity", weight: 2, higher: true,
+      a: (x) => x.marketCap ?? null, b: (x) => x.marketCap ?? null,
+      fmt: (v) => (v == null ? "—" : fmtNum(v, { currency: "USD", maxFrac: 0 })),
+      ev: (v) => (v != null ? `mkt cap ${fmtNum(v / 1e9, { maxFrac: 0 })}B` : "no cap") },
+  ];
+  return defs.map((d) => {
+    const av = d.a(a);
+    const bv = d.b(b);
+    const winner = metricWinner(av, bv, d.higher);
+    const evidenceA = d.ev(av);
+    const evidenceB = d.ev(bv);
+    let explanation = "Insufficient data for this dimension.";
+    if (winner === "A") explanation = `${a.symbol}: ${evidenceA} vs ${b.symbol}: ${evidenceB} — ${a.symbol} leads on ${d.label.toLowerCase()}.`;
+    else if (winner === "B") explanation = `${b.symbol}: ${evidenceB} vs ${a.symbol}: ${evidenceA} — ${b.symbol} leads on ${d.label.toLowerCase()}.`;
+    else if (winner === "tie") explanation = `Comparable ${d.label.toLowerCase()} (${evidenceA} ≈ ${evidenceB}).`;
+    const confidence = winner && winner !== "tie" ? Math.min(95, 55 + d.weight * 5) : 50;
+    return {
+      id: d.id, label: d.label, weight: d.weight, winner, confidence,
+      a: { display: d.fmt(av), evidence: evidenceA },
+      b: { display: d.fmt(bv), evidence: evidenceB },
+      explanation,
+    };
+  });
+}
+
+// Aggregate a weighted verdict from the matrix rows. Returns
+// { winner: symbol|"tie", confidence: number, reasons: string[] } or null.
+export function aggregateVerdict(rows, symbolA, symbolB) {
+  if (!rows.length) return null;
+  let scoreA = 0, scoreB = 0, weightTotal = 0;
+  const reasons = [];
+  for (const r of rows) {
+    const w = Number(r.weight) || 1;
+    weightTotal += w;
+    if (r.winner === "A") { scoreA += w; reasons.push(`${r.label}: ${symbolA} (${r.confidence}% conf)`); }
+    else if (r.winner === "B") { scoreB += w; reasons.push(`${r.label}: ${symbolB} (${r.confidence}% conf)`); }
+  }
+  if (!weightTotal) return null;
+  const winner = scoreA === scoreB ? "tie" : scoreA > scoreB ? symbolA : symbolB;
+  const confidence = Math.round((Math.max(scoreA, scoreB) / weightTotal) * 100);
+  return { winner, confidence, reasons };
+}

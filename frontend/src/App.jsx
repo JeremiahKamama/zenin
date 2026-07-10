@@ -6382,6 +6382,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 symbol={routeState.symbol}
                 asset={routedCompanyAsset}
                 onBack={navigateToAppRoute}
+                onOpenResearch={openAssetResearch}
               />
             </Suspense>
           </div>
@@ -6391,8 +6392,10 @@ const handleOptionTradeClosed = async (tradeId) => {
               <AssetResearchWorkspace
                 symbol={routeState.symbol}
                 asset={routedCompanyAsset}
+                isInWatchlist={routedCompanyAsset?.isInWatchlist}
                 onOpenCompanyProfile={(a) => openCompanyProfile(a || { symbol: routeState.symbol })}
                 onClose={navigateToAppRoute}
+                onCompare={(sym) => navigateToCompare(sym)}
               />
             </Suspense>
           </div>

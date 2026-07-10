@@ -17,13 +17,16 @@ import {
   ComparisonTimeline,
   ComparisonAI,
   ComparisonPortfolioImpact,
-  ComparisonDecisionPanel,
+  ComparisonScenario,
   ComparisonJournalPanel
 } from "./sections/ComparisonStubSections";
+import { ComparisonDecisionSection } from "./ComparisonMatrix";
+import { SharedIntelligence } from "./SharedIntelligence";
 
 // Maps a section key to its component. Every section receives the same
 // { assetA, assetB, ... } props so layout stays identical across assets.
 const REGISTRY = {
+  decision: ComparisonDecisionSection,
   overview: ComparisonOverview,
   price: ComparisonPrice,
   performance: ComparisonPerformance,
@@ -39,22 +42,26 @@ const REGISTRY = {
   news: ComparisonNews,
   catalysts: ComparisonCatalysts,
   risks: ComparisonRisks,
+  shared: SharedIntelligence,
+  scenario: ComparisonScenario,
   timeline: ComparisonTimeline,
   ai: ComparisonAI,
   portfolioImpact: ComparisonPortfolioImpact,
-  decision: ComparisonDecisionPanel,
   journal: ComparisonJournalPanel
 };
 
-export function ComparisonCanvas({ section, assetA, assetB, loadingA, loadingB, onOpenSection }) {
-  const Comp = REGISTRY[section] || ComparisonOverview;
+export function ComparisonCanvas({ section, assetA, assetB, loadingA, loadingB, matrixRows, verdict, onOpenSection }) {
+  const Comp = REGISTRY[section] || ComparisonDecisionSection;
+  const isDecision = section === "decision";
   return (
-    <section className="cmp-canvas" aria-label={section}>
+    <section className={`cmp-canvas ${isDecision ? "cmp-canvas-decision" : ""}`.trim()} aria-label={section}>
       <Comp
         assetA={assetA}
         assetB={assetB}
         loadingA={loadingA}
         loadingB={loadingB}
+        matrixRows={matrixRows}
+        verdict={verdict}
         onOpenSection={onOpenSection}
       />
     </section>
