@@ -10,8 +10,10 @@ import { zeninFetchJson } from "../utils/zeninFetch";
 import { canUseWebSocket, resolveZeninWsUrl } from "../utils/livePriceStream";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { GuidedEmptyState } from "./CompactWorkspaceUI";
+import { recomputeGreeks } from "../utils/optionGreeks";
 import { EquityOptionsDesk } from "./EquityOptionsDesk";
 const OPTIONS_CHAIN_REFRESH_MS = 180000; // 3 minutes
+const CRYPTO_CHAIN_REFRESH_MS = 20000; // 20 seconds — accelerated crypto poll (O6)
 const TERM_STRUCTURE_REFRESH_MS = 15 * 60 * 1000;
 const OPTIONS_SAVED_VIEWS_KEY = "zenin_options_saved_views";
 const OPTIONS_MARKET_MODE_KEY = "zenin_options_market_mode_v1";
@@ -106,19 +108,47 @@ function mergeEquityOptionsChainWithLiveUpdate(prevData, payload = {}) {
   if (!prevData || !Array.isArray(prevData.chain) || !prevData.chain.length) return prevData;
   const quotes = payload?.quotes && typeof payload.quotes === "object" ? payload.quotes : {};
   const trades = payload?.trades && typeof payload.trades === "object" ? payload.trades : {};
+  // O3 — live greeks recompute: use the freshest spot (WS payload -> chain summary)
+  // and each contract's strike/IV/expiry to recompute BS greeks on every tick.
+  const liveSpot = Number(payload?.spotPrice || prevData?.summary?.spotPrice) || null;
+  const riskFreeRate = Number(payload?.riskFreeRate || prevData?.summary?.riskFreeRate || 0.0425) || 0.0425;
   let changed = false;
   const nextChain = prevData.chain.map((row) => {
     let nextRow = row;
     const callTicker = row?.call?.contractTicker;
     const putTicker = row?.put?.contractTicker;
-    if (callTicker && (quotes[callTicker] || trades[callTicker])) {
+    const callLive = callTicker ? (quotes[callTicker] || trades[callTicker]) : null;
+    const putLive = putTicker ? (quotes[putTicker] || trades[putTicker]) : null;
+    if (callTicker && callLive) {
       nextRow = nextRow === row ? { ...row } : nextRow;
       nextRow.call = mergeEquityOptionsContractWithLive(row.call, quotes[callTicker], trades[callTicker]);
+      if (liveSpot) {
+        const g = recomputeGreeks({
+          strike: row.strike,
+          optionType: "call",
+          spotPrice: liveSpot,
+          impliedVolatility: nextRow.call.impliedVolatility ?? row.call.impliedVolatility,
+          expiry: row.expiry,
+          riskFreeRate,
+        });
+        nextRow.call = { ...nextRow.call, ...g, greeksRecomputedAt: payload?.updatedAt || null };
+      }
       changed = true;
     }
-    if (putTicker && (quotes[putTicker] || trades[putTicker])) {
+    if (putTicker && putLive) {
       nextRow = nextRow === row ? { ...row } : nextRow;
       nextRow.put = mergeEquityOptionsContractWithLive(row.put, quotes[putTicker], trades[putTicker]);
+      if (liveSpot) {
+        const g = recomputeGreeks({
+          strike: row.strike,
+          optionType: "put",
+          spotPrice: liveSpot,
+          impliedVolatility: nextRow.put.impliedVolatility ?? row.put.impliedVolatility,
+          expiry: row.expiry,
+          riskFreeRate,
+        });
+        nextRow.put = { ...nextRow.put, ...g, greeksRecomputedAt: payload?.updatedAt || null };
+      }
       changed = true;
     }
     return nextRow;
@@ -126,6 +156,7 @@ function mergeEquityOptionsChainWithLiveUpdate(prevData, payload = {}) {
   if (!changed) return prevData;
   return {
     ...prevData,
+    summary: liveSpot ? { ...prevData.summary, spotPrice: liveSpot } : prevData.summary,
     chain: nextChain,
     updatedAt: payload?.updatedAt || prevData.updatedAt
   };
@@ -830,11 +861,19 @@ useEffect(() => {
 
   fetchChain();
 
-  // Refresh chain every 3 minutes while user is on the Options section.
+  // O6: accelerated poll for crypto options (Derive flow moves fast); equity uses
+  // the slower 3-minute snapshot cadence. Re-evaluated each tick so switching
+  // modes picks up the right cadence without tearing down the effect.
   const interval = setInterval(() => {
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    const fast = optionsMarketMode === "crypto";
+    const lastKey = cryptoPollLastAtRef.current;
+    const nowTs = Date.now();
+    if (fast && lastKey && nowTs - lastKey < CRYPTO_CHAIN_REFRESH_MS) return;
+    if (!fast && lastKey && nowTs - lastKey < OPTIONS_CHAIN_REFRESH_MS) return;
+    cryptoPollLastAtRef.current = nowTs;
     fetchChain();
-  }, OPTIONS_CHAIN_REFRESH_MS);
+  }, optionsMarketMode === "crypto" ? Math.min(CRYPTO_CHAIN_REFRESH_MS, 5000) : 5000);
 
   return () => {
     isMounted = false;
@@ -1105,6 +1144,15 @@ useEffect(() => {
     }).toUpperCase();
   };
 
+  const formatCompact = (value) => {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+    if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+    if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+    return `${Math.round(n)}`;
+  };
+
   const whaleThresholdOptions = [
     { label: "Above $10K", value: 10000 },
     { label: "Above $100K", value: 100000 },
@@ -1173,6 +1221,23 @@ useEffect(() => {
   const emptyChainText = activeUsesRfq
     ? `${activeAsset} is currently exposed through ${marketStructureLabel} on Derive, so a full chain snapshot may be partial or unavailable here.`
     : `Waiting for ${activeAsset} option rows from Derive.`;
+
+  // Real 25-delta risk-reversal skew: OTM call IV minus OTM put IV at the
+  // strikes nearest a fixed delta band. Null when chain data can't support it.
+  const chainSkew = useMemo(() => {
+    const rows = Array.isArray(filteredChain) ? filteredChain : [];
+    if (!rows.length || !Number.isFinite(activeSpot) || activeSpot <= 0) return null;
+    const otmCalls = rows
+      .filter((r) => Number(r.strike) > activeSpot && Number(r.delta) >= 0.2 && Number(r.delta) <= 0.3)
+      .sort((a, b) => Math.abs(Number(a.delta) - 0.25) - Math.abs(Number(b.delta) - 0.25));
+    const otmPuts = rows
+      .filter((r) => Number(r.strike) < activeSpot && Number(r.delta) >= -0.3 && Number(r.delta) <= -0.2)
+      .sort((a, b) => Math.abs(Number(a.delta) + 0.25) - Math.abs(Number(b.delta) + 0.25));
+    const callIv = Number(otmCalls[0]?.iv);
+    const putIv = Number(otmPuts[0]?.iv);
+    if (!(callIv > 0) || !(putIv > 0)) return null;
+    return Number((callIv - putIv).toFixed(2));
+  }, [filteredChain, activeSpot]);
 
   const handleRefreshOptionsView = () => {
     setChainRefreshTick((tick) => tick + 1);
@@ -1268,7 +1333,7 @@ useEffect(() => {
   }, [filteredChain, activeSpot]);
 
   const chainScrollRef = useRef(null);
-
+  const cryptoPollLastAtRef = useRef(0); // O6: throttles accelerated crypto poll
   useEffect(() => {
     if (chainScrollRef.current && atmStrike) {
       const atmRow = chainScrollRef.current.querySelector('.atm-strike-row');
@@ -1296,7 +1361,7 @@ useEffect(() => {
             row.scrollIntoView({ behavior: 'smooth', block: 'center' });
             // Brief highlight
             row.style.transition = 'background-color 0.3s';
-            row.style.backgroundColor = 'rgba(56, 189, 248, 0.25)';
+            row.style.backgroundColor = 'rgba(255, 255, 255, 0.25)';
             setTimeout(() => {
               row.style.backgroundColor = '';
             }, 1500);
@@ -1349,7 +1414,7 @@ useEffect(() => {
       const bestDist = Math.abs(Number(best?.strike || 0) - centerSpot);
       return currentDist < bestDist ? row : best;
     }, null);
-    
+
     // For "Market" greeks, we typically reference the ATM Call option as the benchmark
     const call = nearest?.call || {};
     const callDelta = Number(call?.delta);
@@ -1357,14 +1422,50 @@ useEffect(() => {
     const callTheta = Number(call?.theta);
     const callVega = Number(call?.vega);
 
+    // O4: recompute rho from BS where the feed omits it (e.g. Derive/Massive).
+    let rho = Number(call?.rho);
+    if (!Number.isFinite(rho) || rho === 0) {
+      const g = recomputeGreeks({
+        strike: Number(nearest?.strike),
+        optionType: "call",
+        spotPrice: centerSpot,
+        impliedVolatility: Number(call?.iv || call?.impliedVolatility),
+        expiry: call?.expiry,
+        riskFreeRate: 0.0425,
+      });
+      rho = Number.isFinite(g.rho) ? g.rho : 0;
+    }
+
     return {
       delta: Number.isFinite(callDelta) ? callDelta : 0,
       gamma: Number.isFinite(callGamma) ? callGamma : 0,
       theta: Number.isFinite(callTheta) ? callTheta : 0,
       vega: Number.isFinite(callVega) ? callVega : 0,
-      rho: 0
+      rho,
     };
   }, [filteredChain, chain, activeSpot]);
+
+  // O4: Max Pain = strike where total options OI expires worthless (calls above /
+  // puts below that strike) is minimized. Computed from the current chain OI.
+  const maxPain = useMemo(() => {
+    const rows = (Array.isArray(filteredChain) && filteredChain.length ? filteredChain : chain) || [];
+    if (!rows.length) return null;
+    const strikes = rows.map((r) => Number(r?.strike || 0)).filter((s) => s > 0);
+    if (!strikes.length) return null;
+    let best = null;
+    for (const mp of strikes) {
+      let pain = 0;
+      for (const r of rows) {
+        const k = Number(r?.strike || 0);
+        const callOi = Number(r?.call?.openInterest ?? r?.call?.oi ?? 0);
+        const putOi = Number(r?.put?.openInterest ?? r?.put?.oi ?? 0);
+        if (mp > k) pain += callOi * (mp - k);
+        if (mp < k) pain += putOi * (k - mp);
+      }
+      if (best === null || pain < best.pain) best = { strike: mp, pain };
+    }
+    return best ? best.strike : null;
+  }, [filteredChain, chain]);
 
   const hasActiveTrades = Array.isArray(activeOptionsTrades) && activeOptionsTrades.length > 0;
   const hasPortfolioGreeks = Object.values(greekSummary).some((v) => Math.abs(Number(v) || 0) > 1e-6);
@@ -1416,14 +1517,11 @@ useEffect(() => {
       const days = Math.max(1, Math.round((Number(expiryTs) * 1000 - Date.now()) / (24 * 60 * 60 * 1000)));
       const mappedIv = termIvByExpiry?.[String(expiryTs)];
       
-      let impliedVol = 0;
+      let impliedVol = null;
       if (Number.isFinite(mappedIv) && mappedIv > 0) {
         impliedVol = mappedIv;
       } else if (Number.isFinite(liveBaseIv) && liveBaseIv > 0) {
         impliedVol = liveBaseIv;
-      } else {
-        // Fallback to a baseline IV if nothing else is available yet
-        impliedVol = 0.60; 
       }
 
       return {
@@ -1474,7 +1572,7 @@ useEffect(() => {
           <span aria-hidden="true" />
           {optionsMarketMode === "equity"
             ? (equityOptionsLoading ? "Syncing" : equityOptionsData?.unavailable ? "Offline" : equityOptionsLiveConnected ? "Live" : "Snapshot")
-            : "Live"}
+            : (optionsMarketMode === "crypto" ? "~30s refresh" : "~3m refresh")}
         </span>
         <div className="options-exec-header-actions" aria-label="Options view actions">
           <div className="options-exec-mode-toggle" role="tablist" aria-label="Options market mode">
@@ -1536,13 +1634,13 @@ useEffect(() => {
         </div>
         <div className="metric-card glass options-exec-metric-card">
           <label>Put/Call Ratio</label>
-          <div className="value">{metrics.pcr.toFixed(2)}</div>
-          <div className="change negative">▼ 0.05</div>
+          <div className="value">{metrics.pcr > 0 ? metrics.pcr.toFixed(2) : "—"}</div>
+          <div className="change info">{metrics.pcr > 0 ? "Live" : "Unavailable"}</div>
         </div>
         <div className="metric-card glass options-exec-metric-card">
           <label>Market Skew</label>
-          <div className="value">{metrics.skew}</div>
-          <div className="change positive">+14.2</div>
+          <div className="value">{chainSkew != null ? `${chainSkew > 0 ? "+" : ""}${chainSkew.toFixed(2)}` : "—"}</div>
+          <div className="change info">{chainSkew != null ? "25Δ RR" : "Unavailable"}</div>
         </div>
         <div className="metric-card glass options-exec-metric-card options-exec-session-card">
           <label>Session Status</label>
@@ -1680,20 +1778,24 @@ useEffect(() => {
             { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Theta" : "Market Theta (ATM)", value: displayGreeks.theta },
             { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Gamma" : "Market Gamma (ATM)", value: displayGreeks.gamma },
             { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Vega" : "Market Vega (ATM)", value: displayGreeks.vega },
-            { label: "Implied Volatility", value: Number(metrics?.iv || 0) }
+            { label: hasActiveTrades && hasPortfolioGreeks ? "Portfolio Rho" : "Market Rho (ATM)", value: displayGreeks.rho },
+            { label: "Implied Volatility", value: Number(metrics?.iv || 0) },
+            { label: "Max Pain", value: maxPain != null ? Number(maxPain) : null }
           ].map((item) => (
             <div key={item.label} className="journal-stat-card">
               <span className="journal-stat-label">{item.label}</span>
               <span className="journal-stat-value">
                 {item.label === "Implied Volatility"
                   ? `${(Number(item.value || 0) * 100).toFixed(2)}%`
+                  : item.label === "Max Pain"
+                  ? (item.value != null ? Number(item.value).toLocaleString() : "—")
                   : Number(item.value || 0).toFixed(3)}
               </span>
             </div>
           ))}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
-          <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
+          <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(160, 160, 160, 0.14)", borderRadius: "10px", padding: "10px" }}>
             <div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "6px" }}>IV / OI Heatmap</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {filteredChain.slice(0, 8).map((row) => {
@@ -1711,7 +1813,7 @@ useEffect(() => {
                       border: "none",
                       borderRadius: "6px", 
                       padding: "6px 8px", 
-                      background: `rgba(56,189,248,${intensity.toFixed(2)})`, 
+                      background: `rgba(255,255,255,${intensity.toFixed(2)})`, 
                       display: "flex", 
                       justifyContent: "space-between", 
                       fontSize: "12px",
@@ -1729,7 +1831,7 @@ useEffect(() => {
               })}
             </div>
           </div>
-          <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(148,163,184,0.14)", borderRadius: "10px", padding: "10px" }}>
+          <div className="options-exec-mini-visual" style={{ border: "1px solid rgba(160, 160, 160, 0.14)", borderRadius: "10px", padding: "10px" }}>
             <div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "6px" }}>Volatility Term Structure</div>
             <div style={{ display: "grid", gap: "6px" }}>
               {termStructureRows.slice(0, 8).map((row) => (
@@ -1753,7 +1855,7 @@ useEffect(() => {
                       borderRadius: "4px",
                       transition: "background 0.1s"
                     }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(148,163,184,0.08)'}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(160, 160, 160, 0.08)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                   <span style={{ color: activeExpiry === row.expiryTs ? "var(--color-data-primary)" : "inherit", fontWeight: activeExpiry === row.expiryTs ? "bold" : "normal" }}>{formatDate(row.expiryTs)}</span>
@@ -1859,18 +1961,22 @@ useEffect(() => {
               <table className="option-chain-table">
                 <thead>
                   <tr>
-                    <th colSpan="4" className="chain-side-header">Calls</th>
+                    <th colSpan="6" className="chain-side-header">Calls</th>
                     <th className="strike-col chain-side-divider">Strike</th>
-                    <th colSpan="4" className="chain-side-header">Puts</th>
+                    <th colSpan="6" className="chain-side-header">Puts</th>
                   </tr>
                   <tr>
                     <th>IV</th>
                     <th>Delta</th>
+                    <th>OI</th>
+                    <th>Vol</th>
                     <th>Bid</th>
                     <th>Ask</th>
                     <th className="strike-col">Strike</th>
                     <th>Bid</th>
                     <th>Ask</th>
+                    <th>OI</th>
+                    <th>Vol</th>
                     <th>Delta</th>
                     <th>IV</th>
                   </tr>
@@ -1882,6 +1988,8 @@ useEffect(() => {
                     <tr key={row.strike} className={isAtm ? "atm-strike-row" : ""}>
                       <td className="greek">{formatIv(row.call?.iv)}</td>
                       <td className="greek">{formatGreek(row.call?.delta, 3)}</td>
+                      <td className="oi-vol">{formatCompact(row.call?.openInterest ?? row.call?.oi)}</td>
+                      <td className="oi-vol">{formatCompact(row.call?.volume)}</td>
                       <td className="bid-ask positive">{formatOptionPx(row.call?.bid)}</td>
                       <td className="bid-ask positive">{formatOptionPx(row.call?.ask)}</td>
                       <td className="strike-col" style={{ position: "relative" }}>
@@ -1894,6 +2002,8 @@ useEffect(() => {
                       </td>
                       <td className="bid-ask negative">{formatOptionPx(row.put?.bid)}</td>
                       <td className="bid-ask negative">{formatOptionPx(row.put?.ask)}</td>
+                      <td className="oi-vol">{formatCompact(row.put?.openInterest ?? row.put?.oi)}</td>
+                      <td className="oi-vol">{formatCompact(row.put?.volume)}</td>
                       <td className="greek">{formatGreek(row.put?.delta, 3)}</td>
                       <td className="greek">{formatIv(row.put?.iv)}</td>
                     </tr>
@@ -1927,15 +2037,25 @@ useEffect(() => {
             <h2>Whale Options Flow <span className="live-pill">Live</span></h2>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <div className="asset-count">BTC / ETH / SOL / HYPE</div>
-              <span className={`data-health-badge ${whaleLoading ? "loading" : whaleStale ? "hazard" : "ok"}`} title={whaleLoading ? "Refreshing whale flow" : whaleStale ? "Showing previous whale-flow snapshot" : "Whale flow is up to date"}>
-                <span className={`status-icon ${whaleLoading ? "spinner" : ""}`}>{whaleLoading ? "⟳" : whaleStale ? "⚠" : "✓"}</span>
-                Whale Flow
-              </span>
             </div>
           </div>
           <div className="whale-options-controls">
             <div className="search-type-buttons" style={{ marginLeft: 0 }}>
-              <span className="search-type-button active" style={{ pointerEvents: 'none' }}>Telegram</span>
+              {whaleSourceOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`search-type-button${whaleSource === opt.value ? " active" : ""}`}
+                  onClick={() => {
+                    if (whaleSource !== opt.value) {
+                      setWhaleSource(opt.value);
+                      setWhaleRefreshTick((t) => t + 1);
+                    }
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
             <div className="asset-dropdown-container">
               <select
@@ -2134,8 +2254,8 @@ function SavedOptionsRow({ title, subtitle, actionLabel, onAction }) {
         alignItems: "center",
         padding: "12px 14px",
         borderRadius: 12,
-        border: "1px solid rgba(148, 163, 184, 0.18)",
-        background: "rgba(15, 23, 42, 0.45)",
+        border: "1px solid rgba(160, 160, 160, 0.18)",
+        background: "rgba(10, 10, 10, 0.45)",
       }}
     >
       <div style={{ display: "grid", gap: 4 }}>
