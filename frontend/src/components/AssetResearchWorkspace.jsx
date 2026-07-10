@@ -75,6 +75,12 @@ export function AssetResearchWorkspace({
       const [r, c] = await Promise.all([getResearch(sym), getResearchCounts(sym)]);
       setResearch(r);
       setCounts(c);
+    } catch (err) {
+      // Backend / workspace unavailable → honest empty research state, never
+      // an unhandled promise rejection. Research data is non-fatal for ARW.
+      setResearch({ symbol: sym, documents: [], theses: [], catalysts: [], triggers: [], sources: [] });
+      setCounts({ theses: 0, catalysts: 0, triggers: 0, notes: 0 });
+      if (import.meta.env?.DEV) console.warn("[ARW] research load failed:", err);
     } finally {
       setLoading(false);
     }
