@@ -505,9 +505,9 @@ const SectionHeader = ({ title, description, breadcrumbs, onAction }) => (
 
 const SummaryCard = ({ icon: Icon, label, value, trend, trendUp, sparklineColor }) => (
   <div className="card" style={{ padding: '24px', position: 'relative', overflow: 'hidden' }}>
-    <div style={{ position: 'absolute', top: 0, right: 0, width: '64px', height: '64px', background: `radial-gradient(circle at top right, ${sparklineColor}15, transparent)`, pointerEvents: 'none' }} />
+    <div style={{ position: 'absolute', top: 0, right: 0, width: '64px', height: '64px', background: 'var(--accent-soft)', opacity: 0.4, pointerEvents: 'none' }} />
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-      <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: `${sparklineColor}10`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${sparklineColor}20` }}>
+      <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border-light)' }}>
         <Icon size={20} color={sparklineColor} />
       </div>
       {trend && (
@@ -796,7 +796,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                   fontSize: '13px',
                   background: resolvedUser.suspendedAt ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', 
                   border: resolvedUser.suspendedAt ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(239, 68, 68, 0.2)', 
-                  color: resolvedUser.suspendedAt ? 'var(--success)' : '#ef4444' 
+                  color: resolvedUser.suspendedAt ? 'var(--success)' : 'var(--danger)' 
                 }}
                 onClick={() => {
                   const reason = requestReason(`${resolvedUser.suspendedAt ? 'reactivating' : 'suspending'} ${resolvedUser.email}`);
@@ -912,11 +912,11 @@ const EventDetailPanel = ({ event, onClose }) => {
                   <div key={key} style={{ padding: '12px', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>{key}</div>
                     <div style={{ display: 'flex', gap: '10px', fontSize: '12px', marginBottom: '6px' }}>
-                      <span style={{ color: '#ef4444' }}>Before</span>
+                      <span style={{ color: 'var(--danger)' }}>Before</span>
                       <span style={{ color: 'var(--text-secondary)' }}>{JSON.stringify(value?.before ?? null)}</span>
                     </div>
                     <div style={{ display: 'flex', gap: '10px', fontSize: '12px' }}>
-                      <span style={{ color: '#10b981' }}>After</span>
+                      <span style={{ color: 'var(--success)' }}>After</span>
                       <span style={{ color: 'var(--text-secondary)' }}>{JSON.stringify(value?.after ?? null)}</span>
                     </div>
                   </div>
@@ -1027,7 +1027,7 @@ const LogDetailPanel = ({ log, onClose, onCreateIncident }) => {
           <div className="detail-section" style={{ marginBottom: 0 }}>
             <h4 className="detail-section-title">Performance</h4>
             <div className="log-prop-list">
-              <div className="log-prop-item"><span className="log-prop-label">Duration</span><span className="log-prop-value" style={{ color: log.durationMs > 2000 ? '#ef4444' : 'inherit', fontWeight: 600 }}>{log.durationMs == null ? 'N/A' : `${log.durationMs} ms`}</span></div>
+              <div className="log-prop-item"><span className="log-prop-label">Duration</span><span className="log-prop-value" style={{ color: log.durationMs > 2000 ? 'var(--danger)' : 'inherit', fontWeight: 600 }}>{log.durationMs == null ? 'N/A' : `${log.durationMs} ms`}</span></div>
               <div className="log-prop-item"><span className="log-prop-label">Status Code</span><span className="log-prop-value">{log.statusCode || 'N/A'}</span></div>
             </div>
           </div>
@@ -1039,10 +1039,10 @@ const LogDetailPanel = ({ log, onClose, onCreateIncident }) => {
 
 const LogoutModal = ({ onClose, onLogout }) => (
   <div className="modal-overlay" onClick={onClose} style={{ backdropFilter: 'blur(12px)', background: 'rgba(0,0,0,0.85)' }}>
-    <div className="modal-container" onClick={e => e.stopPropagation()} style={{ width: '420px', borderRadius: '24px', background: '#0a0b0d', border: '1px solid rgba(255,255,255,0.08)', padding: '32px' }}>
+    <div className="modal-container" onClick={e => e.stopPropagation()} style={{ width: '420px', borderRadius: '24px', background: 'var(--bg-card)', border: '1px solid rgba(255,255,255,0.08)', padding: '32px' }}>
       <div style={{ textAlign: 'center', marginBottom: '24px' }}>
         <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px auto' }}>
-          <LogOut size={32} color="#ef4444" />
+          <LogOut size={32} color="var(--danger)" />
         </div>
         <h2 style={{ fontSize: '24px', fontWeight: 700, color: 'white', marginBottom: '12px' }}>Confirm Logout</h2>
         <p style={{ fontSize: '15px', color: 'var(--text-muted)', lineHeight: 1.5 }}>Are you sure you want to log out? You will be signed out of your current session on this device.</p>
@@ -1092,7 +1092,7 @@ const LogoutModal = ({ onClose, onLogout }) => (
 
       <div style={{ display: 'flex', gap: '12px' }}>
         <button onClick={onClose} className="btn" style={{ flex: 1, height: '48px', fontSize: '15px', fontWeight: 600, background: 'transparent', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>Cancel</button>
-        <button onClick={onLogout} className="btn" style={{ flex: 1, height: '48px', fontSize: '15px', fontWeight: 600, background: '#ef4444', borderColor: '#ef4444', color: 'white' }}>Sign Out</button>
+        <button onClick={onLogout} className="btn" style={{ flex: 1, height: '48px', fontSize: '15px', fontWeight: 600, background: 'var(--danger)', borderColor: 'var(--danger)', color: 'white' }}>Sign Out</button>
       </div>
     </div>
   </div>
@@ -1134,7 +1134,7 @@ const OverviewView = ({ stats, onOpenAudit }) => (
         value={stats?.totalUsers?.toLocaleString() || '0'} 
         trend="Active Growth" 
         trendUp={true} 
-        sparklineColor="#3b82f6" 
+        sparklineColor="var(--accent)" 
       />
       <SummaryCard 
         icon={Activity} 
@@ -1142,7 +1142,7 @@ const OverviewView = ({ stats, onOpenAudit }) => (
         value={stats?.activeSessions?.toLocaleString() || '0'} 
         trend="Real-time" 
         trendUp={true} 
-        sparklineColor="#10b981" 
+        sparklineColor="var(--success)" 
       />
       <SummaryCard 
         icon={Zap} 
@@ -1150,7 +1150,7 @@ const OverviewView = ({ stats, onOpenAudit }) => (
         value={stats?.totalTrades?.toLocaleString() || '0'} 
         trend="Across All Workspaces" 
         trendUp={true} 
-        sparklineColor="#8b5cf6" 
+        sparklineColor="var(--text-secondary)" 
       />
       <SummaryCard 
         icon={BillingIcon} 
@@ -1158,7 +1158,7 @@ const OverviewView = ({ stats, onOpenAudit }) => (
         value={`$${stats?.mrr?.toLocaleString() || '0'}`} 
         trend="Projected Revenue" 
         trendUp={true} 
-        sparklineColor="#f59e0b" 
+        sparklineColor="var(--warning)" 
       />
     </div>
 
@@ -1188,20 +1188,20 @@ const OverviewView = ({ stats, onOpenAudit }) => (
                   stats?.totalUsers || 100, 
                   Math.floor((stats?.totalUsers || 100) * 1.02)
                 ],
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                borderColor: 'var(--accent)',
+                backgroundColor: 'var(--accent-soft)',
                 fill: true,
                 tension: 0.4,
                 pointRadius: 4,
-                pointBackgroundColor: '#3b82f6'
+                pointBackgroundColor: 'var(--accent)'
               }]
             }}
             options={{ 
               maintainAspectRatio: false, 
               plugins: { legend: { display: false } }, 
               scales: { 
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#6b7280' } },
-                x: { grid: { display: false }, ticks: { color: '#6b7280' } }
+                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'var(--text-muted)' } },
+                x: { grid: { display: false }, ticks: { color: 'var(--text-muted)' } }
               } 
             }}
           />
@@ -1218,7 +1218,7 @@ const OverviewView = ({ stats, onOpenAudit }) => (
                 const count = stats?.planBreakdown?.[plan.toLowerCase()] || 0;
                 const total = stats?.totalUsers || 1;
                 const percentage = Math.round((count / total) * 100);
-                const color = plan === 'Starter' ? '#6b7280' : plan === 'Pro' ? '#3b82f6' : '#f59e0b';
+                const color = 'var(--color-text-secondary, var(--text-secondary))';
                 return (
                   <div key={plan}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
@@ -1275,7 +1275,7 @@ const OverviewView = ({ stats, onOpenAudit }) => (
         {(stats?.recentActivity || []).map((item, i) => (
           <div key={i} style={{ display: 'flex', gap: '12px', padding: '12px', background: 'var(--bg-app)', borderRadius: '8px', border: '1px solid var(--border)' }}>
             <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {item.action.includes('Registered') ? <UserPlus size={16} color="#3b82f6" /> : <ActivityIcon size={16} color="#10b981" />}
+              {item.action.includes('Registered') ? <UserPlus size={16} color="var(--accent)" /> : <ActivityIcon size={16} color="var(--success)" />}
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
@@ -1387,10 +1387,10 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={Users} label="Total Users" value={formatMetricNumber(users.length)} trend="Live directory" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={Activity} label="Active Users" value={formatMetricNumber(activeUsers)} trend={`${Math.max(users.length - activeUsers, 0)} suspended`} trendUp={true} sparklineColor="#10b981" />
-        <SummaryCard icon={UserPlus} label="New This Week" value={formatMetricNumber(newThisWeek)} trend="Recent signups" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={ShieldCheck} label="Admins" value={formatMetricNumber(adminCount)} trend="Role-separated access" trendUp={true} sparklineColor="#f59e0b" />
+        <SummaryCard icon={Users} label="Total Users" value={formatMetricNumber(users.length)} trend="Live directory" trendUp={true} sparklineColor="var(--accent)" />
+        <SummaryCard icon={Activity} label="Active Users" value={formatMetricNumber(activeUsers)} trend={`${Math.max(users.length - activeUsers, 0)} suspended`} trendUp={true} sparklineColor="var(--success)" />
+        <SummaryCard icon={UserPlus} label="New This Week" value={formatMetricNumber(newThisWeek)} trend="Recent signups" trendUp={true} sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={ShieldCheck} label="Admins" value={formatMetricNumber(adminCount)} trend="Role-separated access" trendUp={true} sparklineColor="var(--warning)" />
       </div>
 
       <div className="card">
@@ -1544,10 +1544,10 @@ const DatabaseView = ({ stats, onRunMigration, onSelectTable, onChangePage }) =>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={Database} label="Tables" value={formatMetricNumber(stats?.summary?.totalTables || 0)} trend="Catalog size" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={HardDrive} label="Storage Used" value={stats?.summary?.totalSize || '0 B'} trend="Current database size" trendUp={true} sparklineColor="#10b981" />
-        <SummaryCard icon={ActivityIcon} label="Avg Query Latency" value={`${formatMetricNumber(stats?.summary?.avgQueryLatencyMs || 0)} ms`} trend="Recent request profile" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={Server} label="Connections" value={formatMetricNumber(stats?.summary?.activeConnections || 0)} trend="Current sessions" trendUp={true} sparklineColor="#f59e0b" />
+        <SummaryCard icon={Database} label="Tables" value={formatMetricNumber(stats?.summary?.totalTables || 0)} trend="Catalog size" trendUp={true} sparklineColor="var(--accent)" />
+        <SummaryCard icon={HardDrive} label="Storage Used" value={stats?.summary?.totalSize || '0 B'} trend="Current database size" trendUp={true} sparklineColor="var(--success)" />
+        <SummaryCard icon={ActivityIcon} label="Avg Query Latency" value={`${formatMetricNumber(stats?.summary?.avgQueryLatencyMs || 0)} ms`} trend="Recent request profile" trendUp={true} sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={Server} label="Connections" value={formatMetricNumber(stats?.summary?.activeConnections || 0)} trend="Current sessions" trendUp={true} sparklineColor="var(--warning)" />
       </div>
 
       <div className="db-grid">
@@ -1776,10 +1776,10 @@ const AuditTrailView = ({ auditData, onSelectEvent, onOpenUser, seedQuery = '' }
       <SectionHeader title="Audit Trail" description="Reasoned, request-correlated history for sensitive admin actions." breadcrumbs={['Audit Trail']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={History} label="Loaded Events" value={formatMetricNumber(auditData?.total || filteredRows.length)} trend="Current audit window" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={ShieldAlert} label="Critical Events" value={formatMetricNumber(filteredRows.filter((entry) => entry.severity === 'critical').length)} trend="Suspensions and deletions" trendUp={true} sparklineColor="#ef4444" />
-        <SummaryCard icon={UserCheck} label="Role Changes" value={formatMetricNumber(filteredRows.filter((entry) => /ROLE/.test(entry.action)).length)} trend="Governance changes" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={Download} label="Reasoned Actions" value={formatMetricNumber(filteredRows.filter((entry) => entry.reason).length)} trend="Captured intent" trendUp={true} sparklineColor="#10b981" />
+        <SummaryCard icon={History} label="Loaded Events" value={formatMetricNumber(auditData?.total || filteredRows.length)} trend="Current audit window" trendUp={true} sparklineColor="var(--accent)" />
+        <SummaryCard icon={ShieldAlert} label="Critical Events" value={formatMetricNumber(filteredRows.filter((entry) => entry.severity === 'critical').length)} trend="Suspensions and deletions" trendUp={true} sparklineColor="var(--danger)" />
+        <SummaryCard icon={UserCheck} label="Role Changes" value={formatMetricNumber(filteredRows.filter((entry) => /ROLE/.test(entry.action)).length)} trend="Governance changes" trendUp={true} sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={Download} label="Reasoned Actions" value={formatMetricNumber(filteredRows.filter((entry) => entry.reason).length)} trend="Captured intent" trendUp={true} sparklineColor="var(--success)" />
       </div>
 
       <div className="card">
@@ -2017,10 +2017,10 @@ const BillingView = ({ stats }) => {
       <SectionHeader title="Billing & Subscriptions" description="Derived revenue, invoice, and provider health from the current production workspace." breadcrumbs={['Billing']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={BillingIcon} label="MRR" value={formatCurrency(summary.mrr || 0)} trend="Current plan revenue" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={Calendar} label="Active Subscriptions" value={formatMetricNumber(summary.activeSubscriptions || 0)} trend="Paid workspaces" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={AlertCircle} label="Failed Payments" value={formatMetricNumber(summary.failedPayments || 0)} trend="Needs follow-up" trendUp={false} sparklineColor="#ef4444" />
-        <SummaryCard icon={BillingIcon} label="Outstanding" value={formatCurrency(summary.outstandingAmount || 0)} trend="Open invoice balance" trendUp={true} sparklineColor="#f59e0b" />
+        <SummaryCard icon={BillingIcon} label="MRR" value={formatCurrency(summary.mrr || 0)} trend="Current plan revenue" trendUp={true} sparklineColor="var(--accent)" />
+        <SummaryCard icon={Calendar} label="Active Subscriptions" value={formatMetricNumber(summary.activeSubscriptions || 0)} trend="Paid workspaces" trendUp={true} sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={AlertCircle} label="Failed Payments" value={formatMetricNumber(summary.failedPayments || 0)} trend="Needs follow-up" trendUp={false} sparklineColor="var(--danger)" />
+        <SummaryCard icon={BillingIcon} label="Outstanding" value={formatCurrency(summary.outstandingAmount || 0)} trend="Open invoice balance" trendUp={true} sparklineColor="var(--warning)" />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginBottom: '24px' }}>
@@ -2159,7 +2159,7 @@ const BillingView = ({ stats }) => {
                 {lookupLoading ? 'Looking up...' : 'Lookup'}
               </button>
             </div>
-            {lookupError ? <p style={{ fontSize: '12px', color: '#ef4444', marginBottom: '12px' }}>{lookupError}</p> : null}
+            {lookupError ? <p style={{ fontSize: '12px', color: 'var(--danger)', marginBottom: '12px' }}>{lookupError}</p> : null}
             {lookupResult ? (
               <RevenueCatCustomerSnapshot snapshot={lookupResult} compact={true} />
             ) : (
@@ -2216,8 +2216,8 @@ const BillingView = ({ stats }) => {
           <div className="transaction-list">
             {(stats?.transactions || []).map((tx) => (
               <div key={tx.id} className="transaction-item">
-                <div style={{ width: '24px', height: '24px', borderRadius: '50%', border: `1px solid ${tx.status === 'received' ? 'var(--success)' : '#ef4444'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {tx.status === 'received' ? <CheckCircle2 size={14} color="var(--success)" /> : <AlertCircle size={14} color="#ef4444" />}
+                <div style={{ width: '24px', height: '24px', borderRadius: '50%', border: `1px solid ${tx.status === 'received' ? 'var(--success)' : 'var(--danger)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {tx.status === 'received' ? <CheckCircle2 size={14} color="var(--success)" /> : <AlertCircle size={14} color="var(--danger)" />}
                 </div>
                 <div style={{ flex: 1 }}>
                   <p style={{ fontSize: '13px', fontWeight: 500 }}>{tx.customer}</p>
@@ -2321,10 +2321,10 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
       />
       
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={AlertCircle} label="Error Rate" value={`${logsData?.metrics?.errorRate || 0}%`} trend="Last 7 days" trendUp={false} sparklineColor="#ef4444" />
-        <SummaryCard icon={ZapOff} label="Failed Requests" value={formatMetricNumber(logsData?.metrics?.failedRequests || 0)} trend="Status >= 400" trendUp={false} sparklineColor="#f59e0b" />
-        <SummaryCard icon={Lock} label="Auth Failures" value={formatMetricNumber(logsData?.metrics?.authFailures || 0)} trend="Auth service failures" trendUp={false} sparklineColor="#a855f7" />
-        <SummaryCard icon={ActivityIcon} label="p95 Latency" value={`${formatMetricNumber(logsData?.metrics?.p95LatencyMs || 0)} ms`} trend="Observed requests" trendUp={true} sparklineColor="#3b82f6" />
+        <SummaryCard icon={AlertCircle} label="Error Rate" value={`${logsData?.metrics?.errorRate || 0}%`} trend="Last 7 days" trendUp={false} sparklineColor="var(--danger)" />
+        <SummaryCard icon={ZapOff} label="Failed Requests" value={formatMetricNumber(logsData?.metrics?.failedRequests || 0)} trend="Status >= 400" trendUp={false} sparklineColor="var(--warning)" />
+        <SummaryCard icon={Lock} label="Auth Failures" value={formatMetricNumber(logsData?.metrics?.authFailures || 0)} trend="Auth service failures" trendUp={false} sparklineColor="var(--severity-high)" />
+        <SummaryCard icon={ActivityIcon} label="p95 Latency" value={`${formatMetricNumber(logsData?.metrics?.p95LatencyMs || 0)} ms`} trend="Observed requests" trendUp={true} sparklineColor="var(--accent)" />
       </div>
 
       <div className="card">
@@ -2389,7 +2389,7 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
                   <td style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>{log.message}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{log.requestId}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{log.userId || log.ipAddress}</td>
-                  <td style={{ fontWeight: 500, fontSize: '12px', color: normalizeLogLevel(log.level) === 'error' ? '#ef4444' : 'inherit' }}>{log.durationMs == null ? 'N/A' : `${log.durationMs} ms`}</td>
+                  <td style={{ fontWeight: 500, fontSize: '12px', color: normalizeLogLevel(log.level) === 'error' ? 'var(--danger)' : 'inherit' }}>{log.durationMs == null ? 'N/A' : `${log.durationMs} ms`}</td>
                   <td><MoreVertical size={14} color="var(--text-muted)" /></td>
                 </tr>
               ))}
@@ -2421,7 +2421,7 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
                 datasets: [{
                   label: 'Errors',
                   data: (logsData?.errorTrend || []).map((item) => item.errorCount),
-                  borderColor: '#ef4444',
+                  borderColor: 'var(--danger)',
                   backgroundColor: 'rgba(239, 68, 68, 0.1)',
                   fill: true,
                   tension: 0.4
@@ -2457,7 +2457,7 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
                   </div>
                 </div>
                 <div className="performance-bar-container">
-                  <div className="performance-bar" style={{ width: `${item.pct}%`, background: item.pct > 70 ? '#ef4444' : item.pct > 50 ? '#f59e0b' : 'var(--accent)' }} />
+                  <div className="performance-bar" style={{ width: `${item.pct}%`, background: item.pct > 70 ? 'var(--danger)' : item.pct > 50 ? 'var(--warning)' : 'var(--accent)' }} />
                 </div>
               </div>
             ))}
@@ -2526,6 +2526,11 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
 
 const SettingsView = ({ onRevokeAllSessions }) => {
   const adminUi = useAdminUi();
+  const [theme, setTheme] = useState('dark');
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('light-theme-active', theme === 'light');
+  }, [theme]);
   const [settingsDraft, setSettingsDraft] = useState({
     compactDensity: true,
     enforceTwoFactor: true,
@@ -2548,7 +2553,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 1. Organization Profile */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>1</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>1</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Organization Profile</h3>
         </div>
         <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
@@ -2599,7 +2604,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 2. Admin Preferences */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>2</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>2</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Admin Preferences</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -2613,8 +2618,8 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Theme Mode</span>
             <div style={{ display: 'flex', background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '8px', padding: '2px' }}>
-              <div style={{ padding: '6px 10px', borderRadius: '6px', color: 'var(--text-muted)' }}><Sun size={14} /></div>
-              <div style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--accent)', color: 'white' }}><Moon size={14} /></div>
+              <button type="button" onClick={() => setTheme('light')} aria-pressed={theme === 'light'} style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', borderRadius: '6px', border: 'none', background: theme === 'light' ? 'var(--accent)' : 'transparent', color: theme === 'light' ? 'var(--bg-app)' : 'var(--text-muted)', cursor: 'pointer' }}><Sun size={14} /></button>
+              <button type="button" onClick={() => setTheme('dark')} aria-pressed={theme === 'dark'} style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', borderRadius: '6px', border: 'none', background: theme === 'dark' ? 'var(--accent)' : 'transparent', color: theme === 'dark' ? 'var(--bg-app)' : 'var(--text-muted)', cursor: 'pointer' }}><Moon size={14} /></button>
             </div>
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2641,7 +2646,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 3. Security & Access */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>3</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>3</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Security & Access</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -2702,7 +2707,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 4. Notifications */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>4</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>4</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Notifications</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -2731,7 +2736,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 5. API & Webhooks */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>5</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>5</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>API & Webhooks</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -2780,7 +2785,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 6. Data & Retention */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>6</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>6</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Data & Retention</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -2820,7 +2825,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <ChevronDown size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
-          <div style={{ background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.1)', borderRadius: '8px', padding: '12px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent-soft)', borderRadius: '8px', padding: '12px', display: 'flex', gap: '10px', alignItems: 'center' }}>
             <AlertCircle size={16} color="var(--accent)" />
             <p style={{ fontSize: '11px', color: 'var(--accent)' }}>Backups are encrypted and stored in your region.</p>
           </div>
@@ -2831,39 +2836,39 @@ const SettingsView = ({ onRevokeAllSessions }) => {
     {/* 7. Danger Zone */}
     <div className="danger-zone" style={{ marginTop: '24px', border: '1px solid rgba(239, 68, 68, 0.2)', background: 'rgba(239, 68, 68, 0.02)', borderRadius: '12px', padding: '24px' }}>
       <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-        <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#ef4444', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>7</div>
-        <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#ef4444' }}>Danger Zone</h3>
+        <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--danger)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>7</div>
+        <h3 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--danger)' }}>Danger Zone</h3>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(280), gap: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <RotateCw size={18} color="#ef4444" style={{ marginTop: '2px' }} />
+            <RotateCw size={18} color="var(--danger)" style={{ marginTop: '2px' }} />
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: '#ef4444' }}>Deactivate Workspace</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--danger)' }}>Deactivate Workspace</p>
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Temporarily deactivate this workspace.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Workspace deactivation is guarded.', 'Add a confirmation workflow here when you are ready to support destructive admin actions.')}>Deactivate</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Workspace deactivation is guarded.', 'Add a confirmation workflow here when you are ready to support destructive admin actions.')}>Deactivate</button>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <Trash2 size={18} color="#ef4444" style={{ marginTop: '2px' }} />
+            <Trash2 size={18} color="var(--danger)" style={{ marginTop: '2px' }} />
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: '#ef4444' }}>Reset Sandbox Data</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--danger)' }}>Reset Sandbox Data</p>
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Permanently delete all sandbox data.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Sandbox reset is intentionally blocked here.', 'Hook this up only when you have a multi-step confirmation and audit trail in place.')}>Reset Sandbox</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Sandbox reset is intentionally blocked here.', 'Hook this up only when you have a multi-step confirmation and audit trail in place.')}>Reset Sandbox</button>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <Users size={18} color="#ef4444" style={{ marginTop: '2px' }} />
+            <Users size={18} color="var(--danger)" style={{ marginTop: '2px' }} />
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: '#ef4444' }}>Revoke All Sessions</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--danger)' }}>Revoke All Sessions</p>
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Sign out all users from all devices.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={onRevokeAllSessions}>Revoke Sessions</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={onRevokeAllSessions}>Revoke Sessions</button>
         </div>
       </div>
     </div>
@@ -2896,10 +2901,10 @@ const IntegrationsView = ({ data, onRetryIntegration }) => {
       <SectionHeader title="Integrations" description="Live provider configuration and health across billing, auth, messaging, and data systems." breadcrumbs={['Integrations']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '16px', marginBottom: '32px' }}>
-        <SummaryCard icon={LayoutGrid} label="Connected Apps" value={formatMetricNumber(summary.connectedApps || 0)} trend="Configured providers" trendUp={true} sparklineColor="#3b82f6" />
-        <SummaryCard icon={Activity} label="Sync Health" value={`${summary.syncHealth || 0}%`} trend="Configuration health" trendUp={true} sparklineColor="#10b981" />
-        <SummaryCard icon={Webhook} label="Webhooks Active" value={formatMetricNumber(summary.webhooksActive || 0)} trend="Developer surfaces" trendUp={true} sparklineColor="#8b5cf6" />
-        <SummaryCard icon={AlertTriangle} label="Needs Attention" value={formatMetricNumber(summary.failedSyncs || 0)} trend="Missing or degraded" trendUp={false} sparklineColor="#ef4444" />
+        <SummaryCard icon={LayoutGrid} label="Connected Apps" value={formatMetricNumber(summary.connectedApps || 0)} trend="Configured providers" trendUp={true} sparklineColor="var(--accent)" />
+        <SummaryCard icon={Activity} label="Sync Health" value={`${summary.syncHealth || 0}%`} trend="Configuration health" trendUp={true} sparklineColor="var(--success)" />
+        <SummaryCard icon={Webhook} label="Webhooks Active" value={formatMetricNumber(summary.webhooksActive || 0)} trend="Developer surfaces" trendUp={true} sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={AlertTriangle} label="Needs Attention" value={formatMetricNumber(summary.failedSyncs || 0)} trend="Missing or degraded" trendUp={false} sparklineColor="var(--danger)" />
       </div>
 
       <div className="integrations-main-grid">
@@ -2915,14 +2920,14 @@ const IntegrationsView = ({ data, onRetryIntegration }) => {
             {items.map((app) => (
               <div key={app.name} className="integration-card">
                 <div style={{ display: 'flex', gap: '16px' }}>
-                  <div className="integration-icon-wrapper" style={{ background: 'rgba(59, 130, 246, 0.12)' }}>
+                  <div className="integration-icon-wrapper" style={{ background: 'var(--accent-soft)' }}>
                     <Code size={24} color="var(--accent)" />
                   </div>
                   <div>
                     <h4 style={{ fontSize: '15px', fontWeight: 600 }}>{app.name}</h4>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{app.category}</p>
                     <div className="sync-status">
-                      <div className="sync-dot" style={{ background: app.status === 'active' || app.status === 'connected' ? 'var(--success)' : app.status === 'degraded' ? '#f59e0b' : 'var(--text-muted)' }} />
+                      <div className="sync-dot" style={{ background: app.status === 'active' || app.status === 'connected' ? 'var(--success)' : app.status === 'degraded' ? 'var(--warning)' : 'var(--text-muted)' }} />
                       Last sync: {formatRelativeTime(app.lastSyncAt, 'Unknown')}
                     </div>
                     <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px' }}>{app.note}</p>
@@ -2968,7 +2973,7 @@ const IntegrationsView = ({ data, onRetryIntegration }) => {
                 <div key={`${app.name}-note`} className="integration-side-item">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                     <span style={{ fontSize: '13px', fontWeight: 600 }}>{app.name}</span>
-                    <span className="status-badge" style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', padding: '2px 6px', fontSize: '10px' }}>{app.status}</span>
+                    <span className="status-badge" style={{ background: 'rgba(245, 158, 11, 0.1)', color: 'var(--warning)', padding: '2px 6px', fontSize: '10px' }}>{app.status}</span>
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{app.note}</p>
                 </div>
@@ -3501,7 +3506,7 @@ export default function App() {
     return (
       <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-app)' }}>
         <div className="card" style={{ maxWidth: '400px', textAlign: 'center', padding: '40px' }}>
-          <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px auto' }}>
+          <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px auto' }}>
             <Shield size={40} color="var(--accent)" />
           </div>
           <h2 style={{ marginBottom: '12px', fontSize: '24px', fontWeight: 700 }}>Admin Access Required</h2>
