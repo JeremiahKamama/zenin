@@ -1,0 +1,48 @@
+{
+  "vw": 1280,
+  "vh": 600,
+  "found": true,
+  "rootClass": "main-content main-content-home",
+  "rootTag": "MAIN",
+  "root": {
+    "x": 272,
+    "y": 0,
+    "w": 984,
+    "h": 600,
+    "bottom": 600,
+    "right": 1256
+  },
+  "canvasLeft": 244,
+  "canvasW": 1036,
+  "sideRight": 244,
+  "rootRight": 1256,
+  "contentW": 1012,
+  "rightGutterPx": 24,
+  "horizontalFill": 0.977,
+  "rootStyle": {
+    "display": "block",
+    "gap": "normal",
+    "padding": "0px",
+    "marginTop": "0px",
+    "marginBottom": "0px",
+    "width": "984px"
+  },
+  "scroll": {
+    "rootScrollH": 675,
+    "rootClientH": 600,
+    "rootScrollable": true,
+    "bodyScrollH": 600,
+    "bodyClientH": 600,
+    "bodyScrollable": false
+  },
+  "density": 1,
+  "blankCells": 0,
+  "totalCells": 1075,
+  "fullyBlankCols": 0,
+  "rightGutterColPx": 0,
+  "emptyContainers": [],
+  "emptyCount": 0,
+  "fixedHeight": [],
+  "fixedCount": 0,
+  "heading": "Probability Desk"
+}

@@ -9,6 +9,12 @@ import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAUL
 import { formatPercent } from "../utils/format";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import {
+  fetchPerformanceHistory,
+  buildEquitySeries,
+  buildBenchmarkSeries,
+  computePerformanceMetrics
+} from "../utils/performanceHistory";
 import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
@@ -154,6 +160,10 @@ export function PortfolioModule({
   const [holdingsSortBy, setHoldingsSortBy] = useState("value");
   const [selectedHolding, setSelectedHolding] = useState(null);
   const [benchmarkSymbol, setBenchmarkSymbol] = useState("SPY");
+  // Immutable snapshot history (single source of truth for the Performance
+  // Curve). Fetched from GET /api/history/range — never reconstructed from trades.
+  const [snapshotHistory, setSnapshotHistory] = useState([]);
+  const [historyStatus, setHistoryStatus] = useState("idle"); // idle|loading|ready|empty|error
   const [selectedTaxLotMethod, setSelectedTaxLotMethod] = useState("hifo");
   const [activeInsightFlow, setActiveInsightFlow] = useState(null);
   const [insightFlowStep, setInsightFlowStep] = useState(1);
@@ -336,83 +346,58 @@ const currentAccountEquity = totalAccountEquity;
 const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "var(--color-success)" : "var(--color-danger)") : "var(--color-data-primary)";
 
+  // Fetch immutable daily snapshots for the selected interval. This is the ONLY
+  // source for the Performance Curve — no trade reconstruction, no interpolation.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    setHistoryStatus("loading");
+    fetchPerformanceHistory(chartInterval, { signal: controller?.signal })
+      .then((rows) => {
+        if (cancelled) return;
+        setSnapshotHistory(rows);
+        setHistoryStatus(rows.length ? "ready" : "empty");
+      })
+      .catch((err) => {
+        if (cancelled || err?.name === "AbortError") return;
+        setSnapshotHistory([]);
+        setHistoryStatus("error");
+      });
+    return () => {
+      cancelled = true;
+      controller?.abort();
+    };
+  }, [chartInterval]);
+
+  // Base value = first snapshot's portfolio value (for %/PnL rebasing). Falls
+  // back to initialBalance when history is empty.
+  const historyBaseValue = useMemo(() => {
+    if (snapshotHistory.length > 0) return snapshotHistory[0].portfolioValue;
+    return initialBalance;
+  }, [snapshotHistory, initialBalance]);
+
   const chartData = useMemo(() => {
-    const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
-    const points = pointCountMap[chartInterval] || 24;
-    const now = Date.now();
-    const start = (() => {
-      if (chartInterval === "1D") return now - 24 * 60 * 60 * 1000;
-      if (chartInterval === "1W") return now - 7 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "1M") return now - 30 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "ALL") {
-        const firstTradeTs = tradeTimeline[0]?.t;
-        return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
+    // Equity curve from immutable snapshots at REAL dates (no fake buckets).
+    const series = buildEquitySeries(snapshotHistory, chartMode, { baseValue: historyBaseValue });
+    // Live overlay: append today's live equity as a SEPARATE trailing point
+    // without overwriting the last immutable snapshot. Only when the last
+    // snapshot predates today (market open / pre-EOD).
+    if (series.length > 0 && Number.isFinite(currentAccountEquity)) {
+      const todayTs = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z").getTime();
+      const lastTs = snapshotHistory[snapshotHistory.length - 1]?.ts;
+      if (lastTs != null && todayTs > lastTs) {
+        const liveUsd = currentAccountEquity;
+        const liveConverted = displayCurrency === "USD" ? liveUsd : convertFromUSD(liveUsd, displayCurrency, spotPrices);
+        let value;
+        if (chartMode === "percentage") value = historyBaseValue ? ((liveUsd - historyBaseValue) / historyBaseValue) * 100 : 0;
+        else if (chartMode === "pnl") value = liveConverted - (displayCurrency === "USD" ? historyBaseValue : convertFromUSD(historyBaseValue, displayCurrency, spotPrices));
+        else value = liveConverted;
+        series.push([Date.now(), Number(Number(value).toFixed(2))]);
       }
-      if (chartInterval === "YTD") {
-        const d = new Date(now);
-        return new Date(d.getFullYear(), 0, 1).getTime();
-      }
-      if (chartInterval === "5Y") return now - 5 * 365 * 24 * 60 * 60 * 1000;
-      const firstTradeTs = tradeTimeline[0]?.t;
-      return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 30 * 24 * 60 * 60 * 1000;
-    })();
+    }
+    return series;
+  }, [snapshotHistory, chartMode, historyBaseValue, currentAccountEquity, displayCurrency, spotPrices]);
 
-    const inRangeTrades = tradeTimeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
-    const beforeRangeTrade = [...tradeTimeline]
-      .reverse()
-      .find((trade) => trade.t < start && Number.isFinite(trade.equity));
-    const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
-
-    const optionOpenAnchors = optionTimelineAdjustments.map((entry, idx) => ({
-      t: entry.openedAt,
-      equity: Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : startEquity,
-      id: `opt-open-${idx}`
-    }));
-
-    const anchors = [
-      { t: start, equity: startEquity },
-      ...inRangeTrades.map((trade) => ({ t: trade.t, equity: trade.equity })),
-      ...optionOpenAnchors.filter((entry) => entry.t >= start && entry.t <= now),
-      { t: now, equity: currentAccountEquity }
-    ].sort((a, b) => a.t - b.t);
-
-    let anchorIdx = 0;
-    const step = points > 1 ? (now - start) / (points - 1) : 0;
-
-    const getOptionAdjustmentAt = (timestamp) => {
-      return optionTimelineAdjustments.reduce((sum, entry) => {
-        if (timestamp <= entry.openedAt) return sum;
-        const horizon = Math.max(1, now - entry.openedAt);
-        const progress = Math.max(0, Math.min(1, (timestamp - entry.openedAt) / horizon));
-        return sum + (entry.currentPnl * progress);
-      }, 0);
-    };
-
-    const toSeriesValue = (equity) => {
-      // Convert equity from USD to displayCurrency
-      const convertedEquity = displayCurrency === "USD" ? equity : convertFromUSD(equity, displayCurrency, spotPrices);
-      const convertedInitial = displayCurrency === "USD" ? initialBalance : convertFromUSD(initialBalance, displayCurrency, spotPrices);
-
-      if (chartMode === "percentage") return ((equity - initialBalance) / initialBalance) * 100;
-      if (chartMode === "equity") return convertedEquity;
-      return convertedEquity - convertedInitial;
-    };
-
-    return Array.from({ length: points }, (_, i) => {
-      const t = start + step * i;
-      while (anchorIdx + 1 < anchors.length && anchors[anchorIdx + 1].t <= t) {
-        anchorIdx += 1;
-      }
-      const baseEquity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
-      const equity = baseEquity + getOptionAdjustmentAt(t);
-      return [
-        t,
-        Number(toSeriesValue(equity).toFixed(2))
-      ];
-    });
-  }, [chartInterval, chartMode, tradeTimeline, currentAccountEquity, optionTimelineAdjustments, initialBalance, displayCurrency, spotPrices]);
   const cashBalances = useMemo(() => {
     const balances = { USD: liveAvailableBalance };
     (Array.isArray(trades) ? trades : []).forEach(t => {
@@ -568,74 +553,47 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
   }, [exposureRows]);
 
-  // Performance Metrics
+  // Performance Metrics — derived from the SAME immutable snapshots that feed
+  // the Performance Curve (GET /api/history/range). No trade reconstruction,
+  // no duplicated equity logic. A live trailing point is appended only when the
+  // last snapshot predates today, mirroring chartData's live overlay.
   const metrics = useMemo(() => {
-    const EPS = 1e-8;
-    const annualization = Math.sqrt(252);
-    const riskFreeDaily = 0.0425 / 252;
-    const formatMetric = (value, digits = 2) => (Number.isFinite(value) ? value.toFixed(digits) : "N/A");
-
-    const equityPoints = [
-      { t: Date.now(), equity: currentAccountEquity },
-      ...tradeTimeline
-        .filter((point) => Number.isFinite(point?.equity))
-        .map((point) => ({ t: Number(point.t) || 0, equity: Number(point.equity) }))
-    ]
-      .filter((point) => Number.isFinite(point.equity) && point.equity > 0)
-      .sort((a, b) => a.t - b.t);
-
-    if (equityPoints.length < 2) {
-      return {
-        sharpe: "N/A",
-        sortino: "N/A",
-        maxDrawdown: "0.00",
-        alpha: "N/A",
-        beta: "N/A"
-      };
+    const base = snapshotHistory.slice();
+    if (
+      base.length > 0 &&
+      Number.isFinite(currentAccountEquity) &&
+      currentAccountEquity > 0
+    ) {
+      const todayTs = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z").getTime();
+      const lastTs = base[base.length - 1]?.ts;
+      if (lastTs != null && todayTs > lastTs) {
+        base.push({
+          date: new Date().toISOString().slice(0, 10),
+          ts: todayTs,
+          portfolioValue: currentAccountEquity,
+          dailyPnl: 0,
+          dailyReturn: 0,
+          deposits: 0,
+          withdrawals: 0,
+          estimated: false
+        });
+      }
     }
-
-    const returns = [];
-    for (let i = 1; i < equityPoints.length; i += 1) {
-      const prev = equityPoints[i - 1].equity;
-      const next = equityPoints[i].equity;
-      if (prev <= EPS || !Number.isFinite(prev) || !Number.isFinite(next)) continue;
-      const r = (next / prev) - 1;
-      if (Number.isFinite(r)) returns.push(r);
-    }
-
-    const meanReturn = returns.length
-      ? returns.reduce((sum, r) => sum + r, 0) / returns.length
-      : NaN;
-    const variance = returns.length > 1
-      ? returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / (returns.length - 1)
-      : NaN;
-    const stdDev = Number.isFinite(variance) && variance > EPS ? Math.sqrt(variance) : NaN;
-
-    const downsideSquares = returns.map((r) => Math.min(0, r - riskFreeDaily) ** 2);
-    const downsideVariance = downsideSquares.length
-      ? downsideSquares.reduce((sum, v) => sum + v, 0) / downsideSquares.length
-      : NaN;
-    const downsideDeviation = Number.isFinite(downsideVariance) && downsideVariance > EPS ? Math.sqrt(downsideVariance) : NaN;
-
-    const sharpe = Number.isFinite(stdDev) ? ((meanReturn - riskFreeDaily) / stdDev) * annualization : NaN;
-    const sortino = Number.isFinite(downsideDeviation) ? ((meanReturn - riskFreeDaily) / downsideDeviation) * annualization : NaN;
-
-    let peak = equityPoints[0].equity;
-    let maxDrawdown = 0;
-    equityPoints.forEach((point) => {
-      peak = Math.max(peak, point.equity);
-      const drawdown = peak > EPS ? ((peak - point.equity) / peak) * 100 : 0;
-      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-    });
-
+    const m = computePerformanceMetrics(base);
     return {
-      sharpe: formatMetric(sharpe),
-      sortino: formatMetric(sortino),
-      maxDrawdown: formatMetric(maxDrawdown),
+      ...m,
+      sharpe: Number.isFinite(m.sharpe) ? m.sharpe.toFixed(2) : "N/A",
+      sortino: Number.isFinite(m.sortino) ? m.sortino.toFixed(2) : "N/A",
+      maxDrawdown: Number.isFinite(m.maxDrawdown) ? m.maxDrawdown.toFixed(2) : "0.00",
+      volatility: Number.isFinite(m.volatility) ? m.volatility.toFixed(2) : "N/A",
+      twr: Number.isFinite(m.twr) ? m.twr.toFixed(2) : "N/A",
+      mwr: Number.isFinite(m.mwr) ? m.mwr.toFixed(2) : "N/A",
+      calmar: Number.isFinite(m.calmar) ? m.calmar.toFixed(2) : "N/A",
+      winRate: Number.isFinite(m.winRate) ? m.winRate.toFixed(1) : "N/A",
       alpha: "N/A",
       beta: "N/A"
     };
-  }, [tradeTimeline, currentAccountEquity]);
+  }, [snapshotHistory, currentAccountEquity]);
 
   const predictionMarketRows = useMemo(() => {
     const source = Array.isArray(trades) ? trades : [];
@@ -758,28 +716,17 @@ const isProfitable = currentAccountEquity >= initialBalance;
     return [...combinedHoldings].sort((a, b) => score(b) - score(a));
   }, [combinedHoldings, holdingsSortBy]);
 
+  // Benchmark series from REAL stored benchmark closes (portfolio_daily_snapshots
+  // .benchmark_value). Rebased to the portfolio's start. Returns [] when the
+  // engine has no benchmark feed configured — the curve shows no fake benchmark.
   const benchmarkSeries = useMemo(() => {
-    const drift = benchmarkSymbol === "SPY" ? 0.0008 : benchmarkSymbol === "ACWI" ? 0.0006 : 0.0005;
-    if (!Array.isArray(chartData) || chartData.length === 0) return [];
+    return buildBenchmarkSeries(snapshotHistory, chartMode, { baseValue: historyBaseValue });
+  }, [snapshotHistory, chartMode, historyBaseValue]);
 
-    return chartData.map((point, idx) => {
-      const t = point[0];
-      const multiplier = Math.pow(1 + drift, idx);
-      let value = 0;
-
-      if (chartMode === "equity") {
-        const startValue = displayCurrency === "USD" ? initialBalance : convertFromUSD(initialBalance, displayCurrency, spotPrices);
-        value = startValue * multiplier;
-      } else if (chartMode === "percentage") {
-        value = (multiplier - 1) * 100;
-      } else {
-        // Cash PnL mode
-        const benchmarkPnL = initialBalance * (multiplier - 1);
-        value = displayCurrency === "USD" ? benchmarkPnL : convertFromUSD(benchmarkPnL, displayCurrency, spotPrices);
-      }
-      return [t, Number(value.toFixed(2))];
-    });
-  }, [chartData, benchmarkSymbol, chartMode, displayCurrency, initialBalance, spotPrices]);
+  // Snapshot-derived performance metrics (TWR, MWR, Sharpe, drawdown, ...).
+  const performanceMetrics = useMemo(() => {
+    return computePerformanceMetrics(snapshotHistory);
+  }, [snapshotHistory]);
 
   const portfolioPerformanceSeries = useMemo(() => {
     const toData = (points) => points
@@ -1826,12 +1773,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
         label: "Total Value",
         value: formatMoney(currentAccountEquity),
         detail: `${formatSignedMoney(totalGainLoss)} (${formatSignedPercent(totalReturnPct, 2)})`,
-        tone: totalGainLoss >= 0 ? "positive" : "negative",
-      },
-      {
-        label: "Day Change",
-        value: formatSignedMoney(totalGainLoss),
-        detail: formatSignedPercent(totalReturnPct, 2),
         tone: totalGainLoss >= 0 ? "positive" : "negative",
       },
       {

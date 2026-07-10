@@ -2,7 +2,10 @@ import { useState } from "react";
 import { zeninFetch } from "../../utils/zeninFetch";
 
 // Asset picker reused for the empty slot(s) in a comparison.
-// Mirrors the global search endpoint (/search?q=&type=).
+// Primary search → /api/market/search (FMP, richer metadata: CIK/exchange/
+// currency). When unauthenticated (route requires requireSignedIn) it 401s, so
+// we fall back to the public /search?q=&type=tradfi (Yahoo). A raw symbol can
+// always be used directly via the Enter key.
 export function ComparisonPicker({ slotLabel, onPick, onCancel }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
@@ -18,15 +21,40 @@ export function ComparisonPicker({ slotLabel, onPick, onCancel }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await zeninFetch(`/search?q=${encodeURIComponent(term)}&type=tradfi`, {});
-      const list = Array.isArray(res) ? res : Array.isArray(res?.results) ? res.results : [];
-      setResults(list.slice(0, 8));
+      // FMP-backed richer metadata. Falls through to Yahoo on any failure
+      // (including 401 requireSignedIn for guests).
+      const res = await zeninFetch(`/api/market/search?q=${encodeURIComponent(term)}&limit=8`, {});
+      const list = Array.isArray(res?.results) ? res.results : [];
+      const mapped = list.map((r) => ({
+        symbol: String(r.symbol || "").toUpperCase(),
+        name: r.name || r.companyName || r.symbol || term,
+        type: "equity",
+        exchange: r.exchange || null,
+        currency: r.currency || null,
+      })).filter((r) => r.symbol);
+      setResults(mapped.slice(0, 8));
     } catch {
-      // Fallback: accept a raw symbol directly.
-      setResults([{ symbol: term.toUpperCase().trim(), name: term.toUpperCase().trim(), type: "equity" }]);
+      try {
+        const yRes = await zeninFetch(`/search?q=${encodeURIComponent(term)}&type=tradfi`, {});
+        const yList = Array.isArray(yRes) ? yRes : Array.isArray(yRes?.results) ? yRes.results : [];
+        const mapped = yList.map((r) => ({
+          symbol: String(r.symbol || "").toUpperCase(),
+          name: r.name || r.symbol || term,
+          type: r.type || "equity",
+        })).filter((r) => r.symbol);
+        setResults(mapped.slice(0, 8));
+      } catch {
+        // Final fallback: accept the typed text as a raw symbol.
+        setResults([{ symbol: term.toUpperCase().trim(), name: term.toUpperCase().trim(), type: "equity" }]);
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const pickFirst = () => {
+    if (results.length) onPick(results[0]);
+    else if (q && q.trim()) onPick({ symbol: q.toUpperCase().trim(), name: q.toUpperCase().trim(), type: "equity" });
   };
 
   return (
@@ -43,6 +71,12 @@ export function ComparisonPicker({ slotLabel, onPick, onCancel }) {
         placeholder="Search symbol or name (e.g. AMD, TSLA)…"
         value={q}
         onChange={(e) => run(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            pickFirst();
+          }
+        }}
         aria-label="Search assets"
       />
       {loading ? <div className="cmp-picker-status">Searching…</div> : null}
@@ -56,6 +90,7 @@ export function ComparisonPicker({ slotLabel, onPick, onCancel }) {
           >
             <span className="cmp-picker-sym">{a.symbol}</span>
             <span className="cmp-picker-name">{a.name}</span>
+            {a.exchange ? <span className="cmp-picker-exch">{a.exchange}</span> : null}
           </button>
         ))}
         {!loading && q && results.length === 0 ? (

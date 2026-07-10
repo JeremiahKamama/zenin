@@ -1,0 +1,48 @@
+{
+  "vw": 1920,
+  "vh": 1080,
+  "found": true,
+  "rootClass": "",
+  "rootTag": "MAIN",
+  "root": {
+    "x": 0,
+    "y": 81,
+    "w": 1920,
+    "h": 4644,
+    "bottom": 4725,
+    "right": 1920
+  },
+  "canvasLeft": 0,
+  "canvasW": 1920,
+  "sideRight": 0,
+  "rootRight": 1920,
+  "contentW": 1920,
+  "rightGutterPx": 0,
+  "horizontalFill": 1,
+  "rootStyle": {
+    "display": "block",
+    "gap": "normal",
+    "padding": "0px",
+    "marginTop": "0px",
+    "marginBottom": "0px",
+    "width": "1920px"
+  },
+  "scroll": {
+    "rootScrollH": 4644,
+    "rootClientH": 4644,
+    "rootScrollable": false,
+    "bodyScrollH": 4838,
+    "bodyClientH": 1080,
+    "bodyScrollable": true
+  },
+  "density": 1,
+  "blankCells": 0,
+  "totalCells": 3600,
+  "fullyBlankCols": 0,
+  "rightGutterColPx": 0,
+  "emptyContainers": [],
+  "emptyCount": 0,
+  "fixedHeight": [],
+  "fixedCount": 0,
+  "heading": "Track portfolios, research stocks, model options, and estima"
+}

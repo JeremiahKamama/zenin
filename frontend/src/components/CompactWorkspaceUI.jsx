@@ -542,6 +542,298 @@ export function Timeline({ items = [], className = "" }) {
 }
 
 /**
+ * SidebarGroup — a labelled group in a workflow-oriented sidebar.
+ * Renders an uppercase eyebrow header. Children are SidebarItems.
+ */
+export function SidebarGroup({ label, children, className = "" }) {
+  return (
+    <div className={`ws-sidebar-group ${className}`.trim()}>
+      {label ? <div className="ws-sidebar-group-label">{label}</div> : null}
+      <div className="ws-sidebar-group-items">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * SidebarItem — a single workflow sidebar entry. <button> (focusable,
+ * keyboard-native). `active` shows a left-border accent (semantic, not
+ * color-only — pair with weight/highlight). `badge` renders a count chip.
+ */
+export function SidebarItem({ icon, label, badge, active, action, onClick, className = "" }) {
+  return (
+    <button
+      type="button"
+      className={`ws-sidebar-item ${active ? "active" : ""} ${action ? "action" : ""} ${className}`.trim()}
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+    >
+      {icon ? <span className="ws-sidebar-item-icon" aria-hidden="true">{icon}</span> : null}
+      <span className="ws-sidebar-item-label">{label}</span>
+      {action ? <span className="ws-sidebar-item-chevron" aria-hidden="true">↗</span> : null}
+      {badge != null && badge !== 0 ? <span className="ws-sidebar-item-badge">{badge}</span> : null}
+    </button>
+  );
+}
+
+/**
+ * ScoreGauge — circular SVG gauge, 0–100, monochrome track with a semantic
+ * arc. Tone is reinforced by a numeric label (never color-only). Used for
+ * Research Score / conviction.
+ */
+export function ScoreGauge({ value = 0, label, size = 72, className = "" }) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  const stroke = 6;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const dash = (v / 100) * c;
+  const tone = v >= 70 ? "high" : v >= 40 ? "mid" : "low";
+  return (
+    <div className={`ws-gauge tone-${tone} ${className}`.trim()} role="img" aria-label={`${label || "Score"} ${v} of 100`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="ws-gauge-svg">
+        <circle cx={size / 2} cy={size / 2} r={r} className="ws-gauge-track" strokeWidth={stroke} fill="none" />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} className="ws-gauge-fill"
+          strokeWidth={stroke} fill="none" strokeLinecap="round"
+          strokeDasharray={`${dash} ${c - dash}`}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+      <div className="ws-gauge-readout">
+        <strong>{v}</strong>
+        {label ? <span className="ws-gauge-label">{label}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ConfidenceBadge — pill showing NN% confidence with a thin underlying meter
+ * bar tinted by semantic token (success/warning/danger). Text + bar, never
+ * color-only.
+ */
+export function ConfidenceBadge({ value = 0, label, className = "" }) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  const tone = v >= 66 ? "high" : v >= 33 ? "mid" : "low";
+  return (
+    <span className={`ws-confidence-badge tone-${tone} ${className}`.trim()}>
+      <span className="ws-confidence-badge-label">{label || "Confidence"}</span>
+      <span className="ws-confidence-badge-value">{v}%</span>
+      <span className="ws-confidence-meter" aria-hidden="true">
+        <span className="ws-confidence-meter-fill" style={{ width: `${v}%` }} />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * PlaceholderMetric — a MetricCard variant for missing data. Renders a neutral
+ * skeleton-gauge (dashed track) + "Awaiting data" label + optional hint,
+ * replacing em-dash-only cells. Carries role="status" so SR users hear it.
+ */
+export function PlaceholderMetric({ label, hint, className = "" }) {
+  return (
+    <div className={`ws-metric-card placeholder ${className}`.trim()} role="status" aria-label={`${label}: awaiting data`}>
+      <span className="ws-metric-label">{label}</span>
+      <span className="ws-placeholder-gauge" aria-hidden="true">
+        <span className="ws-placeholder-gauge-ring" />
+      </span>
+      <span className="ws-metric-helper">Awaiting data{hint ? ` · ${hint}` : ""}</span>
+    </div>
+  );
+}
+
+/**
+ * Ghost — the lightest "value not yet populated" primitive for inline facts
+ * (em-dash replacement in header/fact strips). Renders a muted token-driven
+ * label instead of a raw "—", so a missing value reads as "stale / not yet
+ * synced" rather than an empty dash. Pair: keep the <em> fact name so the
+ * field position is preserved (no layout shift).
+ */
+export function Ghost({ label = "Not yet synced", className = "" }) {
+  return (
+    <span className={`ws-ghost ${className}`.trim()} title={label}>
+      <span className="ws-ghost-pulse" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
+/**
+ * Sparkline — monochrome inline OHLCV mini-chart for a single series. Used by
+ * the ARW Overview / Technicals to render the Massive daily aggregates (data.series)
+ * instead of two static 52W numbers. Degrades to null (caller shows GuidedEmptyState).
+ * Token-driven: stroke uses --color-data-* so it stays in the monochrome system.
+ */
+export function Sparkline({ series, height = 56, stroke = "var(--color-data-primary)", fill = "var(--color-data-muted)", className = "" }) {
+  if (!series || !Array.isArray(series.points) || series.points.length < 2) return null;
+  const pts = series.points;
+  const W = 240;
+  const H = height;
+  const pad = 4;
+  const closes = pts.map((p) => p.c);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const span = max - min || 1;
+  const x = (i) => pad + (i / (pts.length - 1)) * (W - pad * 2);
+  const y = (v) => H - pad - ((v - min) / span) * (H - pad * 2);
+  const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.c).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(pts.length - 1).toFixed(1)},${H - pad} L${x(0).toFixed(1)},${H - pad} Z`;
+  return (
+    <svg
+      className={`ws-sparkline ${className}`.trim()}
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={`1Y price series, ${pts.length} points, ${min.toFixed(2)}–${max.toFixed(2)}`}
+    >
+      <path d={area} fill={fill} fillOpacity={0.12} stroke="none" />
+      <path d={line} fill="none" stroke={stroke} strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+/**
+ * AssetSummaryCard — vertical summary for one asset (Compare Overview).
+ * ticker (large) + name, exchange·sector, price + change (semantic), market
+ * cap, a 6-cell mini-metric grid, a small ScoreGauge conviction, and a
+ * "View full research →" link. Identical structure for A and B → side-by-side.
+ */
+export function AssetSummaryCard({
+  asset,
+  score,
+  metrics = [],
+  onViewResearch,
+  className = "",
+}) {
+  const data = asset || {};
+  const changePct = data.changePct;
+  const up = changePct != null ? Number(changePct) >= 0 : null;
+  return (
+    <article className={`ws-asset-summary ${className}`.trim()}>
+      <header className="ws-asset-summary-head">
+        <div className="ws-asset-summary-id">
+          <span className="ws-asset-summary-sym">{data.symbol || "—"}</span>
+          {data.name ? <span className="ws-asset-summary-name">{data.name}</span> : null}
+        </div>
+        <div className="ws-asset-summary-meta">
+          {data.exchange ? <span>{data.exchange}</span> : null}
+          {data.sector ? <span>· {data.sector}</span> : null}
+        </div>
+      </header>
+      <div className="ws-asset-summary-price">
+        {data.price != null ? <strong className="font-mono">${Number(data.price).toFixed(2)}</strong> : <span className="ws-asset-summary-no-price">—</span>}
+        {up != null ? (
+          <span className={`ws-asset-summary-change ${up ? "up" : "down"}`}>
+            {up ? "▲" : "▼"} {Math.abs(Number(changePct)).toFixed(2)}%
+          </span>
+        ) : null}
+      </div>
+      <div className="ws-asset-summary-grid">
+        {metrics.map((m) => (
+          <div key={m.label} className="ws-asset-summary-cell">
+            <span className="ws-asset-summary-cell-label">{m.label}</span>
+            <span className="ws-asset-summary-cell-value">{m.value}</span>
+          </div>
+        ))}
+      </div>
+      <footer className="ws-asset-summary-foot">
+        {score != null ? <ScoreGauge value={score} label="conviction" size={44} /> : null}
+        {onViewResearch ? (
+          <button type="button" className="ws-asset-summary-link" onClick={onViewResearch}>
+            View full research →
+          </button>
+        ) : null}
+      </footer>
+    </article>
+  );
+}
+
+/**
+ * ResultBanner — decision summary banner above the Compare matrix.
+ *  - insufficient-data: neutral, "Not enough data to declare a winner" + CTAs.
+ *  - winner: semantic accent, winner symbol, ConfidenceBadge, one-line breakdown.
+ */
+export function ResultBanner({
+  state = "winner",
+  winner,
+  confidence,
+  breakdown,
+  cta,
+  secondaryCta,
+  onAction,
+  onSecondaryAction,
+  className = "",
+}) {
+  if (state === "insufficient-data") {
+    return (
+      <section className={`ws-result-banner insufficient ${className}`.trim()} role="status" aria-live="polite">
+        <div className="ws-result-banner-copy">
+          <h3>Not enough data to declare a winner</h3>
+          <p>Populate fundamentals for both assets to build the decision matrix.</p>
+        </div>
+        {(cta || secondaryCta) ? (
+          <div className="ws-result-banner-actions">
+            {cta ? <button type="button" className="journal-btn primary" onClick={onAction}>{cta}</button> : null}
+            {secondaryCta ? <button type="button" className="journal-btn secondary" onClick={onSecondaryAction}>{secondaryCta}</button> : null}
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+  return (
+    <section className={`ws-result-banner winner ${className}`.trim()} aria-live="polite">
+      <div className="ws-result-banner-copy">
+        <span className="ws-result-banner-eyebrow">Decision</span>
+        <h3>Winner · <strong>{winner}</strong></h3>
+        <ConfidenceBadge value={confidence} />
+        {breakdown ? <p className="ws-result-banner-breakdown">{breakdown}</p> : null}
+      </div>
+      {(cta || secondaryCta) ? (
+        <div className="ws-result-banner-actions">
+          {cta ? <button type="button" className="journal-btn primary" onClick={onAction}>{cta}</button> : null}
+          {secondaryCta ? <button type="button" className="journal-btn secondary" onClick={onSecondaryAction}>{secondaryCta}</button> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * DecisionMatrixEmpty — structure preview when no verdict exists: lists the
+ * canonical dimensions as empty rows (PlaceholderMetric cells) + the explanatory
+ * message + action buttons. Replaces the dead "Winner Tie 0%".
+ */
+export const DECISION_DIMENSIONS = [
+  "Valuation", "Growth", "Profitability", "Moat", "Execution", "Risk",
+];
+
+export function DecisionMatrixEmpty({ cta, secondaryCta, onAction, onSecondaryAction, className = "" }) {
+  return (
+    <div className={`ws-decision-empty ${className}`.trim()}>
+      <div className="ws-decision-empty-rows">
+        {DECISION_DIMENSIONS.map((d) => (
+          <div key={d} className="ws-decision-empty-row">
+            <span className="ws-decision-empty-dim"><strong>{d}</strong></span>
+            <PlaceholderMetric label="A" />
+            <span className="ws-decision-empty-win"><Badge tone="neutral">Tie</Badge></span>
+            <PlaceholderMetric label="B" />
+          </div>
+        ))}
+      </div>
+      <div className="ws-decision-empty-foot">
+        <p>Insufficient data to score these dimensions. The matrix populates as fundamentals arrive.</p>
+        {(cta || secondaryCta) ? (
+          <div className="ws-decision-empty-actions">
+            {cta ? <button type="button" className="journal-btn primary" onClick={onAction}>{cta}</button> : null}
+            {secondaryCta ? <button type="button" className="journal-btn secondary" onClick={onSecondaryAction}>{secondaryCta}</button> : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
  * ComparisonMatrix — the Compare Workspace decision-matrix centerpiece.
  * Rows are scored dimensions; the winner is derived from evidence, never
  * asserted arbitrarily. `rows` = [{
@@ -569,6 +861,7 @@ export function ComparisonMatrix({ rows = [], assetA, assetB, showEvidence = tru
               {r.weight != null ? <em className="ws-matrix-weight">w {r.weight}</em> : null}
             </span>
             <span role="cell" className={`ws-matrix-score a ${r.winner === "A" ? "is-winner" : ""}`.trim()}>
+              <span className="ws-matrix-bar" aria-hidden="true"><span className="ws-matrix-bar-fill" style={{ width: `${matrixFill(r.a?.score)}%` }} /></span>
               <strong>{r.a?.display ?? r.a?.score ?? "—"}</strong>
               {showEvidence && r.a?.evidence ? <em className="ws-matrix-evidence">{r.a.evidence}</em> : null}
             </span>
@@ -579,6 +872,7 @@ export function ComparisonMatrix({ rows = [], assetA, assetB, showEvidence = tru
               {r.confidence != null ? <em className="ws-matrix-confidence">{r.confidence}</em> : null}
             </span>
             <span role="cell" className={`ws-matrix-score b ${r.winner === "B" ? "is-winner" : ""}`.trim()}>
+              <span className="ws-matrix-bar" aria-hidden="true"><span className="ws-matrix-bar-fill" style={{ width: `${matrixFill(r.b?.score)}%` }} /></span>
               <strong>{r.b?.display ?? r.b?.score ?? "—"}</strong>
               {showEvidence && r.b?.evidence ? <em className="ws-matrix-evidence">{r.b.evidence}</em> : null}
             </span>
@@ -596,4 +890,16 @@ export function ComparisonMatrix({ rows = [], assetA, assetB, showEvidence = tru
       ) : null}
     </div>
   );
+}
+
+// Relative fill for a matrix score cell. Raw scores vary by unit (P/E, %, etc.),
+// so the bar is a normalized 0–100 visual cue keyed to `score` as a percentage
+// when it is already 0–100, else a flat mid-fill so the track still reads.
+// Never the sole carrier of meaning — the numeric display + winner badge are.
+function matrixFill(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return 0;
+  if (n >= 0 && n <= 100) return n;
+  if (n < 0) return 0;
+  return Math.min(100, (n / (n * 2)) * 100); // unknown scale → neutral half-fill
 }

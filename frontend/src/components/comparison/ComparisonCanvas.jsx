@@ -1,56 +1,47 @@
 import { ComparisonOverview } from "./sections/ComparisonOverview";
-import { ComparisonPrice } from "./sections/ComparisonPrice";
-import { ComparisonPerformance } from "./sections/ComparisonPerformance";
+import { ComparisonPricePerformance } from "./sections/ComparisonPricePerformance";
 import { ComparisonFundamentals } from "./sections/ComparisonFundamentals";
 import { ComparisonValuation } from "./sections/ComparisonValuation";
-import { ComparisonFinancials } from "./sections/ComparisonFinancials";
 import {
-  ComparisonGrowth,
-  ComparisonProfitability,
-  ComparisonQuality,
-  ComparisonTechnical,
-  ComparisonMacro,
-  ComparisonOwnership,
-  ComparisonNews,
+  ComparisonOwnershipNews,
   ComparisonCatalysts,
   ComparisonRisks,
-  ComparisonTimeline,
-  ComparisonAI,
-  ComparisonPortfolioImpact,
   ComparisonScenario,
-  ComparisonJournalPanel
+  ComparisonPlaceholderFallback
 } from "./sections/ComparisonStubSections";
 import { ComparisonDecisionSection } from "./ComparisonMatrix";
 import { SharedIntelligence } from "./SharedIntelligence";
 
-// Maps a section key to its component. Every section receives the same
-// { assetA, assetB, ... } props so layout stays identical across assets.
+// Maps a section key to its component. Pruned from 22 → 10 items (C). Every
+// section receives the same { assetA, assetB, intelA, intelB, ... } props so
+// layout stays identical across assets. One FMP fetch per asset (in the
+// Workspace) is shared via intelA/intelB into Decision Matrix + Fundamentals.
 const REGISTRY = {
   decision: ComparisonDecisionSection,
   overview: ComparisonOverview,
-  price: ComparisonPrice,
-  performance: ComparisonPerformance,
-  fundamentals: ComparisonFundamentals,
+  pricePerformance: ComparisonPricePerformance,
   valuation: ComparisonValuation,
-  financials: ComparisonFinancials,
-  growth: ComparisonGrowth,
-  profitability: ComparisonProfitability,
-  quality: ComparisonQuality,
-  technical: ComparisonTechnical,
-  macro: ComparisonMacro,
-  ownership: ComparisonOwnership,
-  news: ComparisonNews,
+  fundamentals: ComparisonFundamentals,
+  ownershipNews: ComparisonOwnershipNews,
   catalysts: ComparisonCatalysts,
   risks: ComparisonRisks,
   shared: SharedIntelligence,
-  scenario: ComparisonScenario,
-  timeline: ComparisonTimeline,
-  ai: ComparisonAI,
-  portfolioImpact: ComparisonPortfolioImpact,
-  journal: ComparisonJournalPanel
+  scenario: ComparisonScenario
 };
 
-export function ComparisonCanvas({ section, assetA, assetB, loadingA, loadingB, matrixRows, verdict, onOpenSection }) {
+export function ComparisonCanvas({
+  section,
+  assetA,
+  assetB,
+  loadingA,
+  loadingB,
+  matrixRows,
+  verdict,
+  intelA,
+  intelB,
+  onOpenSection,
+  onViewResearch,
+}) {
   const Comp = REGISTRY[section] || ComparisonDecisionSection;
   const isDecision = section === "decision";
   return (
@@ -60,9 +51,12 @@ export function ComparisonCanvas({ section, assetA, assetB, loadingA, loadingB, 
         assetB={assetB}
         loadingA={loadingA}
         loadingB={loadingB}
+        intelA={intelA}
+        intelB={intelB}
         matrixRows={matrixRows}
         verdict={verdict}
         onOpenSection={onOpenSection}
+        onViewResearch={onViewResearch}
       />
     </section>
   );

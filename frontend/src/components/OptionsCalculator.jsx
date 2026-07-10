@@ -249,7 +249,11 @@ export function OptionsCalculator({   spotPrice = 0,
           return {
             ...l,
             premium: data.mark != null ? String(data.mark) : l.premium,
-            iv: data.iv != null ? String(Number(data.iv).toFixed(1)) : l.iv
+            iv: data.iv != null ? String(Number(data.iv).toFixed(1)) : l.iv,
+            delta: data.delta != null ? String(Number(data.delta).toFixed(4)) : l.delta,
+            gamma: data.gamma != null ? String(Number(data.gamma).toFixed(4)) : l.gamma,
+            theta: data.theta != null ? String(Number(data.theta).toFixed(4)) : l.theta,
+            vega: data.vega != null ? String(Number(data.vega).toFixed(4)) : l.vega
           };
         }));
       }
@@ -508,6 +512,19 @@ export function OptionsCalculator({   spotPrice = 0,
     } catch {
       setSaveMsgType("error");
       setSaveMsg("Save failed. Please try again.");
+      setTimeout(() => setSaveMsg(""), 2500);
+    }
+  };
+
+  const deleteCalculation = async (id) => {
+    if (!canUseSavedCalculations || !id) return;
+    try {
+      const res = await zeninFetch(`/db/options-calculations/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setSavedCalculations((prev) => prev.filter((row) => row?.id !== id));
+    } catch (error) {
+      setSaveMsgType("error");
+      setSaveMsg("Delete failed. Please try again.");
       setTimeout(() => setSaveMsg(""), 2500);
     }
   };
@@ -863,6 +880,7 @@ export function OptionsCalculator({   spotPrice = 0,
                         <th>Vega</th>
                         <th>Max Profit</th>
                         <th>Max Loss</th>
+                        <th aria-label="Actions" />
                       </tr>
                     </thead>
                     <tbody>
@@ -893,6 +911,16 @@ export function OptionsCalculator({   spotPrice = 0,
                           <td className="greek">{formatNumber(calc.vega, 4)}</td>
                           <td className="bid-ask positive">{formatMoney(calc.max_profit ?? calc.maxProfit)}</td>
                           <td className="bid-ask negative">{formatMoney(calc.max_loss ?? calc.maxLoss)}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="options-leg-link-btn"
+                              onClick={() => deleteCalculation(calc.id)}
+                              aria-label={`Delete saved calculation ${calc.strategy || "Custom"}`}
+                            >
+                              Delete
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

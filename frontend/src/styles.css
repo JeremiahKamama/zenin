@@ -19339,7 +19339,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-btn.primary {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.22);
-  color: #b9f6ff;
+  color: var(--color-text-primary);
 }
 
 .home-exec-btn.secondary {
@@ -19368,7 +19368,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-link {
   border: 0;
   background: transparent;
-  color: #5bcce8;
+  color: var(--color-text-secondary);
   padding: 0;
   cursor: pointer;
   font-size: 10px;
@@ -19492,7 +19492,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-hero-value {
-  color: rgba(248, 250, 252, 0.94);
+  color: var(--color-text-primary);
   font-size: clamp(34px, 4.5vw, 50px);
   line-height: 1;
   font-weight: 650;
@@ -19714,7 +19714,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
   gap: 16px;
   padding: 12px 14px;
   border: 1px solid var(--color-border-subtle);
-  background: rgba(20, 25, 31, 0.78);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .home-exec-signal-row.warn {
@@ -26848,7 +26848,7 @@ body.light-theme-active .portfolio-exec-rebalance-row span {
   grid-template-columns: minmax(0, 1fr) auto;
   min-height: 0;
   padding: 12px 14px;
-  background: rgba(19, 24, 31, 0.88);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-signal-head h3 {
@@ -33297,7 +33297,7 @@ body.light-theme-active .guided-empty-copy p {
   padding: 14px 16px;
   border-radius: 8px;
   border-color: rgba(148, 163, 184, 0.12);
-  background: rgba(15, 23, 42, 0.58);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .view-container.home-dashboard.home-exec .home-exec-signal-head h3 {

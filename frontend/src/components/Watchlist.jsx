@@ -84,17 +84,6 @@ export function Watchlist({
   const [earningsStale, setEarningsStale] = useState(false);
   const [earningsNotice, setEarningsNotice] = useState("");
   const [isEarningsOpen, setIsEarningsOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth > 1100 : true));
-  // Column sort — drives the header click affordance and ordering of the asset blotter.
-  const [sortColumn, setSortColumn] = useState(null);
-  const [sortDirection, setSortDirection] = useState("asc");
-  const toggleColumnSort = (column) => {
-    if (sortColumn === column) {
-      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setSortColumn(column);
-      setSortDirection("asc");
-    }
-  };
   // Configurable alert threshold (in % absolute) — exposes the previously hardcoded |change| >= 2.
   const [alertThresholdPct, setAlertThresholdPct] = useState(() => {
     if (typeof window === "undefined") return 2;
@@ -307,30 +296,14 @@ export function Watchlist({
           (a) => normalizeTheme(a.theme) === normalizeTheme(activeTheme)
         )
       : starredAssets;
-  // Apply the active column sort (memoized so it only re-runs when assets or sort change).
+  // Default ordering: alphabetical by Symbol (ascending). The manual SORT
+  // toolbar above the table was removed, so the blotter is now sorted by
+  // default rather than relying on the user to pick a sort column.
   const sortedAssets = useMemo(() => {
-    if (!sortColumn) return displayedAssets;
-    const sorted = [...displayedAssets].sort((a, b) => {
-      let left = a?.[sortColumn];
-      let right = b?.[sortColumn];
-      // Symbol/name fall through to string compare; numeric columns parse safely.
-      if (sortColumn === "last" || sortColumn === "priceChangePercent") {
-        left = Number(a?.price ?? a?.last);
-        right = Number(b?.price ?? b?.last);
-        if (sortColumn === "priceChangePercent") {
-          left = Number(a?.priceChangePercent);
-          right = Number(b?.priceChangePercent);
-        }
-      }
-      if (typeof left === "string" || typeof right === "string") {
-        return String(left || "").localeCompare(String(right || ""));
-      }
-      if (!Number.isFinite(left)) left = 0;
-      if (!Number.isFinite(right)) right = 0;
-      return left - right;
-    });
-    return sortDirection === "desc" ? sorted.reverse() : sorted;
-  }, [displayedAssets, sortColumn, sortDirection]);
+    return [...displayedAssets].sort((a, b) =>
+      String(a?.symbol || "").localeCompare(String(b?.symbol || ""))
+    );
+  }, [displayedAssets]);
   const emptyStateTitle = activeTheme && activeTheme !== "All"
     ? `No ${activeTheme} names in this cut`
     : `No ${String(activeCategory || "watchlist")} rows yet`;
@@ -559,15 +532,6 @@ useEffect(() => {
     return asset?.marketType ? String(asset.marketType).toUpperCase() : "Tracked";
   };
 
-  const getCatalystLabel = (asset) => {
-    const symbol = normalizeSymbol(asset?.symbol);
-    const earningsRow = earningsRows.find((row) => row.symbol === symbol)?.item;
-    if (earningsRow?.nextEarnings) return `Earnings ${formatEarningsDate(earningsRow.nextEarnings)}`;
-    if (asset?.marketType === "macro") return "Macro print";
-    if (asset?.type === "crypto" || asset?.marketType === "spot") return "Flow pulse";
-    return asset?.theme ? `${asset.theme} thesis` : "Research queue";
-  };
-
   const getGuestSignupHref = () => {
     if (typeof window === "undefined") return "/auth?mode=signup&next=%2Fapp%3Fsection%3Dwatchlist";
     const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -641,10 +605,10 @@ useEffect(() => {
 
   // ── TanStack DataTable column definitions ──────────────────────────
   // Defined after the cell-renderer helpers (formatAssetPrice, isAlertTriggered,
-  // etc.) so the memo closes over them correctly. Sortable=false because sort
-  // is driven by the shared sortColumn state above (also consumed by the grid
-  // view). A follow-up can consolidate sorting into TanStack's native sort
-  // model once the grid view is retired.
+  // etc.) so the memo closes over them correctly. Sortable=false because the
+  // blotter is sorted alphabetically by Symbol by default; the manual SORT
+  // toolbar was removed. A follow-up can consolidate sorting into TanStack's
+  // native sort model if per-column sorting is wanted again.
   const watchlistColumns = useMemo(() => [
     {
       key: "symbol",
@@ -702,12 +666,6 @@ useEffect(() => {
           </span>
         );
       },
-    },
-    {
-      key: "catalyst",
-      header: "Last catalyst",
-      sortable: false,
-      cell: (asset) => getCatalystLabel(asset),
     },
     {
       key: "session",
@@ -1116,29 +1074,6 @@ useEffect(() => {
                     />
                   ) : (
                     <div className="watchlist-table-wrap">
-                      {/* External sort controls — sort state is shared with
-                          the grid view, so we keep one source of truth and
-                          surface it as a compact toolbar above the DataTable
-                          rather than per-header. A follow-up can move sorting
-                          into TanStack's sort model once the grid view retires. */}
-                      <div className="watchlist-sort-bar" role="group" aria-label="Sort blotter">
-                        <span className="watchlist-sort-label">Sort</span>
-                        {[
-                          { col: "symbol", label: "Symbol" },
-                          { col: "last", label: "Last" },
-                          { col: "priceChangePercent", label: "% Chg" },
-                        ].map(({ col, label }) => (
-                          <button
-                            key={col}
-                            type="button"
-                            className={`watchlist-sort-btn ${sortColumn === col ? "active" : ""}`}
-                            onClick={() => toggleColumnSort(col)}
-                            aria-sort={sortColumn === col ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
-                          >
-                            {label}{sortColumn === col ? <i aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</i> : null}
-                          </button>
-                        ))}
-                      </div>
                       <DataTable
                         columns={watchlistColumns}
                         data={pagedAssets}
@@ -1250,7 +1185,6 @@ useEffect(() => {
                 <DensePanelHeader
                   title="Upcoming"
                   subtitle="Nearest earnings in focus"
-                  meta="Finviz"
                   actions={
                     <InlineControlGroup>
                       <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} role="status" aria-label={earningsLoading ? "Earnings: refreshing" : earningsStale ? "Earnings: stale" : "Earnings: up to date"} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>

@@ -1,0 +1,1638 @@
+[
+  {
+    "section": "dashboard",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 2016,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "prediction-market-title",
+        "right": 451,
+        "w": 417
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 405,
+        "w": 371
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 366,
+        "w": 332
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 350,
+        "w": 316
+      }
+    ]
+  },
+  {
+    "section": "dashboard",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 1978,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "prediction-market-title",
+        "right": 441,
+        "w": 417
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 395,
+        "w": 371
+      }
+    ]
+  },
+  {
+    "section": "dashboard",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 1544,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "dashboard",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "dashboard",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "dashboard",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "dashboard",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "portfolio",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 5004,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "w-full caption-bottom text-[var(--fs-sm)] border-collapse te",
+        "right": 896,
+        "w": 831
+      },
+      {
+        "cls": "[&_tr]:border-b [&_tr]:border-[var(--color-border-default)] ",
+        "right": 896,
+        "w": 831
+      },
+      {
+        "cls": "TR",
+        "right": 896,
+        "w": 831
+      },
+      {
+        "cls": "h-9 px-3 align-middle font-medium uppercase tracking-wide te",
+        "right": 896,
+        "w": 82
+      }
+    ]
+  },
+  {
+    "section": "portfolio",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 4825,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "w-full caption-bottom text-[var(--fs-sm)] border-collapse te",
+        "right": 886,
+        "w": 831
+      },
+      {
+        "cls": "[&_tr]:border-b [&_tr]:border-[var(--color-border-default)] ",
+        "right": 886,
+        "w": 831
+      },
+      {
+        "cls": "TR",
+        "right": 886,
+        "w": 831
+      },
+      {
+        "cls": "h-9 px-3 align-middle font-medium uppercase tracking-wide te",
+        "right": 886,
+        "w": 82
+      }
+    ]
+  },
+  {
+    "section": "portfolio",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 4354,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": [
+      {
+        "cls": "relative w-full overflow-auto rounded-[var(--radius)] border",
+        "right": 914,
+        "w": 860
+      },
+      {
+        "cls": "relative w-full overflow-auto",
+        "right": 913,
+        "w": 858
+      },
+      {
+        "cls": "w-full caption-bottom text-[var(--fs-sm)] border-collapse te",
+        "right": 913,
+        "w": 858
+      },
+      {
+        "cls": "[&_tr]:border-b [&_tr]:border-[var(--color-border-default)] ",
+        "right": 913,
+        "w": 858
+      }
+    ]
+  },
+  {
+    "section": "portfolio",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "portfolio",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": [
+      {
+        "cls": "P",
+        "right": 1332,
+        "w": 391
+      }
+    ]
+  },
+  {
+    "section": "portfolio",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "portfolio",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "watchlist",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 1894,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "w-full caption-bottom text-[var(--fs-sm)] border-collapse te",
+        "right": 802,
+        "w": 775
+      },
+      {
+        "cls": "[&_tr]:border-b [&_tr]:border-[var(--color-border-default)] ",
+        "right": 802,
+        "w": 775
+      },
+      {
+        "cls": "TR",
+        "right": 802,
+        "w": 775
+      },
+      {
+        "cls": "h-9 px-3 align-middle font-medium uppercase tracking-wide te",
+        "right": 802,
+        "w": 303
+      }
+    ]
+  },
+  {
+    "section": "watchlist",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 1832,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "w-full caption-bottom text-[var(--fs-sm)] border-collapse te",
+        "right": 792,
+        "w": 775
+      },
+      {
+        "cls": "[&_tr]:border-b [&_tr]:border-[var(--color-border-default)] ",
+        "right": 792,
+        "w": 775
+      },
+      {
+        "cls": "TR",
+        "right": 792,
+        "w": 775
+      },
+      {
+        "cls": "h-9 px-3 align-middle font-medium uppercase tracking-wide te",
+        "right": 792,
+        "w": 303
+      }
+    ]
+  },
+  {
+    "section": "watchlist",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 1229,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": [
+      {
+        "cls": "w-full caption-bottom text-[var(--fs-sm)] border-collapse te",
+        "right": 792,
+        "w": 775
+      },
+      {
+        "cls": "[&_tr]:border-b [&_tr]:border-[var(--color-border-default)] ",
+        "right": 792,
+        "w": 775
+      },
+      {
+        "cls": "TR",
+        "right": 792,
+        "w": 775
+      },
+      {
+        "cls": "h-9 px-3 align-middle font-medium uppercase tracking-wide te",
+        "right": 792,
+        "w": 303
+      }
+    ]
+  },
+  {
+    "section": "watchlist",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "watchlist",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "watchlist",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "watchlist",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "briefing",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "research",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 2575,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "BUTTON",
+        "right": 695,
+        "w": 89
+      },
+      {
+        "cls": "BUTTON",
+        "right": 599,
+        "w": 78
+      },
+      {
+        "cls": "active",
+        "right": 516,
+        "w": 58
+      },
+      {
+        "cls": "research-view-subtabs",
+        "right": 463,
+        "w": 12
+      }
+    ]
+  },
+  {
+    "section": "research",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 2481,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "BUTTON",
+        "right": 685,
+        "w": 89
+      },
+      {
+        "cls": "BUTTON",
+        "right": 589,
+        "w": 78
+      },
+      {
+        "cls": "active",
+        "right": 506,
+        "w": 58
+      },
+      {
+        "cls": "research-view-subtabs",
+        "right": 453,
+        "w": 12
+      }
+    ]
+  },
+  {
+    "section": "research",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 2026,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "research",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "research",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "research",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "research",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "analytics",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 3487,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "analytics-tab-pill ",
+        "right": 879,
+        "w": 201
+      },
+      {
+        "cls": "analytics-tab-pill-label",
+        "right": 866,
+        "w": 145
+      },
+      {
+        "cls": "analytics-research-table",
+        "right": 737,
+        "w": 720
+      },
+      {
+        "cls": "THEAD",
+        "right": 737,
+        "w": 720
+      }
+    ]
+  },
+  {
+    "section": "analytics",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 3387,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "analytics-tab-pill ",
+        "right": 879,
+        "w": 201
+      },
+      {
+        "cls": "analytics-tab-pill-label",
+        "right": 866,
+        "w": 145
+      },
+      {
+        "cls": "analytics-research-table",
+        "right": 737,
+        "w": 720
+      },
+      {
+        "cls": "THEAD",
+        "right": 737,
+        "w": 720
+      }
+    ]
+  },
+  {
+    "section": "analytics",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 2538,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": [
+      {
+        "cls": "analytics-tab-pill ",
+        "right": 883,
+        "w": 201
+      },
+      {
+        "cls": "analytics-tab-pill-label",
+        "right": 870,
+        "w": 145
+      }
+    ]
+  },
+  {
+    "section": "analytics",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": [
+      {
+        "cls": "analytics-tab-pill ",
+        "right": 1141,
+        "w": 201
+      },
+      {
+        "cls": "analytics-tab-pill-label",
+        "right": 1128,
+        "w": 145
+      }
+    ]
+  },
+  {
+    "section": "analytics",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "analytics",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "analytics",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "journal",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 6356,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "THEAD",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "TR",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "numeric",
+        "right": 671,
+        "w": 67
+      }
+    ]
+  },
+  {
+    "section": "journal",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 6313,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "THEAD",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "TR",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "numeric",
+        "right": 671,
+        "w": 67
+      }
+    ]
+  },
+  {
+    "section": "journal",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 3261,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 799,
+        "w": 760
+      },
+      {
+        "cls": "THEAD",
+        "right": 799,
+        "w": 760
+      },
+      {
+        "cls": "TR",
+        "right": 799,
+        "w": 760
+      },
+      {
+        "cls": "numeric",
+        "right": 799,
+        "w": 79
+      }
+    ]
+  },
+  {
+    "section": "journal",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 1057,
+        "w": 760
+      },
+      {
+        "cls": "THEAD",
+        "right": 1057,
+        "w": 760
+      },
+      {
+        "cls": "TR",
+        "right": 1057,
+        "w": 760
+      },
+      {
+        "cls": "numeric",
+        "right": 1057,
+        "w": 79
+      }
+    ]
+  },
+  {
+    "section": "journal",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "journal",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "journal",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "tax",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 6356,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "THEAD",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "TR",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "numeric",
+        "right": 671,
+        "w": 67
+      }
+    ]
+  },
+  {
+    "section": "tax",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 6313,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "THEAD",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "TR",
+        "right": 671,
+        "w": 640
+      },
+      {
+        "cls": "numeric",
+        "right": 671,
+        "w": 67
+      }
+    ]
+  },
+  {
+    "section": "tax",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 3261,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 799,
+        "w": 760
+      },
+      {
+        "cls": "THEAD",
+        "right": 799,
+        "w": 760
+      },
+      {
+        "cls": "TR",
+        "right": 799,
+        "w": 760
+      },
+      {
+        "cls": "numeric",
+        "right": 799,
+        "w": 79
+      }
+    ]
+  },
+  {
+    "section": "tax",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": [
+      {
+        "cls": "journal-debrief-table",
+        "right": 1057,
+        "w": 760
+      },
+      {
+        "cls": "THEAD",
+        "right": 1057,
+        "w": 760
+      },
+      {
+        "cls": "TR",
+        "right": 1057,
+        "w": 760
+      },
+      {
+        "cls": "numeric",
+        "right": 1057,
+        "w": 79
+      }
+    ]
+  },
+  {
+    "section": "tax",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "tax",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "tax",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 1371,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 1310,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 902,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "decisions",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "options",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 7932,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "tv-lightweight-charts",
+        "right": 1379,
+        "w": 1346
+      },
+      {
+        "cls": "TABLE",
+        "right": 1379,
+        "w": 1346
+      },
+      {
+        "cls": "TR",
+        "right": 1379,
+        "w": 1346
+      },
+      {
+        "cls": "TD",
+        "right": 1379,
+        "w": 1346
+      }
+    ]
+  },
+  {
+    "section": "options",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 7592,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "option-chain-table",
+        "right": 664,
+        "w": 640
+      },
+      {
+        "cls": "THEAD",
+        "right": 664,
+        "w": 640
+      },
+      {
+        "cls": "TR",
+        "right": 664,
+        "w": 640
+      },
+      {
+        "cls": "chain-side-header",
+        "right": 664,
+        "w": 297
+      }
+    ]
+  },
+  {
+    "section": "options",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 5904,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "options",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "options",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "options",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "options",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "predictions",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 2016,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "prediction-market-title",
+        "right": 451,
+        "w": 417
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 405,
+        "w": 371
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 366,
+        "w": 332
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 350,
+        "w": 316
+      }
+    ]
+  },
+  {
+    "section": "predictions",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 1978,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "prediction-market-title",
+        "right": 441,
+        "w": 417
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 395,
+        "w": 371
+      }
+    ]
+  },
+  {
+    "section": "predictions",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 1544,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "predictions",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "predictions",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "predictions",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "predictions",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "settings",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 2016,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 310,
+    "fillPct": 96.9,
+    "topOverflow": [
+      {
+        "cls": "prediction-market-title",
+        "right": 451,
+        "w": 417
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 405,
+        "w": 371
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 366,
+        "w": 332
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 350,
+        "w": 316
+      }
+    ]
+  },
+  {
+    "section": "settings",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 1978,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 365,
+    "fillPct": 97.3,
+    "topOverflow": [
+      {
+        "cls": "prediction-market-title",
+        "right": 441,
+        "w": 417
+      },
+      {
+        "cls": "prediction-market-title",
+        "right": 395,
+        "w": 371
+      }
+    ]
+  },
+  {
+    "section": "settings",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 1544,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 758,
+    "fillPct": 98.7,
+    "topOverflow": []
+  },
+  {
+    "section": "settings",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1014,
+    "fillPct": 99,
+    "topOverflow": []
+  },
+  {
+    "section": "settings",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1268,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "settings",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1427,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "settings",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1705,
+    "fillPct": 99.1,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 320,
+    "iw": 320,
+    "scrollW": 320,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 320,
+    "fillPct": 100,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 375,
+    "iw": 375,
+    "scrollW": 375,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 375,
+    "fillPct": 100,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 768,
+    "iw": 768,
+    "scrollW": 768,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 604,
+    "fillPct": 78.6,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 1024,
+    "iw": 1024,
+    "scrollW": 1024,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1024,
+    "fillPct": 100,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 1280,
+    "iw": 1280,
+    "scrollW": 1280,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1230,
+    "fillPct": 96.1,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 1440,
+    "iw": 1440,
+    "scrollW": 1440,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1310,
+    "fillPct": 91,
+    "topOverflow": []
+  },
+  {
+    "section": "auth",
+    "width": 1720,
+    "iw": 1720,
+    "scrollW": 1720,
+    "scrollH": 900,
+    "overflowX": false,
+    "diff": 0,
+    "mainRight": 1450,
+    "fillPct": 84.3,
+    "topOverflow": []
+  }
+]

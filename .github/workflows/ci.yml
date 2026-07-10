@@ -42,6 +42,16 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # Design-system guardrails (Phase 8). Runs ESLint + Stylelint to surface
+      # design-token drift (inline styles, raw colors/sizes). Currently
+      # non-blocking (continue-on-error) because the legacy codebase has a
+      # large backlog to migrate. Graduate to blocking once the Phase 2 token
+      # migration reduces the warning count below an agreed threshold.
+      - name: Lint frontend (design-system guardrails)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm run lint:all
+
       - name: Build frontend
         working-directory: frontend
         env:

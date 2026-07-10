@@ -2,7 +2,7 @@
    Zenin — Tailwind v4 entry (Brand System v2 monochrome)
    ────────────────────────────────────────────────────────────────────
    - Tailwind v4 is CSS-first: no tailwind.config.js.
-   - Token source of truth lives in styles.css (:root + .light-theme-active).
+    - Token source of truth lives in styles.css (:root + .light-theme-active).
    - This file ALIASES those tokens into Tailwind's namespace via @theme inline
      so utility classes like bg-background / text-muted-foreground resolve to
      Zenin's monochrome palette.

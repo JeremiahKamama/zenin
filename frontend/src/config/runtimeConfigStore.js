@@ -218,9 +218,22 @@ const defaultAppConfig = {
     }
   },
   tax: {
-    rules: {},
-    regions: [],
-    lastUpdated: "",
+    rules: {
+      USA: { name: "United States", region: "Americas", currency: "USD" },
+      Canada: { name: "Canada", region: "Americas", currency: "CAD" },
+      Brazil: { name: "Brazil", region: "Americas", currency: "BRL" },
+      UK: { name: "United Kingdom", region: "Europe", currency: "GBP" },
+      Germany: { name: "Germany", region: "Europe", currency: "EUR" },
+      France: { name: "France", region: "Europe", currency: "EUR" },
+      Spain: { name: "Spain", region: "Europe", currency: "EUR" },
+      UAE: { name: "United Arab Emirates", region: "Middle East", currency: "AED" },
+      Kenya: { name: "Kenya", region: "Africa", currency: "KES" },
+      SouthAfrica: { name: "South Africa", region: "Africa", currency: "ZAR" },
+      Singapore: { name: "Singapore", region: "South East Asia", currency: "SGD" },
+      India: { name: "India", region: "Asia", currency: "INR" }
+    },
+    regions: ["Americas", "Europe", "Middle East", "South East Asia", "Asia", "Africa"],
+    lastUpdated: "2024/25",
     sources: [],
     defaultIncomeBreakdown: {
       salary: 0,

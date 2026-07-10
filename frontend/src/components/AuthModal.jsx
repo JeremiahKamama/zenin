@@ -196,8 +196,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
         {mode === "signup" && (
           <form className="auth-v2-modal-form" onSubmit={handleSignup}>
-            <h1 style={{ textAlign: 'center' }}>Create account</h1>
-            <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>Get started with Zenin Capital for free.</p>
+            <h1>Create account</h1>
+            <p className="auth-v2-subtitle">Get started with Zenin Capital for free.</p>
             
             <label className="auth-v2-label" htmlFor="signup-fullname">Full Name</label>
             <input 
@@ -231,22 +231,21 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               required
             />
 
-            <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} type="submit" style={{ width: '100%' }}>
+            <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" disabled={loading} type="submit">
               {loading ? "Creating account..." : "Create account"}
             </button>
 
             <div className="auth-v2-divider"><span>OR</span></div>
             
             <button 
-              className="auth-v2-btn auth-v2-btn-ghost" 
+              className="auth-v2-btn auth-v2-btn-ghost auth-v2-btn-full" 
               type="button"
-              style={{ width: '100%' }}
               onClick={handleGuestEntry}
             >
               Use as Guest
             </button>
 
-            <p className="auth-v2-bottom-link" style={{ textAlign: 'center' }}>
+            <p className="auth-v2-bottom-link">
               Already have an account? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signin")}>Sign in</button>
             </p>
           </form>
@@ -254,8 +253,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
         {mode === "signin" && (
           <form className="auth-v2-modal-form" onSubmit={handleSignin}>
-            <h1 style={{ textAlign: 'center' }}>Sign in</h1>
-            <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>Welcome back to Zenin Capital.</p>
+            <h1>Sign in</h1>
+            <p className="auth-v2-subtitle">Welcome back to Zenin Capital.</p>
 
             <label className="auth-v2-label" htmlFor="signin-email">Email address</label>
             <input 
@@ -282,16 +281,15 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               required
             />
 
-            <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} type="submit" style={{ width: '100%' }}>
+            <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" disabled={loading} type="submit">
               {loading ? "Signing in..." : "Sign in"}
             </button>
 
             <div className="auth-v2-divider"><span>OR</span></div>
 
             <button 
-              className="auth-v2-btn auth-v2-btn-ghost" 
+              className="auth-v2-btn auth-v2-btn-ghost auth-v2-btn-full" 
               type="button"
-              style={{ width: '100%' }}
               onClick={handleGuestEntry}
             >
               Use as Guest
@@ -301,18 +299,16 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
             <div className="auth-v2-modal-row">
               <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
+                className="auth-v2-btn auth-v2-btn-ghost auth-v2-oauth-btn" 
                 type="button"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                 onClick={() => onOAuthStart("google")}
                 disabled={loading}
               >
-                <span style={{ fontSize: '1.2rem' }}>G</span> Google
+                <span className="provider-icon">G</span> Google
               </button>
               <button 
-                className="auth-v2-btn auth-v2-btn-ghost" 
+                className="auth-v2-btn auth-v2-btn-ghost auth-v2-oauth-btn" 
                 type="button"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                 onClick={async () => {
                   setLoading(true);
                   setError("");
@@ -339,18 +335,17 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               </button>
               {ENABLE_APPLE_OAUTH ? (
                 <button 
-                  className="auth-v2-btn auth-v2-btn-ghost" 
+                  className="auth-v2-btn auth-v2-btn-ghost auth-v2-oauth-btn" 
                   type="button"
-                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                   onClick={() => onOAuthStart("apple")}
                   disabled={loading}
                 >
-                  <span style={{ fontSize: '1.2rem' }}></span> Apple
+                  <span className="provider-icon"></span> Apple
                 </button>
               ) : null}
             </div>
 
-            <p className="auth-v2-bottom-link" style={{ textAlign: 'center' }}>
+            <p className="auth-v2-bottom-link">
               New to Zenin Capital? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signup")}>Create account</button>
             </p>
           </form>
@@ -358,8 +353,8 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
 
         {mode === "forgot" && (
           <form className="auth-v2-modal-form" onSubmit={handleForgotRequest}>
-            <h1 style={{ textAlign: 'center' }}>Reset password</h1>
-            <p className="auth-v2-subtitle" style={{ textAlign: 'center' }}>Enter your email and we'll send a reset link.</p>
+            <h1>Reset password</h1>
+            <p className="auth-v2-subtitle">Enter your email and we'll send a reset link.</p>
 
             <label className="auth-v2-label" htmlFor="forgot-email">Email address</label>
             <input 
@@ -372,26 +367,26 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               required
             />
 
-            <button className="auth-v2-btn auth-v2-btn-primary" disabled={loading} type="submit" style={{ width: '100%' }}>
+            <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" disabled={loading} type="submit">
               {loading ? "Sending..." : "Send reset link"}
             </button>
 
-            <p className="auth-v2-bottom-link" style={{ textAlign: 'center' }}>
+            <p className="auth-v2-bottom-link">
               Remembered your password? <button type="button" className="auth-v2-link-btn" onClick={() => setMode("signin")}>Back to sign in</button>
             </p>
           </form>
         )}
 
         {mode === "forgot_success" && (
-          <div className="auth-v2-modal-form" style={{ textAlign: 'center' }}>
+          <div className="auth-v2-modal-form auth-v2-forgot-success">
             <h1>Check your email</h1>
             <p className="auth-v2-subtitle">We've sent a password reset link to <strong>{forgotForm.email}</strong>.</p>
-            <div className="auth-v2-mail-illustration" style={{ fontSize: '48px' }}>✉</div>
-            <button className="auth-v2-btn auth-v2-btn-primary" style={{ width: '100%' }} onClick={() => setMode("signin")}>Back to sign in</button>
+            <div className="auth-v2-mail-illustration">✉</div>
+            <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" onClick={() => setMode("signin")}>Back to sign in</button>
           </div>
         )}
 
-        {error && <p className="auth-v2-error" style={{ marginTop: '20px', textAlign: 'center' }}>{error}</p>}
+        {error && <p className="auth-v2-error auth-v2-error-center">{error}</p>}
       </div>
     </div>
   );

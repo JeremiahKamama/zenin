@@ -229,6 +229,11 @@ def fetch_earnings(symbol: str) -> dict:
         }
 
         profile = {
+            "companyName": info.get("shortName") or info.get("longName") or None,
+            "exchange": info.get("exchange"),
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "country": info.get("country"),
             "beta": info.get("beta"),
             "dividendYield": info.get("dividendYield"),
             "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),

@@ -19,6 +19,7 @@
     "sentry:create-release": "node scripts/sentry-release.mjs"
   },
   "dependencies": {
+    "@massive.com/client-js": "^10.7.0",
     "@sentry/node": "^10.63.0",
     "@sentry/profiling-node": "^10.63.0",
     "@simplewebauthn/server": "^9.0.3",

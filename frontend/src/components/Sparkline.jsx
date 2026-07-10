@@ -39,7 +39,7 @@ function SparklineImpl({ points = [], width = 96, height = 28, positive, filled 
     ? "rgba(16, 185, 129, 0.18)"
     : positive === false
       ? "rgba(239, 68, 68, 0.18)"
-      : "rgba(148, 163, 184, 0.18)";
+      : "rgba(160, 160, 160, 0.18)";
 
   return (
     <svg

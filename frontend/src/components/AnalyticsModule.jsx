@@ -4,6 +4,7 @@ import ReactApexChart from "react-apexcharts";
 import { chartColors } from "../utils/chartTheme";
 import { DataTable as TanstackDataTable } from "./data-table/DataTable";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
+import { formatPercent as formatPercentCanon } from "../utils/format";
 import { loadWorkspaceCollection, saveWorkspaceCollection } from "../utils/workspacePersistence";
 import { AssetModal } from "./AssetModal";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
@@ -123,7 +124,7 @@ const EMPTY_EQUITIES_SPEC = {
   reitCompare: [],
   reitExposure: [],
   reitIncome: [],
-  marketSnapshot: [],
+  stockIntraday: null,
   marketBenchmarks: [],
   marketSectors: [],
   marketRegions: [],
@@ -275,7 +276,7 @@ function formatCompactMoney(value, currency = "USD") {
 function formatPercent(value, digits = 2) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "—";
-  return `${amount >= 0 ? "+" : ""}${amount.toFixed(digits)}%`;
+  return formatPercentCanon(amount, { sign: true, precision: digits });
 }
 
 function formatFixed(value, digits = 2, suffix = "") {
@@ -1288,7 +1289,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         searchQuery ? fetchJson(`/equities/search?q=${encodeURIComponent(searchQuery)}`) : Promise.resolve([]),
       ]);
 
-      const [stockDetails, stockPeers, stockFundamentals, stockMarketContext, fundDetail, fundCompare, fundHoldings, fundRisk, fundFlows, mmfDetail, mmfYieldHistory, mmfLiquidity, mmfComposition, reitDetail, reitCompare, reitExposure, reitIncome] = await Promise.all([
+      const [stockDetails, stockPeers, stockFundamentals, stockMarketContext, fundDetail, fundCompare, fundHoldings, fundRisk, fundFlows, mmfDetail, mmfYieldHistory, mmfLiquidity, mmfComposition, reitDetail, reitCompare, reitExposure, reitIncome, stockIntraday] = await Promise.all([
         selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}`) : Promise.resolve(null),
         selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}/peers`) : Promise.resolve([]),
         selectedStock ? fetchJson(`/equities/stocks/${encodeURIComponent(selectedStock)}/fundamentals`) : Promise.resolve([]),
@@ -1306,6 +1307,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         compareItems.length && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/compare?ids=${encodeURIComponent(compareItems.join(","))}`) : Promise.resolve([]),
         selectedStock && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/${encodeURIComponent(selectedStock)}/exposure`) : Promise.resolve([]),
         selectedStock && selectedMainCategory === "reits" ? fetchJson(`/equities/reits/${encodeURIComponent(selectedStock)}/income`) : Promise.resolve([]),
+        // Massive equities detail (Track 5): intraday OHLCV for the selected stock.
+        // Request hourly (resolution=60) bars, not daily, so stockIntraday is genuinely intraday.
+        selectedStock ? fetchJson(`/api/equities/${encodeURIComponent(selectedStock)}/aggregates?resolution=60&limit=500`).catch(() => null) : Promise.resolve(null),
       ]);
 
       if (cancelled) return;
@@ -1317,7 +1321,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         stocks: Array.isArray(stocks) ? stocks : prev.stocks,
         stockDetails: stockDetails || prev.stockDetails,
         stockPeers: Array.isArray(stockPeers) ? stockPeers : prev.stockPeers,
-        stockFundamentals: Array.isArray(stockFundamentals) ? stockFundamentals : prev.stockFundamentals,
+        stockFundamentals: Array.isArray(stockFundamentals?.fundamentals) ? stockFundamentals.fundamentals : (Array.isArray(stockFundamentals) ? stockFundamentals : prev.stockFundamentals),
         stockMarketContext: Array.isArray(stockMarketContext) ? stockMarketContext : prev.stockMarketContext,
         funds: Array.isArray(funds) ? funds : prev.funds,
         fundDetail: fundDetail || prev.fundDetail,
@@ -1335,6 +1339,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         reitCompare: Array.isArray(reitCompare) ? reitCompare : prev.reitCompare,
         reitExposure: Array.isArray(reitExposure) ? reitExposure : prev.reitExposure,
         reitIncome: Array.isArray(reitIncome) ? reitIncome : prev.reitIncome,
+        stockIntraday: stockIntraday || prev.stockIntraday,
         marketSnapshot: Array.isArray(marketSnapshot) ? marketSnapshot : prev.marketSnapshot,
         marketBenchmarks: Array.isArray(marketBenchmarks) ? marketBenchmarks : prev.marketBenchmarks,
         marketSectors: Array.isArray(marketSectors) ? marketSectors : prev.marketSectors,
@@ -3510,7 +3515,54 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           ]}
                           rows={(equitiesSpecData.stockPeers || []).map((row, idx) => ({ id: `peer-${idx}`, ...row }))}
                         />
+                        <AnalyticsTableCard
+                          title="Fundamentals"
+                          subtitle="FMP valuation, profitability and leverage metrics"
+                          emptyText="No fundamentals returned."
+                          columns={[
+                            { key: "label", label: "Metric" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={(equitiesSpecData.stockFundamentals || []).map((row, idx) => ({ id: `fn-${idx}`, label: row.label, value: row.value }))}
+                        />
+                        <AnalyticsTableCard
+                          title="Market Context"
+                          subtitle="Finviz headline summary for the selected symbol"
+                          emptyText="No market context returned."
+                          columns={[
+                            { key: "field", label: "Field" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={Object.entries(equitiesSpecData.stockMarketContext?.summary || {}).map(([field, value], idx) => ({
+                            id: `mc-${idx}`,
+                            field,
+                            value: typeof value === "number" ? Number(value).toLocaleString() : String(value),
+                          }))}
+                        />
                       </div>
+                    ) : null}
+                    {selectedSymbol ? (
+                      <AnalyticsTableCard
+                        title={`Intraday OHLCV: ${selectedSymbol}`}
+                        subtitle="Hourly bars (Massive, Yahoo fallback)"
+                        emptyText="No intraday series returned."
+                        columns={[
+                          { key: "t", label: "Time" },
+                          { key: "c", label: "Close", align: "right" },
+                          { key: "v", label: "Volume", align: "right" },
+                        ]}
+                        rows={(() => {
+                          const intraday = equitiesSpecData.stockIntraday;
+                          if (!intraday) return [];
+                          const bars = Array.isArray(intraday.history) ? intraday.history : (Array.isArray(intraday.data) ? intraday.data : []);
+                          return bars.slice(-40).map((b, idx) => ({
+                            id: `id-${idx}`,
+                            t: b?.t || b?.timestamp || b?.date || "",
+                            c: b?.c ?? b?.close ?? "",
+                            v: b?.v ?? b?.volume ?? "",
+                          }));
+                        })()}
+                      />
                     ) : null}
                   </div>
                 ) : null}
@@ -3618,6 +3670,25 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           ]}
                           rows={(equitiesSpecData.fundHoldings || []).map((row, idx) => ({ id: `fh-${idx}`, ...row }))}
                         />
+                        <AnalyticsTableCard
+                          title="Fund Risk"
+                          subtitle="Profile-level risk signals (beta, volatility, 52w range)"
+                          emptyText="No risk metrics returned."
+                          columns={[
+                            { key: "field", label: "Metric" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={(() => {
+                            const risk = equitiesSpecData.fundRisk?.risk;
+                            if (!risk) return [];
+                            return [
+                              { id: "rk-beta", field: "Beta", value: risk.beta != null ? Number(risk.beta).toFixed(2) : "—" },
+                              { id: "rk-vol", field: "Volatility", value: risk.volatility != null ? `${Number(risk.volatility).toFixed(2)}%` : "—" },
+                              { id: "rk-hi", field: "52w High", value: risk.yearHigh != null ? Number(risk.yearHigh).toLocaleString() : "—" },
+                              { id: "rk-lo", field: "52w Low", value: risk.yearLow != null ? Number(risk.yearLow).toLocaleString() : "—" },
+                            ];
+                          })()}
+                        />
                       </div>
                     ) : null}
 
@@ -3711,6 +3782,26 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           ]}
                           rows={(equitiesSpecData.mmfLiquidity || []).map((row, idx) => ({ id: `ml-${idx}`, ...row }))}
                         />
+                        <AnalyticsTableCard
+                          title="MMF Yield History"
+                          subtitle="Trailing yield series"
+                          emptyText="No yield history returned."
+                          columns={[
+                            { key: "date", label: "Date" },
+                            { key: "yield", label: "Yield", align: "right", render: (v) => (v != null ? `${Number(v).toFixed(2)}%` : "—") },
+                          ]}
+                          rows={(equitiesSpecData.mmfYieldHistory || []).map((row, idx) => ({ id: `yh-${idx}`, ...row }))}
+                        />
+                        <AnalyticsTableCard
+                          title="MMF Composition"
+                          subtitle="Asset allocation breakdown"
+                          emptyText="No composition returned."
+                          columns={[
+                            { key: "sector", label: "Sector" },
+                            { key: "weight", label: "Weight", align: "right", render: (v) => (v != null ? `${Number(v).toFixed(2)}%` : "—") },
+                          ]}
+                          rows={(equitiesSpecData.mmfComposition || []).map((row, idx) => ({ id: `mc-${idx}`, ...row }))}
+                        />
                       </div>
                     ) : null}
                   </div>
@@ -3787,6 +3878,31 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             { key: "ffo", label: "FFO", align: "right" },
                           ]}
                           rows={(equitiesSpecData.reitIncome || []).map((row, idx) => ({ id: `ri-${idx}`, ...row }))}
+                        />
+                        <AnalyticsTableCard
+                          title="REIT Exposure"
+                          subtitle="Sector and geographic exposure"
+                          emptyText="No exposure rows returned."
+                          columns={[
+                            { key: "field", label: "Field" },
+                            { key: "value", label: "Value", align: "right" },
+                          ]}
+                          rows={Object.entries(equitiesSpecData.reitExposure || {}).map(([field, value], idx) => ({
+                            id: `re-${idx}`,
+                            field,
+                            value: typeof value === "number" ? Number(value).toLocaleString() : String(value),
+                          }))}
+                        />
+                        <AnalyticsTableCard
+                          title="REIT Compare"
+                          subtitle="Side-by-side comparison for selected REITs"
+                          emptyText="No compare rows returned."
+                          columns={[
+                            { key: "symbol", label: "Symbol" },
+                            { key: "dividendYield", label: "Yield", align: "right", render: (v) => (v != null ? `${Number(v).toFixed(2)}%` : "—") },
+                            { key: "marketCap", label: "Mkt Cap", align: "right", render: (v) => (v != null ? formatCompactMoney(v) : "—") },
+                          ]}
+                          rows={(equitiesSpecData.reitCompare || []).map((row, idx) => ({ id: `rc-${idx}`, ...row }))}
                         />
                       </div>
                     ) : null}
@@ -5750,7 +5866,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               <p>{config.summary}</p>
               <SourceQualityStrip fallback={config.quality} items={[config.quality, ...visibleRows.slice(0, 2), ...visibleRail.slice(0, 1)]} />
             </div>
-            <div className="analytics-desk-command cyan">
+            <div className="analytics-desk-command accent-primary">
               <span>{config.primaryLabel}</span>
               <strong>{config.primaryValue}</strong>
               <em>{config.primaryDelta}</em>

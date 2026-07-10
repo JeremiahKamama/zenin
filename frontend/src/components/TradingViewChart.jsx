@@ -9,7 +9,40 @@ import {
   LineSeries,
   LineStyle,
 } from 'lightweight-charts';
-import { chartColors } from '../utils/chartTheme';
+import { chartColors, resolveChartToken } from '../utils/chartTheme';
+
+// lightweight-charts (canvas) cannot consume CSS custom properties, and a
+// gradient needs a concrete color. Resolve `var(--token)` to its computed
+// value, and only ever build an alpha-stop from a real #hex / rgb() color so
+// we never pass something like `var(--color-data-primary)88` to addColorStop.
+function resolveSeriesColor(color) {
+  if (typeof color === 'string' && color.startsWith('var(--')) {
+    const token = color.slice(4, -1).trim();
+    return resolveChartToken(token) || color;
+  }
+  return color;
+}
+
+function withAlpha(color, alpha) {
+  if (!color || typeof color !== 'string') return color;
+  const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    let full = hex[1];
+    if (full.length === 3) full = full.split('').map((c) => c + c).join('');
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  const rgb = color.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgb) {
+    const parts = rgb[1].split(',').map((p) => p.trim());
+    const [r, g, b] = parts;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  // Unknown format (shouldn't happen) — return as-is rather than crash.
+  return color;
+}
 
 const normalizeChartTime = (time) => {
   if (time == null) return null;
@@ -145,6 +178,13 @@ export function TradingViewChart({
   const markerRef = useRef(null);
   const [hoverReadout, setHoverReadout] = useState(null);
   const priceLineRefs = useRef({});
+  // Formatters are often passed as fresh inline functions (e.g. from HomeModule),
+  // so we keep them in a ref and read the latest inside the chart/crosshair
+  // effect. This keeps the chart-creation effect from tearing down/rebuilding on
+  // every render (which previously caused a ResizeObserver -> crosshair ->
+  // setState update loop).
+  const formattersRef = useRef({ valueFormatter, timeFormatter, readoutFormatter });
+  formattersRef.current = { valueFormatter, timeFormatter, readoutFormatter };
   const latestReadout = useMemo(
     () => getLatestReadout(series, valueFormatter, timeFormatter, readoutFormatter),
     [series, valueFormatter, timeFormatter, readoutFormatter]
@@ -157,8 +197,8 @@ export function TradingViewChart({
       fontFamily: 'Inter, system-ui, sans-serif',
     },
     grid: {
-      vertLines: { color: 'rgba(148, 163, 184, 0.08)' },
-      horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
+      vertLines: { color: chartColors.muted() },
+      horzLines: { color: chartColors.muted() },
     },
     crosshair: {
       mode: crosshairEnabled ? CrosshairMode.Normal : CrosshairMode.Hidden,
@@ -215,6 +255,7 @@ export function TradingViewChart({
         return;
       }
 
+      const { valueFormatter: vf, timeFormatter: tf, readoutFormatter: rf } = formattersRef.current;
       const activeSeries = Object.values(seriesRef.current).find((entry) => entry?.api && entry?.includeInReadout !== false);
       const point = activeSeries?.api && param.seriesData?.get
         ? param.seriesData.get(activeSeries.api)
@@ -225,9 +266,9 @@ export function TradingViewChart({
         time: normalizeChartTime(param.time) ?? param.time,
         point,
         seriesEntry: activeSeries,
-        valueFormatter,
-        timeFormatter,
-        readoutFormatter,
+        valueFormatter: vf,
+        timeFormatter: tf,
+        readoutFormatter: rf,
       }));
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
@@ -245,7 +286,7 @@ export function TradingViewChart({
       seriesRef.current = {};
       chart.remove();
     };
-  }, [defaultChartOptions, height, valueFormatter, timeFormatter, readoutFormatter]);
+  }, [defaultChartOptions, height]);
 
   useEffect(() => {
     if (!chartRef.current?.timeScale) return;
@@ -286,6 +327,7 @@ export function TradingViewChart({
 
     // Add or update series
     series.forEach(({ name, data, type = 'area', color = chartColors.info(), options: seriesSpecificOptions = {} }) => {
+      const resolvedColor = resolveSeriesColor(color);
       let activeSeries = seriesRef.current[name]?.api;
       const chart = chartRef.current;
       if (!chart) return;
@@ -293,9 +335,9 @@ export function TradingViewChart({
       const addSeries = () => {
         if (type === 'area') {
           const seriesOptions = {
-            lineColor: color,
-            topColor: `${color}88`,
-            bottomColor: `${color}00`,
+            lineColor: resolvedColor,
+            topColor: withAlpha(resolvedColor, 0.53),
+            bottomColor: withAlpha(resolvedColor, 0),
             lineWidth: 2,
             lastValueVisible: false,
             priceLineVisible: false,
@@ -323,7 +365,7 @@ export function TradingViewChart({
 
         if (type === 'histogram') {
           const seriesOptions = {
-            color,
+            color: resolvedColor,
             priceFormat: { type: 'volume' },
             priceScaleId: '',
             lastValueVisible: false,
@@ -336,7 +378,7 @@ export function TradingViewChart({
         }
 
         const seriesOptions = {
-          color: color,
+          color: resolvedColor,
           lineWidth: 2,
           lastValueVisible: false,
           priceLineVisible: false,

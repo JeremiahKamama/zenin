@@ -881,7 +881,7 @@ function buildFrameworkSections(profile, displayMeta) {
   return frameworks[frameworkKey] || genericFramework;
 }
 
-export function CompanyProfilePage({ symbol, asset, onBack }) {
+export function CompanyProfilePage({ symbol, asset, onBack, onOpenResearch }) {
   const normalizedSymbol = String(symbol || asset?.symbol || "").trim().toUpperCase();
   const preferredTheme = String(asset?.theme || "").trim();
   const preferredCategory = String(asset?.category || "").trim();
@@ -1000,16 +1000,6 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
       controller.abort();
     };
   }, [normalizedSymbol, preferredTheme, preferredCategory]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    document.documentElement.classList.add("page-dark-theme");
-    document.body.classList.add("page-dark-theme");
-    return () => {
-      document.documentElement.classList.remove("page-dark-theme");
-      document.body.classList.remove("page-dark-theme");
-    };
-  }, []);
 
   const displayMeta = useMemo(() => ({
     theme: asset?.theme || profile?.catalog?.theme || null,
@@ -1192,6 +1182,15 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
         <button className="company-page-back" onClick={onBack} type="button">
           Back
         </button>
+        {onOpenResearch ? (
+          <button
+            type="button"
+            className="company-page-back company-page-research-launch"
+            onClick={() => onOpenResearch(asset || { symbol })}
+          >
+            Research Workspace
+          </button>
+        ) : null}
         <div className="company-page-title-wrap">
           <div className="company-page-kicker">{framework.subtitle}</div>
           <h1>{companyName}</h1>
@@ -1484,8 +1483,8 @@ export function CompanyProfilePage({ symbol, asset, onBack }) {
                   </button>
                   {isOpen && (
                     <div className="company-section-body">
-                      {section.items.map((item) => (
-                        <div key={item.title} className="company-section-item">
+                      {section.items.map((item, itemIdx) => (
+                        <div key={`${item.title}-${itemIdx}`} className="company-section-item">
                           <div className="company-item-title">
                             {item.title}
                             <span className={`company-item-badge badge-${String(item.badge || "").toLowerCase()}`}>

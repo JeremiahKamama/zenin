@@ -20,3 +20,8 @@ export * from "./tooltip";
 export * from "./tabs";
 export * from "./scroll-area";
 export * from "./table";
+export * from "./radio-group";
+export * from "./slider";
+export * from "./combobox";
+export * from "./date-picker";
+export * from "./page";

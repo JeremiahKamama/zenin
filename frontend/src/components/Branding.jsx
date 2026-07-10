@@ -2,7 +2,7 @@ import React from "react";
 
 /**
  * Zenin Capital Brand Logo - Ultra-thin Line Z
- * Implements the precision branding with cyan-to-purple gradients.
+ * Brand System v2: pure monochrome mark, no gradients or saturated color.
  */
 export function LineZMark({ className = "" }) {
   return (

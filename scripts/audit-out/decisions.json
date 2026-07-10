@@ -1,0 +1,48 @@
+{
+  "vw": 1920,
+  "vh": 1080,
+  "found": true,
+  "rootClass": "main-content main-content-home",
+  "rootTag": "MAIN",
+  "root": {
+    "x": 312,
+    "y": 0,
+    "w": 1164,
+    "h": 1080,
+    "bottom": 1080,
+    "right": 1476
+  },
+  "canvasLeft": 284,
+  "canvasW": 1636,
+  "sideRight": 284,
+  "rootRight": 1476,
+  "contentW": 1192,
+  "rightGutterPx": 444,
+  "horizontalFill": 0.729,
+  "rootStyle": {
+    "display": "block",
+    "gap": "normal",
+    "padding": "0px",
+    "marginTop": "0px",
+    "marginBottom": "0px",
+    "width": "1164px"
+  },
+  "scroll": {
+    "rootScrollH": 1080,
+    "rootClientH": 1080,
+    "rootScrollable": false,
+    "bodyScrollH": 1080,
+    "bodyClientH": 1080,
+    "bodyScrollable": false
+  },
+  "density": 0.424,
+  "blankCells": 1764,
+  "totalCells": 3060,
+  "fullyBlankCols": 0,
+  "rightGutterColPx": 0,
+  "emptyContainers": [],
+  "emptyCount": 0,
+  "fixedHeight": [],
+  "fixedCount": 0,
+  "heading": "Decision Threads"
+}

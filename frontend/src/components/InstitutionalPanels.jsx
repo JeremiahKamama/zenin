@@ -1017,7 +1017,7 @@ export function TaxCompliancePanel({
           {auditTrail.length ? auditTrail.slice(0, 5).map((item) => (
             <div key={item.id} className="institutional-list-row">
               <div>
-                <strong>{item.eventType.replace(/_/g, " ")}</strong>
+                <strong>{(item.eventType || "tax_event").replace(/_/g, " ")}</strong>
                 <span>{(item.jurisdictions || []).join(" · ") || "No jurisdictions"} · {item.scenarios} scenarios</span>
               </div>
               <em>{item.estimatedTax == null ? formatSavedAt(item.createdAt) : formatMoney(item.estimatedTax, currency)}</em>

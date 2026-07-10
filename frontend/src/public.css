@@ -60,7 +60,7 @@ body.page-dark-theme #root {
 
 .zc-home input::placeholder,
 .zc-home textarea::placeholder {
-  color: #7f91b7;
+  color: #909090;
 }
 
 .zc-home select option {
@@ -88,7 +88,7 @@ body.page-dark-theme #root {
 
 .zc-home a:focus-visible,
 .zc-home button:focus-visible {
-  outline: 2px solid #f8fafc;
+  outline: 2px solid #fafafa;
   outline-offset: 3px;
 }
 
@@ -200,7 +200,7 @@ body.page-dark-theme #root {
   justify-content: center;
   gap: 10px;
   min-height: 50px;
-  padding: 0 22px;
+     padding: 0 18px;
   border-radius: 14px;
   border: 1px solid var(--border-strong);
   transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
@@ -212,15 +212,15 @@ body.page-dark-theme #root {
 }
 
 .zc-home .btn-primary {
-  background: linear-gradient(180deg, #2f6eff, #2158dd);
-  color: #fff;
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+     color: rgba(255, 255, 255, 0.95);
   border-color: transparent;
-  box-shadow: 0 16px 34px rgba(46, 108, 255, 0.28);
+  box-shadow: 0 8px 20px rgba(255,255,255,0.04);
 }
 
 .zc-home .btn-secondary {
   background: rgba(255, 255, 255, 0.03);
-  color: var(--text);
+    color: rgba(255, 255, 255, 0.85);
 }
 
 .zc-home .menu-toggle {
@@ -228,7 +228,7 @@ body.page-dark-theme #root {
   width: 50px;
   height: 50px;
   border-radius: 14px;
-  border: 1px solid var(--border-strong);
+    border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   cursor: pointer;
@@ -237,7 +237,7 @@ body.page-dark-theme #root {
 }
 
 .zc-home .menu-toggle:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   transform: scale(1.05);
 }
 
@@ -265,11 +265,11 @@ body.page-dark-theme #root {
   padding: 0 14px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
-  background: rgba(8, 18, 36, 0.76);
+  background: rgba(17, 17, 17, 0.76);
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: #c6d9ff;
+  color: #d8d8d8;
 }
 
 .zc-home .eyebrow::before {
@@ -278,7 +278,7 @@ body.page-dark-theme #root {
   height: 8px;
   border-radius: 50%;
   background: var(--primary-2);
-  box-shadow: 0 0 0 8px rgba(46, 108, 255, 0.12);
+  box-shadow: 0 0 0 8px rgba(255,255,255,0.04);
 }
 
 .zc-home h1 {
@@ -329,10 +329,10 @@ body.page-dark-theme #root {
   height: 40px;
   border-radius: 50%;
   border: 1px solid var(--border-strong);
-  background: radial-gradient(circle at 30% 30%, rgba(73, 121, 255, 0.18), rgba(46, 108, 255, 0.05));
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
   display: grid;
   place-items: center;
-  color: #b7ceff;
+  color: #dfe7eb;
   font-size: 1.05rem;
   flex: 0 0 auto;
 }
@@ -355,7 +355,7 @@ body.page-dark-theme #root {
   inset: 8% 8% auto auto;
   width: 260px;
   height: 260px;
-  background: radial-gradient(circle, rgba(46, 108, 255, 0.22), transparent 65%);
+  background: radial-gradient(circle, rgba(255,255,255,0.04), transparent 65%);
   filter: blur(10px);
   pointer-events: none;
 }
@@ -367,7 +367,7 @@ body.page-dark-theme #root {
   width: 100%;
   min-height: 620px;
   padding: 16px;
-  border: 1px solid rgba(126, 159, 255, 0.24);
+  border: 1px solid rgba(255,255,255,0.06);
   border-radius: 22px;
   background:
     linear-gradient(180deg, rgba(10, 10, 10, 0.96), rgba(0, 0, 0, 0.98)),
@@ -382,8 +382,8 @@ body.page-dark-theme #root {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, rgba(103, 232, 249, 0.035) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(103, 232, 249, 0.035) 1px, transparent 1px);
+    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255,255,255,0.02) 1px, transparent 1px);
   background-size: 48px 48px;
   mask-image: linear-gradient(180deg, black, transparent 88%);
 }
@@ -404,7 +404,7 @@ body.page-dark-theme #root {
   gap: 16px;
   min-height: 54px;
   padding: 0 12px 12px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-bottom: 1px solid rgba(160, 160, 160, 0.16);
 }
 
 .zc-home .product-proof-topbar span,
@@ -414,7 +414,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-module-grid span,
 .zc-home .product-proof-rail span {
   display: block;
-  color: #67e8f9;
+  color: rgba(255,255,255,0.8);
   font: 800 10px/1.2 "JetBrains Mono", "SFMono-Regular", monospace;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -423,7 +423,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-topbar strong {
   display: block;
   margin-top: 4px;
-  color: #f8fafc;
+  color: #fafafa;
   font-size: 1rem;
 }
 
@@ -439,7 +439,7 @@ body.page-dark-theme #root {
   align-content: start;
   gap: 8px;
   padding: 10px 8px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(160, 160, 160, 0.16);
   border-radius: 12px;
   background: rgba(5, 5, 5, 0.9);
 }
@@ -473,13 +473,13 @@ body.page-dark-theme #root {
   gap: 10px;
   align-items: center;
   padding: 13px 14px;
-  border: 1px solid rgba(103, 232, 249, 0.18);
+  border: 1px solid rgba(255,255,255,0.06);
   border-radius: 12px;
   background: linear-gradient(135deg, rgba(12, 12, 12, 0.96), rgba(5, 5, 5, 0.98));
 }
 
 .zc-home .product-proof-command strong {
-  color: #f8fafc;
+  color: #fafafa;
   font-size: 1.45rem;
   line-height: 1;
   white-space: nowrap;
@@ -501,7 +501,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-chart {
   position: relative;
   min-height: 156px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(160, 160, 160, 0.14);
   border-radius: 14px;
   background:
     linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
@@ -520,13 +520,13 @@ body.page-dark-theme #root {
 
 .zc-home .product-proof-chart path {
   fill: none;
-  stroke: #67e8f9;
+  stroke: rgba(255,255,255,0.6);
   stroke-width: 4;
-  filter: drop-shadow(0 0 10px rgba(103, 232, 249, 0.42));
+  filter: drop-shadow(0 0 10px rgba(255,255,255,0.04));
 }
 
 .zc-home .product-proof-chart path.fill {
-  fill: rgba(103, 232, 249, 0.1);
+  fill: rgba(255,255,255,0.06);
   stroke: none;
   filter: none;
 }
@@ -540,7 +540,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-module-grid article {
   min-height: 112px;
   padding: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(160, 160, 160, 0.16);
   border-radius: 12px;
   background: rgba(5, 5, 5, 0.9);
 }
@@ -548,7 +548,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-module-grid strong {
   display: block;
   margin-top: 10px;
-  color: #f8fafc;
+  color: #fafafa;
   font-size: 0.9rem;
   line-height: 1.2;
 }
@@ -564,14 +564,14 @@ body.page-dark-theme #root {
   display: grid;
   gap: 14px;
   padding: 18px;
-  border: 1px solid rgba(103, 232, 249, 0.2);
+  border: 1px solid rgba(255,255,255,0.06);
   border-radius: 14px;
   background: linear-gradient(135deg, rgba(12, 12, 12, 0.96), rgba(5, 5, 5, 0.98));
 }
 
 .zc-home .product-proof-hero-card h3 {
   margin: 0;
-  color: #f8fafc;
+  color: #fafafa;
   font-size: clamp(1.25rem, 2.1vw, 1.8rem);
   line-height: 1.05;
 }
@@ -585,7 +585,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-flow div {
   min-height: 92px;
   padding: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(160, 160, 160, 0.16);
   border-radius: 10px;
   background: rgba(5, 5, 5, 0.88);
 }
@@ -596,15 +596,15 @@ body.page-dark-theme #root {
   width: 20px;
   height: 20px;
   border-radius: 999px;
-  color: #021019;
-  background: #67e8f9;
+  color: #0d0d0d;
+  background: rgba(255,255,255,0.04);
   font: 900 0.68rem/1 "JetBrains Mono", "SFMono-Regular", monospace;
 }
 
 .zc-home .product-proof-flow strong {
   display: block;
   margin-top: 9px;
-  color: #f8fafc;
+  color: #fafafa;
   font-size: 0.8rem;
 }
 
@@ -626,20 +626,20 @@ body.page-dark-theme #root {
 .zc-home .product-proof-card {
   min-height: 148px;
   padding: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(160, 160, 160, 0.16);
   border-radius: 12px;
   background: rgba(5, 5, 5, 0.9);
 }
 
 .zc-home .product-proof-card.focused {
-  border-color: rgba(103, 232, 249, 0.38);
+  border-color: rgba(255,255,255,0.06);
   background: rgba(14, 14, 14, 0.94);
 }
 
 .zc-home .product-proof-card strong {
   display: block;
   margin-top: 14px;
-  color: #f8fafc;
+  color: #fafafa;
   font-size: 1.8rem;
   line-height: 1;
 }
@@ -660,7 +660,7 @@ body.page-dark-theme #root {
 
 .zc-home .product-proof-rail div {
   padding: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(160, 160, 160, 0.14);
   border-radius: 10px;
   background: rgba(5, 5, 5, 0.88);
 }
@@ -668,7 +668,7 @@ body.page-dark-theme #root {
 .zc-home .product-proof-rail strong {
   display: block;
   margin-top: 8px;
-  color: #e2e8f0;
+  color: #e5e5e5;
   font-size: 0.78rem;
   line-height: 1.35;
 }
@@ -677,8 +677,8 @@ body.page-dark-theme #root {
   position: relative;
   width: 100%;
   border-radius: 24px;
-  border: 1px solid rgba(126, 159, 255, 0.22);
-  background: linear-gradient(180deg, rgba(9, 18, 34, 0.94), rgba(5, 11, 23, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: linear-gradient(180deg, rgba(17, 17, 17, 0.94), rgba(11, 11, 11, 0.94));
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -704,7 +704,7 @@ body.page-dark-theme #root {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  background: rgba(5, 11, 22, 0.9);
+  background: rgba(10, 10, 10, 0.9);
 }
 
 .zc-home .app-logo {
@@ -739,7 +739,7 @@ body.page-dark-theme #root {
 }
 
 .zc-home .mock-side-link.active {
-  background: rgba(46, 108, 255, 0.22);
+  background: rgba(255,255,255,0.03);
   color: #fff;
 }
 
@@ -800,7 +800,7 @@ body.page-dark-theme #root {
 .zc-home .pricing-card,
 .zc-home .about-card,
 .zc-home .faq-card {
-  background: linear-gradient(180deg, rgba(11, 22, 42, 0.86), rgba(7, 15, 29, 0.94));
+  background: linear-gradient(180deg, rgba(21, 21, 21, 0.86), rgba(14, 14, 14, 0.94));
   border: 1px solid var(--border);
   border-radius: 18px;
   transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
@@ -889,9 +889,9 @@ body.page-dark-theme #root {
 }
 
 .zc-home .tab.active {
-  background: rgba(46, 108, 255, 0.18);
+  background: rgba(255,255,255,0.03);
   color: #fff;
-  border-color: rgba(46, 108, 255, 0.34);
+  border-color: rgba(255,255,255,0.06);
 }
 
 .zc-home .chart {
@@ -902,7 +902,7 @@ body.page-dark-theme #root {
   background:
     linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(6, 13, 26, 0.95), rgba(8, 17, 32, 0.95));
+    linear-gradient(180deg, rgba(12, 12, 12, 0.95), rgba(16, 16, 16, 0.95));
   background-size: 100% 25%, 16.66% 100%, auto;
   overflow: hidden;
 }
@@ -923,7 +923,7 @@ body.page-dark-theme #root {
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(4, 13, 28, 0.85);
+  background: rgba(12, 12, 12, 0.85);
 }
 
 .zc-home .company-summary-head {
@@ -1017,8 +1017,8 @@ body.page-dark-theme #root {
   display: grid;
   place-items: center;
   border: 1px solid var(--border-strong);
-  background: rgba(46, 108, 255, 0.08);
-  color: #bdd2ff;
+  background: rgba(255,255,255,0.02);
+  color: #d1d1d1;
   flex: 0 0 auto;
   font-size: 1.05rem;
 }
@@ -1097,7 +1097,7 @@ body.page-dark-theme #root {
   top: 48%;
   width: 76%;
   height: 1.8%;
-  background: #f8fafc;
+  background: #fafafa;
   transform: translateY(-50%) rotate(-51deg);
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
@@ -1107,7 +1107,7 @@ body.page-dark-theme #root {
   top: 52%;
   width: 48%;
   height: 1.2%;
-  background: rgba(248, 250, 252, 0.7);
+  background: rgba(250, 250, 250, 0.7);
   transform: translateY(-50%) rotate(-51deg);
   opacity: 0.8;
 }
@@ -1123,12 +1123,12 @@ body.page-dark-theme #root {
 
 .zc-home .brand-spec-board {
   border-radius: 20px;
-  border: 1px solid rgba(122, 158, 240, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   background:
-    radial-gradient(circle at 10% 88%, rgba(32, 105, 255, 0.24), transparent 30%),
-    radial-gradient(circle at 94% 54%, rgba(132, 62, 255, 0.21), transparent 26%),
-    linear-gradient(160deg, rgba(5, 14, 34, 0.96), rgba(2, 9, 24, 0.98));
-  box-shadow: inset 0 0 48px rgba(30, 75, 165, 0.18), 0 26px 60px rgba(2, 6, 20, 0.55);
+    radial-gradient(circle at 10% 88%, rgba(255, 255, 255, 0.24), transparent 30%),
+    radial-gradient(circle at 94% 54%, rgba(255, 255, 255, 0.21), transparent 26%),
+    linear-gradient(160deg, rgba(14, 14, 14, 0.96), rgba(9, 9, 9, 0.98));
+  box-shadow: inset 0 0 48px rgba(255, 255, 255, 0.18), 0 26px 60px rgba(6, 6, 6, 0.55);
   padding: 22px;
 }
 
@@ -1138,11 +1138,11 @@ body.page-dark-theme #root {
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 14px;
-  border-bottom: 1px solid rgba(106, 137, 206, 0.28);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.28);
   text-transform: uppercase;
   letter-spacing: 0.26em;
   font-size: 0.76rem;
-  color: #98abda;
+  color: #ababab;
 }
 
 .zc-home .brand-spec-grid {
@@ -1157,7 +1157,7 @@ body.page-dark-theme #root {
 }
 
 .zc-home .brand-spec-col:not(:last-child) {
-  border-right: 1px solid rgba(99, 132, 203, 0.26);
+  border-right: 1px solid rgba(255, 255, 255, 0.26);
 }
 
 .zc-home .brand-spec-col-large {
@@ -1174,7 +1174,7 @@ body.page-dark-theme #root {
 
 .zc-home .brand-lockup-mark {
   padding-right: 18px;
-  border-right: 1px solid rgba(111, 145, 212, 0.34);
+  border-right: 1px solid rgba(255, 255, 255, 0.34);
 }
 
 .zc-home .brand-lockup-text strong,
@@ -1192,7 +1192,7 @@ body.page-dark-theme #root {
 .zc-home .brand-lockup-text span {
   margin-top: 6px;
   font-size: clamp(1rem, 1.8vw, 1.7rem);
-  color: #8ca6e3;
+  color: #a5a5a5;
 }
 
 .zc-home .brand-spec-col-icons {
@@ -1210,7 +1210,7 @@ body.page-dark-theme #root {
 .zc-home .brand-icon-block small {
   display: block;
   margin-bottom: 10px;
-  color: #8ea3d8;
+  color: #a3a3a3;
   letter-spacing: 0.26em;
   font-size: 0.72rem;
 }
@@ -1219,30 +1219,30 @@ body.page-dark-theme #root {
   width: 192px;
   height: 192px;
   border-radius: 36px;
-  border: 1px solid rgba(129, 166, 242, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.6);
   display: grid;
   place-items: center;
-  background: linear-gradient(180deg, rgba(12, 28, 63, 0.8), rgba(7, 16, 38, 0.94));
+  background: linear-gradient(180deg, rgba(27, 27, 27, 0.8), rgba(16, 16, 16, 0.94));
 }
 
 .zc-home .brand-favicon-chip {
   width: 124px;
   height: 76px;
   border-radius: 16px;
-  border: 1px solid rgba(102, 137, 207, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   display: grid;
   place-items: center;
-  background: rgba(9, 19, 43, 0.7);
+  background: rgba(19, 19, 19, 0.7);
 }
 
 .zc-home .brand-spec-foot {
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid rgba(96, 133, 212, 0.24);
+  border-top: 1px solid rgba(255, 255, 255, 0.24);
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.22em;
-  color: #8ea3d9;
+  color: #a3a3a3;
   font-size: 0.78rem;
 }
 
@@ -1299,7 +1299,7 @@ body.page-dark-theme #root {
   display: grid;
   place-items: center;
   font-size: 1.45rem;
-  color: #f8fafc;
+  color: #fafafa;
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
 }
@@ -1360,7 +1360,7 @@ body.page-dark-theme #root {
 
 .zc-home .coverage-plan-chip {
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(160, 160, 160, 0.2);
   background: rgba(5, 5, 5, 0.9);
   padding: 10px;
   display: grid;
@@ -1374,7 +1374,7 @@ body.page-dark-theme #root {
 
 .zc-home .coverage-plan-chip span {
   font-size: 0.76rem;
-  color: #9eb0d5;
+  color: #afafaf;
   line-height: 1.4;
 }
 
@@ -1392,7 +1392,7 @@ body.page-dark-theme #root {
 
 .zc-home .coverage-card {
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(160, 160, 160, 0.2);
   background: rgba(5, 5, 5, 0.9);
   padding: 14px;
 }
@@ -1421,7 +1421,7 @@ body.page-dark-theme #root {
 }
 
 .zc-home .coverage-kpis div {
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(160, 160, 160, 0.16);
   border-radius: 12px;
   background: rgba(5, 5, 5, 0.9);
   padding: 12px;
@@ -1438,7 +1438,7 @@ body.page-dark-theme #root {
   display: block;
   margin-top: 6px;
   font-size: 0.8rem;
-  color: #9eb0d5;
+  color: #afafaf;
 }
 
 .zc-home .pricing-section {
@@ -1496,7 +1496,7 @@ body.page-dark-theme #root {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #cbd5e1;
+  color: #d4d4d4;
   font-size: 0.82rem;
   font-weight: 600;
   border: 0;
@@ -1506,7 +1506,7 @@ body.page-dark-theme #root {
 
 .zc-home .pricing-billing-pill .is-active {
   color: #000000;
-  background: linear-gradient(180deg, #f8fafc, #cbd5e1);
+  background: linear-gradient(180deg, #fafafa, #d4d4d4);
   box-shadow: 0 8px 20px rgba(255, 255, 255, 0.12);
 }
 
@@ -1519,8 +1519,8 @@ body.page-dark-theme #root {
 
 .zc-home .pricing-card {
   border-radius: 18px;
-  border: 1px solid rgba(133, 162, 229, 0.2);
-  background: linear-gradient(180deg, rgba(10, 21, 42, 0.9), rgba(6, 14, 27, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, rgba(20, 20, 20, 0.9), rgba(13, 13, 13, 0.95));
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -1528,8 +1528,8 @@ body.page-dark-theme #root {
 }
 
 .zc-home .pricing-card.featured {
-  border-color: rgba(103, 157, 255, 0.42);
-  box-shadow: 0 18px 38px rgba(35, 78, 176, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.42);
+  box-shadow: 0 18px 38px rgba(255, 255, 255, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   position: relative;
 }
 
@@ -1541,7 +1541,7 @@ body.page-dark-theme #root {
   right: -1px;
   height: 3px;
   border-radius: 18px 18px 0 0;
-  background: linear-gradient(90deg, #2f6eff, #63a0ff);
+  background: linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
 }
 
 .zc-home .pricing-card-head {
@@ -1560,9 +1560,9 @@ body.page-dark-theme #root {
 
 .zc-home .pricing-badge {
   border-radius: 999px;
-  border: 1px solid rgba(103, 157, 255, 0.35);
-  background: rgba(46, 108, 255, 0.18);
-  color: #cfe1ff;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
+  color: #dfe7eb;
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.07em;
@@ -1571,9 +1571,9 @@ body.page-dark-theme #root {
 }
 
 .zc-home .pricing-badge.muted {
-  border-color: rgba(148, 163, 184, 0.26);
-  background: rgba(30, 41, 59, 0.42);
-  color: #9fb0cf;
+  border-color: rgba(160, 160, 160, 0.26);
+  background: rgba(23, 23, 23, 0.42);
+  color: #aeaeae;
 }
 
 .zc-home .pricing-desc {
@@ -1604,7 +1604,7 @@ body.page-dark-theme #root {
 
 .zc-home .pricing-price-helper {
   margin: -6px 0 12px;
-  color: #8fb3ef;
+  color: #afafaf;
   font-size: 0.76rem;
   letter-spacing: 0.02em;
 }
@@ -1620,8 +1620,8 @@ body.page-dark-theme #root {
 }
 
 .zc-home .pricing-list li {
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  background: rgba(10, 21, 40, 0.64);
+  border: 1px solid rgba(160, 160, 160, 0.15);
+  background: rgba(20, 20, 20, 0.64);
   border-radius: 10px;
   min-height: 36px;
   padding: 8px 10px;
@@ -1653,8 +1653,8 @@ body.page-dark-theme #root {
 
 .zc-home .pricing-compare {
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(6, 14, 28, 0.82);
+  border: 1px solid rgba(160, 160, 160, 0.2);
+  background: rgba(13, 13, 13, 0.82);
   overflow: hidden;
 }
 
@@ -1664,7 +1664,7 @@ body.page-dark-theme #root {
   align-items: center;
   gap: 12px;
   padding: 14px 14px 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid rgba(160, 160, 160, 0.14);
 }
 
 .zc-home .pricing-compare-head h4 {
@@ -1696,12 +1696,12 @@ body.page-dark-theme #root {
 .zc-home .pricing-table td {
   text-align: left;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  border-bottom: 1px solid rgba(160, 160, 160, 0.13);
   font-size: 0.84rem;
 }
 
 .zc-home .pricing-table th {
-  color: #9fb0cf;
+  color: #aeaeae;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1747,7 +1747,7 @@ body.page-dark-theme #root {
 
 .zc-home .about-card {
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(160, 160, 160, 0.2);
   background: rgba(5, 5, 5, 0.9);
   padding: 14px;
 }
@@ -1769,7 +1769,7 @@ body.page-dark-theme #root {
 }
 
 .zc-home .about-card a {
-  color: #9ec2ff;
+  color: #bebebe;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -1832,7 +1832,7 @@ body.page-dark-theme #root {
   width: 340px;
   height: 340px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(46, 108, 255, 0.24), transparent 68%);
+  background: radial-gradient(circle, rgba(255,255,255,0.04), transparent 68%);
   pointer-events: none;
 }
 
@@ -1884,7 +1884,7 @@ body.page-dark-theme #root {
 
 .zc-home .screen-label {
   font-size: 0.7rem;
-  color: #9ab7ff;
+  color: #b7b7b7;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-bottom: 8px;
@@ -1914,7 +1914,7 @@ body.page-dark-theme #root {
   display: block;
   height: 8px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(248, 250, 252, 0.72), rgba(248, 250, 252, 0.12));
+  background: linear-gradient(90deg, rgba(250, 250, 250, 0.72), rgba(250, 250, 250, 0.12));
 }
 
 .zc-home .phone {
@@ -1950,12 +1950,12 @@ body.page-dark-theme #root {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
   padding: 7px 8px;
-  background: rgba(16, 28, 52, 0.8);
+  background: rgba(27, 27, 27, 0.8);
 }
 
 .zc-home .analytics-kpi-row small {
   display: block;
-  color: #93a5c9;
+  color: #a4a4a4;
   font-size: 0.6rem;
 }
 
@@ -1970,8 +1970,8 @@ body.page-dark-theme #root {
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.07);
   background:
-    linear-gradient(180deg, rgba(46, 108, 255, 0.35), rgba(46, 108, 255, 0.04)),
-    linear-gradient(180deg, rgba(8, 16, 30, 0.95), rgba(8, 16, 30, 0.95));
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)),
+    linear-gradient(180deg, rgba(15, 15, 15, 0.95), rgba(15, 15, 15, 0.95));
 }
 
 .zc-home .footer {
@@ -2065,7 +2065,7 @@ body.page-dark-theme #root {
 
   .zc-home .brand-spec-col:not(:last-child) {
     border-right: 0;
-    border-bottom: 1px solid rgba(99, 132, 203, 0.24);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.24);
   }
 
   .zc-home .brand-spec-col-lockup {
@@ -2078,7 +2078,7 @@ body.page-dark-theme #root {
     padding-right: 0;
     border-right: 0;
     padding-bottom: 10px;
-    border-bottom: 1px solid rgba(111, 145, 212, 0.28);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.28);
   }
 
   .zc-home .brand-icon-card {
@@ -2967,9 +2967,9 @@ body.page-dark-theme #root {
 }
 
 .auth-v2-tile-grid article {
-  border: 1px solid rgba(69, 108, 178, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.62);
   border-radius: 14px;
-  background: rgba(7, 18, 44, 0.86);
+  background: rgba(18, 18, 18, 0.86);
   padding: 14px;
 }
 
@@ -2980,7 +2980,7 @@ body.page-dark-theme #root {
 
 .auth-v2-tile-grid p {
   margin: 6px 0 0;
-  color: #98aacd;
+  color: #a9a9a9;
   line-height: 1.4;
 }
 
@@ -2995,8 +2995,8 @@ body.page-dark-theme #root {
   align-items: center;
   justify-content: center;
   font-size: 3rem;
-  background: radial-gradient(circle at center, rgba(46, 108, 255, 0.15), transparent 70%);
-  box-shadow: 0 0 30px rgba(46, 108, 255, 0.1);
+  background: radial-gradient(circle at center, rgba(255,255,255,0.03), transparent 70%);
+  box-shadow: 0 0 30px rgba(255,255,255,0.03);
 }
 
 .auth-v2-split-actions {
@@ -3011,7 +3011,7 @@ body.page-dark-theme #root {
   display: block;
   border: none;
   background: none;
-  color: #79beff;
+  color: #b1b1b1;
   cursor: pointer;
 }
 
@@ -3071,10 +3071,10 @@ body.page-dark-theme #root {
   --panel-3: rgba(12, 12, 12, 0.92);
   --border: rgba(255, 255, 255, 0.13);
   --border-strong: rgba(255, 255, 255, 0.22);
-  --text: #f8fafc;
-  --muted: #a1a1aa;
-  --muted-2: #71717a;
-  --primary: #f8fafc;
+  --text: #fafafa;
+  --muted: #a2a2a2;
+  --muted-2: #727272;
+  --primary: #fafafa;
   --primary-2: #d4d4d8;
   --primary-soft: rgba(255, 255, 255, 0.1);
   background: linear-gradient(180deg, #000000 0%, #050505 52%, #000000 100%);
@@ -3293,6 +3293,40 @@ body.page-dark-theme #root {
 
 .auth-v2-modal-row .auth-v2-btn {
   margin-top: 0;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Full-width auth button utility (used by page + modal) */
+.auth-v2-btn-full {
+  width: 100%;
+}
+
+/* Centered error block, used on the full auth page */
+.auth-v2-error-center {
+  text-align: left;
+  margin-top: 14px;
+}
+
+/* OAuth provider icon badge, shared by page + modal */
+.auth-v2-oauth-btn .provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 800;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+body.light-theme-active .auth-v2-oauth-btn .provider-icon {
+  border-color: rgba(0, 0, 0, 0.18);
+  color: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .auth-v2-modal-forgot-row {
@@ -3331,15 +3365,20 @@ body.page-dark-theme #root {
 
 /* Zenin auth operator-console overhaul */
 .auth-v2-shell {
+  /* Shell is the page background wrapper; the inner .auth-v2-main owns the
+     two-column grid. Neutralise styles.css's grid so it doesn't double up. */
+  display: block !important;
+  grid-template-columns: none !important;
+  min-height: 100vh;
   background:
-    linear-gradient(180deg, #070b10 0%, #05070a 54%, #080b0f 100%) !important;
+    linear-gradient(180deg, #0a0a0a 0%, #05070a 54%, #080b0f 100%) !important;
   color: #edf7fb;
 }
 
 .auth-v2-bg {
   background-image:
-    linear-gradient(rgba(125, 211, 252, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(125, 211, 252, 0.025) 1px, transparent 1px) !important;
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px) !important;
   background-size: 54px 54px, 54px 54px !important;
   opacity: 0.6;
 }
@@ -3357,8 +3396,8 @@ body.page-dark-theme #root {
 .auth-v2-modal-card {
   max-width: none;
   border-radius: 3px !important;
-  border-color: rgba(125, 211, 252, 0.18) !important;
-  background: linear-gradient(180deg, rgba(14, 19, 25, 0.98), rgba(7, 10, 14, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  background: linear-gradient(180deg, rgba(18, 18, 18, 0.98), rgba(7, 10, 14, 0.98)) !important;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -3371,7 +3410,7 @@ body.page-dark-theme #root {
 
 .auth-v2-back {
   margin-bottom: 16px;
-  color: #8a97a8;
+  color: #959595;
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -3382,9 +3421,9 @@ body.page-dark-theme #root {
   min-height: 46px;
   margin-bottom: 26px;
   padding: 10px 12px;
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  border-left: 3px solid #67e8f9;
-  background: rgba(9, 15, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-left: 3px solid rgba(255,255,255,0.06);
+  background: rgba(14, 14, 14, 0.88);
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
@@ -3395,7 +3434,7 @@ body.page-dark-theme #root {
 .auth-v2-context-header span,
 .auth-v2-terminal-row span,
 .auth-v2-context-grid span {
-  color: #7f8da1;
+  color: #8b8b8b;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.16em;
@@ -3413,10 +3452,10 @@ body.page-dark-theme #root {
   grid-column: 2;
   align-self: center;
   padding: 4px 8px;
-  border: 1px solid rgba(103, 232, 249, 0.26);
+  border: 1px solid rgba(255,255,255,0.06);
   border-radius: 3px;
-  color: #67e8f9;
-  background: rgba(103, 232, 249, 0.08);
+  color: rgba(255,255,255,0.8);
+  background: rgba(255,255,255,0.02);
   font-size: 10px;
   font-style: normal;
   font-weight: 900;
@@ -3435,13 +3474,13 @@ body.page-dark-theme #root {
 
 .auth-v2-subtitle {
   margin: 0 0 24px;
-  color: #91a0b5;
+  color: #9e9e9e;
   font-size: 13px;
   line-height: 1.55;
 }
 
 .auth-v2-label {
-  color: #8fa0b6;
+  color: #9d9d9d;
   font-size: 10px;
   font-weight: 900;
   letter-spacing: 0.14em;
@@ -3454,7 +3493,7 @@ body.page-dark-theme #root {
   min-height: 44px;
   margin-bottom: 16px;
   border-radius: 3px !important;
-  border-color: rgba(132, 152, 174, 0.28) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
   background: rgba(4, 7, 11, 0.82) !important;
   color: #f5f9fc;
   font-size: 13px;
@@ -3462,9 +3501,9 @@ body.page-dark-theme #root {
 }
 
 .auth-v2-input:focus {
-  border-color: rgba(103, 232, 249, 0.68) !important;
-  background: rgba(8, 13, 18, 0.96) !important;
-  box-shadow: inset 3px 0 0 #67e8f9, 0 0 0 1px rgba(103, 232, 249, 0.12);
+  border-color: rgba(255, 255, 255, 0.5) !important;
+  background: rgba(12, 12, 12, 0.96) !important;
+  box-shadow: inset 3px 0 0 var(--color-text-primary), 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
 .auth-v2-btn,
@@ -3480,26 +3519,26 @@ body.page-dark-theme #root {
 }
 
 .auth-v2-btn-primary {
-  border-color: rgba(103, 232, 249, 0.45) !important;
-  background: rgba(103, 232, 249, 0.16) !important;
+  border-color: rgba(255, 255, 255, 0.45) !important;
+  background: rgba(255, 255, 255, 0.16) !important;
   color: #dffbff !important;
   box-shadow: none !important;
 }
 
 .auth-v2-btn-primary:hover:not(:disabled) {
-  background: rgba(103, 232, 249, 0.23) !important;
+  background: rgba(255, 255, 255, 0.23) !important;
   transform: translateY(-1px);
 }
 
 .auth-v2-btn-ghost {
-  border-color: rgba(132, 152, 174, 0.22) !important;
-  background: rgba(11, 16, 22, 0.86) !important;
-  color: #c8d2df;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  background: rgba(15, 15, 15, 0.86) !important;
+  color: #d0d0d0;
 }
 
 .auth-v2-divider {
   margin: 20px 0;
-  color: #5e6b7f;
+  color: #696969;
   font-size: 10px;
   font-weight: 900;
   letter-spacing: 0.16em;
@@ -3507,7 +3546,7 @@ body.page-dark-theme #root {
 }
 
 .auth-v2-link-btn {
-  color: #67e8f9;
+  color: rgba(255,255,255,0.85);
   font-weight: 800;
   text-decoration: none;
 }
@@ -3516,14 +3555,14 @@ body.page-dark-theme #root {
 .auth-v2-bottom-link,
 .auth-v2-terms,
 .auth-v2-footnote {
-  color: #8fa0b6;
+  color: #9d9d9d;
   font-size: 12px;
 }
 
 .auth-v2-rule-list {
   padding: 12px;
-  border: 1px solid rgba(132, 152, 174, 0.16);
-  background: rgba(7, 11, 16, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 10, 10, 0.72);
 }
 
 .auth-v2-rule-list li {
@@ -3533,28 +3572,28 @@ body.page-dark-theme #root {
 .auth-v2-strength-track {
   height: 4px;
   border-radius: 0;
-  background: rgba(132, 152, 174, 0.18);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .auth-v2-strength-track > span {
   border-radius: 0;
-  background: #67e8f9;
+  background: rgba(255,255,255,0.06);
 }
 
 .auth-v2-mail-illustration,
 .auth-v2-passkey-badge,
 .auth-v2-success-circle {
   border-radius: 3px;
-  background: rgba(8, 13, 18, 0.86);
+  background: rgba(12, 12, 12, 0.86);
   box-shadow: none;
 }
 
 .auth-v2-context-panel {
   min-height: 640px;
-  border: 1px solid rgba(132, 152, 174, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 3px;
   background:
-    linear-gradient(180deg, rgba(13, 20, 28, 0.96), rgba(5, 7, 10, 0.98));
+    linear-gradient(180deg, rgba(19, 19, 19, 0.96), rgba(5, 7, 10, 0.98));
   padding: 28px;
   display: grid;
   grid-template-rows: auto auto 1fr auto;
@@ -3567,28 +3606,28 @@ body.page-dark-theme #root {
   align-items: center;
   gap: 18px;
   padding-bottom: 22px;
-  border-bottom: 1px solid rgba(132, 152, 174, 0.16);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
 }
 
 .auth-v2-context-header strong {
   display: block;
   margin-top: 4px;
-  color: #67e8f9;
+  color: rgba(255,255,255,0.85);
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .auth-v2-terminal-card {
-  border: 1px solid rgba(103, 232, 249, 0.2);
-  border-left: 3px solid #67e8f9;
-  background: rgba(7, 12, 18, 0.82);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-left: 3px solid rgba(255,255,255,0.06);
+  background: rgba(11, 11, 11, 0.82);
 }
 
 .auth-v2-terminal-row {
   min-height: 44px;
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(132, 152, 174, 0.12);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3615,15 +3654,15 @@ body.page-dark-theme #root {
 .auth-v2-context-grid div {
   min-height: 96px;
   padding: 14px;
-  border: 1px solid rgba(132, 152, 174, 0.14);
-  background: rgba(4, 8, 12, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(7, 7, 7, 0.72);
   display: grid;
   align-content: space-between;
   gap: 8px;
 }
 
 .auth-v2-context-grid em {
-  color: #67e8f9;
+  color: rgba(255,255,255,0.8);
   font-size: 11px;
   font-style: normal;
   font-weight: 800;
@@ -3635,17 +3674,17 @@ body.page-dark-theme #root {
   gap: 12px;
   align-items: center;
   padding-top: 18px;
-  border-top: 1px solid rgba(132, 152, 174, 0.14);
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .auth-v2-context-foot span {
   height: 2px;
-  background: #67e8f9;
+  background: rgba(255,255,255,0.06);
 }
 
 .auth-v2-context-foot p {
   margin: 0;
-  color: #8fa0b6;
+  color: #9d9d9d;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -3712,7 +3751,7 @@ body.page-dark-theme #root {
   width: 34px;
   height: 34px;
   right: 6px;
-  color: #8fa0b6;
+  color: #9d9d9d;
   border: 1px solid transparent;
   border-radius: 4px;
   display: grid;
@@ -3721,9 +3760,9 @@ body.page-dark-theme #root {
 
 .auth-v2-eye-btn:hover,
 .auth-v2-eye-btn:focus-visible {
-  color: #dffbff;
-  border-color: rgba(103, 232, 249, 0.28);
-  background: rgba(103, 232, 249, 0.08);
+  color: rgba(255,255,255,0.9);
+  border-color: rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
   outline: none;
 }
 
@@ -3740,8 +3779,8 @@ body.page-dark-theme #root {
 .auth-v2-signup-rules {
   margin: -6px 0 18px;
   padding: 10px 12px;
-  border: 1px solid rgba(132, 152, 174, 0.16);
-  background: rgba(7, 11, 16, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 10, 10, 0.56);
 }
 
 .auth-v2-signup-rules li {
@@ -3802,13 +3841,13 @@ body.page-dark-theme #root {
 /* ── Light theme overrides for auth/legal pages ────────────────────── */
 body.light-theme-active .auth-v2-shell,
 body.light-theme-active .auth-v2-bg {
-  background: #f8fafc !important;
+  background: #fafafa !important;
 }
 
 body.light-theme-active .auth-v2-card {
   background: rgba(255, 255, 255, 0.96) !important;
-  border-color: rgba(15, 23, 42, 0.1) !important;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08) !important;
+  border-color: rgba(10, 10, 10, 0.1) !important;
+  box-shadow: 0 24px 60px rgba(10, 10, 10, 0.08) !important;
 }
 
 body.light-theme-active .auth-v2-subtitle,
@@ -3820,54 +3859,54 @@ body.light-theme-active .auth-v2-divider,
 body.light-theme-active .auth-v2-terms,
 body.light-theme-active .auth-v2-readonly-row,
 body.light-theme-active .auth-v2-back {
-  color: #475569 !important;
+  color: #525252 !important;
 }
 
 body.light-theme-active .auth-v2-input {
   background: #ffffff !important;
-  border-color: rgba(15, 23, 42, 0.14) !important;
-  color: #0f172a !important;
+  border-color: rgba(10, 10, 10, 0.14) !important;
+  color: #0a0a0a !important;
 }
 
 body.light-theme-active .auth-v2-input::placeholder {
-  color: #94a3b8 !important;
+  color: #8a8a8a !important;
 }
 
 body.light-theme-active .auth-v2-btn-primary {
-  background: #0f172a !important;
+  background: #0a0a0a !important;
   color: #ffffff !important;
-  border-color: #0f172a !important;
+  border-color: #0a0a0a !important;
 }
 
 body.light-theme-active .auth-v2-btn-ghost,
 body.light-theme-active .auth-v2-link-btn {
   background: #ffffff !important;
-  color: #0f172a !important;
-  border-color: rgba(15, 23, 42, 0.14) !important;
+  color: #0a0a0a !important;
+  border-color: rgba(10, 10, 10, 0.14) !important;
 }
 
 body.light-theme-active .auth-v2-strength-track {
-  background: rgba(15, 23, 42, 0.08) !important;
+  background: rgba(10, 10, 10, 0.08) !important;
 }
 
 body.light-theme-active .auth-v2-card h1,
 body.light-theme-active .auth-v2-modal-card h1 {
-  color: #0f172a !important;
+  color: #0a0a0a !important;
 }
 
 body.light-theme-active .auth-v2-signup-rules {
-  background: rgba(241, 245, 249, 0.72) !important;
-  border-color: rgba(15, 23, 42, 0.1) !important;
+  background: rgba(245, 245, 245, 0.72) !important;
+  border-color: rgba(10, 10, 10, 0.1) !important;
 }
 
 body.light-theme-active .auth-v2-rule-list li {
-  color: #475569 !important;
+  color: #525252 !important;
 }
 
 body.light-theme-active .auth-v2-rule-list li.ok {
-  color: #0f172a !important;
+  color: #0a0a0a !important;
 }
 
 body.light-theme-active .auth-v2-rule-list li::before {
-  color: #94a3b8 !important;
+  color: #8a8a8a !important;
 }

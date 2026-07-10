@@ -1,0 +1,352 @@
+{
+  "portfolio": {
+    "vw": 1920,
+    "canvasW": 1608,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container portfolio-shell-view",
+        "w": 1164,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1476
+      },
+      {
+        "cls": "portfolio-module portfolio-v2 portfolio-exec-page portfolio-command-page",
+        "w": 1164,
+        "maxW": "1520px",
+        "display": "flex",
+        "m": 1476
+      },
+      {
+        "cls": "portfolio-command-attention-grid",
+        "w": 1114,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1451
+      },
+      {
+        "cls": "portfolio-command-summary-grid",
+        "w": 1086,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1437
+      },
+      {
+        "cls": "portfolio-command-analysis-grid",
+        "w": 1086,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1437
+      },
+      {
+        "cls": "portfolio-command-rebalance-grid",
+        "w": 1078,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1433
+      },
+      {
+        "cls": "portfolio-command-table-wrap",
+        "w": 716,
+        "maxW": "none",
+        "display": "block",
+        "m": 1068
+      },
+      {
+        "cls": "portfolio-command-change-grid",
+        "w": 388,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1094
+      }
+    ]
+  },
+  "watchlist": {
+    "vw": 1920,
+    "canvasW": 1608,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container",
+        "w": 1164,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1476
+      },
+      {
+        "cls": "institutional-form-grid",
+        "w": 335,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1062
+      },
+      {
+        "cls": "search-type-select-wrap",
+        "w": 172,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1469
+      },
+      {
+        "cls": "search-type-select-shell",
+        "w": 172,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1469
+      }
+    ]
+  },
+  "research": {
+    "vw": 1920,
+    "canvasW": 1608,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container",
+        "w": 1164,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1476
+      }
+    ]
+  },
+  "analytics": {
+    "vw": 1920,
+    "canvasW": 1608,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container",
+        "w": 1164,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1476
+      },
+      {
+        "cls": "analytics-layout",
+        "w": 1164,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1476
+      },
+      {
+        "cls": "analytics-toolbar analytics-toolbar-shell",
+        "w": 1108,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1448
+      },
+      {
+        "cls": "analytics-main-grid",
+        "w": 1108,
+        "maxW": "none",
+        "display": "block",
+        "m": 1448
+      },
+      {
+        "cls": "analytics-research-table-wrap",
+        "w": 766,
+        "maxW": "none",
+        "display": "block",
+        "m": 1107
+      }
+    ]
+  },
+  "options": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "options-calculator-layout",
+        "w": 933,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1230
+      },
+      {
+        "cls": "options-calculator-strategy-grid",
+        "w": 895,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1211
+      },
+      {
+        "cls": "options-calculator-legs-grid",
+        "w": 895,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1211
+      },
+      {
+        "cls": "options-calculator-greeks-grid",
+        "w": 895,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1211
+      },
+      {
+        "cls": "asset-dropdown-container",
+        "w": 165,
+        "maxW": "none",
+        "display": "block",
+        "m": 1211
+      }
+    ]
+  },
+  "predictions": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "prediction-desk-grid",
+        "w": 984,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1256
+      },
+      {
+        "cls": "asset-dropdown-container",
+        "w": 120,
+        "maxW": "none",
+        "display": "grid",
+        "m": 985
+      }
+    ]
+  },
+  "decisions": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container",
+        "w": 984,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1256
+      }
+    ]
+  },
+  "journal": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container journal-page",
+        "w": 984,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1256
+      },
+      {
+        "cls": "journal-debrief-top-grid",
+        "w": 936,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1232
+      },
+      {
+        "cls": "journal-debrief-mid-grid",
+        "w": 936,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1232
+      },
+      {
+        "cls": "journal-debrief-bottom-grid",
+        "w": 936,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1232
+      },
+      {
+        "cls": "journal-debrief-metric-grid",
+        "w": 573,
+        "maxW": "none",
+        "display": "grid",
+        "m": 884
+      },
+      {
+        "cls": "journal-debrief-table-wrap",
+        "w": 536,
+        "maxW": "none",
+        "display": "block",
+        "m": 847
+      },
+      {
+        "cls": "journal-debrief-heat-grid",
+        "w": 536,
+        "maxW": "none",
+        "display": "grid",
+        "m": 847
+      },
+      {
+        "cls": "journal-export-wrap",
+        "w": 78,
+        "maxW": "none",
+        "display": "block",
+        "m": 912
+      }
+    ]
+  },
+  "tax-estimator": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "tax-subview-wrap",
+        "w": 984,
+        "maxW": "1400px",
+        "display": "flex",
+        "m": 1256
+      },
+      {
+        "cls": "tax-workbench-shell",
+        "w": 968,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1248
+      },
+      {
+        "cls": "tax-workbench-primary-grid",
+        "w": 968,
+        "maxW": "none",
+        "display": "grid",
+        "m": 1248
+      }
+    ]
+  },
+  "briefing": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container",
+        "w": 984,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1256
+      }
+    ]
+  },
+  "metrics": {
+    "vw": 1280,
+    "canvasW": 968,
+    "found": true,
+    "candidates": [
+      {
+        "cls": "view-container",
+        "w": 984,
+        "maxW": "none",
+        "display": "flex",
+        "m": 1256
+      }
+    ]
+  }
+}

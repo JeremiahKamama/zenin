@@ -1,6 +1,7 @@
 const { Pool } = require("pg");
 const { watchlistData } = require("./data");
 const crypto = require("crypto");
+const portfolioSnapshots = require("./portfolioSnapshots");
 
 const QTY_EPSILON = 1e-8;
 const DEFAULT_BALANCE = 10000;
@@ -2064,6 +2065,43 @@ async function initializeDatabase() {
         UNIQUE (workspace_id, user_id, briefing_date)
       );
 
+      CREATE TABLE IF NOT EXISTS portfolio_daily_snapshots (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        snapshot_date DATE NOT NULL,
+        portfolio_value DOUBLE PRECISION NOT NULL,
+        cash DOUBLE PRECISION NOT NULL DEFAULT 0,
+        invested_capital DOUBLE PRECISION NOT NULL DEFAULT 0,
+        daily_pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
+        daily_return DOUBLE PRECISION NOT NULL DEFAULT 0,
+        realized_pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
+        unrealized_pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
+        benchmark_value DOUBLE PRECISION,
+        benchmark_return DOUBLE PRECISION,
+        benchmark_relative_return DOUBLE PRECISION,
+        holdings_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        allocation_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        sector_breakdown JSONB NOT NULL DEFAULT '[]'::jsonb,
+        country_breakdown JSONB NOT NULL DEFAULT '[]'::jsonb,
+        asset_breakdown JSONB NOT NULL DEFAULT '[]'::jsonb,
+        fees DOUBLE PRECISION NOT NULL DEFAULT 0,
+        tax_estimate DOUBLE PRECISION NOT NULL DEFAULT 0,
+        dividends DOUBLE PRECISION NOT NULL DEFAULT 0,
+        deposits DOUBLE PRECISION NOT NULL DEFAULT 0,
+        withdrawals DOUBLE PRECISION NOT NULL DEFAULT 0,
+        decision_count INTEGER NOT NULL DEFAULT 0,
+        journal_count INTEGER NOT NULL DEFAULT 0,
+        research_count INTEGER NOT NULL DEFAULT 0,
+        prediction_count INTEGER NOT NULL DEFAULT 0,
+        snapshot_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        estimated BOOLEAN NOT NULL DEFAULT FALSE,
+        source TEXT NOT NULL DEFAULT 'eod-job',
+        UNIQUE (workspace_id, snapshot_date)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_snapshots_workspace_date
+        ON portfolio_daily_snapshots (workspace_id, snapshot_date DESC);
+
       CREATE TABLE IF NOT EXISTS decision_threads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -3222,6 +3260,17 @@ const optionsCalculations = {
       ...row,
       created_at: toIsoString(row.created_at)
     }));
+  },
+
+  delete: async (id) => {
+    const safeId = Number(id);
+    if (!Number.isInteger(safeId)) return { deleted: false, reason: "invalid_id" };
+    const result = await pool.query(`
+      DELETE FROM options_calculations
+      WHERE id = $1
+      RETURNING id;
+    `, [safeId]);
+    return { deleted: result.rowCount > 0, id: safeId };
   }
 };
 
@@ -4180,7 +4229,6 @@ const workspaces = {
 };
 
 async function resolveWorkspaceScope(userId, workspaceId = null) {
-  const resolvedUserId = toUserId(userId);
   if (workspaceId != null) {
     const parsedWorkspaceId = Number(workspaceId);
     if (!Number.isInteger(parsedWorkspaceId) || parsedWorkspaceId <= 0) {
@@ -4188,14 +4236,33 @@ async function resolveWorkspaceScope(userId, workspaceId = null) {
       error.code = "INVALID_WORKSPACE_ID";
       throw error;
     }
-    return { resolvedUserId, resolvedWorkspaceId: parsedWorkspaceId };
+    // The snapshot engine and scheduler call with a workspace id and no user id
+    // (e.g. EOD jobs). Resolve the workspace owner so downstream queries that
+    // need a userId still function.
+    const resolvedUserId = userId != null ? toUserId(userId) : null;
+    if (resolvedUserId != null) return { resolvedUserId, resolvedWorkspaceId: parsedWorkspaceId };
+    const ownerRes = await pool.query(
+      `SELECT owner_user_id FROM workspaces WHERE id = $1`,
+      [parsedWorkspaceId]
+    );
+    const ownerId = ownerRes.rows[0]?.owner_user_id;
+    if (ownerId == null) {
+      const error = new Error("Workspace has no owner");
+      error.code = "WORKSPACE_NO_OWNER";
+      throw error;
+    }
+    return { resolvedUserId: Number(ownerId), resolvedWorkspaceId: parsedWorkspaceId };
   }
+  const resolvedUserId = toUserId(userId);
   const personalWorkspace = await workspaces.ensurePersonalWorkspace(resolvedUserId);
   return {
     resolvedUserId,
     resolvedWorkspaceId: Number(personalWorkspace?.workspace?.id)
   };
 }
+
+// Wire the snapshot engine to the shared pool + scope resolver.
+portfolioSnapshots.init(pool, resolveWorkspaceScope, { fetch: (...args) => fetch(...args) });
 
 const userAuth = {
   createUser: async ({ email, passwordHash, displayName = null, authProvider = "email", emailVerified = false, supabaseUserId = null }) => {
@@ -4970,10 +5037,15 @@ const userAuth = {
           updated_at = NOW()
       WHERE id = $1;
     `, [toUserId(userId), lockedUntil]);
-  }
+  },
+
 };
 
 const userWorkspace = {
+  // Historical Portfolio Snapshot Engine — single source of truth for all
+  // time-series features. See backend/portfolioSnapshots.js.
+  snapshots: portfolioSnapshots.PortfolioHistoryRepository,
+  snapshotService: portfolioSnapshots.DailySnapshotService,
   exchangeKeys: {
     list: async (userId, workspaceId = null) => {
       const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
@@ -6319,6 +6391,17 @@ const userWorkspace = {
         LIMIT $2;
       `, [resolvedUserId, safeLimit]);
       return result.rows.map((row) => ({ ...row, created_at: toIsoString(row.created_at) }));
+    },
+
+    delete: async (userId, id) => {
+      const safeId = Number(id);
+      if (!Number.isInteger(safeId)) return { deleted: false, reason: "invalid_id" };
+      const result = await pool.query(`
+        DELETE FROM user_workspace_options_calculations
+        WHERE user_id = $1 AND id = $2
+        RETURNING id;
+      `, [toUserId(userId), safeId]);
+      return { deleted: result.rowCount > 0, id: safeId };
     }
   },
 
@@ -9252,6 +9335,7 @@ module.exports = {
   analytics,
   perpsBench,
   brokerage,
+  portfolioSnapshots,
   clearAllData,
   closeDatabase,
   describeDatabaseConfig

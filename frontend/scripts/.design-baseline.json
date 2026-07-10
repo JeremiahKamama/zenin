@@ -1,0 +1,74 @@
+{
+  "totalColors": 266,
+  "totalTypes": 110,
+  "perFile": {
+    "App.jsx": {
+      "colors": 6,
+      "types": 53
+    },
+    "LegalPage.jsx": {
+      "colors": 10,
+      "types": 0
+    },
+    "components/AnalyticsModule.jsx": {
+      "colors": 186,
+      "types": 0
+    },
+    "components/AssetModal.jsx": {
+      "colors": 5,
+      "types": 2
+    },
+    "components/DecisionComposer.jsx": {
+      "colors": 7,
+      "types": 15
+    },
+    "components/ErrorBoundary.jsx": {
+      "colors": 2,
+      "types": 0
+    },
+    "components/FullMetricsPage.jsx": {
+      "colors": 7,
+      "types": 0
+    },
+    "components/HomeModule.jsx": {
+      "colors": 1,
+      "types": 0
+    },
+    "components/IndicatorMetricModal.jsx": {
+      "colors": 2,
+      "types": 0
+    },
+    "components/IndicatorMetricsTable.jsx": {
+      "colors": 0,
+      "types": 1
+    },
+    "components/JournalModule.jsx": {
+      "colors": 1,
+      "types": 1
+    },
+    "components/OptionsCalculator.jsx": {
+      "colors": 6,
+      "types": 0
+    },
+    "components/OptionsModule.jsx": {
+      "colors": 9,
+      "types": 10
+    },
+    "components/OptionsStrategySimulator.jsx": {
+      "colors": 11,
+      "types": 1
+    },
+    "components/PerpsCalculator.jsx": {
+      "colors": 2,
+      "types": 0
+    },
+    "components/PortfolioModule.jsx": {
+      "colors": 8,
+      "types": 27
+    },
+    "components/Sparkline.jsx": {
+      "colors": 3,
+      "types": 0
+    }
+  }
+}

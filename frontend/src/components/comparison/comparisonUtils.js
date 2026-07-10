@@ -133,22 +133,44 @@ export function riskLevel(score) {
 // Build the vNext Decision Matrix from two comparison-asset payloads.
 // Each row's `winner` is DERIVED from the data (never asserted), with an
 // evidence string and confidence. Rows are ordered by spec weight.
-// Returns rows consumable by ComparisonMatrix: { id, label, weight, winner,
-// confidence, a:{display,evidence}, b:{display,evidence}, explanation }.
-export function buildDecisionMatrix(a, b) {
+// `intel` (optional) is a map { [symbol]: { ratios, keyMetrics, income } }
+// sourced from /api/market/* (FMP). When present, growth/margin/ROE rows prefer
+// these deeper fields; all reads fall back to null so missing data degrades
+// gracefully (no fabricated verdicts).
+export function buildDecisionMatrix(a, b, intel = {}) {
   if (!a || !b) return [];
+  const num = (v) => {
+    const n = typeof v === "string" ? parseFloat(v) : v;
+    return Number.isFinite(Number(n)) ? Number(n) : null;
+  };
+  // Pull FMP-derived fundamentals for a symbol, if the intel map has it.
+  const fm = (sym) => {
+    const entry = intel?.[sym];
+    if (!entry) return {};
+    const ratios = entry.ratios?.ratios?.[0] || entry.ratios || {};
+    const km = entry.keyMetrics?.keyMetrics?.[0] || entry.keyMetrics || {};
+    return {
+      revenueGrowth: num(ratios.revenueGrowth),
+      grossMargin: num(ratios.grossMargin),
+      operatingMargin: num(ratios.operatingMargin),
+      netMargin: num(ratios.netMargin),
+      roe: num(ratios.returnOnEquity ?? km.roe),
+    };
+  };
+  const fmA = fm(a.symbol);
+  const fmB = fm(b.symbol);
   const defs = [
     { id: "valuation", label: "Valuation", weight: 3, higher: false,
       a: (x) => x.earnings?.valuation?.trailingPe ?? x.finviz?.pe ?? null,
       b: (x) => x.earnings?.valuation?.fwdPe ?? x.finviz?.forwardPe ?? null,
       fmt: fmtMultiple, ev: (v) => (v != null ? `${fmtMultiple(v)} P/E` : "no P/E") },
     { id: "growth", label: "Growth", weight: 4, higher: true,
-      a: (x) => x.earnings?.growth?.revenueGrowth ?? x.finviz?.revenueGrowth ?? null,
-      b: (x) => x.earnings?.growth?.earningsGrowth ?? x.finviz?.earningsGrowth ?? null,
+      a: (x) => fmA.revenueGrowth ?? x.earnings?.growth?.revenueGrowth ?? x.finviz?.revenueGrowth ?? null,
+      b: (x) => fmB.revenueGrowth ?? x.earnings?.growth?.earningsGrowth ?? x.finviz?.earningsGrowth ?? null,
       fmt: fmtPct, ev: (v) => (v != null ? `rev growth ${fmtPct(v)}` : "no growth") },
     { id: "profitability", label: "Profitability", weight: 4, higher: true,
-      a: (x) => x.earnings?.profitability?.operatingMargin ?? x.finviz?.operatingMargin ?? null,
-      b: (x) => x.earnings?.profitability?.netMargin ?? x.finviz?.netMargin ?? null,
+      a: (x) => fmA.operatingMargin ?? x.earnings?.profitability?.operatingMargin ?? x.finviz?.operatingMargin ?? null,
+      b: (x) => fmB.netMargin ?? x.earnings?.profitability?.netMargin ?? x.finviz?.netMargin ?? null,
       fmt: fmtPct, ev: (v) => (v != null ? `margin ${fmtPct(v)}` : "no margin") },
     { id: "moat", label: "Moat", weight: 5, higher: true,
       a: (x) => x.finviz?.moatScore ?? x.earnings?.quality?.moatScore ?? null,
@@ -156,8 +178,8 @@ export function buildDecisionMatrix(a, b) {
       fmt: (v) => (v == null ? "—" : `${v}/100`),
       ev: (v) => (v != null ? `moat ${v}/100` : "no moat score") },
     { id: "execution", label: "Execution", weight: 4, higher: true,
-      a: (x) => x.earnings?.quality?.roe ?? x.finviz?.roe ?? null,
-      b: (x) => x.earnings?.quality?.roe ?? x.finviz?.roe ?? null,
+      a: (x) => fmA.roe ?? x.earnings?.quality?.roe ?? x.finviz?.roe ?? null,
+      b: (x) => fmB.roe ?? x.earnings?.quality?.roe ?? x.finviz?.roe ?? null,
       fmt: fmtPct, ev: (v) => (v != null ? `ROE ${fmtPct(v)}` : "no ROE") },
     { id: "risk", label: "Risk", weight: 3, higher: false,
       a: (x) => x.beta ?? x.finviz?.beta ?? null,

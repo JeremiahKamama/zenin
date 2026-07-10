@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { zeninFetch } from "../utils/zeninFetch";
 
 const PERSONAS = [
@@ -31,6 +31,17 @@ export function PersonaOnboardingModal({ open, onClose, onSelect, isGuestUser = 
   const [feedback, setFeedback] = useState(null);
 
   if (!open) return null;
+
+  useEffect(() => {
+    if (!open) return;
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        onClose?.();
+      }
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [open, onClose]);
 
   const handleConfirm = async () => {
     const persona = PERSONAS.find((p) => p.key === selected) || PERSONAS[0];

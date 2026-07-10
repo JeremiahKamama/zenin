@@ -1007,8 +1007,8 @@ const styles = `
 }
 
 .back-btn {
-    background: rgba(56, 189, 248, 0.1);
-    border: 1px solid rgba(56, 189, 248, 0.2);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     color: var(--blue);
     padding: 4px 12px;
     border-radius: 8px;
@@ -1100,8 +1100,8 @@ const styles = `
 
 .tabs button.active {
   color: var(--text);
-  background: rgba(56, 189, 248, 0.18);
-  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.38);
 }
 
 .kpi-grid {
@@ -1143,7 +1143,7 @@ const styles = `
   padding: 6px 10px;
   border-radius: 999px;
   color: var(--blue);
-  background: rgba(56, 189, 248, 0.12);
+  background: rgba(255, 255, 255, 0.12);
   font-size: 12px;
   font-weight: 800;
 }
@@ -1181,7 +1181,7 @@ const styles = `
   cursor: pointer;
   font-size: 12px;
 }
-.range-row button.active { color: var(--text); background: rgba(56, 189, 248, 0.18); }
+.range-row button.active { color: var(--text); background: rgba(255, 255, 255, 0.18); }
 
 .insight-copy { color: var(--soft) !important; font-size: 14px !important; line-height: 1.6; margin-bottom: 18px !important; }
 .insight-grid, .ratio-grid, .comparison-grid { display: grid; gap: 12px; }
@@ -1228,7 +1228,7 @@ const styles = `
 .rank-list { display: grid; gap: 12px; }
 .rank-row { display: grid; grid-template-columns: 1.2fr 1fr auto; gap: 12px; align-items: center; font-size: 13px; color: var(--soft); }
 .rank-row strong { font-size: 12px; }
-.mini-bar { height: 7px; background: rgba(148, 163, 184, 0.15); border-radius: 999px; overflow: hidden; }
+.mini-bar { height: 7px; background: rgba(160, 160, 160, 0.15); border-radius: 999px; overflow: hidden; }
 .mini-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--green)); }
 
 .table-list { display: grid; gap: 10px; }

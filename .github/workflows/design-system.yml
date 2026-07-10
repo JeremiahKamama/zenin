@@ -1,0 +1,52 @@
+name: Design System Guardrails
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref.
+concurrency:
+  group: design-system-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  design-system:
+    name: Design-system consistency gates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Phase 8 — no NEW design-system drift. Fails if component code adds
+      # hardcoded colors / font-sizes beyond the committed baseline.
+      - name: Design-system audit (regression gate)
+        run: npm run audit:design
+
+      # Phase 8 — managed UI-kit CSS must stay token-clean (color-no-hex etc.).
+      # The huge legacy src/styles.css is intentionally excluded; it is migrated
+      # out-of-band. We lint only the strict override scope to keep signal high.
+      - name: Stylelint (managed CSS)
+        run: npx stylelint "src/components/**/*.css" "src/**/*.module.css" --allow-empty-input
+
+      # Phase 8 — inline design-token drift surfaced (warn, not yet error).
+      - name: ESLint (design-token guardrail)
+        run: npm run lint
+
+      # Validity gate — the production build must succeed.
+      - name: Build
+        run: npm run build:spa

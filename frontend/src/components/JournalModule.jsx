@@ -68,6 +68,12 @@ export function JournalModule({
   const [nowTs, setNowTs] = useState(Date.now());
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef(null);
+  // Phase 4: historical snapshots are the single source of truth for the heatmap.
+  // When snapshots exist for the visible month they override the legacy
+  // render-time delta calculation (which is retained only as a fallback before
+  // any snapshot has been generated).
+  const [snapshotsByDate, setSnapshotsByDate] = useState(() => new Map());
+  const [snapshotsLoadedFor, setSnapshotsLoadedFor] = useState("");
   const [journalEntries, setJournalEntries] = useState(() => {
     try {
       const parsed = JSON.parse(localStorage.getItem("zenin_journal_entries") || "[]");
@@ -114,7 +120,7 @@ export function JournalModule({
     status: "all"
   });
   const [expandedExecutionGroups, setExpandedExecutionGroups] = useState({});
-  const [journalView, setJournalView] = useState("entries");
+  const [journalView, setJournalView] = useState("overview");
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [isEntryDrawerOpen, setIsEntryDrawerOpen] = useState(false);
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false);
@@ -126,6 +132,7 @@ export function JournalModule({
   const [selectedCalendarTradeDate, setSelectedCalendarTradeDate] = useState("");
   const [reviewNote, setReviewNote] = useState(() => localStorage.getItem(JOURNAL_REVIEW_NOTE_KEY) || "");
   const [isReviewModeActive, setIsReviewModeActive] = useState(false);
+  const [entriesListPage, setEntriesListPage] = useState(1);
   const drawerRef = useRef(null);
   const reviewComposerRef = useRef(null);
   const journalSyncReadyRef = useRef(false);
@@ -1080,19 +1087,23 @@ export function JournalModule({
     ? Number(accountEquity)
     : availableBalance + portfolioValue;
 
-  const winLossSeries = [
-    Math.max(analytics.wins, 0),
-    Math.max(analytics.losses, 0)
-  ];
-  const winLossOptions = {
-    chart: { type: "donut", background: "transparent" },
-    labels: ["Wins", "Losses"],
+  const winLossCounts = useMemo(() => ({
+    winners: Math.max(analytics.wins, 0),
+    losers: Math.max(analytics.losses, 0),
+    breakeven: Math.max(analytics.breakevens, 0)
+  }), [analytics.wins, analytics.losses, analytics.breakevens]);
+  const winLossSeries = useMemo(() => [winLossCounts.winners, winLossCounts.losers, winLossCounts.breakeven], [winLossCounts]);
+  const winLossOptions = useMemo(() => ({
+    chart: { type: "donut", background: "transparent", fontFamily: "inherit" },
+    labels: ["Winners", "Losers", "Breakeven"],
     legend: { show: false },
     stroke: { show: false },
     dataLabels: { enabled: false },
-    colors: [chartColors.success(), chartColors.danger()],
-    plotOptions: { pie: { donut: { size: "70%" } } }
-  };
+    colors: [chartColors.success(), chartColors.danger(), chartColors.muted()],
+    plotOptions: { pie: { donut: { size: "68%" } } },
+    tooltip: { theme: activeChartThemeMode() },
+    theme: { mode: activeChartThemeMode() }
+  }), []);
 
   const statsRows = [
     { label: "Total Gain/Loss", value: analytics.totalGainLoss, currency: true },
@@ -1176,6 +1187,33 @@ export function JournalModule({
       setSelectedCalendarTradeDate("");
     }
   }, [journalView]);
+
+  // Phase 4: hydrate the visible calendar month from the immutable snapshot
+  // service. This is the ONLY historical source the heatmap reads once the
+  // migration has produced snapshots for the account.
+  useEffect(() => {
+    if (journalView !== "calendar") return undefined;
+    const year = calendarCursor.getFullYear();
+    const month = calendarCursor.getMonth() + 1;
+    const key = `${year}-${String(month).padStart(2, "0")}`;
+    if (snapshotsLoadedFor === key) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await zeninFetch(`/api/history/daily?year=${year}&month=${month}`);
+        const data = res && typeof res.json === "function" ? await res.json() : res;
+        const list = (data && Array.isArray(data.snapshots) ? data.snapshots : []) || [];
+        if (cancelled) return;
+        const map = new Map();
+        list.forEach((s) => { if (s && s.date) map.set(s.date, s); });
+        setSnapshotsByDate(map);
+        setSnapshotsLoadedFor(key);
+      } catch {
+        // Snapshot service unavailable or no history yet — legacy fallback applies.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [journalView, calendarCursor, snapshotsLoadedFor]);
 
   const frequentTradedSymbols = analytics.tradedAssetsReport
     .filter((row) => row.tradeCount > 0)
@@ -1264,8 +1302,11 @@ export function JournalModule({
     const dayNum = idx - firstDayOffset + 1;
     if (dayNum < 1) return { type: "blank", key: `b-${idx}` };
     const key = `${calendarYear}-${String(calendarMonth + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-    const pnl = calendarPnlByDate.get(key);
-    return { type: "day", key, dayNum, pnl: Number.isFinite(pnl) ? pnl : null };
+    // Prefer the immutable snapshot's stored daily P&L when available; fall back
+    // to the legacy render-time delta only when no snapshot exists for the day.
+    const snapshot = snapshotsByDate.get(key);
+    const pnl = snapshot != null ? snapshot.dailyPnl : calendarPnlByDate.get(key);
+    return { type: "day", key, dayNum, pnl: Number.isFinite(pnl) ? pnl : null, snapshot };
   });
 
   const moveCalendarMonth = (delta) => {
@@ -1658,6 +1699,28 @@ export function JournalModule({
   const safeEntriesPage = Math.min(reportPage, journalEntriesTotalPages);
   const paginatedTradeLogRows = tradeLogRows.slice((safeEntriesPage - 1) * JOURNAL_PAGE_SIZE, safeEntriesPage * JOURNAL_PAGE_SIZE);
 
+  // --- Entries tab: dedicated pagination over the filtered trade log ---
+  const ENTRIES_LIST_PAGE_SIZE = 12;
+  const entriesListTotalPages = Math.max(1, Math.ceil(tradeLogRows.length / ENTRIES_LIST_PAGE_SIZE));
+  const safeEntriesListPage = Math.min(Math.max(1, entriesListPage), entriesListTotalPages);
+  const entriesPageRows = tradeLogRows.slice((safeEntriesListPage - 1) * ENTRIES_LIST_PAGE_SIZE, safeEntriesListPage * ENTRIES_LIST_PAGE_SIZE);
+
+  // --- Calendar tab: day-type counts (per-day trades come from the shared derived block) ---
+  const calendarDayCounts = useMemo(() => {
+    let profitable = 0;
+    let losing = 0;
+    let breakeven = 0;
+    for (const cell of calendarCells) {
+      if (cell.type !== "day" || cell.pnl == null) continue;
+      if (cell.pnl > 0) profitable += 1;
+      else if (cell.pnl < 0) losing += 1;
+      else breakeven += 1;
+    }
+    return { profitable, losing, breakeven };
+  }, [calendarCells]);
+
+  // --- Analytics tab: win/loss donut (winLossCounts/series/options defined above alongside analytics) ---
+
   const statCards = [
     { label: "Total Trades", value: analytics.totalTrades, delta: `+${Math.max(0, weeklyMonthlyReview.monthly.wins - weeklyMonthlyReview.weekly.wins)} vs last 30d`, tone: "neutral", icon: "T" },
     { label: "Win Rate", value: `${analytics.winRate.toFixed(1)}%`, delta: `${analytics.winRate >= 50 ? "+" : "-"}${Math.abs(analytics.winRate - 50).toFixed(1)}pp vs last 30d`, tone: analytics.winRate >= 50 ? "positive" : "negative", icon: "W" },
@@ -1794,15 +1857,6 @@ export function JournalModule({
     });
     setIsReviewModeActive(true);
     notify("Review saved to your Zenin workspace.", "success");
-  };
-
-  const enterReviewMode = () => {
-    setIsReviewModeActive(true);
-    requestAnimationFrame(() => {
-      reviewComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      reviewComposerRef.current?.focus();
-    });
-    notify("Review mode focused.", "info");
   };
 
   const handleExportChoice = (choice) => {
@@ -1970,7 +2024,10 @@ export function JournalModule({
           dateKey={activeCalendarTradeDate}
           rows={activeCalendarTradeRows}
           availableDateKeys={availableTradeDateKeys}
-          onBack={() => setSelectedCalendarTradeDate("")}
+          onBack={() => {
+            setSelectedCalendarTradeDate("");
+            setJournalView("calendar");
+          }}
           onNavigateDate={setSelectedCalendarTradeDate}
           onNewEntry={openNewEntry}
           onOpenDetail={openTradeDetail}
@@ -1978,61 +2035,145 @@ export function JournalModule({
         />
       ) : (
         <>
-          <JournalDebriefHeader
-            syncTimestampLabel={syncTimestampLabel}
-            exportMenuOpen={isExportMenuOpen}
-            setExportMenuOpen={setIsExportMenuOpen}
-            exportMenuRef={exportMenuRef}
-            onExportChoice={handleExportChoice}
-            onNewEntry={openNewEntry}
-            onSaveSnapshot={saveReviewSnapshot}
-            onJumpToReview={enterReviewMode}
-            reviewModeActive={isReviewModeActive}
-          />
-          <JournalDecisionLayer
-            debriefPnl={debriefPnl}
-            ruleAdherence={ruleAdherence}
-            emotionalDiscipline={emotionalDiscipline}
-            primaryLesson={primaryLesson}
-            reviewQueueItems={reviewQueueItems}
-            onNewEntry={openNewEntry}
-            onJumpToReview={enterReviewMode}
-          />
-          <JournalDebriefDashboard
-            dateKey={activeDebriefDate}
-            syncTimestampLabel={syncTimestampLabel}
-            debriefPnl={debriefPnl}
-            debriefWinRate={debriefWinRate}
-            ruleAdherence={ruleAdherence}
-            emotionalDiscipline={emotionalDiscipline}
-            primaryLesson={primaryLesson}
-            reviewQueueItems={reviewQueueItems}
-            executionRows={tradeLogRows.slice(0, 8)}
-            behaviorPatterns={behaviorPatterns}
-            calendarMonthLabel={calendarMonthLabel}
-            monthDateRangeLabel={monthDateRangeLabel}
-            calendarCells={calendarCells}
-            resolveHeatTone={resolveHeatTone}
-            selectedDay={selectedDay}
-            monthPnL={monthPnL}
-            bestDay={bestDay}
-            worstDay={worstDay}
-            avgDayPnL={avgDayPnL}
-            heatmapScale={heatmapScale}
-            formatValue={formatValue}
-            onSelectDay={setSelectedCalendarDay}
-            onMoveMonth={moveCalendarMonth}
-            onOpenDay={(day) => setSelectedCalendarTradeDate(String(day?.key || ""))}
-            onOpenTrade={openTradeDetail}
-            lessonRows={lessonRows}
-            reviewNote={reviewNote}
-            setReviewNote={setReviewNote}
-            reviewComposerRef={reviewComposerRef}
-            onSaveReview={saveReviewSnapshot}
-            onAddToJournal={addReviewToJournal}
-            onNewEntry={openNewEntry}
-            reviewModeActive={isReviewModeActive}
-          />
+          {journalView === "overview" ? (
+            <JournalDebriefHeader
+              syncTimestampLabel={syncTimestampLabel}
+              exportMenuOpen={isExportMenuOpen}
+              setExportMenuOpen={setIsExportMenuOpen}
+              exportMenuRef={exportMenuRef}
+              onExportChoice={handleExportChoice}
+              onNewEntry={openNewEntry}
+              onSaveSnapshot={saveReviewSnapshot}
+            />
+          ) : (
+            <JournalHeader
+              search={journalFilters.search}
+              onSearch={(value) => setJournalFilters((prev) => ({ ...prev, search: value }))}
+              onNewEntry={openNewEntry}
+              exportMenuOpen={isExportMenuOpen}
+              setExportMenuOpen={setIsExportMenuOpen}
+              exportMenuRef={exportMenuRef}
+              onExportChoice={handleExportChoice}
+            />
+          )}
+          <JournalTabNav activeTab={journalView} onChange={setJournalView} />
+          {journalView === "overview" ? (
+            <JournalDebriefDashboard
+              dateKey={activeDebriefDate}
+              syncTimestampLabel={syncTimestampLabel}
+              debriefPnl={debriefPnl}
+              debriefWinRate={debriefWinRate}
+              ruleAdherence={ruleAdherence}
+              emotionalDiscipline={emotionalDiscipline}
+              primaryLesson={primaryLesson}
+              reviewQueueItems={reviewQueueItems}
+              executionRows={tradeLogRows.slice(0, 8)}
+              behaviorPatterns={behaviorPatterns}
+              calendarMonthLabel={calendarMonthLabel}
+              monthDateRangeLabel={monthDateRangeLabel}
+              calendarCells={calendarCells}
+              resolveHeatTone={resolveHeatTone}
+              selectedDay={selectedDay}
+              monthPnL={monthPnL}
+              bestDay={bestDay}
+              worstDay={worstDay}
+              avgDayPnL={avgDayPnL}
+              heatmapScale={heatmapScale}
+              formatValue={formatValue}
+              onSelectDay={setSelectedCalendarDay}
+              onMoveMonth={moveCalendarMonth}
+              onOpenDay={(day) => {
+                setSelectedCalendarTradeDate(String(day?.key || ""));
+                setJournalView("calendar");
+              }}
+              onOpenTrade={openTradeDetail}
+              lessonRows={lessonRows}
+              reviewNote={reviewNote}
+              setReviewNote={setReviewNote}
+              reviewComposerRef={reviewComposerRef}
+              onAddToJournal={addReviewToJournal}
+              onNewEntry={openNewEntry}
+              reviewModeActive={isReviewModeActive}
+            />
+          ) : journalView === "entries" ? (
+            <JournalEntriesView
+              rows={entriesPageRows}
+              totalRows={tradeLogRows.length}
+              page={entriesListPage}
+              pageSize={ENTRIES_LIST_PAGE_SIZE}
+              totalPages={entriesListTotalPages}
+              filters={journalFilters}
+              setFilters={setJournalFilters}
+              showMoreFilters={showMoreFilters}
+              setShowMoreFilters={setShowMoreFilters}
+              symbolOptions={symbolOptions}
+              setupOptions={setupOptions}
+              regimeOptions={regimeOptions}
+              selectedSymbols={selectedSymbols}
+              setSelectedSymbols={setSelectedSymbols}
+              onReset={resetFilters}
+              onNewEntry={openNewEntry}
+              onOpenDetail={openTradeDetail}
+              onPrevPage={() => setEntriesListPage((p) => Math.max(1, p - 1))}
+              onNextPage={() => setEntriesListPage((p) => Math.min(entriesListTotalPages, p + 1))}
+              formatValue={formatValue}
+            />
+          ) : journalView === "calendar" ? (
+            <JournalCalendarView
+              calendarMonthLabel={calendarMonthLabel}
+              monthDateRangeLabel={monthDateRangeLabel}
+              calendarCells={calendarCells}
+              selectedDay={selectedDay}
+              selectedDayTrades={selectedDayTrades}
+              onSelectDay={setSelectedCalendarDay}
+              onMoveMonth={moveCalendarMonth}
+              onViewTrades={(day) => {
+                setSelectedCalendarTradeDate(String(day?.key || ""));
+              }}
+              selectedSymbol={selectedSymbols[0] || ""}
+              setSelectedSymbols={setSelectedSymbols}
+              symbolOptions={symbolOptions}
+              monthPnL={monthPnL}
+              bestDay={bestDay}
+              worstDay={worstDay}
+              avgDayPnL={avgDayPnL}
+              profitableDays={calendarDayCounts.profitable}
+              losingDays={calendarDayCounts.losing}
+              breakevenDays={calendarDayCounts.breakeven}
+              formatValue={formatValue}
+            />
+          ) : journalView === "analytics" ? (
+            <JournalAnalyticsView
+              analytics={analytics}
+              winLossOptions={winLossOptions}
+              winLossSeries={winLossSeries}
+              winnersCount={winLossCounts.winners}
+              losersCount={winLossCounts.losers}
+              breakevenCount={winLossCounts.breakeven}
+              weeklyMonthlyReview={weeklyMonthlyReview}
+              assetPnlRows={assetPnlRows}
+              setupPnlRows={setupPnlRows}
+              tradeLogRows={tradeLogRows}
+              onToast={notify}
+              onExportAnalytics={exportAnalyticsReport}
+              onSaveInsight={saveAnalyticsInsightToJournal}
+              onCreateReviewTask={createReviewTask}
+              formatValue={formatValue}
+            />
+          ) : journalView === "review" ? (
+            <JournalReviewView
+              analytics={analytics}
+              mistakeRows={mistakeRows}
+              setupPnlRows={setupPnlRows}
+              reviewNote={reviewNote}
+              setReviewNote={setReviewNote}
+              onToast={notify}
+              onSaveReview={saveReviewSnapshot}
+              onExportReview={exportReviewReport}
+              onAddToJournal={addReviewToJournal}
+              formatValue={formatValue}
+            />
+          ) : null}
         </>
       )}
 
@@ -2093,9 +2234,7 @@ function JournalDebriefHeader({
   exportMenuRef,
   onExportChoice,
   onNewEntry,
-  onSaveSnapshot,
-  onJumpToReview,
-  reviewModeActive = false
+  onSaveSnapshot
 }) {
   return (
     <CompactPageHeader
@@ -2105,10 +2244,6 @@ function JournalDebriefHeader({
       description="A compact record of decision theses, evidence, outcomes, and follow-up reviews."
       actions={(
         <div className="journal-debrief-head-actions">
-          <div className="journal-debrief-sync-box" aria-label={`Sync state ${syncTimestampLabel}`}>
-            <span>Sync State</span>
-            <strong>{syncTimestampLabel}</strong>
-          </div>
           <div className="journal-debrief-action-cluster">
             <button type="button" className="journal-btn secondary" onClick={onNewEntry}>New Entry</button>
             <div className="journal-export-wrap" ref={exportMenuRef}>
@@ -2123,68 +2258,11 @@ function JournalDebriefHeader({
                 </div>
               ) : null}
             </div>
-            <button
-              type="button"
-              className={`journal-btn secondary ${reviewModeActive ? "active" : ""}`.trim()}
-              onClick={onJumpToReview}
-            >
-              Review Mode
-            </button>
             <button type="button" className="journal-btn primary" onClick={onSaveSnapshot}>Save Snapshot</button>
           </div>
         </div>
       )}
     />
-  );
-}
-
-function JournalDecisionLayer({
-  debriefPnl,
-  ruleAdherence,
-  emotionalDiscipline,
-  primaryLesson,
-  reviewQueueItems,
-  onNewEntry,
-  onJumpToReview
-}) {
-  const qualityScore = Math.round(
-    [
-      Number.isFinite(ruleAdherence) ? ruleAdherence : null,
-      Number.isFinite(emotionalDiscipline) ? emotionalDiscipline : null,
-      Number(debriefPnl || 0) >= 0 ? 72 : 48
-    ].filter((value) => value != null).reduce((sum, value, _index, arr) => sum + value / arr.length, 0)
-  );
-  const templates = [
-    ["Decision", "Record thesis, outcome, and mistake tags."],
-    ["Research note", "Save the catalyst, variant view, and invalidation."],
-    ["Risk decision", "Log sizing, exposure, and what would change your mind."],
-    ["Post-mortem", "Turn the outcome into one rule to repeat or remove."]
-  ];
-  return (
-    <section className="journal-decision-layer" aria-label="Decision ledger layer">
-      <div className="journal-decision-primary">
-        <span>Decision layer</span>
-        <h3>Convert market work into reviewable decisions.</h3>
-        <p>{primaryLesson || "Capture the decision, evidence, and next rule before the context fades."}</p>
-        <div className="journal-decision-actions">
-          <button type="button" className="journal-btn primary" onClick={onNewEntry}>Record decision</button>
-          <button type="button" className="journal-btn secondary" onClick={onJumpToReview}>Review queue</button>
-        </div>
-      </div>
-      <div className="journal-decision-score" title="Weighted average of rule adherence, emotional discipline, and P&L sign (positive P&L = 72%, negative = 48%).">
-        <span>Decision quality</span>
-        <strong>{Number.isFinite(qualityScore) ? `${qualityScore}%` : "—"}</strong>
-        <small>{reviewQueueItems.length ? `${reviewQueueItems.length} follow-up${reviewQueueItems.length === 1 ? "" : "s"} waiting` : "No urgent follow-ups"}</small>
-      </div>
-      <div className="journal-decision-templates">
-        {templates.map(([title, detail]) => (
-          <button key={title} type="button" onClick={onNewEntry}>
-            <strong>{title}</strong>
-            <span>{detail}</span>
-          </button>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -2219,7 +2297,6 @@ function JournalDebriefDashboard(props) {
     reviewNote,
     setReviewNote,
     reviewComposerRef,
-    onSaveReview,
     onAddToJournal,
     onNewEntry,
     reviewModeActive = false
@@ -2447,7 +2524,6 @@ function JournalDebriefDashboard(props) {
             />
           </label>
           <div className="journal-inline-actions">
-            <button type="button" className="journal-btn primary" onClick={onSaveReview}>Save Review</button>
             <button type="button" className="journal-btn secondary" onClick={onAddToJournal}>Add to Journal</button>
           </div>
         </article>
@@ -2501,6 +2577,7 @@ function JournalStatsGrid({ stats }) {
 
 function JournalTabNav({ activeTab, onChange }) {
   const tabs = [
+    ["overview", "Overview"],
     ["entries", "Entries"],
     ["calendar", "Calendar"],
     ["analytics", "Analytics"],
@@ -2927,7 +3004,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
   }];
   const intradayOptions = {
     chart: { toolbar: { show: false }, foreColor: chartColors.muted(), background: "transparent" },
-    grid: { borderColor: "rgba(148,163,184,0.12)" },
+    grid: { borderColor: "rgba(160, 160, 160, 0.12)" },
     theme: { mode: activeChartThemeMode() },
     plotOptions: {
       bar: {

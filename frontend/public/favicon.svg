@@ -1,20 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <defs>
-    <linearGradient id="cyanPurple" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#3b82f6" />
-      <stop offset="100%" stop-color="#8b5cf6" />
+    <linearGradient id="zeninMark" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#737373" />
     </linearGradient>
   </defs>
 
   <!-- Scaled identically to app-icon but without the dark bg -->
-  <rect x="18" y="27" width="64" height="2" rx="1" fill="url(#cyanPurple)" />
-  <rect x="18" y="71" width="64" height="2" rx="1" fill="url(#cyanPurple)" />
-  
+  <rect x="18" y="27" width="64" height="2" rx="1" fill="url(#zeninMark)" />
+  <rect x="18" y="71" width="64" height="2" rx="1" fill="url(#zeninMark)" />
+
   <g transform="translate(50, 50) rotate(-51) translate(-50, -50)">
-    <rect x="22" y="49" width="56" height="2.2" rx="1.1" fill="#f8fafc" />
+    <rect x="22" y="49" width="56" height="2.2" rx="1.1" fill="#F5F5F5" />
   </g>
-  
+
   <g transform="translate(50, 50) rotate(-51) translate(-50, -50)">
-    <rect x="32" y="53.5" width="36" height="1.5" rx="0.75" fill="#f8fafc" opacity="0.8" />
+    <rect x="32" y="53.5" width="36" height="1.5" rx="0.75" fill="#F5F5F5" opacity="0.8" />
   </g>
 </svg>

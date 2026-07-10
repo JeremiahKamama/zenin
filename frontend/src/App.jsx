@@ -2,10 +2,12 @@ import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRe
 import {
   PanelLeftClose,
   PanelLeftOpen,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { ToastProvider, Toaster } from "@/components/ui/toast";
+import { Switch } from "@/components/ui/switch";
 import { WorkspaceScopeProvider } from "./components/WorkspaceScopeContext";
 import "./styles.css";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
@@ -4270,7 +4272,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     apiSecret: ""
   });
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
-  const settingsCategories = ["Profile", "Subscription", "Workspace", "General", "Accounts", "Operations", "Layout", "Notification"];
+  const settingsCategories = ["Profile", "Subscription", "Workspace", "General", "Accounts", "Notification"];
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
     const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
@@ -6372,6 +6374,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               assets={routeState.assets || []}
               onBack={navigateToAppRoute}
               onNavigateCompare={(p) => navigateToCompare(p.a, p.b)}
+              onViewResearch={(sym) => openAssetResearch({ symbol: sym })}
               onCloseModal={() => setSelectedAsset(null)}
             />
           </div>
@@ -6983,8 +6986,8 @@ const handleOptionTradeClosed = async (tradeId) => {
             <div className="flex justify-between items-start px-8 py-6 border-b border-[var(--color-border)]">
               <div className="flex flex-col gap-1">
                 <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">CONTROL BAY</span>
-                <h2 className="text-xl font-medium text-[var(--color-text-primary)] m-0">Workspace Settings</h2>
-                <p className="text-sm text-[var(--color-text-secondary)] m-0">Profile, security, billing, data, and workstation controls.</p>
+                <h2 className="text-[var(--fs-xl)] font-medium text-[var(--color-text-primary)] m-0">Workspace Settings</h2>
+                <p className="text-[var(--fs-body)] text-[var(--color-text-secondary)] m-0">Profile, security, billing, data, and workstation controls.</p>
               </div>
               <div className="flex items-center gap-2 text-[13px]">
                 <span className="settings-live-dot" aria-hidden="true" />
@@ -7004,7 +7007,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                     id={`settings-tab-${category.replace(/\s+/g, "-").toLowerCase()}`}
                     aria-selected={activeSettingsCategory === category}
                     aria-controls="settings-content-panel"
-                    className={`text-left px-3 py-2 rounded-md text-sm transition-colors ${ activeSettingsCategory === category ? "active" : "" ? "bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-white bg-transparent border-none"}`}
+                    className={`text-left px-3 py-2 rounded-md text-[var(--fs-body)] transition-colors ${ activeSettingsCategory === category ? "active" : "" ? "bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-white bg-transparent border-none"}`}
                     onClick={() => handleSettingsCategorySelect(category)}
                   >
                     {category}
@@ -7022,9 +7025,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                   <>
                     <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-email")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-email")}>
                         <span>Email Address</span>
-                        <span>{expandedSettingsPanels["profile-email"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["profile-email"]} />
                       </button>
                       {expandedSettingsPanels["profile-email"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7104,9 +7107,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-password")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-password")}>
                         <span>Password</span>
-                        <span>{expandedSettingsPanels["profile-password"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["profile-password"]} />
                       </button>
                       {expandedSettingsPanels["profile-password"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7183,9 +7186,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-twofa")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-twofa")}>
                         <span>2FA & Passkeys</span>
-                        <span>{expandedSettingsPanels["profile-twofa"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["profile-twofa"]} />
                       </button>
                       {expandedSettingsPanels["profile-twofa"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7516,9 +7519,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="settings-panel settings-danger-panel">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-delete")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-delete")}>
                         <span>Delete Account</span>
-                        <span>{expandedSettingsPanels["profile-delete"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["profile-delete"]} />
                       </button>
                       {expandedSettingsPanels["profile-delete"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7577,9 +7580,9 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsCategory === "Subscription" && (
                   <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("subscription-plan")}>
+                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("subscription-plan")}>
                       <span>My Plan</span>
-                      <span>{expandedSettingsPanels["subscription-plan"] ? "−" : "+"}</span>
+                      <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["subscription-plan"]} />
                     </button>
                     {expandedSettingsPanels["subscription-plan"] && (
                       <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7779,28 +7782,24 @@ const handleOptionTradeClosed = async (tradeId) => {
                 {activeSettingsCategory === "General" && (
                   <>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-display")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-display")}>
                         <span>Display Preferences</span>
-                        <span>{expandedSettingsPanels["general-display"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["general-display"]} />
                       </button>
                       {expandedSettingsPanels["general-display"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                           <label className="settings-toggle-row">
                             <span>Hide account values</span>
-                            <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                              type="checkbox"
+                            <Switch
                               checked={preferences.hideValues}
-                              onChange={(e) => setPreferences((prev) => ({ ...prev, hideValues: e.target.checked }))}
+                              onCheckedChange={(v) => setPreferences((prev) => ({ ...prev, hideValues: v }))}
                             />
                           </label>
                           <label className="settings-toggle-row">
                             <span>Hide portfolio PnL</span>
-                            <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                              type="checkbox"
+                            <Switch
                               checked={preferences.hidePortfolioPnl}
-                              onChange={(e) => setPreferences((prev) => ({ ...prev, hidePortfolioPnl: e.target.checked }))}
+                              onCheckedChange={(v) => setPreferences((prev) => ({ ...prev, hidePortfolioPnl: v }))}
                             />
                           </label>
                         </div>
@@ -7808,9 +7807,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-data")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-data")}>
                         <span>Data & Time</span>
-                        <span>{expandedSettingsPanels["general-data"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["general-data"]} />
                       </button>
                       {expandedSettingsPanels["general-data"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7849,6 +7848,32 @@ const handleOptionTradeClosed = async (tradeId) => {
                           </label>
                         </div>
                       )}
+
+                    </div>
+
+                    <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("layout-presets")}>
+                        <span>Layout Presets</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["layout-presets"]} />
+                      </button>
+                      {expandedSettingsPanels["layout-presets"] && (
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <label className="flex flex-col gap-2 w-full max-w-md">
+                            <span>Choose layout style</span>
+                            <select
+                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
+                              value={preferences.layoutPreset}
+                              onChange={(e) => setPreferences((prev) => ({ ...prev, layoutPreset: e.target.value }))}
+                            >
+                              <option value="default">Default</option>
+                              <option value="compact">Compact</option>
+                              <option value="expanded">Expanded</option>
+                              <option value="focus">Focus Mode</option>
+                            </select>
+                          </label>
+                          <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">Layout preferences are saved to this browser profile.</p>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
@@ -7858,10 +7883,61 @@ const handleOptionTradeClosed = async (tradeId) => {
                     <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">
                       Desk workspaces turn Zenin into a shared operating surface: members, seats, shared account ingestion, and recent desk activity all live here.
                     </div>
+
+                    <div className="settings-panel settings-ops-panel">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("ops-health")}>
+                        <span>Workspace Health</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["ops-health"]} />
+                      </button>
+                      {expandedSettingsPanels["ops-health"] && (
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
+                              <span>Market feed</span>
+                              <strong>{liveStreamStatus === "connected" ? "Live" : liveStreamStatus === "degraded" ? "Degraded" : "Saved snapshot"}</strong>
+                              <em>{lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}</em>
+                            </div>
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
+                              <span>Account posture</span>
+                              <strong>{isAdmin ? "Admin" : isGuestUser ? "Guest" : accountPlanLabel}</strong>
+                              <em>{isGuestUser ? "Preview workspace" : "Authenticated workspace"}</em>
+                            </div>
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
+                              <span>Workspace</span>
+                              <strong>{activeWorkspace?.name || "Personal workspace"}</strong>
+                              <em>{activeWorkspace?.membership?.role || (isAdmin ? "admin" : "member")}</em>
+                            </div>
+                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
+                              <span>Coverage</span>
+                              <strong>{watchlistAssets.length} tracked</strong>
+                              <em>{connectedAccounts.length} connected account{connectedAccounts.length === 1 ? "" : "s"}</em>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="settings-panel settings-ops-panel">
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("ops-capture")}>
+                        <span>Issue Capture</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["ops-capture"]} />
+                      </button>
+                      {expandedSettingsPanels["ops-capture"] && (
+                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <div className="flex flex-col gap-3 p-4 border border-[var(--color-border)] rounded-md bg-[var(--color-surface-card)] mt-2">
+                            <div><strong>Data access</strong><span>Feed status, retry visibility, stale snapshots, and unavailable endpoints.</span></div>
+                            <div><strong>Conversion blockers</strong><span>Guest previews, locked modules, billing state, and account creation handoff.</span></div>
+                            <div><strong>Trust controls</strong><span>OAuth, passkeys, MFA posture, workspace roles, and notification reachability.</span></div>
+                            <div><strong>Interface quality</strong><span>Theme contrast, dense-table overflow, module crashes, and modal consistency.</span></div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-overview")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-overview")}>
                         <span>Workspace Overview</span>
-                        <span>{expandedSettingsPanels["workspace-overview"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["workspace-overview"]} />
                       </button>
                       {expandedSettingsPanels["workspace-overview"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -7918,9 +7994,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-team")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-team")}>
                         <span>Members & Invites</span>
-                        <span>{expandedSettingsPanels["workspace-team"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["workspace-team"]} />
                       </button>
                       {expandedSettingsPanels["workspace-team"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -8004,9 +8080,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     </div>
 
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-activity")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("workspace-activity")}>
                         <span>Desk Activity</span>
-                        <span>{expandedSettingsPanels["workspace-activity"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["workspace-activity"]} />
                       </button>
                       {expandedSettingsPanels["workspace-activity"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -8037,9 +8113,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                   <>
                     <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("accounts-connected")}>
+                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("accounts-connected")}>
                         <span>Connected Accounts</span>
-                        <span>{expandedSettingsPanels["accounts-connected"] ? "−" : "+"}</span>
+                        <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["accounts-connected"]} />
                       </button>
                       {expandedSettingsPanels["accounts-connected"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
@@ -8136,153 +8212,58 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
-                {activeSettingsCategory === "Operations" && (
-                  <>
-                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">
-                      Operational checks capture feed health, access posture, conversion blockers, and interface quality in one admin surface.
-                    </div>
-
-                    <div className="settings-panel settings-ops-panel">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("ops-health")}>
-                        <span>Workspace Health</span>
-                        <span>{expandedSettingsPanels["ops-health"] ? "−" : "+"}</span>
-                      </button>
-                      {expandedSettingsPanels["ops-health"] && (
-                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
-                              <span>Market feed</span>
-                              <strong>{liveStreamStatus === "connected" ? "Live" : liveStreamStatus === "degraded" ? "Degraded" : "Saved snapshot"}</strong>
-                              <em>{lastLivePriceAt ? new Date(lastLivePriceAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : GUEST_DEMO_SNAPSHOT_LABEL}</em>
-                            </div>
-                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
-                              <span>Account posture</span>
-                              <strong>{isAdmin ? "Admin" : isGuestUser ? "Guest" : accountPlanLabel}</strong>
-                              <em>{isGuestUser ? "Preview workspace" : "Authenticated workspace"}</em>
-                            </div>
-                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
-                              <span>Workspace</span>
-                              <strong>{activeWorkspace?.name || "Personal workspace"}</strong>
-                              <em>{activeWorkspace?.membership?.role || (isAdmin ? "admin" : "member")}</em>
-                            </div>
-                            <div className="flex flex-col gap-2 p-4 border border-[var(--color-border)] bg-[var(--color-surface-elevated)] rounded-md">
-                              <span>Coverage</span>
-                              <strong>{watchlistAssets.length} tracked</strong>
-                              <em>{connectedAccounts.length} connected account{connectedAccounts.length === 1 ? "" : "s"}</em>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="settings-panel settings-ops-panel">
-                      <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("ops-capture")}>
-                        <span>Issue Capture</span>
-                        <span>{expandedSettingsPanels["ops-capture"] ? "−" : "+"}</span>
-                      </button>
-                      {expandedSettingsPanels["ops-capture"] && (
-                        <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
-                          <div className="flex flex-col gap-3 p-4 border border-[var(--color-border)] rounded-md bg-[var(--color-surface-card)] mt-2">
-                            <div><strong>Data access</strong><span>Feed status, retry visibility, stale snapshots, and unavailable endpoints.</span></div>
-                            <div><strong>Conversion blockers</strong><span>Guest previews, locked modules, billing state, and account creation handoff.</span></div>
-                            <div><strong>Trust controls</strong><span>OAuth, passkeys, MFA posture, workspace roles, and notification reachability.</span></div>
-                            <div><strong>Interface quality</strong><span>Theme contrast, dense-table overflow, module crashes, and modal consistency.</span></div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {activeSettingsCategory === "Layout" && (
-                  <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("layout-presets")}>
-                      <span>Layout Presets</span>
-                      <span>{expandedSettingsPanels["layout-presets"] ? "−" : "+"}</span>
-                    </button>
-                    {expandedSettingsPanels["layout-presets"] && (
-                      <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
-                        <label className="flex flex-col gap-2 w-full max-w-md">
-                          <span>Choose layout style</span>
-                          <select
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                            value={preferences.layoutPreset}
-                            onChange={(e) => setPreferences((prev) => ({ ...prev, layoutPreset: e.target.value }))}
-                          >
-                            <option value="default">Default</option>
-                            <option value="compact">Compact</option>
-                            <option value="expanded">Expanded</option>
-                            <option value="focus">Focus Mode</option>
-                          </select>
-                        </label>
-                        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">Layout preferences are saved to this browser profile.</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {activeSettingsCategory === "Notification" && (
                   <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
-                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[15px] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("notifications-channels")}>
+                    <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("notifications-channels")}>
                       <span>Notification Channels</span>
-                      <span>{expandedSettingsPanels["notifications-channels"] ? "−" : "+"}</span>
+                      <ChevronRight className="settings-chevron" data-open={expandedSettingsPanels["notifications-channels"]} />
                     </button>
                     {expandedSettingsPanels["notifications-channels"] && (
                       <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
                         <label className="settings-toggle-row">
                           <span>Email notifications</span>
-                          <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                            type="checkbox"
+                          <Switch
                             checked={effectiveEmailNotificationsEnabled}
                             disabled={!canUseEmailNotifications}
-                            onChange={(e) => {
-                              void handleNotificationPreferenceToggle("notifyEmail", e.target.checked);
+                            onCheckedChange={(v) => {
+                              void handleNotificationPreferenceToggle("notifyEmail", v);
                             }}
                           />
                         </label>
                         <label className="settings-toggle-row">
                           <span>Browser notifications</span>
-                          <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                            type="checkbox"
+                          <Switch
                             checked={effectiveBrowserNotificationsEnabled}
                             disabled={!browserNotificationsSupported || browserNotificationsBlocked}
-                            onChange={(e) => {
-                              void handleNotificationPreferenceToggle("notifyBrowser", e.target.checked);
+                            onCheckedChange={(v) => {
+                              void handleNotificationPreferenceToggle("notifyBrowser", v);
                             }}
                           />
                         </label>
                         <label className="settings-toggle-row">
                           <span>Price alerts</span>
-                          <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                            type="checkbox"
+                          <Switch
                             checked={preferences.notifyPriceAlerts}
-                            onChange={(e) => {
-                              void handleNotificationPreferenceToggle("notifyPriceAlerts", e.target.checked);
+                            onCheckedChange={(v) => {
+                              void handleNotificationPreferenceToggle("notifyPriceAlerts", v);
                             }}
                           />
                         </label>
                         <label className="settings-toggle-row">
                           <span>Order executions</span>
-                          <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                            type="checkbox"
+                          <Switch
                             checked={preferences.notifyOrderEvents}
-                            onChange={(e) => {
-                              void handleNotificationPreferenceToggle("notifyOrderEvents", e.target.checked);
+                            onCheckedChange={(v) => {
+                              void handleNotificationPreferenceToggle("notifyOrderEvents", v);
                             }}
                           />
                         </label>
                         <label className="settings-toggle-row">
                           <span>Market news digests</span>
-                          <input
-                                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
-                            type="checkbox"
+                          <Switch
                             checked={preferences.notifyNews}
-                            onChange={(e) => {
-                              void handleNotificationPreferenceToggle("notifyNews", e.target.checked);
+                            onCheckedChange={(v) => {
+                              void handleNotificationPreferenceToggle("notifyNews", v);
                             }}
                           />
                         </label>

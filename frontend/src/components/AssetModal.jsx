@@ -78,6 +78,16 @@ export function AssetModal({
       : asset?.type || normalizedAssetKind;
   const isStockResearchEligible = normalizedAssetKind === "stock";
 
+  // v3: modal is a launcher. Open the Asset Research Workspace route for this asset.
+  const onOpenResearch = useCallback((target) => {
+    const symbol = String(target?.symbol || asset?.symbol || "").trim().toUpperCase();
+    if (!symbol) return;
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: "asset", symbol }, "", `/app/asset/${encodeURIComponent(symbol)}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }, [asset]);
+
   const cleanAsset = useMemo(() => {
     if (!asset) return null;
     const cloned = { ...asset };

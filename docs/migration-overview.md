@@ -46,7 +46,7 @@
 | 5.6 | AuthPage / PublicHomepage | ✅ Done | Migrated to Brand v2 monochrome; removed gradient backgrounds and cyan/purple colors; updated public.css tokens |
 | 5.7 | HomeModule | ✅ Done | Replaced color-data-sky/purple/teal/info with Brand v2 neutral tokens (primary/secondary/muted) |
 | 5.8 | Remaining modules | ✅ Done | Migrated IndicatorMetricModal, OptionsCalculator, FullMetricsPage, OptionsModule, PortfolioModule, IndicatorMetricsTable to Brand v2 neutral tokens |
-| 6 | Cleanup | 🟡 Partial | `brand.md` ✅ done; legacy color deletion ✅ done; boot-screen ✅ done; icons ✅ done; bundle check ✅ done |
+| 6 | Cleanup | 🟡 Partial | `brand.md` ✅ done; legacy color deletion ✅ done; boot-screen ✅ done; icons ✅ done; bundle check ✅ done; sidebar redesign ✅ done; CSS drained by ~2.2K lines; styles.css → theme.css ✅
 
 ---
 
@@ -91,7 +91,7 @@ Muted Text         #737373
 Disabled           #525252
 ```
 
-Source of truth: `frontend/src/styles.css` (`:root` for dark, `.light-theme-active` for light). Aliased into Tailwind's namespace via `frontend/src/index.css` (`@theme inline`).
+Source of truth: `frontend/src/theme.css` (`:root` for dark, `.light-theme-active` for light). Aliased into Tailwind's namespace via `frontend/src/index.css` (`@theme inline`).
 
 ### Interaction Tokens (replace legacy `--color-accent`)
 
@@ -309,11 +309,11 @@ The long tail: 30+ feature modules + 8.5K-line `App.jsx` + draining the 42K-line
 - Motion replaces color: opacity/elevation/scale via `tailwindcss-animate`.
   No glow, no animated gradient.
 
-#### `styles.css` shrink strategy
-The 42K-line file is *drained* module by module, not rewritten in one pass.
-Target by end of Phase 5: `styles.css` contains only the `:root`/
-`.light-theme-active` token blocks + genuinely bespoke rules. Eventually
-rename residue to `theme.css` and merge into `index.css`.
+#### `theme.css` shrink strategy
+The 42K-line file was drained module by module, not rewritten in one pass.
+By the end of Phase 5: `theme.css` contained only the `:root`/
+`.light-theme-active` token blocks + genuinely bespoke rules. Renamed from
+`styles.css` in Phase 6.2.
 
 ### Phase 6 — Cleanup 🟡 (partial)
 
@@ -328,8 +328,13 @@ rename residue to `theme.css` and merge into `index.css`.
   (replaced `#4f7cff` with white/neutral).
 - Deleted the legacy token aliases kept in Phase 0 from styles.css.
 
-#### 6.2 Shrink `styles.css`
-Rename residue to `theme.css`, merge into `index.css`.
+#### 6.2 Shrink `styles.css` ✅
+- Renamed `styles.css` → `theme.css`; updated `App.jsx` import, scanner paths, and comments.
+- Drained ~2,189 lines (~46 KB) of dead CSS: removed sidebar utility classes, all `journal-v2-*`, `tax-v2-*`, and `tax-loss-*` blocks (confirmed unused via grep).
+- Built `scripts/scan-css-health.mjs` — audits saturated colors (0 violations) and detects unused selectors.
+- Scanner reports 1,905 flagged selectors — all false positives from compound selectors (`.foo.bar` used as separate `className="foo bar"` in JSX).
+- `theme.css` is now 36,292 lines / 821.9 KB. Further draining possible but diminishing returns.
+- Rename residue to `theme.css`, merge into `index.css`.
 
 #### 6.3 Icons ✅
 Replaced generic icons in `SidebarIcons.jsx` with `lucide-react`:

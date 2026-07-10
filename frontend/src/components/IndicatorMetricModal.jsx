@@ -73,8 +73,8 @@ export function IndicatorMetricModal({ countryName, metric, onClose }) {
         borderVisible: false,
       },
       grid: {
-        vertLines: { color: 'rgba(148, 163, 184, 0.08)' },
-        horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
+        vertLines: { color: 'rgba(160, 160, 160, 0.08)' },
+        horzLines: { color: 'rgba(160, 160, 160, 0.08)' },
       }
     }),
     []

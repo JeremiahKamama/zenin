@@ -503,10 +503,6 @@ const computeWhalePnl = (item, options = {}) => {
             <h2>Flow blotter</h2>
             <div className="prediction-panel-status">
               <div className="asset-count">Large prediction-market flow · {filteredPredictionWhales.length} matches</div>
-              <span className={`data-health-badge ${predictionLoading ? "loading" : predictionStale ? "hazard" : "ok"}`} title={predictionLoading ? "Refreshing whale transactions" : predictionStale ? "Showing previous whale snapshot" : "Whale transactions are up to date"}>
-                <span className={`status-icon ${predictionLoading ? "spinner" : ""}`}>{predictionLoading ? "⟳" : predictionStale ? "⚠" : "✓"}</span>
-                Whale Flow
-              </span>
             </div>
           </div>
           <div className="prediction-filter-bar">

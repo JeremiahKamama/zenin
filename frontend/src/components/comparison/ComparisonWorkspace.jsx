@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useComparisonAsset } from "./useComparisonAsset";
 import { buildDecisionMatrix, aggregateVerdict } from "./comparisonUtils";
+import { useMarketIntel } from "../useMarketIntel";
 import { ComparisonHeader } from "./ComparisonHeader";
 import { ComparisonSidebar } from "./ComparisonSidebar";
 import { ComparisonCanvas } from "./ComparisonCanvas";
@@ -10,26 +11,14 @@ import { ComparisonPicker } from "./ComparisonPicker";
 const SECTIONS = [
   { key: "decision", label: "Decision Matrix" },
   { key: "overview", label: "Overview" },
-  { key: "price", label: "Price" },
-  { key: "performance", label: "Performance" },
-  { key: "fundamentals", label: "Fundamentals" },
+  { key: "pricePerformance", label: "Price & Performance" },
   { key: "valuation", label: "Valuation" },
-  { key: "financials", label: "Financials" },
-  { key: "growth", label: "Growth" },
-  { key: "profitability", label: "Profitability" },
-  { key: "quality", label: "Quality" },
-  { key: "technical", label: "Technical" },
-  { key: "macro", label: "Macro" },
-  { key: "ownership", label: "Ownership" },
-  { key: "news", label: "News" },
+  { key: "fundamentals", label: "Fundamentals" },
+  { key: "ownershipNews", label: "Ownership & News" },
   { key: "catalysts", label: "Catalysts" },
   { key: "risks", label: "Risks" },
-  { key: "portfolioImpact", label: "Portfolio Impact" },
   { key: "shared", label: "Shared Intelligence" },
-  { key: "scenario", label: "Scenario" },
-  { key: "ai", label: "AI Analysis" },
-  { key: "timeline", label: "Timeline" },
-  { key: "journal", label: "Journal" }
+  { key: "scenario", label: "Scenario" }
 ];
 
 const SAVE_KEY = "zenin_saved_comparisons";
@@ -44,7 +33,7 @@ function loadSaved() {
 
 // Orchestrator. `assets` is an array (spec: engine accepts an array, never
 // assume two forever). Renders a full-page workspace, not a modal.
-export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, onCloseModal }) {
+export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, onViewResearch, onCloseModal }) {
   const [list, setList] = useState(() => (assets.length ? assets : []));
   const [section, setSection] = useState("decision");
   const [picking, setPicking] = useState(null); // "A" | "B" | null
@@ -56,6 +45,13 @@ export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, on
 
   const a = useComparisonAsset(assetA?.symbol, assetA?.type);
   const b = useComparisonAsset(assetB?.symbol, assetB?.type);
+  // FMP company fundamentals feed the Decision Matrix growth/profitability/
+  // execution rows AND the merged Fundamentals section (Growth / Profitability /
+  // Balance Sheet / Cash). One fetch per asset, shared across both. Gracefully
+  // null when FMP is unconfigured.
+  const FMP_KEYS = ["ratios", "keyMetrics", "income", "balance", "cashflow"];
+  const intelA = useMarketIntel(assetA?.symbol, FMP_KEYS);
+  const intelB = useMarketIntel(assetB?.symbol, FMP_KEYS);
 
   useEffect(() => {
     if (onCloseModal) onCloseModal();
@@ -116,7 +112,12 @@ export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, on
     flash("Opened AI Analysis (backend prompt layer not wired in this environment)");
   };
 
-  const matrixRows = useMemo(() => buildDecisionMatrix(a.data, b.data), [a.data, b.data]);
+  const intelMap = useMemo(() => ({
+    [a.data?.symbol]: intelA.data || {},
+    [b.data?.symbol]: intelB.data || {},
+  }), [a.data?.symbol, b.data?.symbol, intelA.data, intelB.data]);
+
+  const matrixRows = useMemo(() => buildDecisionMatrix(a.data, b.data, intelMap), [a.data, b.data, intelMap]);
   const verdict = useMemo(
     () => (matrixRows.length ? aggregateVerdict(matrixRows, a.data?.symbol, b.data?.symbol) : null),
     [matrixRows, a.data, b.data]
@@ -185,7 +186,10 @@ export function ComparisonWorkspace({ assets = [], onBack, onNavigateCompare, on
           loadingB={b.loading}
           matrixRows={matrixRows}
           verdict={verdict}
+          intelA={intelA}
+          intelB={intelB}
           onOpenSection={setSection}
+          onViewResearch={onViewResearch}
         />
         <ComparisonInsights assetA={a.data} assetB={b.data} verdict={verdict} onDecision={onDecision} />
       </div>

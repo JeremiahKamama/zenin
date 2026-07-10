@@ -1,5 +1,7 @@
 import { ComparisonMetricTable } from "../ComparisonMetricTable";
 import { fmtPct, fmtNum, fmtMultiple, metricWinner, gradeForScore, riskLevel } from "../comparisonUtils";
+import { Timeline, Ghost } from "../../CompactWorkspaceUI";
+import { useMarketIntel } from "../../useMarketIntel";
 
 // These sections consume existing services where possible (earnings/finviz)
 // and render honest empty states for data the current backend does not expose
@@ -93,8 +95,18 @@ export function ComparisonMacro({ assetA, assetB }) {
 }
 
 export function ComparisonOwnership({ assetA, assetB }) {
-  if (!assetA || !assetB) return <div className="cmp-section-empty">Select two assets to compare.</div>;
+  const aSym = assetA?.symbol;
+  const bSym = assetB?.symbol;
+  const insA = useMarketIntel(aSym, ["insiders"]);
+  const insB = useMarketIntel(bSym, ["insiders"]);
+  const trades = (d) => {
+    const arr = d?.insiders?.data || d?.insiders?.transactions || d?.insiders || [];
+    return Array.isArray(arr) ? arr : [];
+  };
+  const ta = trades(insA.data);
+  const tb = trades(insB.data);
   const rows = [
+    { label: "Insider Trades (90d)", a: ta.length || "—", b: tb.length || "—" },
     { label: "Institution Ownership", a: assetA.finviz?.institutionOwnership ?? "—", b: assetB.finviz?.institutionOwnership ?? "—" },
     { label: "Insider Ownership", a: assetA.finviz?.insiderOwnership ?? "—", b: assetB.finviz?.insiderOwnership ?? "—" }
   ];
@@ -102,32 +114,38 @@ export function ComparisonOwnership({ assetA, assetB }) {
     <div className="cmp-section">
       <h2 className="cmp-section-title">Ownership</h2>
       <ComparisonMetricTable rows={rows} caption="Ownership profile" />
-      <div className="cmp-section-note">Institution/insider ownership shown only when present in the finviz payload.</div>
+      <div className="cmp-section-note">Insider trade count from /api/market/insiders (FMP). Institutional % requires the company-profile enrichment flag.</div>
     </div>
   );
 }
 
 export function ComparisonNews({ assetA, assetB }) {
+  const aSym = assetA?.symbol;
+  const bSym = assetB?.symbol;
+  const newsA = useMarketIntel(aSym, ["news"]);
+  const newsB = useMarketIntel(bSym, ["news"]);
+  const itemsA = Array.isArray(newsA.data?.news?.news) ? newsA.data.news.news : [];
+  const itemsB = Array.isArray(newsB.data?.news?.news) ? newsB.data.news.news : [];
+  const renderList = (items, sym) => {
+    if (!items.length) return <div className="cmp-section-empty">No recent news synced for {sym}.</div>;
+    return (
+      <ul className="cmp-news-list">
+        {items.slice(0, 6).map((n, i) => (
+          <li key={i} className="cmp-news-item">
+            <a href={n.url || "#"} target="_blank" rel="noreferrer">{n.title || n.headline}</a>
+            <span className="cmp-news-meta">{n.source || ""}{n.publishedAt || n.time ? ` · ${n.publishedAt || n.time}` : ""}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  };
   return (
     <div className="cmp-section">
       <h2 className="cmp-section-title">News</h2>
-      <div className="cmp-section-empty">Topic-clustered news is not available from the current data services.</div>
-    </div>
-  );
-}
-
-export function ComparisonCatalysts({ assetA, assetB }) {
-  if (!assetA || !assetB) return <div className="cmp-section-empty">Select two assets to compare.</div>;
-  const ea = assetA.earnings?.nextEarnings ?? assetA.finviz?.nextEarnings ?? null;
-  const eb = assetB.earnings?.nextEarnings ?? assetB.finviz?.nextEarnings ?? null;
-  return (
-    <div className="cmp-section">
-      <h2 className="cmp-section-title">Catalysts</h2>
-      <ComparisonMetricTable
-        rows={[{ label: "Next Earnings", a: ea || "—", b: eb || "—" }]}
-        caption="Upcoming earnings"
-      />
-      <div className="cmp-section-note">Full catalyst tracking (launches, dividends, regulatory) is not exposed by current services.</div>
+      <div className="cmp-news-grid">
+        <div><h3 className="cmp-news-head">{aSym}</h3>{renderList(itemsA, aSym)}</div>
+        <div><h3 className="cmp-news-head">{bSym}</h3>{renderList(itemsB, bSym)}</div>
+      </div>
     </div>
   );
 }
@@ -153,8 +171,93 @@ export function ComparisonRisks({ assetA, assetB }) {
   );
 }
 
-export function ComparisonTimeline({ assetA, assetB }) {
-  return <Empty title="Timeline" note="Event timeline (earnings, splits, filings) is not provided by the current data services." />;
+export function ComparisonOwnershipNews({ assetA, assetB }) {
+  const aSym = assetA?.symbol;
+  const bSym = assetB?.symbol;
+  // Single FMP fetch per asset (insiders + news) — no double-fetch.
+  const insA = useMarketIntel(aSym, ["insiders"]);
+  const insB = useMarketIntel(bSym, ["insiders"]);
+  const newsA = useMarketIntel(aSym, ["news"]);
+  const newsB = useMarketIntel(bSym, ["news"]);
+  const trades = (d) => {
+    const arr = d?.insiders?.data || d?.insiders?.transactions || d?.insiders || [];
+    return Array.isArray(arr) ? arr : [];
+  };
+  const ta = trades(insA.data);
+  const tb = trades(insB.data);
+  const itemsA = Array.isArray(newsA.data?.news?.news) ? newsA.data.news.news : [];
+  const itemsB = Array.isArray(newsB.data?.news?.news) ? newsB.data.news.news : [];
+  const renderNews = (items, sym) => {
+    if (!items.length) return <div className="cmp-section-empty">No recent news synced for {sym}.</div>;
+    return (
+      <ul className="cmp-news-list">
+        {items.slice(0, 6).map((n, i) => (
+          <li key={i} className="cmp-news-item">
+            <a href={n.url || "#"} target="_blank" rel="noreferrer">{n.title || n.headline}</a>
+            <span className="cmp-news-meta">{n.source || ""}{n.publishedAt || n.time ? ` · ${n.publishedAt || n.time}` : ""}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+  return (
+    <div className="cmp-section">
+      <h2 className="cmp-section-title">Ownership &amp; News</h2>
+      <div className="cmp-two-col">
+        <div>
+          <h3 className="cmp-fund-block-title">Ownership</h3>
+          <ComparisonMetricTable
+            rows={[
+              { label: "Insider Trades (90d)", a: ta.length || "—", b: tb.length || "—" },
+              { label: "Institution Ownership", a: assetA.finviz?.institutionOwnership ?? "—", b: assetB.finviz?.institutionOwnership ?? "—" },
+              { label: "Insider Ownership", a: assetA.finviz?.insiderOwnership ?? "—", b: assetB.finviz?.insiderOwnership ?? "—" },
+            ]}
+            caption="Ownership profile (FMP insiders)"
+          />
+        </div>
+        <div>
+          <h3 className="cmp-fund-block-title">News</h3>
+          <div className="cmp-news-grid">
+            <div><h4 className="cmp-news-head">{aSym}</h4>{renderNews(itemsA, aSym)}</div>
+            <div><h4 className="cmp-news-head">{bSym}</h4>{renderNews(itemsB, bSym)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ComparisonCatalysts({ assetA, assetB }) {
+  if (!assetA || !assetB) return <div className="cmp-section-empty">Select two assets to compare.</div>;
+  const ea = assetA.earnings?.nextEarnings ?? assetA.finviz?.nextEarnings ?? null;
+  const eb = assetB.earnings?.nextEarnings ?? assetB.finviz?.nextEarnings ?? null;
+  const items = [];
+  if (ea) items.push({ id: `ea-${assetA.symbol}`, kind: "catalyst", title: `${assetA.symbol} earnings`, time: ea, meta: "Next reporting window" });
+  if (eb) items.push({ id: `eb-${assetB.symbol}`, kind: "catalyst", title: `${assetB.symbol} earnings`, time: eb, meta: "Next reporting window" });
+  items.sort((x, y) => String(x.time).localeCompare(String(y.time)));
+  return (
+    <div className="cmp-section">
+      <h2 className="cmp-section-title">Catalysts</h2>
+      <ComparisonMetricTable
+        rows={[{ label: "Next Earnings", a: ea || "—", b: eb || "—" }]}
+        caption="Upcoming earnings"
+      />
+      {items.length ? (
+        <div className="cmp-timeline-wrap"><Timeline items={items} /></div>
+      ) : (
+        <div className="cmp-section-empty">
+          Next earnings dates are not available from the current data services for either asset.
+        </div>
+      )}
+      <div className="cmp-section-note">Merged from each asset's next-earnings window. Full event timeline (splits, filings, dividends) requires the events service.</div>
+    </div>
+  );
+}
+
+// Retained for code reference (pruned from the sidebar in C). Absorbs the old
+// standalone Timeline section into the Catalysts merge above.
+export function ComparisonPlaceholderFallback() {
+  return <Empty title="Unavailable" note="This section was pruned from the comparison sidebar." />;
 }
 
 export function ComparisonAI({ assetA, assetB }) {
