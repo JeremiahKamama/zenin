@@ -19400,10 +19400,8 @@ body.light-theme-active .portfolio-v2-empty h3 {
 }
 
 .home-exec-command-deck {
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 32%),
-    linear-gradient(180deg, rgba(23, 29, 37, 0.96), rgba(18, 23, 31, 0.94));
-  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--color-surface-card-strong);
+  border-color: var(--color-border-subtle);
 }
 
 .home-exec-command-head {
@@ -19449,7 +19447,7 @@ body.light-theme-active .portfolio-v2-empty h3 {
 .home-exec-monitor-panel {
   display: grid;
   gap: 12px;
-  background: rgba(15, 19, 26, 0.96);
+  background: var(--color-surface-card-strong);
 }
 
 .home-exec-monitor-head {
@@ -38413,6 +38411,12 @@ body.page-dark-theme {
   --portfolio-exec-surface-soft: rgba(11, 11, 11, 0.86);
   --home-draft-bg: #000000;
   --home-draft-surface: #0b0b0b;
+}
+
+body.page-dark-theme .home-exec-command-deck,
+body.page-dark-theme .home-exec-monitor-panel {
+  background: var(--color-surface-card-strong) !important;
+  border-color: var(--color-border-subtle) !important;
 }
 
 body.page-dark-theme .view-container,
