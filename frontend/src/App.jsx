@@ -64,6 +64,7 @@ import {
   verifySupabaseTotpEnrollment
 } from "./utils/backendAuth";
 import { updateAccountPlan } from "./utils/accountPlan";
+import { ComparisonWorkspace } from "./components/comparison/ComparisonWorkspace";
 import {
   formatRevenueCatError,
   isRevenueCatCancelledError,
@@ -191,6 +192,10 @@ const IndicatorCountryModal = lazyWithReloadRetry(
 const CompanyProfilePage = lazyWithReloadRetry(
   () => import("./components/CompanyProfilePage").then((mod) => ({ default: mod.CompanyProfilePage })),
   "zenin_lazy_retry_company"
+);
+const AssetResearchWorkspace = lazyWithReloadRetry(
+  () => import("./components/AssetResearchWorkspace").then((mod) => ({ default: mod.AssetResearchWorkspace })),
+  "zenin_lazy_retry_arw"
 );
 const SpeedInsights = lazyWithReloadRetry(
   () => import("@vercel/speed-insights/react").then((mod) => ({ default: mod.SpeedInsights })),
@@ -427,8 +432,24 @@ function parseRouteFromLocation() {
   if (typeof window === "undefined") {
     return { type: "app", symbol: "" };
   }
+  const compareMatch = window.location.pathname.match(/^\/app\/compare\/([^/]+)$/i);
+  if (compareMatch) {
+    const raw = decodeURIComponent(compareMatch[1] || "").trim();
+    const [a, b] = raw.split("-vs-").map((s) => s.trim().toUpperCase()).filter(Boolean);
+    return { type: "compare", assets: [a, b].filter(Boolean).map((s) => ({ symbol: s, type: "equity" })) };
+  }
   const match = window.location.pathname.match(/^\/app\/company\/([^/]+)$/i);
-  if (!match) return { type: "app", symbol: "" };
+  if (!match) {
+    const assetMatch = window.location.pathname.match(/^\/app\/asset\/([^/]+)$/i);
+    if (assetMatch) {
+      try {
+        return { type: "asset", symbol: decodeURIComponent(assetMatch[1] || "").trim().toUpperCase() };
+      } catch {
+        return { type: "asset", symbol: String(assetMatch[1] || "").trim().toUpperCase() };
+      }
+    }
+    return { type: "app", symbol: "" };
+  }
   try {
     return {
       type: "company",
@@ -1606,7 +1627,7 @@ function App() {
     const handlePopState = () => {
       const nextRoute = parseRouteFromLocation();
       setRouteState(nextRoute);
-      if (nextRoute.type !== "company") {
+      if (nextRoute.type !== "company" && nextRoute.type !== "asset") {
         setCompanyRouteAsset(null);
       }
     };
@@ -1933,6 +1954,14 @@ useEffect(() => {
     }
   };
 
+  const navigateToCompare = useCallback((a, b = null) => {
+    const slug = b ? `${a}-vs-${b}` : `${a}`;
+    setRouteState({ type: "compare", assets: [a, b].filter(Boolean).map((s) => ({ symbol: s, type: "equity" })) });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: "compare" }, "", `/app/compare/${slug}`);
+    }
+  }, []);
+
   const syncGuestSectionUrl = useCallback((section) => {
     if (!isGuestQueryRequested() || typeof window === "undefined") return;
     const nextUrl = new URL(window.location.href);
@@ -1996,6 +2025,17 @@ useEffect(() => {
     setRouteState({ type: "company", symbol });
     if (typeof window !== "undefined") {
       window.history.pushState({ page: "company", symbol }, "", `/app/company/${encodeURIComponent(symbol)}`);
+    }
+  };
+
+  const openAssetResearch = (asset) => {
+    const symbol = normalizeSymbolKey(asset?.symbol);
+    if (!symbol) return;
+    setSelectedAsset(null);
+    setCompanyRouteAsset(null);
+    setRouteState({ type: "asset", symbol });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: "asset", symbol }, "", `/app/asset/${encodeURIComponent(symbol)}`);
     }
   };
 
@@ -6326,13 +6366,33 @@ const handleOptionTradeClosed = async (tradeId) => {
       </aside>
 
 <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
-        {routeState.type === "company" ? (
+        {routeState.type === "compare" ? (
+          <div className="view-container cmp-view-container">
+            <ComparisonWorkspace
+              assets={routeState.assets || []}
+              onBack={navigateToAppRoute}
+              onNavigateCompare={(p) => navigateToCompare(p.a, p.b)}
+              onCloseModal={() => setSelectedAsset(null)}
+            />
+          </div>
+        ) : routeState.type === "company" ? (
           <div className="view-container">
             <Suspense fallback={moduleLoadingFallback}>
               <CompanyProfilePage
                 symbol={routeState.symbol}
                 asset={routedCompanyAsset}
                 onBack={navigateToAppRoute}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "asset" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <AssetResearchWorkspace
+                symbol={routeState.symbol}
+                asset={routedCompanyAsset}
+                onOpenCompanyProfile={(a) => openCompanyProfile(a || { symbol: routeState.symbol })}
+                onClose={navigateToAppRoute}
               />
             </Suspense>
           </div>
@@ -6565,24 +6625,6 @@ const handleOptionTradeClosed = async (tradeId) => {
                     <span className="search-type-select-caret" aria-hidden="true">▾</span>
                   </div>
                 </label>
-              </div>
-              <div className="search-context-hint" aria-live="polite">
-                Searching in{" "}
-                <button
-                  type="button"
-                  className="search-context-hint-button"
-                  onClick={() => searchTypeSelectRef.current?.focus()}
-                  aria-label="Focus asset class dropdown"
-                >
-                  {searchType === "tradfi"
-                    ? "Stocks"
-                    : searchType === "crypto"
-                      ? "Crypto"
-                      : searchType === "indicator"
-                        ? "Indicator"
-                        : "Commodities"}{" "}
-                  ▾
-                </button>
               </div>
               {searchTerm && (
                 <div className="search-results">
@@ -6820,6 +6862,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               asset={selectedAsset}
               onClose={() => setSelectedAsset(null)}
               onConfirm={null}
+              onCompare={(sym) => { setSelectedAsset(null); navigateToCompare(sym); }}
               researchOnly
               isInWatchlist={isInWatchlist}
               onToggleStar={toggleWatchlistStar}
