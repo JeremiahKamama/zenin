@@ -48,6 +48,13 @@ import { usePlanGate } from "./hooks/usePlanGate";
 import { CommandPalette, useCommandPaletteLauncher } from "./components/CommandPalette";
 import { enqueueImportSync, flushImportSyncQueue, hasPendingImportSync } from "./utils/importSyncQueue";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
+import FirstSessionWelcome from "./components/onboarding/launch/FirstSessionWelcome";
+import { consumeLaunched } from "./components/onboarding/launch/launchSignal";
+import { markLaunched } from "./components/onboarding/launch/launchSignal";
+import {
+  markOnboardingComplete,
+  loadOnboardingComplete,
+} from "./services/OnboardingService";
 import { WorkspaceInstitutionalControlPanel } from "./components/InstitutionalPanels";
 import { applySeo } from "./utils/seo";
 import { storePostAuthRedirect } from "./utils/authRedirect";
@@ -197,7 +204,11 @@ const CompanyProfilePage = lazyWithReloadRetry(
 );
 const AssetResearchWorkspace = lazyWithReloadRetry(
   () => import("./components/AssetResearchWorkspace").then((mod) => ({ default: mod.AssetResearchWorkspace })),
-  "zenin_lazy_retry_arw"
+  "zenin_lazy_retry_asset"
+);
+const OnboardingPage = lazyWithReloadRetry(
+  () => import("./pages/OnboardingPage").then((mod) => ({ default: mod.default })),
+  "zenin_lazy_retry_onboarding"
 );
 const SpeedInsights = lazyWithReloadRetry(
   () => import("@vercel/speed-insights/react").then((mod) => ({ default: mod.SpeedInsights })),
@@ -449,6 +460,12 @@ function parseRouteFromLocation() {
       } catch {
         return { type: "asset", symbol: String(assetMatch[1] || "").trim().toUpperCase() };
       }
+    }
+    const onboardingMatch = window.location.pathname.match(/^\/onboarding$/i);
+    if (onboardingMatch) {
+      const params = new URLSearchParams(window.location.search);
+      const plan = params.get("plan");
+      return { type: "onboarding", plan: plan || null };
     }
     return { type: "app", symbol: "" };
   }
@@ -1271,6 +1288,18 @@ const mapOptionHoldingToTrade = (holding) => {
     status: "OPEN",
     pnl: 0
   };
+}
+
+// Explicit onboarding lifecycle states (spec state machine). Module-level so
+// it is initialized before any component callback references it (avoids TDZ).
+const LIFECYCLE = {
+  IN_PROGRESS: "IN_PROGRESS",
+  COMPLETE: "COMPLETE",
+  BOOTSTRAPPING: "BOOTSTRAPPING",
+  SUCCESS: "SUCCESS",
+  FAILED: "FAILED",
+  RETRYING: "RETRYING",
+  APP_LAUNCHED: "APP_LAUNCHED",
 };
 
 function App() {
@@ -1315,6 +1344,17 @@ function App() {
   const [assets, setAssets] = useState([]);
   const [activeCategory, setActiveCategory] = useState("stocks");
   const [activeTheme, setActiveTheme] = useState("");
+
+  // Progressive app-shell boot fade: when we arrive directly from onboarding
+  // launch, the shell fades + cascades in once (calm, institutional reveal).
+  const [booted, setBooted] = useState(() => !consumeLaunched());
+  useEffect(() => {
+    if (!booted) {
+      const raf = requestAnimationFrame(() => setBooted(true));
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [booted]);
+
   const [portfolio, setPortfolio] = useState(() => {
     const stored = readStoredArray("zenin_portfolio");
     if (stored.length > 0) return stored;
@@ -1484,6 +1524,7 @@ function App() {
     let isMounted = true;
 
     const fetchHomeMovers = async () => {
+      console.count("fetchHomeMovers");
       try {
         const [stocksRes, forexRes, commoditiesRes, macroRes] = await Promise.all([
           zeninFetch(`/watchlist?category=stocks`),
@@ -1956,6 +1997,110 @@ useEffect(() => {
     }
   };
 
+  // ---- Onboarding lifecycle (single owner of launch + routing) ----
+  // Explicit onboarding lifecycle state (spec state machine). Declared BEFORE
+  // the handlers below so the callbacks' dependency arrays don't hit a TDZ.
+  const [lifecycle, setLifecycle] = useState(LIFECYCLE.IN_PROGRESS);
+  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [workspaceLaunched, setWorkspaceLaunched] = useState(false);
+
+  // Structured launch-state snapshot (spec #1/#4 instrumentation).
+  const logLaunchState = (label) => {
+    console.log(`[lifecycle] ${label} | route=${routeState.type} launchState=${lifecycle} onboardingComplete=${onboardingComplete} workspaceReady=${workspaceLaunched} path=${typeof window !== "undefined" ? window.location.pathname : "?"}`);
+  };
+
+  // Persisted completion is authoritative: once onboarding is done, the router
+  // must never leave the user stranded at /onboarding (fixes launch/route
+  // desync across reloads).
+  useEffect(() => {
+    let alive = true;
+    loadOnboardingComplete()
+      .then((done) => { if (alive) setOnboardingComplete(Boolean(done)); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const setPhase = (next) => {
+    console.log(`[lifecycle] ${lifecycle} -> ${next}`);
+    setLifecycle(next);
+  };
+
+  // Routes: COMPLETE -> BOOTSTRAPPING -> SUCCESS -> /app ; or FAILED -> modal.
+  // Continue Anyway: bypass bootstrap entirely -> APP_LAUNCHED -> /app.
+  // Retry: exactly one fresh bootstrap attempt.
+
+  const goToApp = useCallback(() => {
+    if (hasLaunchedWorkspaceRef.current) {
+      console.log("[lifecycle] Launch workspace: already launched, skipping duplicate route transition");
+      return;
+    }
+    logLaunchState("NAV pre");
+    hasLaunchedWorkspaceRef.current = true;
+    setWorkspaceLaunched(true);
+    console.log("[lifecycle] Launching Workspace");
+    console.log("[lifecycle] Navigating to /app");
+    markLaunched();
+    navigateToAppRoute();
+    logLaunchState("NAV post");
+  }, [navigateToAppRoute, logLaunchState]);
+
+  // Called by OnboardingPage on completion. Persists completion, then runs the
+  // (optional) bootstrap. The app launches on SUCCESS or on the 5s timeout;
+  // bootstrap failure routes to the FAILED modal, not a trap.
+  const onLaunchWorkspace = useCallback((plan) => {
+    console.log("[lifecycle] Onboarding Complete");
+    markOnboardingComplete({ selectedPlan: plan || null })
+      .then(() => setOnboardingComplete(true))
+      .catch(() => {});
+    setPhase(LIFECYCLE.COMPLETE);
+    setPhase(LIFECYCLE.BOOTSTRAPPING);
+  }, [LIFECYCLE]);
+
+  // Continue Anyway: skip remote bootstrap, enter the workspace immediately
+  // using existing local state. Must NOT restart bootstrap or reopen the modal.
+  const handleContinueAnyway = useCallback(() => {
+    console.log("[lifecycle] Continue Anyway -> skip bootstrap, enter workspace");
+    markOnboardingComplete()
+      .then(() => setOnboardingComplete(true))
+      .catch(() => {});
+    setPhase(LIFECYCLE.APP_LAUNCHED);
+    goToApp();
+  }, [goToApp]);
+
+  // Retry: exactly one fresh bootstrap attempt (debounced). No recursion.
+  // refreshBootstrap is captured via a ref (declared by useAppBootstrap below)
+  // to avoid a TDZ in this callback's dependency array.
+  const handleRetry = useCallback(() => {
+    if (lifecycle === LIFECYCLE.RETRYING) return; // debounce double-clicks
+    console.log("[lifecycle] Retry -> one fresh bootstrap attempt");
+    setPhase(LIFECYCLE.RETRYING);
+    setPhase(LIFECYCLE.BOOTSTRAPPING);
+    refreshBootstrapRef.current?.();
+  }, [lifecycle]);
+
+  // Router-authoritative redirect: onboarding completion is persisted, so the
+  // router must never strand the user at /onboarding even if an in-memory flag
+  // is lost (e.g. reload). This is the single source of truth for "you're done".
+  useEffect(() => {
+    if (onboardingComplete && routeState.type === "onboarding") {
+      console.log("[lifecycle] onboardingComplete + at /onboarding -> redirect to /app");
+      goToApp();
+    }
+  }, [onboardingComplete, routeState.type, goToApp]);
+
+  // Spec #4: forbidden desync guard. If the workspace has launched but the
+  // router still reports /onboarding (e.g. a popstate/location re-derive reset
+  // routeState after launch), force a redirect to /app and log the offender.
+  useEffect(() => {
+    if (workspaceLaunched && routeState.type === "onboarding") {
+      const offender = new Error().stack || "unknown";
+      console.warn("[lifecycle] DESYNC DETECTED: workspaceLaunched=true but route=/onboarding -> force redirect to /app");
+      console.warn(`[lifecycle] offending path: ${offender.split("\n").slice(1, 4).join(" <- ")}`);
+      logLaunchState("DESYNC-force-redirect");
+      goToApp();
+    }
+  }, [workspaceLaunched, routeState.type, goToApp, logLaunchState]);
+
   const navigateToCompare = useCallback((a, b = null) => {
     const slug = b ? `${a}-vs-${b}` : `${a}`;
     setRouteState({ type: "compare", assets: [a, b].filter(Boolean).map((s) => ({ symbol: s, type: "equity" })) });
@@ -2231,6 +2376,7 @@ useEffect(() => {
   }, []);
 
   const refreshWorkspaceNotifications = useCallback(async ({ toastNew = false } = {}) => {
+    console.count("refreshNotifications");
     if (!hasAuthToken()) return [];
     try {
       const res = await zeninFetch("/notifications?limit=50");
@@ -3456,6 +3602,9 @@ const handleOptionTradeClosed = async (tradeId) => {
   const explicitGuestAccess = useMemo(() => isGuestQueryRequested(), []);
   const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
+  // Single-owner launch guard: the workspace route transition fires exactly once.
+  const hasLaunchedWorkspaceRef = useRef(false);
+
   const [bootPhase, setBootPhase] = useState("checking_session");
   const [showDetailedBootPhase, setShowDetailedBootPhase] = useState(false);
   // Reserved shell slot: future right-hand context panel. Defaults off — renders nothing today.
@@ -3881,13 +4030,39 @@ const handleOptionTradeClosed = async (tradeId) => {
   const {
     bootstrapData,
     bootstrapLoading,
-    bootstrapError
+    bootstrapError,
+    refreshBootstrap
   } = useAppBootstrap({
-    enabled: !accessCheckLoading && !isGuestUser,
+    // Bootstrap runs ONLY while the lifecycle is actively bootstrapping/retrying
+    // — never on every render, route change, or modal close.
+    enabled: lifecycle === LIFECYCLE.BOOTSTRAPPING || lifecycle === LIFECYCLE.RETRYING,
     tradeLimit: 1000
   });
+  // Capture refreshBootstrap for handleRetry without creating a forward-ref TDZ.
+  const refreshBootstrapRef = useRef(null);
+  refreshBootstrapRef.current = refreshBootstrap;
+
+  // Drive lifecycle transitions from bootstrap outcome.
+  useEffect(() => {
+    if (lifecycle === LIFECYCLE.BOOTSTRAPPING || lifecycle === LIFECYCLE.RETRYING) {
+      if (bootstrapError) {
+        setPhase(LIFECYCLE.FAILED);
+      } else if (bootstrapData) {
+        setPhase(LIFECYCLE.SUCCESS);
+        console.log("[lifecycle] APP_LAUNCHED");
+        goToApp();
+      }
+    }
+  }, [lifecycle, bootstrapError, bootstrapData, goToApp]);
 
   // Route-aware boot phase tracker: shows exact step copy when loading exceeds 2s.
+  useEffect(() => {
+    if (routeState.type === "app") {
+      console.log("[lifecycle] Workspace Mounted");
+      console.log("[lifecycle] Background services initializing asynchronously");
+    }
+  }, [routeState.type]);
+
   useEffect(() => {
     if (!accessCheckLoading) {
       setShowDetailedBootPhase(false);
@@ -4058,12 +4233,17 @@ const handleOptionTradeClosed = async (tradeId) => {
       setConnectedAccountsHydrated(true);
       return undefined;
     }
+    // One-shot guard: load workspace settings exactly once (no re-fire on
+    // dep churn). Prevents the settings:preferences GET storm.
+    if (settingsLoadedRef.current) return undefined;
+    settingsLoadedRef.current = true;
 
     let cancelled = false;
     settingsSyncReadyRef.current = false;
     setConnectedAccountsHydrated(false);
 
     const loadWorkspaceSettings = async () => {
+      console.count("loadWorkspaceSettings");
       try {
         const preferencesResult = await loadWorkspaceDoc("settings:preferences", null);
         if (cancelled) return;
@@ -4229,6 +4409,10 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   useEffect(() => {
     if (bootstrapLoading || bootstrapError || isGuestUser || !hasAuthToken()) return;
+    // One-shot guard: secondary (non-critical) data loads exactly once after
+    // the workspace is visible — never re-fires on dep churn, no storm.
+    if (secondaryBootstrappedRef.current) return;
+    secondaryBootstrappedRef.current = true;
     void refreshApiTradeExecutions();
     void refreshWorkspaceNotifications();
   }, [bootstrapError, bootstrapLoading, isGuestUser, refreshApiTradeExecutions, refreshWorkspaceNotifications]);
@@ -4290,6 +4474,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   });
   const settingsSyncReadyRef = useRef(false);
+  const settingsLoadedRef = useRef(false);
+  const secondaryBootstrappedRef = useRef(false);
   const [profileForms, setProfileForms] = useState({
     newEmail: "",
     emailPassword: "",
@@ -6160,6 +6346,33 @@ const handleOptionTradeClosed = async (tradeId) => {
     );
   };
 
+  if (lifecycle === LIFECYCLE.FAILED) {
+    return (
+      <div className="app-auth-loading" role="alertdialog" aria-live="polite">
+        <div className="loading-state module-loading-state">
+          <p style={{ marginBottom: 12 }}>Unable to initialize workspace.</p>
+          <p style={{ marginBottom: 16, opacity: 0.7, fontSize: 13 }}>{bootstrapError}</p>
+          <div className="connect-empty-actions">
+            <button
+              type="button"
+              className="settings-primary-btn"
+              onClick={handleContinueAnyway}
+            >
+              Continue anyway
+            </button>
+            <button
+              type="button"
+              className="settings-secondary-btn"
+              onClick={handleRetry}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (accessCheckLoading) {
     return (
       <div className="app-auth-loading" role="status" aria-live="polite">
@@ -6170,10 +6383,22 @@ const handleOptionTradeClosed = async (tradeId) => {
     );
   }
 
+  // Onboarding renders standalone — no application sidebar/chrome, so it
+  // reads as a dedicated "Workspace Setup" journey, not an overlay.
+  if (routeState.type === "onboarding") {
+    return (
+      <ToastProvider>
+        <Suspense fallback={moduleLoadingFallback}>
+          <OnboardingPage plan={routeState.plan} onLaunch={onLaunchWorkspace} />
+        </Suspense>
+      </ToastProvider>
+    );
+  }
+
   return (
     <ToastProvider>
     <WorkspaceScopeProvider accounts={connectedAccounts}>
-    <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""}`}>
+    <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""} ${booted ? "ob-booted" : "ob-boot"}`}>
       {isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <button
           className="fixed top-[calc(env(safe-area-inset-top,0px)+12px)] left-[max(12px,env(safe-area-inset-left))] z-[1000] flex items-center justify-center p-2 rounded-md bg-slate-400/10 border border-slate-400/20 backdrop-blur-md text-[var(--color-text-secondary)] cursor-pointer hover:bg-slate-400/20 transition-colors"
@@ -6386,6 +6611,12 @@ const handleOptionTradeClosed = async (tradeId) => {
                 onBack={navigateToAppRoute}
                 onOpenResearch={openAssetResearch}
               />
+            </Suspense>
+          </div>
+        ) : routeState.type === "onboarding" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <OnboardingPage plan={routeState.plan} />
             </Suspense>
           </div>
         ) : routeState.type === "asset" ? (
@@ -8602,6 +8833,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         <Analytics />
       </Suspense>
       <Toaster />
+      <FirstSessionWelcome />
       </div>
     </WorkspaceScopeProvider>
     </ToastProvider>

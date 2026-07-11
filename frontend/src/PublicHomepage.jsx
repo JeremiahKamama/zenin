@@ -114,6 +114,7 @@ export default function PublicHomepage() {
   const [openAppChecking, setOpenAppChecking] = useState(false);
   const [pricingBusyPlan, setPricingBusyPlan] = useState("");
   const [pricingError, setPricingError] = useState("");
+  const [selectedPlan, setSelectedPlan] = useState("");
   const [billingCycle, setBillingCycle] = useState(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("zenin_pricing_billing_cycle") : "";
     return normalizeBillingCycle(stored || "monthly");
@@ -271,6 +272,10 @@ export default function PublicHomepage() {
     localStorage.setItem("zenin_pricing_billing_cycle", billingCycle);
   }, [billingCycle]);
 
+  const handleCardSelect = (plan) => {
+    setSelectedPlan((prev) => (normalizePlan(prev) === normalizePlan(plan) ? "" : normalizePlan(plan)));
+  };
+
   const handlePlanSelection = async (plan) => {
     const normalizedPlan = normalizePlan(plan);
     const normalizedBillingCycle = normalizeBillingCycle(billingCycle);
@@ -316,34 +321,13 @@ export default function PublicHomepage() {
     return fallback;
   };
 
-  const coveragePlanRefs = useMemo(() => ([
-    {
-      key: "starter",
-      label: "Starter",
-      description: "Core coverage for personal tracking",
-      price: `${toMoney(getPlanPrice("starter", billingCycle).amount)}${getPlanPrice("starter", billingCycle).periodLabel}`
-    },
-    {
-      key: "pro",
-      label: "Pro",
-      description: "Adds advanced analytics and journal depth",
-      price: `${toMoney(getPlanPrice("pro", billingCycle).amount)}${getPlanPrice("pro", billingCycle).periodLabel}`
-    },
-    {
-      key: "desk",
-      label: "Desk",
-      description: "Shared desk workflows, workspace controls, and premium operations",
-      price: `${toMoney(getPlanPrice("desk", billingCycle).amount)}${getPlanPrice("desk", billingCycle).periodLabel}`
-    }
-  ]), [billingCycle]);
-
   const handleOpenAppClick = async (event) => {
     event.preventDefault();
     if (authUser) {
       window.location.href = postPlanTarget;
     } else {
       storePostAuthRedirect(postPlanTarget, "/app");
-      window.location.href = `/auth?mode=signup&next=${encodeURIComponent(postPlanTarget)}`;
+      window.location.href = `/auth?mode=signin&next=${encodeURIComponent(postPlanTarget)}`;
     }
   };
 
@@ -369,15 +353,15 @@ export default function PublicHomepage() {
 
           <div className={`nav-actions ${menuOpen ? "open" : ""}`}>
             {!authUser && (
-              <button 
-                className="btn btn-secondary" 
-                style={{ background: 'transparent', border: 'none', padding: '0 10px', boxShadow: 'none' }}
-                onClick={(e) => { e.preventDefault(); openAuthModal("signin"); }}
+              <button
+                className="btn btn-secondary btn-halo"
+                style={{ background: 'transparent', border: '1px solid var(--color-border-medium)', padding: '0 12px' }}
+                onClick={(e) => { e.preventDefault(); openAuthModal("signup"); }}
               >
-                Sign In
+                Sign Up
               </button>
             )}
-            <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
+            <a className="btn btn-primary btn-halo" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
               {openAppChecking ? "Checking..." : "Open App →"}
             </a>
           </div>
@@ -407,7 +391,7 @@ export default function PublicHomepage() {
                 splitting your workflow across multiple tools.
               </p>
               <div className="hero-actions">
-                <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
+                <a className="btn btn-primary btn-halo" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
                   {openAppChecking ? "Checking..." : "Open App →"}
                 </a>
                 <a className="btn btn-secondary" href="#features">Explore Features</a>
@@ -510,15 +494,32 @@ export default function PublicHomepage() {
               <p>Powerful tools and insights across every market and workflow.</p>
             </div>
 
-            <div className="cards-grid">
-              <article className="feature-card"><div className="feature-icon icon-watchlist">WL</div><h3>Watchlist</h3><p>Track assets, themes, earnings, and macro context before opening deeper work.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-company">CO</div><h3>Company Profile</h3><p>Inspect fundamentals, leadership, catalysts, news, and earnings context.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-portfolio">PF</div><h3>Portfolio</h3><p>Review allocation, cash, P/L, risk posture, and rebalance prompts.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-options">OP</div><h3>Options Risk Desk</h3><p>Analyze chains, volatility, max-pain, and flow-driven risk in one desk.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-predictions">PR</div><h3>Probability Desk</h3><p>Track event odds, whale activity, and mark-to-entry pressure.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-journal">JL</div><h3>Decision Ledger</h3><p>Capture the thesis, evidence, outcome, and review queue behind each move.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-analytics">AN</div><h3>Cross-market Analytics</h3><p>Move across Crypto, Options, Equities, Macro, and Commodities sibling desks.</p></article>
-              <article className="feature-card"><div className="feature-icon icon-tax">TX</div><h3>Tax Scenario Desk</h3><p>Model realized gains, jurisdictions, after-tax outcomes, and export-ready summaries.</p></article>
+            <div className="cards-grid platform-workflows">
+              <div className="workflow-container workflow-analyze">
+                <div className="workflow-label">Analyze</div>
+                <div className="workflow-items">
+                  <div className="workflow-item"><div className="feature-icon icon-analytics">AN</div><div className="workflow-item-body"><h3>Cross-market Analytics</h3><p>Move across Crypto, Options, Equities, Macro, and Commodities sibling desks.</p></div></div>
+                  <div className="workflow-item"><div className="feature-icon icon-options">OP</div><div className="workflow-item-body"><h3>Options Risk Desk</h3><p>Analyze chains, volatility, max-pain, and flow-driven risk in one desk.</p></div></div>
+                </div>
+              </div>
+              <div className="workflow-columns">
+                <div className="workflow-container">
+                  <div className="workflow-label">Track</div>
+                  <div className="workflow-items">
+                    <div className="workflow-item"><div className="feature-icon icon-watchlist">WL</div><div className="workflow-item-body"><h3>Watchlist</h3><p>Track assets, themes, earnings, and macro context before opening deeper work.</p></div></div>
+                    <div className="workflow-item"><div className="feature-icon icon-company">CO</div><div className="workflow-item-body"><h3>Company Profile</h3><p>Inspect fundamentals, leadership, catalysts, news, and earnings context.</p></div></div>
+                    <div className="workflow-item"><div className="feature-icon icon-portfolio">PF</div><div className="workflow-item-body"><h3>Portfolio</h3><p>Review allocation, cash, P/L, risk posture, and rebalance prompts.</p></div></div>
+                  </div>
+                </div>
+                <div className="workflow-container">
+                  <div className="workflow-label">Decide</div>
+                  <div className="workflow-items">
+                    <div className="workflow-item"><div className="feature-icon icon-predictions">PR</div><div className="workflow-item-body"><h3>Probability Desk</h3><p>Track event odds, whale activity, and mark-to-entry pressure.</p></div></div>
+                    <div className="workflow-item"><div className="feature-icon icon-journal">JL</div><div className="workflow-item-body"><h3>Decision Ledger</h3><p>Capture the thesis, evidence, outcome, and review queue behind each move.</p></div></div>
+                    <div className="workflow-item"><div className="feature-icon icon-tax">TX</div><div className="workflow-item-body"><h3>Tax Scenario Desk</h3><p>Model realized gains, jurisdictions, after-tax outcomes, and export-ready summaries.</p></div></div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <section className="coverage-section" id="coverage">
@@ -530,15 +531,6 @@ export default function PublicHomepage() {
                   Track equities, crypto, options, prediction markets, and tax workflows in one place so research,
                   portfolio context, and review stay connected.
                 </p>
-                <div className="coverage-plan-refs">
-                  {coveragePlanRefs.map((item) => (
-                    <div key={item.key} className="coverage-plan-chip">
-                      <strong>{item.label}</strong>
-                      <span>{item.description}</span>
-                      <b>{item.price}</b>
-                    </div>
-                  ))}
-                </div>
               </div>
 
               <div className="coverage-grid">
@@ -572,9 +564,9 @@ export default function PublicHomepage() {
               </div>
 
               <div className="coverage-kpis">
-                <div><strong>5</strong><span>core market modules</span></div>
-                <div><strong>40+</strong><span>tax jurisdictions</span></div>
-                <div><strong>1</strong><span>unified dashboard</span></div>
+                <div><strong>5</strong><span>Core Market Modules</span></div>
+                <div><strong>40+</strong><span>Tax Jurisdictions</span></div>
+                <div><strong>1</strong><span>Unified Workspace</span></div>
               </div>
             </section>
 
@@ -606,7 +598,15 @@ export default function PublicHomepage() {
               </div>
 
               <div className="pricing-grid">
-                <article className="pricing-card">
+                <article
+                  className={`pricing-card${selectedPlan === "starter" ? " is-selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedPlan === "starter"}
+                  aria-label="Select Starter plan"
+                  onClick={() => handleCardSelect("starter")}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("starter"); } }}
+                >
                   <div className="pricing-card-head">
                     <h4>Starter</h4>
                     <span className="pricing-badge muted">For beginners</span>
@@ -626,15 +626,23 @@ export default function PublicHomepage() {
                     <li>Email support</li>
                   </ul>
                   <button
-                    className="btn btn-secondary pricing-cta"
-                    onClick={() => handlePlanSelection("starter")}
+                    className="btn btn-secondary pricing-cta btn-halo"
+                    onClick={() => { window.location.href = "/onboarding?plan=starter"; }}
                     disabled={pricingBusyPlan === "starter" || isCurrentSelection("starter")}
                   >
                     {renderCtaText("starter", "Get Started")}
                   </button>
                 </article>
 
-                <article className="pricing-card featured">
+                <article
+                  className={`pricing-card featured${selectedPlan === "pro" ? " is-selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedPlan === "pro"}
+                  aria-label="Select Pro plan"
+                  onClick={() => handleCardSelect("pro")}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("pro"); } }}
+                >
                   <div className="pricing-card-head">
                     <h4>Pro</h4>
                     <span className="pricing-badge">Most popular</span>
@@ -654,15 +662,23 @@ export default function PublicHomepage() {
                     <li>Prediction market flow tracker</li>
                   </ul>
                   <button
-                    className="btn btn-primary pricing-cta"
-                    onClick={() => handlePlanSelection("pro")}
+                    className="btn btn-primary pricing-cta btn-halo"
+                    onClick={() => { window.location.href = "/onboarding?plan=pro"; }}
                     disabled={pricingBusyPlan === "pro" || isCurrentSelection("pro")}
                   >
                     {renderCtaText("pro", "Start Pro")}
                   </button>
                 </article>
 
-                <article className="pricing-card">
+                <article
+                  className={`pricing-card${selectedPlan === "desk" ? " is-selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedPlan === "desk"}
+                  aria-label="Select Desk plan"
+                  onClick={() => handleCardSelect("desk")}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("desk"); } }}
+                >
                   <div className="pricing-card-head">
                     <h4>Desk</h4>
                     <span className="pricing-badge muted">For teams</span>
@@ -682,8 +698,8 @@ export default function PublicHomepage() {
                     <li>Priority data refresh and source health</li>
                   </ul>
                   <button
-                    className="btn btn-secondary pricing-cta"
-                    onClick={() => handlePlanSelection("desk")}
+                    className="btn btn-secondary pricing-cta btn-halo"
+                    onClick={() => { window.location.href = "/onboarding?plan=desk"; }}
                     disabled={pricingBusyPlan === "desk" || isCurrentSelection("desk")}
                   >
                     {renderCtaText("desk", "Choose Desk")}
@@ -830,7 +846,7 @@ export default function PublicHomepage() {
                   Zenin keeps the workflow in one place so you can focus on better decisions.
                 </p>
                 <div className="cta-actions">
-                  <a className="btn btn-primary" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
+                  <a className="btn btn-primary btn-halo" href="/app" onClick={handleOpenAppClick} aria-busy={openAppChecking}>
                     {openAppChecking ? "Checking..." : "Open App →"}
                   </a>
                 </div>

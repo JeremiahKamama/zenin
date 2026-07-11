@@ -9,18 +9,34 @@ export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
   const [refreshKey, setRefreshKey] = useState(0);
   const hasDataRef = useRef(false);
 
+  const inFlightRef = useRef(false);
+
   useEffect(() => {
     if (!enabled) {
       setLoading(false);
       setRefreshing(false);
       setError("");
+      inFlightRef.current = false;
       return;
     }
+    // StrictMode (dev) double-invokes effects; guarantee a single in-flight
+    // bootstrap GET regardless of how many times this effect re-runs.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
 
     let cancelled = false;
     const controller = new AbortController();
+    // Hard timeout: never trap the user on the splash. If bootstrap is slow or
+    // rate-limited, launch the workspace anyway and let data fill in behind it.
+    const hardTimeout = setTimeout(() => {
+      if (cancelled) return;
+      setError((prev) => prev || "Workspace is taking longer than expected.");
+      setLoading(false);
+      setRefreshing(false);
+    }, 5000);
 
     const load = async () => {
+      console.count("bootstrapWorkspace");
       const shouldBlockRender = !hasDataRef.current;
       setLoading(shouldBlockRender);
       setRefreshing(!shouldBlockRender);
@@ -39,6 +55,7 @@ export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
           setData(payload);
         });
         hasDataRef.current = true;
+        console.log("[lifecycle] Bootstrap Completed");
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
         setError(err?.message || "Failed to load workspace bootstrap.");
@@ -55,6 +72,7 @@ export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
     return () => {
       cancelled = true;
       controller.abort();
+      clearTimeout(hardTimeout);
     };
   }, [enabled, tradeLimit, refreshKey]);
 

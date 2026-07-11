@@ -382,15 +382,6 @@ export default function AuthPage() {
     <div className="auth-v2-shell auth-v2-bg">
       <main className="auth-v2-main">
         <section className="auth-v2-panel">
-          <div className="auth-v2-brand">
-            <h2 className="auth-v2-brand-title">Zenin Capital</h2>
-            <p className="auth-v2-brand-lede">An institutional trading workspace for the decision loop — briefing, research, journal, review.</p>
-            <ul className="auth-v2-brand-metrics">
-              <li><strong>Live</strong><span>Market status &amp; tracked assets</span></li>
-              <li><strong>Macro</strong><span>Indices, BTC, ETH &amp; rates</span></li>
-              <li><strong>Loop</strong><span>Every journaled decision reviewed</span></li>
-            </ul>
-          </div>
         </section>
         <section className="auth-v2-card auth-v2-modal-card">
           <button
@@ -527,18 +518,6 @@ export default function AuthPage() {
                 {loading ? "Signing in..." : "Sign in"}
               </button>
 
-              <div className="auth-v2-divider" aria-hidden="true"><span>OR</span></div>
-
-              <button
-                className="auth-v2-btn auth-v2-btn-ghost auth-v2-btn-full"
-                type="button"
-                onClick={handleGuestEntry}
-              >
-                Continue as Guest
-              </button>
-
-              <div className="auth-v2-divider" aria-hidden="true"><span>OR</span></div>
-
               <div className="auth-v2-modal-row">
                 <button
                   className="auth-v2-btn auth-v2-btn-ghost auth-v2-oauth-btn"
@@ -552,6 +531,16 @@ export default function AuthPage() {
                   Passkey
                 </button>
               </div>
+
+              <div className="auth-v2-divider" aria-hidden="true"><span>OR</span></div>
+
+              <button
+                className="auth-v2-btn auth-v2-btn-ghost auth-v2-btn-full"
+                type="button"
+                onClick={handleGuestEntry}
+              >
+                Continue as Guest
+              </button>
 
               <p className="auth-v2-bottom-link">
                 Need an account? <button type="button" className="auth-v2-link-btn" onClick={() => updateMode("signup")}>Create one</button>

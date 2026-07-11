@@ -21,6 +21,7 @@ function resolveEntry(pathname) {
   }
   const path = String(pathname || "/").toLowerCase();
   if (path.startsWith("/app")) return "app";
+  if (path.startsWith("/onboarding")) return "app";
   if (path.startsWith("/auth")) return "auth";
   if (path.startsWith("/terms")) return "terms";
   if (path.startsWith("/privacy")) return "privacy";

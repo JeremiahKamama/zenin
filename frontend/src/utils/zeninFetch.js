@@ -184,6 +184,58 @@ export class ZeninRequestError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Resilient fetch layer: exponential backoff + retry limit + circuit breaker.
+// Only idempotent reads (GET/HEAD/OPTIONS) are auto-retried; writes never are,
+// to avoid duplicate side effects. This prevents the "429 storm" / infinite
+// loading where many modules each hammer a rate-limited backend.
+// ---------------------------------------------------------------------------
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_RETRIES = 3;            // up to 4 attempts total
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_MAX_MS = 8000;
+const CIRCUIT_FAILURE_THRESHOLD = 3;
+const CIRCUIT_OPEN_MS = 20000;
+
+const circuit = { failures: 0, openedAt: 0 };
+function circuitAllow() {
+  if (circuit.failures < CIRCUIT_FAILURE_THRESHOLD) return true;
+  if (Date.now() >= circuit.openedAt) {
+    circuit.failures = 0;
+    circuit.openedAt = 0;
+    return true;
+  }
+  return false;
+}
+function circuitRecordFailure() {
+  circuit.failures += 1;
+  if (circuit.failures >= CIRCUIT_FAILURE_THRESHOLD) {
+    circuit.openedAt = Date.now() + CIRCUIT_OPEN_MS;
+  }
+}
+function circuitRecordSuccess() {
+  circuit.failures = 0;
+  circuit.openedAt = 0;
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener?.("abort", onAbort);
+  });
+}
+
 export async function zeninFetch(endpoint, options = {}) {
   const { skipSimulationHeaders = false, timeoutMs = 0, ...fetchOptions } = options;
   const url = buildZeninUrl(endpoint);
@@ -210,42 +262,79 @@ export async function zeninFetch(endpoint, options = {}) {
     }
   }
 
-  let timeoutId = null;
-  let didTimeout = false;
-  let signal = fetchOptions.signal;
-  if (!signal && Number(timeoutMs) > 0 && typeof AbortController !== "undefined") {
-    const controller = new AbortController();
-    signal = controller.signal;
-    timeoutId = setTimeout(() => {
-      didTimeout = true;
-      controller.abort("request-timeout");
-    }, Number(timeoutMs));
-  }
+  // Only idempotent reads are safe to retry. Writes (POST/PUT/DELETE) are
+  // never auto-retried to avoid duplicate side effects.
+  const isRead = ["GET", "HEAD", "OPTIONS"].includes(method);
+  const maxAttempts = isRead ? MAX_RETRIES + 1 : 1;
 
-  try {
-    const response = await fetch(url, {
-      ...fetchOptions,
-      credentials: fetchOptions.credentials || "include",
-      headers,
-      signal
-    });
-
-    return response;
-  } catch (error) {
-    if (error?.name === "AbortError" && didTimeout) {
-      throw new ZeninRequestError("Zenin's backend is taking too long to respond. Please wait a moment and try again.", {
-        status: 0,
-        code: "REQUEST_TIMEOUT",
-        error: "Request timeout",
-        retryable: true,
-        endpoint: url,
-        cause: error,
-      });
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Circuit breaker: after repeated failures, fail fast instead of hammering
+    // a rate-limited backend (prevents the 429 storm / infinite loading).
+    if (isRead && !circuitAllow()) {
+      throw new ZeninRequestError(
+        "Zenin is rate-limiting requests right now. Showing cached data.",
+        { status: 429, code: "CIRCUIT_OPEN", retryable: false, endpoint: url }
+      );
     }
-    throw error;
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+
+    let timeoutId = null;
+    let didTimeout = false;
+    let signal = fetchOptions.signal;
+    if (!signal && Number(timeoutMs) > 0 && typeof AbortController !== "undefined") {
+      const controller = new AbortController();
+      signal = controller.signal;
+      timeoutId = setTimeout(() => {
+        didTimeout = true;
+        controller.abort("request-timeout");
+      }, Number(timeoutMs));
+    }
+
+    try {
+      const response = await fetch(url, {
+        ...fetchOptions,
+        credentials: fetchOptions.credentials || "include",
+        headers,
+        signal,
+      });
+
+      if (timeoutId) clearTimeout(timeoutId);
+      if (response.ok) {
+        circuitRecordSuccess();
+        return response;
+      }
+
+      const status = response.status;
+      // Retryable status (429/5xx) -> back off and retry (GET only).
+      if (isRead && RETRYABLE_STATUS.has(status) && attempt < maxAttempts) {
+        circuitRecordFailure();
+        const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS);
+        await sleep(backoff, fetchOptions.signal);
+        continue;
+      }
+      circuitRecordFailure();
+      return response; // non-retryable or exhausted -> caller handles
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (error?.name === "AbortError") {
+        // Timeout or external abort: do not retry silently.
+        if (didTimeout) {
+          throw new ZeninRequestError(
+            "Zenin's backend is taking too long to respond. Please wait a moment and try again.",
+            { status: 0, code: "REQUEST_TIMEOUT", error: "Request timeout", retryable: true, endpoint: url, cause: error }
+          );
+        }
+        throw error;
+      }
+      lastErr = error;
+      if (isRead && attempt < maxAttempts) {
+        await sleep(BACKOFF_BASE_MS, fetchOptions.signal);
+        continue;
+      }
+      throw error;
+    }
   }
+  throw lastErr || new Error("Request failed");
 }
 
 export async function zeninFetchJson(endpoint, options = {}) {
