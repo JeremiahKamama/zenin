@@ -6070,6 +6070,10 @@ app.get("/api/admin/search", requireAdmin, async (req, res) => {
   }
 });
 
+// Coverage Registry service (Track F) — mounted under /api/admin/coverage.
+const { createCoverageRouter } = require("./coverageService");
+app.use("/api/admin/coverage", requireSignedIn, requireAdmin, createCoverageRouter());
+
 app.patch("/api/admin/users/:id/plan", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -14949,6 +14953,9 @@ const EQUITIES_ANALYTICS_SNAPSHOT_SCOPE = "analytics-equities-v3";
 const EQUITIES_ANALYTICS_SNAPSHOT_PARAMS = { scope: "equities" };
 const EQUITIES_ANALYTICS_TTL_MS = 15 * 60 * 1000;
 
+const { createEquitiesProvider } = require("./providers/equitiesProvider");
+const equitiesProvider = createEquitiesProvider({ fetchFinvizQuotes });
+
 async function buildEquitiesAnalyticsPayload() {
   console.log("[Analytics] Fetching live equities data...");
   let analyticsPayload = null;
@@ -14974,10 +14981,16 @@ async function buildEquitiesAnalyticsPayload() {
     ...MACRO_FINVIZ_FX_PROXIES.map((item) => item.symbol),
     ...(Array.isArray(analyticsPayload?.stockScreener) ? analyticsPayload.stockScreener.map((row) => row?.symbol) : []),
   ];
-  const finvizQuotes = await fetchFinvizQuotes(finvizSymbols).catch((error) => {
-    console.warn("[Analytics] Finviz enrichment skipped:", error?.message || error);
-    return new Map();
-  });
+  // Multi-provider fallback (Slice D): try providers in Coverage-priority order.
+  // Finviz remains in the chain; Massive/FMP/Yahoo/MyStocks are added as configured.
+  const { quotes: finvizQuotes, provider: equitiesProviderUsed, tried: equitiesProviderTried } =
+    await equitiesProvider.fetchEquitiesQuotesWithFallback(finvizSymbols, { region: "Americas", assetClass: "Equities", capability: "quotes" }).catch((error) => {
+      console.warn("[Analytics] Equities provider chain failed:", error?.message || error);
+      return { quotes: new Map(), provider: null, tried: [] };
+    });
+  if (equitiesProviderUsed) {
+    console.log(`[Analytics] Equities sourced from ${equitiesProviderUsed} (chain: ${equitiesProviderTried.join(" > ")})`);
+  }
   const sectorPerformance = buildEquitiesSectorRows(finvizQuotes);
   const regionalPerformance = buildEquitiesRegionalRows(finvizQuotes);
   const styleFactors = buildEquitiesStyleRows(finvizQuotes);

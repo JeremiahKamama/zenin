@@ -1,6 +1,6 @@
 // src/components/AnalyticsModule.jsx
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import ReactApexChart from "react-apexcharts";
+import React, { startTransition, useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
+const ReactApexChart = lazy(() => import("react-apexcharts"));
 import { chartColors } from "../utils/chartTheme";
 import { DataTable as TanstackDataTable } from "./data-table/DataTable";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
@@ -12,6 +12,7 @@ import { CompactPageHeader, DensePanelHeader, InlineControlGroup } from "./Compa
 import { ResearchWorkspacePanel } from "./InstitutionalPanels";
 import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
 import { zeninFetchJson } from "../utils/zeninFetch";
+import { deriveMacroExecutive, deriveCommoditiesExecutive, buildMarketSignal } from "../utils/deskIntelligence";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto Desk", shortLabel: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter, Variational + Dune analytics" },
@@ -216,6 +217,164 @@ const MACRO_VIEW_OPTIONS = [
   { key: "ranking", label: "Ranking" },
   { key: "forecast", label: "Forecast" },
 ];
+
+/**
+ * Equities Desk — registry-driven geography (Phase 2 Global Filter Layer).
+ * Region -> Country -> Exchange. Replaceable by Coverage Registry metadata later;
+ * kept as a single source of truth here so no provider/region logic leaks into widgets.
+ */
+const EQUITIES_REGIONS = [
+  {
+    code: "GLB", name: "Global", exchanges: [],
+  },
+  {
+    code: "NAM", name: "Americas", exchanges: [],
+    countries: [
+      { code: "USA", name: "United States", exchanges: ["NYSE", "NASDAQ", "CBOE", "IEX"] },
+      { code: "CAN", name: "Canada", exchanges: ["TSX", "TSXV"] },
+      { code: "MEX", name: "Mexico", exchanges: ["BMV"] },
+      { code: "BRA", name: "Brazil", exchanges: ["B3"] },
+    ],
+  },
+  {
+    code: "EUR", name: "Europe", exchanges: [],
+    countries: [
+      { code: "GBR", name: "United Kingdom", exchanges: ["LSE"] },
+      { code: "DEU", name: "Germany", exchanges: ["Deutsche Börse", "SWB"] },
+      { code: "FRA", name: "France", exchanges: ["Euronext Paris"] },
+      { code: "NLD", name: "Netherlands", exchanges: ["Euronext Amsterdam"] },
+      { code: "CHE", name: "Switzerland", exchanges: ["SIX"] },
+      { code: "ESP", name: "Spain", exchanges: ["BME"] },
+      { code: "ITA", name: "Italy", exchanges: ["Borsa Italiana"] },
+    ],
+  },
+  {
+    code: "ASI", name: "Asia-Pacific", exchanges: [],
+    countries: [
+      { code: "JPN", name: "Japan", exchanges: ["TSE", "JPX"] },
+      { code: "HKG", name: "Hong Kong", exchanges: ["HKEX"] },
+      { code: "SGP", name: "Singapore", exchanges: ["SGX"] },
+      { code: "CHN", name: "China", exchanges: ["SSE", "SZSE"] },
+      { code: "IND", name: "India", exchanges: ["NSE India", "BSE"] },
+      { code: "KOR", name: "South Korea", exchanges: ["KRX"] },
+      { code: "AUS", name: "Australia", exchanges: ["ASX"] },
+    ],
+  },
+  {
+    code: "AFR", name: "Africa", exchanges: [],
+    countries: [
+      { code: "KEN", name: "Kenya", exchanges: ["NSE Kenya", "NGX"] },
+      { code: "NGA", name: "Nigeria", exchanges: ["NGX", "NSE Nigeria"] },
+      { code: "ZAF", name: "South Africa", exchanges: ["JSE"] },
+      { code: "EGY", name: "Egypt", exchanges: ["EGX"] },
+      { code: "BWA", name: "Botswana", exchanges: ["BSE Botswana"] },
+      { code: "UGA", name: "Uganda", exchanges: ["USE"] },
+    ],
+  },
+];
+
+const EQUITIES_ASSET_CLASSES = [
+  "All", "Equities", "ETFs", "Bonds", "Mutual Funds", "REITs",
+  "Money Market", "Private Markets",
+];
+
+function countriesForRegion(regionCode) {
+  if (regionCode === "GLB") return [];
+  const region = EQUITIES_REGIONS.find((r) => r.code === regionCode);
+  return region ? region.countries : [];
+}
+
+function exchangesForCountry(regionCode, countryCode) {
+  const countries = countriesForRegion(regionCode);
+  const country = countries.find((c) => c.code === countryCode);
+  return country ? country.exchanges : [];
+}
+
+/**
+ * Equities Desk — Global Filter Layer (Phase 2).
+ * Persistent Region -> Country -> Exchange -> Asset Class cascade.
+ * Changing any filter updates every widget (via filteredEquities + fetch params)
+ * without changing page layout. Reuses existing analytics chip/input tokens.
+ */
+function EquitiesGlobalFilterLayer({ region, country, exchange, assetClass, onRegion, onCountry, onExchange, onAssetClass }) {
+  const countries = countriesForRegion(region);
+  const exchanges = exchangesForCountry(region, country);
+
+  const handleRegion = (code) => {
+    onRegion(code);
+    onCountry("ALL");
+    onExchange("ALL");
+  };
+  const handleCountry = (code) => {
+    onCountry(code);
+    onExchange("ALL");
+  };
+
+  return (
+    <div className="analytics-equities-global-filter" role="region" aria-label="Global market filters">
+      <div className="analytics-gfl-group">
+        <span className="analytics-gfl-label">Region</span>
+        <div className="analytics-gfl-chips">
+          {EQUITIES_REGIONS.map((r) => (
+            <button
+              key={r.code}
+              type="button"
+              className={`analytics-chip-button ${region === r.code ? "active" : ""}`}
+              onClick={() => handleRegion(r.code)}
+            >
+              {r.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="analytics-gfl-group">
+        <span className="analytics-gfl-label">Country</span>
+        <select
+          className="analytics-select"
+          value={country}
+          onChange={(e) => handleCountry(e.target.value)}
+          aria-label="Country"
+        >
+          <option value="ALL">All</option>
+          {countries.map((c) => (
+            <option key={c.code} value={c.code}>{c.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="analytics-gfl-group">
+        <span className="analytics-gfl-label">Exchange</span>
+        <select
+          className="analytics-select"
+          value={exchange}
+          onChange={(e) => onExchange(e.target.value)}
+          disabled={!exchanges.length}
+          aria-label="Exchange"
+        >
+          <option value="ALL">All</option>
+          {exchanges.map((ex) => (
+            <option key={ex} value={ex}>{ex}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="analytics-gfl-group">
+        <span className="analytics-gfl-label">Asset Class</span>
+        <select
+          className="analytics-select"
+          value={assetClass}
+          onChange={(e) => onAssetClass(e.target.value)}
+          aria-label="Asset class"
+        >
+          {EQUITIES_ASSET_CLASSES.map((ac) => (
+            <option key={ac} value={ac}>{ac}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
 
 const FALLBACK_MACRO_GEOS = [
   { type: "Country", name: "United States", code: "USA", regionCode: "NAM", members: [], parent: "Global" },
@@ -589,6 +748,92 @@ const getCorrelationTone = (value) => {
 
 
 
+function ExecTiltRow({ dir, label }) {
+  const glyph = dir === "up" ? "↑" : dir === "down" ? "↓" : "→";
+  const color = dir === "up" ? "var(--color-data-up)" : dir === "down" ? "var(--color-data-down)" : "var(--color-data-slate)";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+      <span style={{ color, fontWeight: "bold", width: 12, textAlign: "center" }}>{glyph}</span>
+      <span style={{ color: "var(--color-text-primary)" }}>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Executive Decision Panel (Phase 2). Decision-first, no charts.
+ * Renders NOTHING when `exec` is null (Phase 12: never show empty widgets).
+ */
+const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict, verdictTone = "neutral" }) {
+  if (!exec) return null;
+  const toneColor = verdictTone === "positive" ? "var(--color-data-up)"
+    : verdictTone === "negative" ? "var(--color-data-down)"
+    : verdictTone === "warning" ? "var(--color-data-amber)"
+    : "var(--color-text-primary)";
+  const drivers = kind === "macro" ? (exec.drivers || []) : [];
+  return (
+    <div className="analytics-card" style={{ display: "grid", gap: 16, borderLeft: `3px solid ${toneColor}` }}>
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
+        <div style={{ display: "grid", gap: 4 }}>
+          <div className="analytics-card-label" style={{ letterSpacing: "0.08em" }}>
+            {kind === "macro" ? "MACRO REGIME" : "COMMODITY MARKET STATE"}
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: toneColor, lineHeight: 1.1 }}>{verdict}</div>
+          {exec.explain ? <div className="analytics-card-subtitle" style={{ maxWidth: 520 }}>{exec.explain}</div> : null}
+        </div>
+        <div style={{ display: "grid", gap: 6, minWidth: 150 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Confidence</span>
+            <span style={{ color: "var(--color-text-primary)", fontWeight: 700 }}>{exec.confidence}%</span>
+          </div>
+          {exec.risk ? (
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+              <span style={{ color: "var(--color-text-secondary)" }}>Risk</span>
+              <span style={{ color: "var(--color-text-primary)", fontWeight: 700 }}>{exec.risk}</span>
+            </div>
+          ) : null}
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Sources</span>
+            <span style={{ color: "var(--color-text-primary)" }}>{exec.sourceCount}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Updated</span>
+            <span style={{ color: exec.freshness?.stale ? "var(--color-data-amber)" : "var(--color-text-primary)" }}>{exec.freshness?.label || "Unknown"}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+        <div style={{ display: "grid", gap: 8 }}>
+          <div className="analytics-card-label">Portfolio Tilt</div>
+          {(exec.tilt || []).map((t, i) => <ExecTiltRow key={`tilt-${i}`} dir={t.dir} label={t.label} />)}
+        </div>
+        {kind === "macro" && drivers.length ? (
+          <div style={{ display: "grid", gap: 8 }}>
+            <div className="analytics-card-label">Drivers</div>
+            {drivers.map((d, i) => (
+              <div key={`drv-${i}`} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <span style={{ color: d.positive ? "var(--color-data-up)" : "var(--color-data-down)", width: 12 }}>{d.positive ? "✓" : "✕"}</span>
+                <span style={{ color: "var(--color-text-secondary)" }}>{d.label}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {kind === "commodities" && (exec.states || []).length ? (
+          <div style={{ display: "grid", gap: 8 }}>
+            <div className="analytics-card-label">Group State</div>
+            {(exec.states || []).slice(0, 6).map((s, i) => (
+              <div key={`st-${i}`} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>{s.group}</span>
+                <span style={{ color: s.tone === "positive" ? "var(--color-data-up)" : s.tone === "negative" ? "var(--color-data-down)" : "var(--color-data-slate)", fontWeight: 600 }}>{s.state}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+    );
+});
+
 export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   const analyticsConfig = getAppRuntimeConfig()?.analytics || {};
   const macroCategoryOptions = Array.isArray(analyticsConfig?.macroCategoryOptions) && analyticsConfig.macroCategoryOptions.length
@@ -631,6 +876,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   const [selectedREITCountry, setSelectedREITCountry] = useState("ALL");
   const [selectedMarketView, setSelectedMarketView] = useState("benchmarks");
   const [marketSnapshotFilter, setMarketSnapshotFilter] = useState("all");
+  // Equities Desk — Global Filter Layer (Phase 2): Region -> Country -> Exchange -> Asset Class.
+  // Additive: derives Country/Exchange from Region/Country; wired into equities fetch + filteredEquities.
+  const [globalRegion, setGlobalRegion] = useState("GLB");
+  const [globalCountry, setGlobalCountry] = useState("ALL");
+  const [globalExchange, setGlobalExchange] = useState("ALL");
+  const [globalAssetClass, setGlobalAssetClass] = useState("All");
   const [compareItems, setCompareItems] = useState([]);
   const [timeRange, setTimeRange] = useState("1Y");
   const [equitiesSavedViews, setEquitiesSavedViews] = useState([]);
@@ -1203,9 +1454,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       setRefreshing((prev) => ({ ...prev, [activeTab]: !shouldBlockRender }));
       setErrors((prev) => ({ ...prev, [activeTab]: "" }));
       const endpointTab = activeTab;
+      const equitiesQuery = activeTab === "equities"
+        ? `?region=${encodeURIComponent(globalRegion)}&country=${encodeURIComponent(globalCountry)}&exchange=${encodeURIComponent(globalExchange)}&assetClass=${encodeURIComponent(globalAssetClass)}`
+        : "";
 
       try {
-        const payload = await fetchApiJson(backendUrl, `/analytics/${endpointTab}`, {
+        const payload = await fetchApiJson(backendUrl, `/analytics/${endpointTab}${equitiesQuery}`, {
           signal: controller.signal,
         });
         if (cancelled) return;
@@ -1254,7 +1508,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeTab, backendUrl, retryNonce]);
+  }, [activeTab, backendUrl, retryNonce, globalRegion, globalCountry, globalExchange, globalAssetClass]);
 
   useEffect(() => {
     if (activeTab !== "equities") return;
@@ -1450,16 +1704,44 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   }, [timeRange]);
 
   const filteredEquities = useMemo(() => {
+    const regionMatch = (row) => {
+      if (globalRegion === "GLB") return true;
+      const regionName = EQUITIES_REGIONS.find((r) => r.code === globalRegion)?.name;
+      return String(row?.region || row?.regionName || "").toLowerCase() === String(regionName || "").toLowerCase()
+        || String(row?.regionCode || "").toUpperCase() === globalRegion;
+    };
+    const countryMatch = (row) => {
+      if (globalCountry === "ALL") return true;
+      return String(row?.country || row?.countryCode || "").toUpperCase() === globalCountry
+        || String(row?.countryCode || "").toUpperCase() === globalCountry;
+    };
+    const exchangeMatch = (row) => {
+      if (globalExchange === "ALL") return true;
+      return String(row?.exchange || "").toLowerCase() === String(globalExchange).toLowerCase();
+    };
+    const assetClassMatch = (row) => {
+      if (globalAssetClass === "All") return true;
+      const ac = String(row?.assetClass || row?.type || row?.structure || "").toLowerCase();
+      return ac === String(globalAssetClass).toLowerCase()
+        || ac.includes(String(globalAssetClass).toLowerCase().replace(/s$/, ""));
+    };
+    const geoFilter = (rows) => {
+      if (!Array.isArray(rows)) return [];
+      return rows.filter((row) => regionMatch(row) && countryMatch(row) && exchangeMatch(row) && assetClassMatch(row));
+    };
     const filterRows = (rows, fields) => {
       if (!Array.isArray(rows)) return [];
-      if (!equitiesSearch) return rows;
-      return rows.filter((row) =>
-        fields.some((field) =>
-          String(row?.[field] ?? "")
-            .toLowerCase()
-            .includes(equitiesSearch)
-        )
-      );
+      let out = rows;
+      if (equitiesSearch) {
+        out = out.filter((row) =>
+          fields.some((field) =>
+            String(row?.[field] ?? "")
+              .toLowerCase()
+              .includes(equitiesSearch)
+          )
+        );
+      }
+      return geoFilter(out);
     };
 
     return {
@@ -1511,7 +1793,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         ["group", "name", "metric", "value"]
       ),
     };
-  }, [equitiesData, equitiesSpecData, correlationRows, equitiesSearch]);
+  }, [equitiesData, equitiesSpecData, correlationRows, equitiesSearch, globalRegion, globalCountry, globalExchange, globalAssetClass]);
 
   const marketSnapshotRows = useMemo(() => {
     const rows = [
@@ -1573,6 +1855,25 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
     const movers = [...rows].sort((a, b) => Math.abs(Number(b?.dailyChangePct) || 0) - Math.abs(Number(a?.dailyChangePct) || 0)).slice(0, 5);
     return { rows, movers };
   }, [commoditiesData.list, commoditySearchQuery, selectedCommodityGroup, selectedCommodityRegion]);
+
+  const macroExecutive = useMemo(() => deriveMacroExecutive({
+    regimeLabel,
+    regimeScore,
+    regimeExplain,
+    macroRows: macroData.macroData || [],
+    riskRows: macroData.riskIndicators || [],
+    updatedAt: macroData.updatedAt,
+  }), [regimeLabel, regimeScore, regimeExplain, macroData.macroData, macroData.riskIndicators, macroData.updatedAt]);
+
+  const macroSignal = useMemo(() => buildMarketSignal("macro", macroExecutive), [macroExecutive]);
+
+  const commoditiesExecutive = useMemo(() => deriveCommoditiesExecutive({
+    rows: filteredCommodities.rows || [],
+    updatedAt: commoditiesData.updatedAt,
+  }), [filteredCommodities.rows, commoditiesData.updatedAt]);
+
+  const commoditiesSignal = useMemo(() => buildMarketSignal("commodities", commoditiesExecutive), [commoditiesExecutive]);
+
 
   const forexMoverRows = useMemo(() => {
     const gainers = Array.isArray(macroData.forexMovers?.gainers) ? macroData.forexMovers.gainers : [];
@@ -2090,6 +2391,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         insight={activeTab === "equities" ? equitiesHubInsight : activeTab === "macro" ? regimeExplain : null}
         equitiesDeskSnapshot={activeTab === "equities" ? equitiesDeskSnapshot : null}
         timeRange={timeRange}
+        macroExecutive={macroExecutive}
+        commoditiesExecutive={commoditiesExecutive}
         onCommoditySelect={(symbol) => {
           const nextSymbol = String(symbol || "").trim().toUpperCase();
           if (!nextSymbol) return;
@@ -2191,6 +2494,20 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
       {/* Loading / error */}
       {currentBlockingLoad && <LoadingSkeleton label={`Loading ${activeTab} analytics...`} />}
+
+      {/* Equities Desk — Global Filter Layer is persistent: renders regardless of data/error state */}
+      {!currentBlockingLoad && activeTab === "equities" && (
+        <EquitiesGlobalFilterLayer
+          region={globalRegion}
+          country={globalCountry}
+          exchange={globalExchange}
+          assetClass={globalAssetClass}
+          onRegion={setGlobalRegion}
+          onCountry={setGlobalCountry}
+          onExchange={setGlobalExchange}
+          onAssetClass={setGlobalAssetClass}
+        />
+      )}
 
       {currentError && !currentHasLoaded && !currentBlockingLoad && (
         <ErrorState title={`Couldn't load ${activeTab} analytics`} description={currentError} onRetry={() => setRetryNonce((value) => value + 1)} />
@@ -2438,6 +2755,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     </div>
                   </div>
                   <div style={{ flex: 1, minHeight: 300 }}>
+                    <Suspense fallback={<div style={{ minHeight: 300, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-secondary)", fontSize: 12 }}>Loading chart…</div>}>
                     <ReactApexChart
                       options={{
                         chart: {
@@ -2464,6 +2782,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       type="donut"
                       height={300}
                     />
+                    </Suspense>
                   </div>
                 </div>
               </div>
@@ -3048,7 +3367,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     <section className="analytics-desk-panel analytics-equities-top-strip">
                       {[
                         {
-                          label: "Breadth Regime",
+                          label: "Market Health",
                           value: equitiesDeskSnapshot.breadthRegime,
                           helper: `Score ${equitiesDeskSnapshot.breadthScore} / 100`,
                           tone: equitiesDeskSnapshot.breadthRegime === "Broad Strength" ? "positive" : equitiesDeskSnapshot.breadthRegime === "Narrow Leadership" ? "warning" : "neutral",
@@ -3069,7 +3388,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           sparkline: equitiesDeskSnapshot.breadthHistogram,
                         },
                         {
-                          label: "Equal Weight vs Cap Weight",
+                          label: "Market Participation",
                           value: formatPercent(equitiesDeskSnapshot.equalWeightProxy),
                           helper: equitiesDeskSnapshot.equalWeightProxy >= 0 ? "Outperforming" : "Underperforming",
                           tone: equitiesDeskSnapshot.equalWeightProxy >= 0 ? "positive" : "negative",
@@ -3083,14 +3402,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           sparkline: equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.08),
                         },
                         {
-                          label: "Earnings Revision Breadth",
+                          label: "Corporate Activity",
                           value: `${equitiesDeskSnapshot.earningsBreadth}%`,
                           helper: equitiesDeskSnapshot.revisionAlertsRows.length ? `${equitiesDeskSnapshot.revisionAlertsRows.length} alerts` : "No active alerts",
                           tone: equitiesDeskSnapshot.earningsBreadth >= 50 ? "positive" : "negative",
                           sparkline: equitiesDeskSnapshot.breadthHistogram.map((value, idx) => value * (idx % 2 === 0 ? 1 : 0.6)),
                         },
                         {
-                          label: "Index Concentration",
+                          label: "Market Concentration",
                           value: `${equitiesDeskSnapshot.concentrationPct.toFixed(1)}%`,
                           helper: equitiesDeskSnapshot.concentrationPct >= 22 ? "High" : "Contained",
                           tone: equitiesDeskSnapshot.concentrationPct >= 22 ? "warning" : "neutral",
@@ -3182,7 +3501,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         </div>
 
                         <div className="analytics-equities-watch-section">
-                          <span>Earnings calendar</span>
+                          <span>Corporate Events</span>
                           <div className="analytics-equities-watch-table">
                             {equitiesDeskSnapshot.earningsRiskRows.map((row) => (
                               <div key={row.id} className="analytics-equities-watch-row">
@@ -3316,6 +3635,10 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         { key: "funds", title: "Funds", body: "Jump to fund directory, AUM, fee structure, holdings, and compare views.", cta: "View funds" },
                         { key: "mmf", title: "MMF", body: "Jump to money market fund yields, liquidity, and composition data.", cta: "View yields" },
                         { key: "reits", title: "REITs", body: "Jump to REIT income, FFO/AFFO, occupancy, and exposure datasets.", cta: "View REITs" },
+                        { key: "bonds", title: "Bonds", body: "Government and corporate bond curves, yields, and auctions across Africa and global markets.", cta: "View bonds" },
+                        { key: "ipo", title: "IPO Pipeline", body: "Listings, prospectus events, and first-day activity by exchange.", cta: "View pipeline" },
+                        { key: "dividend", title: "Dividend Calendar", body: "Upcoming dividends, rights issues, and payout dates.", cta: "View calendar" },
+                        { key: "corporate-actions", title: "Corporate Actions", body: "Splits, buybacks, mergers, and trading suspensions by exchange.", cta: "View actions" },
                         { key: "market", title: "General Market", body: "Jump to sector, regional, breadth, flow, and corporate-action datasets.", cta: "Open market view" },
                       ].map((card) => (
                         <button
@@ -3909,6 +4232,89 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   </div>
                 ) : null}
 
+                {selectedMainCategory === "bonds" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                      Government &amp; corporate bonds — yields, curves, and auctions. Reuses normalized fund-flow and corporate-action models.
+                    </div>
+                    <AnalyticsTableCard
+                      title="Bond Auctions & Flows"
+                      subtitle="Primary issuance, auction results, and fund flow by market"
+                      emptyText="No bond auction or flow rows returned for the current scope."
+                      columns={[
+                        { key: "segment", label: "Segment" },
+                        { key: "assetClass", label: "Asset Class" },
+                        { key: "region", label: "Region" },
+                        { key: "period", label: "Period" },
+                        { key: "flow", label: "Flow", align: "right", render: (v) => (v != null ? formatCompactMoney(v) : "—") },
+                      ]}
+                      rows={(filteredEquities.fundFlows || []).map((row, idx) => ({ id: `bond-${idx}`, ...row }))}
+                    />
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "ipo" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                      Listings pipeline and first-day activity. Corporate actions surface IPO and cross-listing events.
+                    </div>
+                    <AnalyticsTableCard
+                      title="IPO & Cross-Listing Pipeline"
+                      subtitle="Upcoming and recent listings by exchange"
+                      emptyText="No IPO or cross-listing events returned for the current scope."
+                      columns={[
+                        { key: "date", label: "Date" },
+                        { key: "symbol", label: "Symbol" },
+                        { key: "action", label: "Event" },
+                        { key: "detail", label: "Detail" },
+                        { key: "exchange", label: "Exchange" },
+                      ]}
+                      rows={(filteredEquities.corporateActions || []).map((row, idx) => ({ id: `ipo-${idx}`, ...row }))}
+                    />
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "dividend" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                      Dividend calendar, rights issues, and payout dates across markets.
+                    </div>
+                    <AnalyticsTableCard
+                      title="Dividend & Rights Calendar"
+                      subtitle="Upcoming payouts and corporate distributions"
+                      emptyText="No dividend or rights events returned for the current scope."
+                      columns={[
+                        { key: "symbol", label: "Symbol" },
+                        { key: "dividendYield", label: "Yield", align: "right", render: (v) => (v != null ? `${Number(v).toFixed(2)}%` : "—") },
+                        { key: "exDividendDate", label: "Ex-Date" },
+                        { key: "payoutRatio", label: "Payout", align: "right", render: (v) => (v != null ? `${Number(v).toFixed(1)}%` : "—") },
+                      ]}
+                      rows={(filteredEquities.dividendData || []).map((row, idx) => ({ id: `div-${idx}`, ...row }))}
+                    />
+                  </div>
+                ) : null}
+
+                {selectedMainCategory === "corporate-actions" ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                      Splits, buybacks, mergers, suspensions, and foreign-ownership limits — by exchange.
+                    </div>
+                    <AnalyticsTableCard
+                      title="Corporate Actions"
+                      subtitle="Splits, buybacks, mergers, suspensions, and limits"
+                      emptyText="No corporate actions returned for the current scope."
+                      columns={[
+                        { key: "date", label: "Date" },
+                        { key: "symbol", label: "Symbol" },
+                        { key: "action", label: "Action" },
+                        { key: "detail", label: "Detail" },
+                        { key: "exchange", label: "Exchange" },
+                      ]}
+                      rows={(filteredEquities.corporateActions || []).map((row, idx) => ({ id: `ca-${idx}`, ...row }))}
+                    />
+                  </div>
+                ) : null}
+
                 {selectedMainCategory === "market" ? (
                   <div style={{ display: "grid", gap: 16 }}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -4112,6 +4518,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
             </>
           ) : activeTab === "macro" ? (
             <>
+              {/* DEAD-CODE BRANCH (gated by {false && ...} upstream) — ExecutivePanel intentionally NOT mounted here; see AnalyticsSpecializedDesk live path. */}
               <div style={{ display: "grid", gap: 18 }}>
                 <div className="analytics-card" style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                   <div>
@@ -4800,6 +5207,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
             </>
           ) : activeTab === "commodities" ? (
             <>
+              <ExecutivePanel
+                kind="commodities"
+                exec={commoditiesExecutive}
+                verdict={commoditiesExecutive?.theme || "Unavailable"}
+                verdictTone="neutral"
+              />
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   {COMMODITY_GROUPS.map((group) => {
@@ -4902,9 +5315,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     onChange={(e) => setCommodityFlowMode(e.target.value)}
                     style={{ background: "var(--color-surface-elevated)", border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                   >
-                    <option value="etf">ETF flows</option>
-                    <option value="fund">Fund flows</option>
-                    <option value="futures">Futures positioning</option>
+                    <option value="etf">Price/volume (daily)</option>
+                    <option value="fund">Price/volume (weekly)</option>
+                    <option value="futures">Futures volume</option>
                   </select>
                 </div>
 
@@ -5097,8 +5510,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
               {selectedCommodityView === "flows" ? (
                 <div className="analytics-card" style={{ display: "grid", gap: 16 }}>
                   <div style={{ borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: 12 }}>
-                    <div className="analytics-section-title" style={{ fontSize: 15 }}>Flow Attribution Dashboard • {selectedCommoditySymbol}</div>
-                    <div className="analytics-card-subtitle">Managed money, ETF changes, and commercial hedger positioning</div>
+                    <div className="analytics-section-title" style={{ fontSize: 15 }}>Price & Volume Flow Proxy • {selectedCommoditySymbol}</div>
+                    <div className="analytics-card-subtitle">Sourced price/volume activity. Not CFTC positioning — managed-money, commercial-hedger, and large-spec data require a real COT feed and are not shown here.</div>
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
@@ -5109,8 +5522,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         <thead>
                           <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                             <th style={{ padding: "6px 4px" }}>Date</th>
-                            <th style={{ padding: "6px 4px" }}>Allocation Type</th>
-                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Net Flow</th>
+                            <th style={{ padding: "6px 4px" }}>Series</th>
+                            <th style={{ padding: "6px 4px", textAlign: "right" }}>Volume</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -5158,8 +5571,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     {/* Right: Net Allocation Visual Bars */}
                     <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)", display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
-                        <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Flow Allocation Intensity</div>
-                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>Relative net exposure shifts by capital pools</div>
+                        <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Volume Intensity</div>
+                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>Relative traded-volume shifts by day</div>
                       </div>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 8 }}>
@@ -5190,7 +5603,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: "100%", background: "rgba(160, 160, 160, 0.3)" }} />
                               </div>
                               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: isPositive ? "var(--color-data-up)" : "var(--color-data-down)" }}>
-                                <span>{isPositive ? "NET BUYING" : "NET SELLING"}</span>
+                                <span>{isPositive ? "UP VOLUME" : "DOWN VOLUME"}</span>
                                 <span style={{ fontWeight: "bold" }}>{isPositive ? "+" : ""}{formatCompactMoney(row.value)}</span>
                               </div>
                             </div>
@@ -5270,7 +5683,16 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 />
               ) : null}
 
-              {selectedCommodityView === "curve" ? (
+              {selectedCommodityView === "curve" && (commoditiesData.curve || []).length < 2 ? (
+                <div className="analytics-card">
+                  <AnalyticsDeskEmpty
+                    title="Futures curve unavailable"
+                    description={`Only front-month pricing is available for ${selectedCommoditySymbol} through the current feed. A true term structure (contango/backwardation, calendar spreads) requires a multi-contract futures provider (e.g. CME/Barchart) and is intentionally hidden until real curve data is sourced.`}
+                  />
+                </div>
+              ) : null}
+
+              {selectedCommodityView === "curve" && (commoditiesData.curve || []).length >= 2 ? (
                 <div className="analytics-card" style={{ display: "grid", gap: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: 12 }}>
                     <div>
@@ -5666,7 +6088,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   );
 }
 
-function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null }) {
+function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null }) {
   if (!config) return null;
   const rows = Array.isArray(config.rows) ? config.rows : [];
   const metrics = Array.isArray(config.metrics) ? config.metrics : [];
@@ -5684,6 +6106,8 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
         equitiesDeskSnapshot={equitiesDeskSnapshot}
         timeRange={timeRange}
         onCommoditySelect={onCommoditySelect}
+        macroExecutive={macroExecutive}
+        commoditiesExecutive={commoditiesExecutive}
       />
     );
   }
@@ -5797,7 +6221,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
   );
 }
 
-function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null }) {
+const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null }) {
   const isEquities = activeTab === "equities";
   const isOptions = activeTab === "options";
   const isMacro = activeTab === "macro";
@@ -6083,7 +6507,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
         <section className="analytics-desk-panel analytics-equities-top-strip">
           {[
             {
-              label: "Breadth Regime",
+              label: "Market Health",
               value: snapshot.breadthRegime,
               helper: `Score ${snapshot.breadthScore} / 100`,
               tone: snapshot.breadthRegime === "Broad Strength" ? "positive" : snapshot.breadthRegime === "Narrow Leadership" ? "warning" : "neutral",
@@ -6104,7 +6528,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               sparkline: snapshot.breadthHistogram,
             },
             {
-              label: "Equal Weight vs Cap Weight",
+              label: "Market Participation",
               value: formatPercent(snapshot.equalWeightProxy),
               helper: snapshot.equalWeightProxy >= 0 ? "Outperforming" : "Underperforming",
               tone: snapshot.equalWeightProxy >= 0 ? "positive" : "negative",
@@ -6118,14 +6542,14 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
               sparkline: snapshot.breadthTapeSeries.map((value, idx) => value + idx * 0.08),
             },
             {
-              label: "Earnings Revision Breadth",
+              label: "Corporate Activity",
               value: `${snapshot.earningsBreadth}%`,
               helper: snapshot.revisionAlertsRows.length ? `${snapshot.revisionAlertsRows.length} alerts` : "No active alerts",
               tone: snapshot.earningsBreadth >= 50 ? "positive" : "negative",
               sparkline: snapshot.breadthHistogram.map((value, idx) => value * (idx % 2 === 0 ? 1 : 0.6)),
             },
             {
-              label: "Index Concentration",
+              label: "Market Concentration",
               value: `${snapshot.concentrationPct.toFixed(1)}%`,
               helper: snapshot.concentrationPct >= 22 ? "High" : "Contained",
               tone: snapshot.concentrationPct >= 22 ? "warning" : "neutral",
@@ -6218,7 +6642,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             </div>
 
             <div className="analytics-equities-watch-section">
-              <span>Earnings calendar</span>
+              <span>Corporate Events</span>
               <div className="analytics-equities-watch-table">
                 {snapshot.earningsRiskRows.map((row) => (
                   <div key={row.id} className="analytics-equities-watch-row">
@@ -6353,6 +6777,14 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     const fxRows = Array.isArray(macroMeta.forexMovers) ? macroMeta.forexMovers.slice(0, 6) : [];
     return (
       <section className="analytics-desk-shell analytics-macro-command">
+        {macroExecutive ? (
+          <ExecutivePanel
+            kind="macro"
+            exec={macroExecutive}
+            verdict={macroExecutive.regime || "Unavailable"}
+            verdictTone={macroExecutive.tone || "neutral"}
+          />
+        ) : null}
         <div className="analytics-macro-topline">
           <div className="analytics-desk-hero analytics-macro-hero">
             <div>
@@ -6599,7 +7031,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
     };
     const selectedCurvePoints = normalizeCurvePoints(commodityMeta.selectedSymbol || leader.symbol || "CMD");
     const compareDeskRows = (compareRows.length ? compareRows : terminalRows).slice(0, 5);
-    const compareCurveRows = compareDeskRows.map((row, idx) => {
+    const compareCurveRows = useMemo(() => compareDeskRows.map((row, idx) => {
       const spot = parseNumeric(row?.price) ?? parseNumeric(row?.latestPrice) ?? parseNumeric(row?.primary) ?? 0;
       const rawSlope = Number(row?.slope);
       const fallbackSlope = Number(row?.dailyChangePct);
@@ -6613,12 +7045,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
             : 0;
       const curvePoints = hasRealCurve
         ? row.curvePoints
-        : [
-            { label: "Spot", value: spot },
-            { label: "1M", value: spot ? spot * (1 + slope / 300) : 0 },
-            { label: "3M", value: spot ? spot * (1 + slope / 180) : 0 },
-            { label: "6M", value: spot ? spot * (1 + slope / 100) : 0 },
-          ];
+        : [];
       const normalizedPoints = curvePoints
         .map((point, pointIdx) => ({
           label: point?.label || point?.contract || ["Spot", "1M", "3M", "6M"][pointIdx] || `T${pointIdx + 1}`,
@@ -6639,8 +7066,10 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
         structure: Number(curveSlope) < -0.25 ? "Backwardation" : Number(curveSlope) > 0.25 ? "Contango" : "Flat",
         tone: Number(curveSlope) < 0 ? "negative" : Number(curveSlope) > 0 ? "positive" : "neutral",
       };
-    });
-    const maxCurveAbs = Math.max(...compareCurveRows.map((row) => Math.abs(Number(row.slope) || 0)), 1);
+    }),
+    [compareDeskRows]);
+    const realCurveCompareRows = compareCurveRows.filter((row) => row.hasRealCurve);
+    const maxCurveAbs = Math.max(...realCurveCompareRows.map((row) => Math.abs(Number(row.slope) || 0)), 1);
     const physicalStressRows = physicalStress.length
       ? physicalStress
       : getCommodityStressFallbackRows(commodityMeta.selectedSymbol || leader.symbol, commodityMeta.selectedRow);
@@ -6723,6 +7152,14 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
 
     return (
       <section className="analytics-desk-shell analytics-commodities-curve analytics-commodities-terminal">
+        {commoditiesExecutive ? (
+          <ExecutivePanel
+            kind="commodities"
+            exec={commoditiesExecutive}
+            verdict={commoditiesExecutive.theme || "Unavailable"}
+            verdictTone="neutral"
+          />
+        ) : null}
         <div className="analytics-commodity-commandbar">
           <div className="analytics-commodity-titleblock">
             <span>{config.kicker}</span>
@@ -6767,8 +7204,17 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
         <div className="analytics-commodity-tape">
           <article className="analytics-commodity-regime">
             <span>Commodity Regime</span>
-            <strong>{Number(leader.slope) < 0 ? "Backwardation / Supply Tight" : "Contango / Carry Favored"}</strong>
-            <em>Confidence: {Math.min(98, Math.max(42, Math.round(Math.abs(Number(leader.slope) || 0) * 6 + 48)))} / 100</em>
+            {selectedCurvePoints.length > 1 ? (
+              <>
+                <strong>{Number(leader.slope) < 0 ? "Backwardation / Supply Tight" : "Contango / Carry Favored"}</strong>
+                <em>Confidence: {Math.min(98, Math.max(42, Math.round(Math.abs(Number(leader.slope) || 0) * 6 + 48)))} / 100</em>
+              </>
+            ) : (
+              <>
+                <strong>Term structure unavailable</strong>
+                <em>Only front-month pricing is sourced — real curve requires a multi-contract futures feed.</em>
+              </>
+            )}
           </article>
           <article className="analytics-commodity-regime analytics-commodity-regime-secondary">
             <span>Selected Contract</span>
@@ -6923,37 +7369,44 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
                 <span>Futures Curve Comparison</span>
                 <strong>Spot, near-term, deferred, and implied structure</strong>
               </div>
-              <em>{compareCurveRows.length} contracts</em>
+              <em>{realCurveCompareRows.length} contracts</em>
             </div>
-            <div className="analytics-curve-comparison">
-              <div className="analytics-curve-scale">
-                <span>Contract</span>
-                <span>Spot</span>
-                <span>Front</span>
-                <span>3M</span>
-                <span>6M</span>
-                <span>Slope</span>
+            {realCurveCompareRows.length ? (
+              <div className="analytics-curve-comparison">
+                <div className="analytics-curve-scale">
+                  <span>Contract</span>
+                  <span>Spot</span>
+                  <span>Front</span>
+                  <span>3M</span>
+                  <span>6M</span>
+                  <span>Slope</span>
+                </div>
+                <div className="analytics-curve-rows">
+                  {realCurveCompareRows.map((row) => {
+                    const width = `${Math.max(12, Math.min(100, (Math.abs(Number(row.slope) || 0) / maxCurveAbs) * 100))}%`;
+                    return (
+                      <div key={row.id} className="analytics-curve-row">
+                        <strong>{row.symbol}</strong>
+                        <span>{formatFixed(row.spot, Math.abs(row.spot) > 1000 ? 0 : 2)}</span>
+                        <span>{formatFixed(row.front, Math.abs(row.front) > 1000 ? 0 : 2)}</span>
+                        <span>{formatFixed(row.mid, Math.abs(row.mid) > 1000 ? 0 : 2)}</span>
+                        <span>{formatFixed(row.deferred, Math.abs(row.deferred) > 1000 ? 0 : 2)}</span>
+                        <b className={row.tone}>{formatPercent(row.slope)}</b>
+                        <em className={row.tone}>
+                          <i style={{ width }} />
+                          {row.structure}
+                        </em>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="analytics-curve-rows">
-                {compareCurveRows.map((row) => {
-                  const width = `${Math.max(12, Math.min(100, (Math.abs(Number(row.slope) || 0) / maxCurveAbs) * 100))}%`;
-                  return (
-                    <div key={row.id} className="analytics-curve-row">
-                      <strong>{row.symbol}</strong>
-                      <span>{formatFixed(row.spot, Math.abs(row.spot) > 1000 ? 0 : 2)}</span>
-                      <span>{formatFixed(row.front, Math.abs(row.front) > 1000 ? 0 : 2)}</span>
-                      <span>{formatFixed(row.mid, Math.abs(row.mid) > 1000 ? 0 : 2)}</span>
-                      <span>{formatFixed(row.deferred, Math.abs(row.deferred) > 1000 ? 0 : 2)}</span>
-                      <b className={row.tone}>{formatPercent(row.slope)}</b>
-                      <em className={row.tone}>
-                        <i style={{ width }} />
-                        {row.structure}
-                      </em>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            ) : (
+              <AnalyticsDeskEmpty
+                title="Futures curve comparison unavailable"
+                description="No commodity in view carries a real multi-contract term structure. Curve comparison renders only when the backend returns multiple contracts — synthetic curves are never drawn."
+              />
+            )}
           </div>
 
           <div className="analytics-desk-panel analytics-commodity-inventory">
@@ -7038,7 +7491,7 @@ function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows,
   }
 
   return null;
-}
+});
 
 function AnalyticsDeskEmpty({ title = "No rows yet", description = "Refresh this desk or adjust filters once the backend has data." }) {
   return (

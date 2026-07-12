@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import ReactApexChart from "react-apexcharts";
 import { DataTable } from "./data-table/DataTable";
 import { TradingViewChart } from "./TradingViewChart";
@@ -16,6 +16,14 @@ import {
   computePerformanceMetrics
 } from "../utils/performanceHistory";
 import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
+// Portfolio Intelligence — feature modules + normalized data layer.
+import { PortfolioOverview } from "./portfolioIntelligence/PortfolioOverview";
+import { PortfolioAnalysis, PORTFOLIO_ANALYSIS_TABS } from "./portfolioIntelligence/PortfolioAnalysis";
+import { PortfolioIntelligenceRail } from "./portfolioIntelligence/PortfolioIntelligenceRail";
+import { deriveOrderLedgerFromConnections } from "./portfolioIntelligence/services/OrderNormalizationService";
+import { normalizeExecutions } from "./portfolioIntelligence/services/ExecutionService";
+import { buildAlerts } from "./portfolioIntelligence/services/AlertEngine";
+import { createPortfolioHealth } from "./portfolioIntelligence/models/domainModels";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -3047,6 +3055,64 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
   }, []);
 
+  // --- Portfolio Intelligence: normalized data layer -----------------------
+  // Orders ledger derived read-only from connected broker accounts. Because
+  // the Zenin backend has no orders endpoint, we surface what brokers report
+  // (open/resting intents) and never fabricate market data.
+  const orderLedger = useMemo(
+    () => deriveOrderLedgerFromConnections(connectedAccounts),
+    [connectedAccounts]
+  );
+
+  // Normalized executions feed Order Desk metrics, Execution Analysis, Costs,
+  // Events, and the Alert engine.
+  const normalizedExecutions = useMemo(
+    () => normalizeExecutions(apiTradeExecutions),
+    [apiTradeExecutions]
+  );
+
+  // Portfolio health roll-up for drift + risk alerts.
+  const portfolioHealth = useMemo(
+    () =>
+      createPortfolioHealth({
+        totalValue: currentAccountEquity,
+        driftPct: Number(rebalanceMetrics?.totalDrift || 0),
+        concentrationPct: Number(exposureSummary?.maxWeight || 0),
+        topMoverSymbol: undefined,
+        riskLevel: metrics?.riskLevel || "normal",
+      }),
+    [currentAccountEquity, rebalanceMetrics?.totalDrift, exposureSummary?.maxWeight, metrics?.riskLevel]
+  );
+
+  // Alert engine context (memoized; AlertEngine is pure/read-only).
+  const alertContext = useMemo(
+    () => ({
+      orders: orderLedger.orders,
+      executions: normalizedExecutions,
+      brokers: orderLedger.brokers,
+      venues: orderLedger.venues,
+      portfolioHealth,
+      notifications: workspaceNotifications,
+      connectedAccounts,
+    }),
+    [orderLedger, normalizedExecutions, portfolioHealth, workspaceNotifications, connectedAccounts]
+  );
+
+  // Right rail is independently refreshable: its own token + state. Refreshing
+  // re-runs AlertEngine without re-rendering the main workspace.
+  const [railRefreshToken, setRailRefreshToken] = useState(0);
+  const [railRefreshing, setRailRefreshing] = useState(false);
+  const alertContextForRail = useMemo(() => alertContext, [alertContext, railRefreshToken]);
+  const handleRefreshAlerts = useCallback(() => {
+    setRailRefreshing(true);
+    // AlertEngine is synchronous + cheap; simulate async refresh boundary so the
+    // rail can show a pending state without blocking the workspace.
+    requestAnimationFrame(() => {
+      setRailRefreshToken((t) => t + 1);
+      setRailRefreshing(false);
+    });
+  }, []);
+
   return (
     <div className="portfolio-module portfolio-v2 portfolio-exec-page portfolio-command-page">
       <header className="portfolio-command-header">
@@ -3097,258 +3163,165 @@ const isProfitable = currentAccountEquity >= initialBalance;
         </div>
       </header>
 
-      <section className="portfolio-command-summary">
-        <div className="portfolio-command-section-head">
-          <span>Portfolio Summary</span>
-          <em>{isSyncing ? "Syncing venues..." : `As of ${formatSavedTimestamp(feeDashboard.updatedAt || Date.now())}`}</em>
-        </div>
-        <div className="portfolio-command-summary-grid">
-          {portfolioSummaryCards.map((card) => (
-            <article key={card.label} className={`portfolio-command-summary-card ${card.tone || "neutral"}`}>
-              <span>{card.label}</span>
-              <strong>{card.value}</strong>
-              <em>{card.detail}</em>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="portfolio-command-attention">
-        <div className="portfolio-command-section-head">
-          <span>What Needs Attention</span>
-          <button type="button" className="portfolio-v2-link" onClick={() => openPortfolioTab("exposure")}>View All</button>
-        </div>
-        <div className="portfolio-command-attention-grid">
-          {attentionCards.map((card) => (
-            <button
-              key={card.id}
-              type="button"
-              className={`portfolio-command-attention-card ${card.tone || "neutral"}`}
-              onClick={card.onClick}
-            >
-              <div>
-                <span>{card.title}</span>
-                <strong>{card.metric}</strong>
-                <em>{card.detail}</em>
-              </div>
-              <b>{card.action}</b>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="portfolio-command-rebalance">
-        <div className="portfolio-command-section-head">
-          <span>Recommended Changes</span>
-          <div className="portfolio-command-inline-actions">
-            <div className="portfolio-v2-range">
-              {intervals.map((int) => (
-                <button
-                  key={int}
-                  type="button"
-                  className={`portfolio-v2-range-btn ${chartInterval === int ? "active" : ""}`}
-                  onClick={() => setChartInterval(int)}
-                >
-                  {int}
-                </button>
-              ))}
-            </div>
-            <div className="portfolio-v2-range" role="group" aria-label="Chart mode">
-              {[
-                { value: "equity", label: "Equity" },
-                { value: "percentage", label: "% Gain" },
-                { value: "pnl", label: "Cash PnL" }
-              ].map((mode) => (
-                <button
-                  key={mode.value}
-                  type="button"
-                  className={`portfolio-v2-range-btn ${chartMode === mode.value ? "active" : ""}`}
-                  onClick={() => setChartMode(mode.value)}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-            <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>Open Rebalance Flow</button>
-          </div>
-        </div>
-        <div className="portfolio-command-rebalance-grid">
-          <div className="portfolio-command-drift-card">
-            <div className="portfolio-command-panel-head">
-              <div>
-                <h3>Rebalance to Restore Target Allocation</h3>
-                <p>Address drift, reduce concentration, and improve portfolio alignment.</p>
-              </div>
-            </div>
-            <div className="portfolio-command-drift-visual">
-              <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={214} />
-              <div className="portfolio-command-drift-legend">
-                <span><i className="risk" />Overweight</span>
-                <span><i className="info" />Underweight</span>
-                <span><i className="neutral" />In Range</span>
-              </div>
-            </div>
-            <div className="portfolio-command-stat-rail">
-              {executiveStatRail.map((item) => (
-                <div key={item.label}>
-                  <span>{item.label}</span>
-                  <strong className={item.tone || "neutral"}>{item.value}</strong>
+      <PortfolioOverview
+        summary={{
+          eyebrow: isSyncing ? "Syncing venues..." : `As of ${formatSavedTimestamp(feeDashboard.updatedAt || Date.now())}`,
+          cards: portfolioSummaryCards,
+        }}
+        attention={{ onViewAll: () => openPortfolioTab("exposure"), cards: attentionCards }}
+        recommendedChanges={
+          <div className="portfolio-command-rebalance-inner">
+            <div className="portfolio-command-section-head">
+              <span>Recommended Changes</span>
+              <div className="portfolio-command-inline-actions">
+                <div className="portfolio-v2-range">
+                  <label className="portfolio-v2-range-label" htmlFor="recommended-changes-interval">Timeframe</label>
+                  <select
+                    id="recommended-changes-interval"
+                    className="portfolio-v2-select"
+                    value={chartInterval}
+                    onChange={(event) => setChartInterval(event.target.value)}
+                    aria-label="Select timeframe for Recommended Changes"
+                  >
+                    {intervals.map((int) => (
+                      <option key={int} value={int}>{int}</option>
+                    ))}
+                  </select>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="portfolio-command-change-card">
-            <div className="portfolio-command-panel-head">
-              <div>
-                <h3>Trim / Add Summary</h3>
-                <p>Highest-impact allocation changes from the current drift model.</p>
-              </div>
-            </div>
-            <div className="portfolio-command-change-grid">
-              <div>
-                <span className="portfolio-command-column-label risk">Trim</span>
-                <div className="portfolio-command-change-list">
-                  {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row) => (
-                    <button key={`trim-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
-                      <strong>{row.symbol}</strong>
-                      <em>{formatMoney(-Math.abs(row.tradeValue || 0))}</em>
-                      <b>{formatSignedPercent(row.drift, 1)}</b>
+                <div className="portfolio-v2-range" role="group" aria-label="Chart mode">
+                  {[
+                    { value: "equity", label: "Equity" },
+                    { value: "percentage", label: "% Gain" },
+                    { value: "pnl", label: "Cash PnL" }
+                  ].map((mode) => (
+                    <button
+                      key={mode.value}
+                      type="button"
+                      className={`portfolio-v2-range-btn ${chartMode === mode.value ? "active" : ""}`}
+                      onClick={() => setChartMode(mode.value)}
+                    >
+                      {mode.label}
                     </button>
                   ))}
                 </div>
+                <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>Open Rebalance Flow</button>
               </div>
-              <div>
-                <span className="portfolio-command-column-label positive">Add</span>
-                <div className="portfolio-command-change-list">
-                  {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row) => (
-                    <button key={`add-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
-                      <strong>{row.symbol}</strong>
-                      <em>{formatMoney(Math.abs(row.tradeValue || 0))}</em>
-                      <b>{formatSignedPercent(Math.abs(row.drift || 0), 1)}</b>
-                    </button>
+            </div>
+            <div className="portfolio-command-rebalance-grid">
+              <div className="portfolio-command-drift-card">
+                <div className="portfolio-command-panel-head">
+                  <div>
+                    <h3>Rebalance to Restore Target Allocation</h3>
+                    <p>Address drift, reduce concentration, and improve portfolio alignment.</p>
+                  </div>
+                </div>
+                <div className="portfolio-command-drift-visual">
+                  <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={214} />
+                  <div className="portfolio-command-drift-legend">
+                    <span><i className="risk" />Overweight</span>
+                    <span><i className="info" />Underweight</span>
+                    <span><i className="neutral" />In Range</span>
+                  </div>
+                </div>
+                <div className="portfolio-command-stat-rail">
+                  {executiveStatRail.map((item) => (
+                    <div key={item.label}>
+                      <span>{item.label}</span>
+                      <strong className={item.tone || "neutral"}>{item.value}</strong>
+                    </div>
                   ))}
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div className="portfolio-command-impact-card">
-            <div className="portfolio-command-panel-head">
-              <div>
-              <h3>Allocation Impact</h3>
-                <p>Estimated cost, readiness, and alignment improvement before you commit.</p>
-              </div>
-            </div>
-            <div className="portfolio-command-impact-list">
-              <div><span>Change Count</span><strong>{rebalanceMetrics.tradesRequired}</strong></div>
-              <div><span>Est. Fees</span><strong>{formatMoney(rebalanceMetrics.estimatedFees)}</strong></div>
-              <div><span>Est. Slippage</span><strong>{formatMoney(rebalanceMetrics.estimatedSlippage)}</strong></div>
-              <div><span>Projected Alignment</span><strong>{projectedAlignment.before.toFixed(0)}% → {projectedAlignment.after.toFixed(0)}%</strong></div>
-            </div>
-            <div className="portfolio-command-readiness">
-              <span>Plan Readiness</span>
-              <ul>
-                <li className={liveAvailableBalance > 0 ? "positive" : "negative"}>{liveAvailableBalance > 0 ? "Sufficient cash" : "Low available cash"}</li>
-                <li className={rebalanceMetrics.tradesRequired > 0 ? "positive" : "neutral"}>{rebalanceMetrics.tradesRequired > 0 ? "Actionable allocation set" : "No changes required"}</li>
-                <li className={feeDashboard.tradeCount > 0 ? "positive" : "neutral"}>{feeDashboard.tradeCount > 0 ? "Fee history available" : "Fee history still sparse"}</li>
-              </ul>
-            </div>
-            <button type="button" className="portfolio-command-primary-cta" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>
-              Review &amp; Rebalance
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="portfolio-command-analysis" ref={analysisSectionRef}>
-        <div className="portfolio-command-tabs">
-          {[
-            { id: "holdings", label: "Holdings" },
-            { id: "attribution", label: "Attribution" },
-            { id: "exposure", label: "Exposure" },
-            { id: "history", label: "History" },
-            { id: "fees", label: "Fees" },
-            { id: "prediction", label: "Event Risk", beta: true },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={`portfolio-command-tab ${activePortfolioTab === tab.id ? "active" : ""}`}
-              onClick={() => openPortfolioTab(tab.id)}
-            >
-              {tab.label}
-              {tab.beta ? <small>Beta</small> : null}
-            </button>
-          ))}
-        </div>
-        <div className="portfolio-command-analysis-grid">
-          <div className="portfolio-command-analysis-main">
-            {renderPortfolioTabContent()}
-          </div>
-          <aside className="portfolio-command-analysis-rail">
-            <section className="portfolio-command-side-card">
-              <div className="portfolio-command-panel-head">
-                <div>
-                  <h3>Benchmark &amp; Risk</h3>
-                  <p>Keep benchmark context visible without overwhelming the main workspace.</p>
-                </div>
-              </div>
-              <div className="portfolio-command-side-list">
-                {benchmarkRiskRows.map((row) => (
-                  <div key={row.label}>
-                    <span>{row.label}</span>
-                    <strong className={row.tone || "neutral"}>{row.value}</strong>
+              <div className="portfolio-command-change-card">
+                <div className="portfolio-command-panel-head">
+                  <div>
+                    <h3>Trim / Add Summary</h3>
+                    <p>Highest-impact allocation changes from the current drift model.</p>
                   </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="portfolio-command-side-card">
-              <div className="portfolio-command-panel-head">
-                <div>
-                  <h3>Fees (YTD)</h3>
-                  <p>Cost context and cheapest-avenue comparison.</p>
                 </div>
-              </div>
-              <div className="portfolio-command-side-list">
-                <div><span>Gross Fees Paid</span><strong>{formatMoney(feeDashboard.estimatedUsd)}</strong></div>
-                <div><span>Annual Run Rate</span><strong>{feeDashboard.tradeCount ? `${((feeDashboard.estimatedUsd / Math.max(1, feeDashboard.tradeCount)) * 12).toFixed(2)}` : "N/A"}</strong></div>
-                <div><span>vs Policy</span><strong className={feeDashboard.comparisonDeltaUsd <= 0 ? "positive" : "negative"}>{feeDashboard.comparison ? formatSignedMoney(-feeDashboard.comparisonDeltaUsd) : "N/A"}</strong></div>
-              </div>
-              <button type="button" className="portfolio-v2-link" onClick={() => setActivePortfolioTab("fees")}>View Details</button>
-            </section>
-
-            <section className="portfolio-command-side-card">
-              <div className="portfolio-command-panel-head">
-                <div>
-                  <h3>Recent Activity</h3>
-                  <p>Most recent portfolio activity across connected sources.</p>
-                </div>
-              </div>
-              <div className="portfolio-command-activity-list">
-                {recentActivityRows.length ? recentActivityRows.map((row) => (
-                  <div key={row.id} className="portfolio-command-activity-row">
-                    <div className="portfolio-command-activity-copy">
-                      <strong>{row.symbol} · {row.side}</strong>
-                      <span>{row.when}</span>
-                    </div>
-                    <div className="portfolio-command-activity-values">
-                      <strong>{formatMoney(row.notional)}</strong>
-                      <span>{row.qty.toFixed(2)} qty</span>
+                <div className="portfolio-command-change-grid">
+                  <div>
+                    <span className="portfolio-command-column-label risk">Trim</span>
+                    <div className="portfolio-command-change-list">
+                      {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row) => (
+                        <button key={`trim-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                          <strong>{row.symbol}</strong>
+                          <em>{formatMoney(-Math.abs(row.tradeValue || 0))}</em>
+                          <b>{formatSignedPercent(row.drift, 1)}</b>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                )) : (
-                  <div className="portfolio-command-empty">
-                    <h3>No recent activity</h3>
-                    <p>Portfolio activity will appear here once connected sources start syncing.</p>
+                  <div>
+                    <span className="portfolio-command-column-label positive">Add</span>
+                    <div className="portfolio-command-change-list">
+                      {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row) => (
+                        <button key={`add-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                          <strong>{row.symbol}</strong>
+                          <em>{formatMoney(Math.abs(row.tradeValue || 0))}</em>
+                          <b>{formatSignedPercent(Math.abs(row.drift || 0), 1)}</b>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                )}
+                </div>
               </div>
-            </section>
-          </aside>
-        </div>
-      </section>
+
+              <div className="portfolio-command-impact-card">
+                <div className="portfolio-command-panel-head">
+                  <div>
+                  <h3>Allocation Impact</h3>
+                    <p>Estimated cost, readiness, and alignment improvement before you commit.</p>
+                  </div>
+                </div>
+                <div className="portfolio-command-impact-list">
+                  <div><span>Change Count</span><strong>{rebalanceMetrics.tradesRequired}</strong></div>
+                  <div><span>Est. Fees</span><strong>{formatMoney(rebalanceMetrics.estimatedFees)}</strong></div>
+                  <div><span>Est. Slippage</span><strong>{formatMoney(rebalanceMetrics.estimatedSlippage)}</strong></div>
+                  <div><span>Projected Alignment</span><strong>{projectedAlignment.before.toFixed(0)}% → {projectedAlignment.after.toFixed(0)}%</strong></div>
+                </div>
+                <div className="portfolio-command-readiness">
+                  <span>Plan Readiness</span>
+                  <ul>
+                    <li className={liveAvailableBalance > 0 ? "positive" : "negative"}>{liveAvailableBalance > 0 ? "Sufficient cash" : "Low available cash"}</li>
+                    <li className={rebalanceMetrics.tradesRequired > 0 ? "positive" : "neutral"}>{rebalanceMetrics.tradesRequired > 0 ? "Actionable allocation set" : "No changes required"}</li>
+                    <li className={feeDashboard.tradeCount > 0 ? "positive" : "neutral"}>{feeDashboard.tradeCount > 0 ? "Fee history available" : "Fee history still sparse"}</li>
+                  </ul>
+                </div>
+                <button type="button" className="portfolio-command-primary-cta" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>
+                  Review &amp; Rebalance
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+      />
+
+      <PortfolioAnalysis
+        activeTab={activePortfolioTab}
+        onTabChange={(id) => openPortfolioTab(id)}
+        assetClassFilter={assetClassFilter}
+        orders={orderLedger.orders}
+        rawExecutions={apiTradeExecutions}
+        feeDashboard={feeDashboard}
+        notifications={workspaceNotifications}
+        onManageConnections={handleOpenConnections}
+        renderLegacyTab={(id) => {
+          // Render the existing Holdings / Performance(Attribution) / Exposure
+          // panels exactly as before. History/Fees/Prediction are superseded by
+          // the new Execution/Orders/Costs/Events intelligence tabs. `id` already
+          // equals activePortfolioTab (set by onTabChange); no state write here.
+          return renderPortfolioTabContent();
+        }}
+        rail={
+          <PortfolioIntelligenceRail
+            alertContext={alertContextForRail}
+            onRefreshAlerts={handleRefreshAlerts}
+            refreshing={railRefreshing}
+          />
+        }
+      />
 
       {activePortfolioTab !== "prediction" ? (
         <section className="portfolio-command-prediction-strip">

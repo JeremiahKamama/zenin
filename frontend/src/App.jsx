@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { ToastProvider, Toaster } from "@/components/ui/toast";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceScopeProvider } from "./components/WorkspaceScopeContext";
 import "./styles.css";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
@@ -6419,6 +6420,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         />
       )}
       <aside id="zenin-primary-sidebar" className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
+        <TooltipProvider delayDuration={150}>
         <header className="sidebar-header sidebar-brand-row">
           {!isSidebarVisuallyCollapsed ? (
             <>
@@ -6446,7 +6448,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 aria-label="Expand sidebar"
                 title="Expand sidebar"
               >
-                <ZeninLogo size="sm" showText={false} />
+                <span className="sidebar-z-monogram" aria-hidden="true">Z</span>
               </button>
             </div>
           )}
@@ -6463,7 +6465,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   const isActiveSection = activeSection === section;
                   const navCode = `${group.label.slice(0, 1).toUpperCase()}${String(itemIndex + 1).padStart(2, "0")}`;
 
-                  return (
+                  const item = (
                     <a
                       key={section}
                       href={isExplicitGuestMode ? `/app?guest=1&section=${getGuestSectionSlug(section)}` : "#"}
@@ -6492,6 +6494,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                       </span>
                     </a>
                   );
+
+                  return isSidebarVisuallyCollapsed ? (
+                    <Tooltip key={section} side="right">
+                      <TooltipTrigger asChild>{item}</TooltipTrigger>
+                      <TooltipContent>{section}</TooltipContent>
+                    </Tooltip>
+                  ) : item;
                 })}
               </div>
             </div>
@@ -6535,60 +6544,75 @@ const handleOptionTradeClosed = async (tradeId) => {
         </div>
         <div className="sidebar-bottom">
           {!isSidebarVisuallyCollapsed ? <div className="sidebar-section-header">SYSTEM</div> : null}
-          <button
-            className="sidebar-theme-row sidebar-utility-row"
-            onClick={toggleTheme}
-            title={`Theme: ${themeMode === "dark" ? "Dark mode" : "Light mode"}`}
-            aria-label={`Switch to ${themeMode === "dark" ? "light" : "dark"} mode`}
-          >
-            <span className="sidebar-utility-left">
-              <span className="sidebar-theme-icon" aria-hidden="true">
-                {themeMode === "dark" ? <ThemeDarkIcon /> : <ThemeLightIcon />}
-              </span>
-              <span className="sidebar-utility-copy">
-                <span className="sidebar-theme-label">Theme</span>
-              </span>
-            </span>
-            <div className="sidebar-theme-right">
-              <span className="sidebar-theme-chip">{themeMode === "dark" ? "Dark" : "Light"}</span>
-              <span className="sidebar-theme-arrow">›</span>
-            </div>
-          </button>
+          <Tooltip side="right">
+            <TooltipTrigger asChild>
+              <button
+                className="sidebar-theme-row sidebar-utility-row"
+                onClick={toggleTheme}
+                title={`Theme: ${themeMode === "dark" ? "Dark mode" : "Light mode"}`}
+                aria-label={`Switch to ${themeMode === "dark" ? "light" : "dark"} mode`}
+              >
+                <span className="sidebar-utility-left">
+                  <span className="sidebar-theme-icon" aria-hidden="true">
+                    {themeMode === "dark" ? <ThemeDarkIcon /> : <ThemeLightIcon />}
+                  </span>
+                  <span className="sidebar-utility-copy">
+                    <span className="sidebar-theme-label">Theme</span>
+                  </span>
+                </span>
+                <div className="sidebar-theme-right">
+                  <span className="sidebar-theme-chip">{themeMode === "dark" ? "Dark" : "Light"}</span>
+                  <span className="sidebar-theme-arrow">›</span>
+                </div>
+              </button>
+            </TooltipTrigger>
+            {isSidebarVisuallyCollapsed ? <TooltipContent>Theme</TooltipContent> : null}
+          </Tooltip>
 
-          <button
-            className="sidebar-utility-row sidebar-account-row settings-launcher"
-            onClick={() => setIsSettingsOpen(true)}
-            title="Open settings"
-          >
-            <span className="sidebar-utility-left">
-              <span className="user-icon" aria-hidden="true">
-                <AccountIcon />
-              </span>
-              <span className="sidebar-utility-copy">
-                <span className="sidebar-theme-label">Account</span>
-              </span>
-            </span>
-            {!isSidebarVisuallyCollapsed && (
-              <span className="sidebar-account-chevron">›</span>
-            )}
-          </button>
+          <Tooltip side="right">
+            <TooltipTrigger asChild>
+              <button
+                className="sidebar-utility-row sidebar-account-row settings-launcher"
+                onClick={() => setIsSettingsOpen(true)}
+                title="Open settings"
+              >
+                <span className="sidebar-utility-left">
+                  <span className="user-icon" aria-hidden="true">
+                    <AccountIcon />
+                  </span>
+                  <span className="sidebar-utility-copy">
+                    <span className="sidebar-theme-label">Account</span>
+                  </span>
+                </span>
+                {!isSidebarVisuallyCollapsed && (
+                  <span className="sidebar-account-chevron">›</span>
+                )}
+              </button>
+            </TooltipTrigger>
+            {isSidebarVisuallyCollapsed ? <TooltipContent>Account</TooltipContent> : null}
+          </Tooltip>
 
-          <button
-            className="sidebar-theme-row sidebar-utility-row sidebar-logout-row"
-            onClick={handleLogout}
-            title="Sign out"
-            aria-label="Sign out"
-          >
-            <span className="sidebar-utility-left">
-              <span className="sidebar-theme-icon" aria-hidden="true"><LogoutIcon /></span>
-              <span className="sidebar-utility-copy">
-                <span className="sidebar-theme-label">Logout</span>
-              </span>
-            </span>
-            {!isSidebarVisuallyCollapsed ? <span className="sidebar-theme-arrow">›</span> : null}
-          </button>
+          <Tooltip side="right">
+            <TooltipTrigger asChild>
+              <button
+                className="sidebar-theme-row sidebar-utility-row sidebar-logout-row"
+                onClick={handleLogout}
+                title="Sign out"
+                aria-label="Sign out"
+              >
+                <span className="sidebar-utility-left">
+                  <span className="sidebar-theme-icon" aria-hidden="true"><LogoutIcon /></span>
+                  <span className="sidebar-utility-copy">
+                    <span className="sidebar-theme-label">Logout</span>
+                  </span>
+                </span>
+                {!isSidebarVisuallyCollapsed ? <span className="sidebar-theme-arrow">›</span> : null}
+              </button>
+            </TooltipTrigger>
+            {isSidebarVisuallyCollapsed ? <TooltipContent>Logout</TooltipContent> : null}
+          </Tooltip>
         </div>
-
+        </TooltipProvider>
       </aside>
 
 <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>

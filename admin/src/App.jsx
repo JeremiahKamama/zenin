@@ -98,6 +98,8 @@ import {
 import { Line, Bar } from 'react-chartjs-2';
 import { adminFetch } from './utils/adminFetch';
 import { copyTextToClipboard, downloadCsvFile, downloadJsonFile } from './utils/adminUi';
+import CoverageRegistryView from './CoverageRegistryView';
+import { COVERAGE_SEED } from './coverageSeed';
 
 ChartJS.register(
   CategoryScale,
@@ -3015,6 +3017,7 @@ export default function App() {
   const [dbStats, setDbStats] = useState(null);
   const [billingStats, setBillingStats] = useState(null);
   const [integrationsData, setIntegrationsData] = useState(null);
+  const [coverageData, setCoverageData] = useState(null);
   const [users, setUsers] = useState([]);
   const [logsData, setLogsData] = useState({ rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
   const [auditData, setAuditData] = useState({ rows: [], total: 0 });
@@ -3115,6 +3118,15 @@ export default function App() {
       } else if (tab === 'integrations') {
         const data = await adminFetch('/integrations');
         setIntegrationsData(data);
+      } else if (tab === 'coverage') {
+        // Backend Coverage Service is optional; fall back to seed metadata so the
+        // registry is always inspectable (graceful degradation, no error banner).
+        try {
+          const data = await adminFetch('/coverage');
+          setCoverageData(data);
+        } catch {
+          setCoverageData(COVERAGE_SEED);
+        }
       } else if (tab === 'logs' || tab === 'audit') {
         const { auditLogs, systemLogs } = await adminFetch('/logs');
         setLogsData(systemLogs || { rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
@@ -3602,6 +3614,7 @@ export default function App() {
       );
       case 'settings': return <SettingsView onRevokeAllSessions={handleRevokeAllSessions} />;
       case 'integrations': return <IntegrationsView data={integrationsData} onRetryIntegration={handleRetryIntegration} />;
+      case 'coverage': return <CoverageRegistryView data={coverageData} onExport={adminUi.downloadJson} />;
       default: return <OverviewView stats={stats} onOpenAudit={openAuditTrail} />;
     }
   };
@@ -3623,6 +3636,7 @@ export default function App() {
           <SidebarItem icon={<BillingIcon size={18} />} label="Billing" active={activeTab === 'billing'} onClick={() => setActiveTab('billing')} />
           <SidebarItem icon={<AuditIcon size={18} />} label="Audit Trail" active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} />
           <SidebarItem icon={<IntegrationsIcon size={18} />} label="Integrations" active={activeTab === 'integrations'} onClick={() => setActiveTab('integrations')} />
+          <SidebarItem icon={<Layers size={18} />} label="Coverage Registry" active={activeTab === 'coverage'} onClick={() => setActiveTab('coverage')} />
           <SidebarItem icon={<SettingsIcon size={18} />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
 

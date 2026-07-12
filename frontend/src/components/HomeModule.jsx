@@ -10,6 +10,13 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { zeninFetchJson } from "../utils/zeninFetch";
 import { DashboardLayout, DashboardHero, DashboardGrid } from "./layout/DashboardLayout";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "./ui/select";
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
@@ -2639,16 +2646,20 @@ export function HomeModule({
               </div>
             </div>
             <div className="home-exec-timeframe-strip home-exec-command-strip">
-              {heroIntervals.map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={item === (chartInterval === "1D" ? "Today" : chartInterval) ? "active" : ""}
-                  onClick={() => setChartInterval(item === "Today" ? "1D" : item)}
-                >
-                  {item}
-                </button>
-              ))}
+              <label className="home-exec-control-label" htmlFor="hero-interval">Timeframe</label>
+              <Select
+                value={chartInterval === "1D" ? "Today" : chartInterval}
+                onValueChange={(value) => setChartInterval(value === "Today" ? "1D" : value)}
+              >
+                <SelectTrigger id="hero-interval" className="home-exec-select" aria-label="Select portfolio value timeframe">
+                  <SelectValue placeholder="Timeframe" />
+                </SelectTrigger>
+                <SelectContent side="bottom">
+                  {heroIntervals.map((item) => (
+                    <SelectItem key={item} value={item}>{item}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="home-exec-command-metrics">
@@ -2736,8 +2747,15 @@ export function HomeModule({
                     {card.cta}
                   </button>
                   <div className="home-exec-triage-tools">
-                    <button type="button" onClick={() => { snoozeAttentionCard(card, 24); setHomeToast("Signal snoozed for 24 hours."); }}>Snooze</button>
-                    <button type="button" onClick={() => setPendingDismissCard(card)}>Dismiss</button>
+                    <button
+                      type="button"
+                      onClick={() => { snoozeAttentionCard(card, 24); setHomeToast("Signal snoozed for 24 hours."); }}
+                    >Snooze</button>
+                    <button
+                      type="button"
+                      data-tone="dismiss"
+                      onClick={() => setPendingDismissCard(card)}
+                    >Dismiss</button>
                   </div>
                 </div>
               </article>
@@ -2759,28 +2777,40 @@ export function HomeModule({
         <section className="home-exec-main-grid">
         <div className="home-exec-primary-col">
           <section className="home-exec-panel home-exec-performance-panel">
-            <div className="home-exec-section-head">
+            <div className="home-exec-section-head home-exec-performance-head">
               <div className="home-exec-performance-head-left">
                 <div className="home-exec-section-title-row">
                   <h2>Performance Curve</h2>
                   <p>Primary performance plane with benchmark context and drawdown stats.</p>
                 </div>
-                <div className="home-exec-toggle-row home-exec-toggle-row-compact">
-                  {chartModeButtons.map(([mode, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={`home-exec-toggle ${chartMode === mode ? "active" : ""}`}
-                      onClick={() => setChartMode(mode)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
               </div>
               <div className="home-exec-performance-legend" aria-label="Chart legend">
                 <span><i className="home-exec-dot portfolio" />Portfolio</span>
                 <span><i className="home-exec-dot benchmark" />SP500_REF</span>
+              </div>
+              <div className="home-exec-toggle-row home-exec-toggle-row-compact home-exec-performance-controls">
+                <label className="home-exec-control-label" htmlFor="performance-chart-mode">View</label>
+                <Select value={chartMode} onValueChange={(value) => setChartMode(value)}>
+                  <SelectTrigger id="performance-chart-mode" className="home-exec-select" aria-label="Select performance chart view">
+                    <SelectValue placeholder="View" />
+                  </SelectTrigger>
+                  <SelectContent side="bottom">
+                    {chartModeButtons.map(([mode, label]) => (
+                      <SelectItem key={mode} value={mode}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <label className="home-exec-control-label" htmlFor="performance-interval">Timeframe</label>
+                <Select value={chartInterval} onValueChange={(value) => setChartInterval(value)}>
+                  <SelectTrigger id="performance-interval" className="home-exec-select" aria-label="Select performance chart timeframe">
+                    <SelectValue placeholder="Timeframe" />
+                  </SelectTrigger>
+                  <SelectContent side="bottom">
+                    {displayIntervals.map((int) => (
+                      <SelectItem key={int} value={int}>{int}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <TradingViewChart
@@ -2792,20 +2822,6 @@ export function HomeModule({
               height={360}
               width="100%"
             />
-            <div className="home-exec-performance-foot">
-              <div className="home-exec-toggle-row home-exec-toggle-row-right">
-                {displayIntervals.map((int) => (
-                  <button
-                    key={int}
-                    type="button"
-                    className={`home-exec-toggle ${chartInterval === int ? "active" : ""}`}
-                    onClick={() => setChartInterval(int)}
-                  >
-                    {int}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div className="home-exec-chart-stats">
               <div><span>Best Period</span><strong className={bestDay >= 0 ? "positive" : "negative"}>{formatSignedMoney(bestDay)}</strong></div>
               <div><span>Worst Period</span><strong className="negative">{formatSignedMoney(worstDay)}</strong></div>
