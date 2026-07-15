@@ -7,12 +7,49 @@ import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/curren
 import { formatPercent as formatPercentCanon } from "../utils/format";
 import { loadWorkspaceCollection, saveWorkspaceCollection } from "../utils/workspacePersistence";
 import { AssetModal } from "./AssetModal";
+import { GroupProfileDrawer } from "./GroupProfileDrawer";
+import { GroupContextStrip } from "./GroupProfileDrawer";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { CompactPageHeader, DensePanelHeader, InlineControlGroup } from "./CompactWorkspaceUI";
 import { ResearchWorkspacePanel } from "./InstitutionalPanels";
 import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
 import { zeninFetchJson } from "../utils/zeninFetch";
-import { deriveMacroExecutive, deriveCommoditiesExecutive, buildMarketSignal } from "../utils/deskIntelligence";
+import { deriveMacroExecutive, deriveCommoditiesExecutive, buildMarketSignal, buildCommodityAllocation } from "../utils/deskIntelligence";
+import { getGroupSymbols } from "../utils/commodityGroups";
+import { COMMODITY_GROUP_DEFS, COMMODITY_GROUP_ORDER, getGroupDef } from "../utils/commodityGroups";
+import MacroContextEnhanced from "./market/MacroContextEnhanced";
+import { publishRegime } from "../utils/intelligenceBus";
+import { ExecutiveSignalStrip, DecisionBanner, buildMacroSignalTiles, buildCommoditySignalTiles, buildMacroDecisionText, buildCommodityDecisionText } from "./deskV2IA";
+import { GrowthInflationQuadrant, CrossAssetDashboard, MacroWatchlist, useMacroWatchlist, CrossDeskChain, CommodityRotationHeatmap, HonestUnavailable, CommodityAllocationGuidance } from "./deskV2Modules";
+import { ActiveTransmission, OpenExplorerButton, CommodityTransmissionContext } from "../transmission/TransmissionSurfaces";
+import { signalsFromMacroExecutive, signalsFromCommoditiesExecutive } from "../transmission/TransmissionRuleEngine";
+import { MacroCountryProvider, useMacroCountry } from "./macro/MacroCountryContext";
+import { MacroCountrySelector } from "./macro/MacroCountrySelector";
+import { MacroCountryMetaStrip } from "./macro/MacroCountryMetaStrip";
+import { formatMacroNumber, formatMacroPercent } from "./macro/MacroFormatter";
+import { getCountryCoverage, tierMeta, getCrossAssets } from "./macro/MacroCoverageRegistry";
+import { MacroTierRail } from "./macro/MacroTierRail.jsx";
+import { MacroFxModule } from "./macro/MacroFxModule.jsx";
+import { MacroCentralBankModule } from "./macro/MacroCentralBankModule.jsx";
+import { MacroFinancialConditionsModule } from "./macro/MacroFinancialConditionsModule.jsx";
+import { MacroGlobalTradeModule } from "./macro/MacroGlobalTradeModule.jsx";
+import { MacroCapitalFlowsModule } from "./macro/MacroCapitalFlowsModule.jsx";
+import { MacroSovereignBondsModule } from "./macro/MacroSovereignBondsModule.jsx";
+import { MacroCreditModule } from "./macro/MacroCreditModule.jsx";
+import { MacroSurpriseModule } from "./macro/MacroSurpriseModule.jsx";
+import { MacroRiskAppetiteModule } from "./macro/MacroRiskAppetiteModule.jsx";
+import { MacroCrossAssetModule } from "./macro/MacroCrossAssetModule.jsx";
+import { MacroTransmissionModule } from "./macro/MacroTransmissionModule.jsx";
+import { MacroCountryProfileModule } from "./macro/MacroCountryProfileModule.jsx";
+import { MacroResearchWorkspaceModule } from "./macro/MacroResearchWorkspaceModule.jsx";
+import { AfricaDesk } from "./AfricaDesk.jsx";
+import { providerLabel } from "./macro/MacroProviderRegistry";
+import {
+  advanceDecline,
+  weekHighsLows,
+  marketConcentration,
+  institutionalFlowScore,
+} from "../utils/marketIntelligence";
 
 const CATEGORY_TABS = [
   { id: "crypto", label: "Crypto Desk", shortLabel: "Crypto", icon: "C", description: "Hyperliquid, Aster, Lighter, Variational + Dune analytics" },
@@ -20,6 +57,7 @@ const CATEGORY_TABS = [
   { id: "equities", label: "Equities Desk", shortLabel: "Equities", icon: "E", description: "Asset Classes, Industries, Regions" },
   { id: "macro", label: "Macro Desk", shortLabel: "Macro", icon: "M", description: "Macro indicators, FX and risk context" },
   { id: "commodities", label: "Commodities Desk", shortLabel: "Commodities", icon: "X", description: "Commodities hub, flows, inventory and curve" },
+  { id: "africa", label: "Africa Desk", shortLabel: "Africa", icon: "A", description: "African exchange-listed equities via MyStocks (NSE, NGX, JSE, GSE, EGX, BRVM…)" },
 ];
 
 const EMPTY_CRYPTO = {
@@ -679,6 +717,7 @@ function normalizeMacroPayload(payload) {
     forexMovers: payload?.forexMovers || { gainers: [], losers: [] },
     riskIndicators: Array.isArray(payload?.riskIndicators) ? payload.riskIndicators : [],
     providers: payload?.providers || null,
+    country: payload?.country || "USA",
   };
 }
 
@@ -748,22 +787,204 @@ const getCorrelationTone = (value) => {
 
 
 
-function ExecTiltRow({ dir, label }) {
-  const glyph = dir === "up" ? "↑" : dir === "down" ? "↓" : "→";
-  const color = dir === "up" ? "var(--color-data-up)" : dir === "down" ? "var(--color-data-down)" : "var(--color-data-slate)";
+/**
+ * Commodity Group Monitor — replaces the legacy Group State + Positioning Tilt.
+ * Single source of group navigation. Registry-driven (COMMODITY_GROUP_DEFS):
+ * every row, count, leader, and trend derives from the registry, never hardcoded.
+ *   - "All" is the default; clicking the active group toggles back to All.
+ *   - ESC clears to All. Clear Filter shows whenever a group is active.
+ *   - Dynamic asset counts. Empty groups show an honest registered-state message.
+ *   - Keyboard: ArrowUp/Down navigate, Enter selects, ESC clears.
+ */
+const COMMODITY_MONITOR_GROUPS = COMMODITY_GROUP_ORDER.filter((g) => g !== "all");
+
+const CommodityGroupMonitor = React.memo(function CommodityGroupMonitor({ exec, selectedGroup, selectedGroups, onSelectGroup, onToggleGroup }) {
+  const statesByGroup = React.useMemo(() => {
+    const m = {};
+    for (const s of (exec?.states || [])) {
+      const g = String(s.group || "").toLowerCase();
+      if (g) m[g] = s;
+    }
+    return m;
+  }, [exec]);
+
+  const focusRef = React.useRef(null);
+  const orderRef = React.useRef(COMMODITY_MONITOR_GROUPS);
+
+  // V2 expanded group drill-down: reveal member assets (registry-driven, no live data needed).
+  const [expandedGroup, setExpandedGroup] = React.useState(null);
+  const expandGroup = React.useCallback((g) => {
+    setExpandedGroup((prev) => (prev === g ? null : g));
+  }, []);
+
+  const isActive = (g) => (selectedGroups ? selectedGroups.has(g) : selectedGroup === g);
+
+  const toggle = React.useCallback((g) => {
+    if (onToggleGroup) { onToggleGroup(g); return; }
+    if (!onSelectGroup) return;
+    onSelectGroup(selectedGroup === g ? "all" : g);
+  }, [onToggleGroup, onSelectGroup, selectedGroup]);
+
+  const onKeyDown = React.useCallback((e) => {
+    const idx = orderRef.current.indexOf(selectedGroup);
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const next = orderRef.current[(idx + 1 + orderRef.current.length) % orderRef.current.length];
+      onToggleGroup ? onToggleGroup(next) : (onSelectGroup && onSelectGroup(next));
+      focusRef.current && focusRef.current.focus();
+    } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      const prev = orderRef.current[(idx - 1 + orderRef.current.length) % orderRef.current.length];
+      onToggleGroup ? onToggleGroup(prev) : (onSelectGroup && onSelectGroup(prev));
+      focusRef.current && focusRef.current.focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onToggleGroup ? onToggleGroup("all") : (onSelectGroup && onSelectGroup("all"));
+    }
+  }, [onToggleGroup, onSelectGroup, selectedGroup]);
+
+  const hasData = Boolean(exec);
+  const activeDef = selectedGroup && selectedGroup !== "all" ? getGroupDef(selectedGroup) : null;
+  const activeCount = activeDef ? activeDef.symbols.length : 0;
+  const totalSelected = selectedGroups ? selectedGroups.size : (selectedGroup && selectedGroup !== "all" ? 1 : 0);
+  const multiActive = totalSelected > 1;
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-      <span style={{ color, fontWeight: "bold", width: 12, textAlign: "center" }}>{glyph}</span>
-      <span style={{ color: "var(--color-text-primary)" }}>{label}</span>
+    <div style={{ display: "grid", gap: 12 }}>
+      <div
+        role="grid"
+        aria-label="Commodity group monitor"
+        aria-multiselectable="true"
+        onKeyDown={onKeyDown}
+        style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 0.6fr 0.6fr", gap: "1px", background: "var(--color-border-subtle)", border: "1px solid var(--color-border-subtle)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}
+      >
+        {["Group", "Positioning", "Leader", "Trend", "Assets"].map((h) => (
+          <div key={`h-${h}`} style={{ background: "var(--color-surface-elevated)", padding: "6px 8px", fontWeight: 700, color: "var(--color-text-secondary)", letterSpacing: "0.04em", textTransform: "uppercase", fontSize: 10 }}>
+            {h}
+          </div>
+        ))}
+        {COMMODITY_MONITOR_GROUPS.map((g) => {
+          const def = COMMODITY_GROUP_DEFS[g];
+          const count = def ? def.symbols.length : 0;
+          const st = statesByGroup[g];
+          const tone = st?.tone || "neutral";
+          const positioning = st?.state || "Neutral";
+          const leader = def && def.symbols.length ? def.symbols[0] : "—";
+          const trendGlyph = tone === "positive" ? "↑" : tone === "negative" ? "↓" : "→";
+          const trendColor = tone === "positive" ? "var(--color-data-up)" : tone === "negative" ? "var(--color-data-down)" : "var(--color-text-secondary)";
+          const active = isActive(g);
+          const cellBg = active ? "var(--color-interactive-soft)" : "var(--color-surface-base)";
+          const isExpanded = expandedGroup === g;
+          return (
+            <React.Fragment key={g}>
+              <button
+                ref={active ? focusRef : undefined}
+                type="button"
+                role="row"
+                aria-selected={active}
+                aria-expanded={isExpanded}
+                title={`${def ? def.label : g}: ${def ? def.symbols.join(", ") : "no registered commodities"}${multiActive ? " · multi-select active" : ""}`}
+                onClick={() => toggle(g)}
+                style={{ background: cellBg, border: "none", textAlign: "left", padding: "6px 8px", color: active ? "var(--color-interactive)" : "var(--color-text-primary)", fontWeight: active ? 700 : 500, cursor: "pointer", fontSize: 12, textTransform: "capitalize" }}
+              >
+                <span style={{ display: "inline-block", width: 14, color: "var(--color-text-secondary)", fontSize: 10 }}>{isExpanded ? "▾" : "▸"}</span>
+                {def ? def.label : g}
+              </button>
+              <div style={{ background: cellBg, padding: "6px 8px", color: tone === "positive" ? "var(--color-data-up)" : tone === "negative" ? "var(--color-data-down)" : "var(--color-text-secondary)", fontSize: 12 }}>{positioning}</div>
+              <div style={{ background: cellBg, padding: "6px 8px", color: "var(--color-text-secondary)", fontSize: 12, fontFamily: "var(--font-mono, monospace)" }}>{leader}</div>
+              <div style={{ background: cellBg, padding: "6px 8px", color: trendColor, fontSize: 13, fontWeight: 700 }}>{trendGlyph}</div>
+              <div style={{ background: cellBg, padding: "6px 8px", color: "var(--color-text-primary)", fontSize: 12, textAlign: "right", cursor: "pointer" }} onClick={() => expandGroup(g)} title="Expand to view member commodities">{count}</div>
+              {isExpanded && def && def.symbols.length ? (
+                <div style={{ gridColumn: "1 / -1", background: "var(--color-surface-elevated)", borderTop: "1px solid var(--color-border-subtle)", padding: "6px 10px", display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  <span style={{ fontSize: 11, color: "var(--color-data-slate)", alignSelf: "center", marginRight: 4 }}>{def.label} · {def.symbols.length} registered</span>
+                  {def.symbols.map((sym) => (
+                    <span key={sym} style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", padding: "2px 8px", borderRadius: 6, border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)", background: "var(--color-surface-base)" }}>{sym}</span>
+                  ))}
+                </div>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {totalSelected > 0 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: "var(--color-data-slate)" }}>
+            {multiActive ? (
+              <>Showing <b style={{ color: "var(--color-text-primary)" }}>{totalSelected} groups</b> · {[...selectedGroups].map((g) => COMMODITY_GROUP_DEFS[g]?.label || g).join(", ")}</>
+            ) : (
+              <>Showing <b style={{ color: "var(--color-text-primary)", textTransform: "capitalize" }}>{selectedGroup}</b>
+              {" · "}{activeCount} {activeCount === 1 ? "Commodity" : "Commodities"}</>
+            )}
+          </span>
+          <button type="button" onClick={() => onToggleGroup ? onToggleGroup("all") : (onSelectGroup && onSelectGroup("all"))} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid var(--color-border-subtle)", background: "var(--color-surface-elevated)", color: "var(--color-text-secondary)", cursor: "pointer", fontSize: 11 }}>
+            Clear Filter{multiActive ? "s" : ""}
+          </button>
+        </div>
+      ) : null}
+
+      {activeDef && activeDef.symbols.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--color-data-amber)" }}>
+          No {activeDef.label} commodities currently registered.
+        </div>
+      ) : null}
+
+      {activeDef ? (
+        <PositioningIntelligence exec={exec} group={selectedGroup} />
+      ) : hasData ? (
+        <PositioningIntelligence exec={exec} group={null} />
+      ) : null}
     </div>
   );
-}
+});
+
+/**
+ * Positioning Intelligence — replaces the "Neutral" verdict + Monitor circles.
+ * Explains the verdict, confidence, and the drivers behind it. Honest fallback
+ * when positioning data is insufficient (never fabricates a verdict).
+ */
+const PositioningIntelligence = React.memo(function PositioningIntelligence({ exec, group }) {
+  if (!exec) return null;
+  const st = group ? (exec.states || []).find((s) => String(s.group || "").toLowerCase() === group) : null;
+  const hasPositioning = Boolean(st);
+  const verdict = hasPositioning ? (st.state || "Neutral") : "Insufficient positioning data";
+  const tone = hasPositioning ? (st.tone || "neutral") : "neutral";
+  const toneColor = tone === "positive" ? "var(--color-data-up)" : tone === "negative" ? "var(--color-data-down)" : "var(--color-text-secondary)";
+  const confidence = exec.confidence != null ? exec.confidence : 41;
+
+  return (
+    <div style={{ display: "grid", gap: 6, borderTop: "1px solid var(--color-border-subtle)", paddingTop: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+        <span className="analytics-card-label" style={{ letterSpacing: "0.06em" }}>Positioning Intelligence{group ? ` · ${group}` : ""}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: toneColor, textTransform: "capitalize" }}>{verdict}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--color-text-secondary)" }}>
+        <span>Confidence</span>
+        <span style={{ color: "var(--color-text-primary)", fontWeight: 700 }}>{confidence}%</span>
+      </div>
+      {hasPositioning && (exec.drivers || []).length ? (
+        <div style={{ display: "grid", gap: 3 }}>
+          {(exec.drivers || []).slice(0, 4).map((d, i) => (
+            <div key={`pi-${i}`} style={{ display: "flex", gap: 6, fontSize: 11, color: "var(--color-text-secondary)" }}>
+              <span style={{ color: d.positive ? "var(--color-data-up)" : "var(--color-data-down)" }}>{d.positive ? "▲" : "▼"}</span>
+              <span>{d.label}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+          Using Inventory · Price Momentum · Volume — Confidence {confidence}%
+        </div>
+      )}
+    </div>
+  );
+});
 
 /**
  * Executive Decision Panel (Phase 2). Decision-first, no charts.
  * Renders NOTHING when `exec` is null (Phase 12: never show empty widgets).
  */
-const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict, verdictTone = "neutral" }) {
+const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict, verdictTone = "neutral", onSelectGroup, selectedGroup, selectedGroups, onToggleGroup }) {
   if (!exec) return null;
   const toneColor = verdictTone === "positive" ? "var(--color-data-up)"
     : verdictTone === "negative" ? "var(--color-data-down)"
@@ -803,10 +1024,6 @@ const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict,
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-        <div style={{ display: "grid", gap: 8 }}>
-          <div className="analytics-card-label">Portfolio Tilt</div>
-          {(exec.tilt || []).map((t, i) => <ExecTiltRow key={`tilt-${i}`} dir={t.dir} label={t.label} />)}
-        </div>
         {kind === "macro" && drivers.length ? (
           <div style={{ display: "grid", gap: 8 }}>
             <div className="analytics-card-label">Drivers</div>
@@ -818,23 +1035,30 @@ const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict,
             ))}
           </div>
         ) : null}
-        {kind === "commodities" && (exec.states || []).length ? (
-          <div style={{ display: "grid", gap: 8 }}>
-            <div className="analytics-card-label">Group State</div>
-            {(exec.states || []).slice(0, 6).map((s, i) => (
-              <div key={`st-${i}`} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
-                <span style={{ color: "var(--color-text-secondary)" }}>{s.group}</span>
-                <span style={{ color: s.tone === "positive" ? "var(--color-data-up)" : s.tone === "negative" ? "var(--color-data-down)" : "var(--color-data-slate)", fontWeight: 600 }}>{s.state}</span>
-              </div>
-            ))}
-          </div>
+        {kind === "commodities" ? (
+          <CommodityGroupMonitor
+            exec={exec}
+            selectedGroup={selectedGroup}
+            selectedGroups={selectedGroups}
+            onSelectGroup={onSelectGroup}
+            onToggleGroup={onToggleGroup}
+          />
         ) : null}
       </div>
     </div>
     );
-});
+  });
 
-export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
+export function AnalyticsModule({
+  backendUrl,
+  hasDeskFeatureAccess = false,
+  onCommoditySelect,
+  onOpenCommodityResearch,
+  onOpenCommodityProfile,
+  onOpenCommodityTransmission,
+  onAddCommodityToWatchlist,
+  onOpenResearch,
+}) {
   const analyticsConfig = getAppRuntimeConfig()?.analytics || {};
   const macroCategoryOptions = Array.isArray(analyticsConfig?.macroCategoryOptions) && analyticsConfig.macroCategoryOptions.length
     ? analyticsConfig.macroCategoryOptions
@@ -868,6 +1092,15 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   const [selectedPerpExchange, setSelectedPerpExchange] = useState("Hyperliquid");
   const [annualReturnsPageIndex, setAnnualReturnsPageIndex] = useState(0);
   const [selectedMainCategory, setSelectedMainCategory] = useState("hub");
+  // Phase 7 — selecting a desk (C/O/E/M/X switcher) also activates its detail panel.
+  // Unifies selectedMainCategory (summary) with activeTab (detail table + Actions column)
+  // so the commodities Assets table (with Research/Profile/Transmission actions) is reachable.
+  const DESK_TABS = ["crypto", "options", "equities", "macro", "commodities"];
+  useEffect(() => {
+    if (DESK_TABS.includes(selectedMainCategory) && selectedMainCategory !== activeTab) {
+      setActiveTab(selectedMainCategory);
+    }
+  }, [selectedMainCategory, activeTab]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [selectedFundId, setSelectedFundId] = useState("");
@@ -942,18 +1175,71 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
   const [sourceDrawerOpen, setSourceDrawerOpen] = useState(false);
   const [macroSourceDataExpanded, setMacroSourceDataExpanded] = useState(false);
   const [macroTimeseriesPageIndex, setMacroTimeseriesPageIndex] = useState(0);
-  const [selectedCommodityGroup, setSelectedCommodityGroup] = useState("all");
-  const [selectedCommoditySymbol, setSelectedCommoditySymbol] = useState("CL");
   const [selectedCommodityRegion, setSelectedCommodityRegion] = useState("global");
   const [selectedCommodityTimeRange, setSelectedCommodityTimeRange] = useState("1Y");
-  const [selectedCommodityView, setSelectedCommodityView] = useState("price");
   const [compareCommoditySymbols, setCompareCommoditySymbols] = useState(["CL", "NG", "GC", "HG", "ZW"]);
   const [commodityAlertRules, setCommodityAlertRules] = useState([]);
   const [commodityFlowMode, setCommodityFlowMode] = useState("etf");
-  const [commoditySearchQuery, setCommoditySearchQuery] = useState("");
+  const [commoditySearchQuery, setCommoditySearchQuery] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("cmdQ") || "";
+  });
   const [commoditySearchRows, setCommoditySearchRows] = useState([]);
   const [actionNotice, setActionNotice] = useState("");
   const [commodityAssetsPageIndex, setCommodityAssetsPageIndex] = useState(0);
+
+  // Phase 2/4 — desk context survives navigation + is deep-linkable via URL query.
+  // Initialize group/symbol/view from the URL so a shared link restores state.
+  const [initialDeskState] = useState(() => {
+    if (typeof window === "undefined") return {};
+    const p = new URLSearchParams(window.location.search);
+    // Accept both the legacy cmd* names and the spec's explicit ?group=/symbol=/tab=
+    // shape so existing bookmarks keep working while the documented deep-link form restores too.
+    return {
+      group: p.get("cmdGroup") || p.get("group"),
+      symbol: p.get("cmdSymbol") || p.get("symbol"),
+      view: p.get("cmdView") || p.get("tab"),
+    };
+  });
+  const [selectedCommodityGroup, setSelectedCommodityGroupState] = useState(initialDeskState.group || "all");
+  const [selectedCommoditySymbol, setSelectedCommoditySymbolState] = useState(initialDeskState.symbol || "CL");
+  const [selectedCommodityView, setSelectedCommodityViewState] = useState(initialDeskState.view || "price");
+
+  // Writers that also sync to the URL (replaceState — no history spam).
+  const syncDeskUrl = (next) => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search);
+    Object.entries(next).forEach(([k, v]) => {
+      if (v && v !== "all" && v !== "price") p.set(k, v);
+      else p.delete(k);
+    });
+    const qs = p.toString();
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+  };
+  const setSelectedCommodityGroup = (v) => { setSelectedCommodityGroupState(v); syncDeskUrl({ cmdGroup: v }); };
+  // V2 multi-select: a Set of active group keys. Single-select stays available
+  // (clicking the only active group clears to All). Drives every panel via groupMatchSet.
+  const [selectedCommodityGroups, setSelectedCommodityGroupsState] = useState(
+    () => (initialDeskState.group && initialDeskState.group !== "all" ? new Set([initialDeskState.group]) : new Set())
+  );
+  const setSelectedCommodityGroups = (nextSet) => {
+    setSelectedCommodityGroupsState(nextSet);
+    const arr = [...nextSet];
+    syncDeskUrl({ cmdGroup: arr.length === 1 ? arr[0] : arr.length ? arr.join(",") : "all" });
+    // Keep the legacy singular selector in sync for single-select consumers.
+    setSelectedCommodityGroupState(arr.length === 1 ? arr[0] : "all");
+  };
+  const toggleCommodityGroup = (g) => {
+    if (!g || g === "all") { setSelectedCommodityGroups(new Set()); return; }
+    setSelectedCommodityGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(g)) next.delete(g); else next.add(g);
+      return next;
+    });
+  };
+  const setSelectedCommoditySymbol = (v) => { setSelectedCommoditySymbolState(v); syncDeskUrl({ cmdSymbol: v }); };
+  const setSelectedCommodityView = (v) => { setSelectedCommodityViewState(v); syncDeskUrl({ cmdView: v }); };
+  const [groupProfileOpen, setGroupProfileOpen] = useState(false);
   const [commodityPriceSeriesPageIndex, setCommodityPriceSeriesPageIndex] = useState(0);
   const [commoditySeasonalityPageIndex, setCommoditySeasonalityPageIndex] = useState(0);
   const ANNUAL_RETURNS_PAGE_SIZE = 10;
@@ -1248,6 +1534,20 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       if (regimeFromApi) setRegimeLabel(String(regimeFromApi).toLowerCase());
       if (Number.isFinite(regimeScoreVal)) setRegimeScore(regimeScoreVal);
       if (regimeNote) setRegimeExplain(regimeNote);
+      // P4 — publish regime to the IntelligenceBus (event-driven fan-out to
+      // Portfolio / Profiles / Watchlist / Decision Engine). Low-frequency: one
+      // publish per fetch, never per-tick.
+      if (regimeFromApi) {
+        publishRegime({
+          label: String(regimeFromApi).toLowerCase(),
+          score: Number.isFinite(regimeScoreVal) ? regimeScoreVal : undefined,
+          explain: regimeNote,
+          macroRows: macroData.macroData || [],
+          riskRows: macroData.riskIndicators || [],
+          updatedAt: macroData.updatedAt || new Date().toISOString(),
+          source: `geo:${selectedGeoCode || "US"}`,
+        });
+      }
       setOverviewLoading(false);
     };
 
@@ -1457,9 +1757,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       const equitiesQuery = activeTab === "equities"
         ? `?region=${encodeURIComponent(globalRegion)}&country=${encodeURIComponent(globalCountry)}&exchange=${encodeURIComponent(globalExchange)}&assetClass=${encodeURIComponent(globalAssetClass)}`
         : "";
+      const macroQuery = activeTab === "macro" ? `?geo=${encodeURIComponent(selectedGeoCode)}` : "";
+      const tabQuery = equitiesQuery || macroQuery;
 
       try {
-        const payload = await fetchApiJson(backendUrl, `/analytics/${endpointTab}${equitiesQuery}`, {
+        const payload = await fetchApiJson(backendUrl, `/analytics/${endpointTab}${tabQuery}`, {
           signal: controller.signal,
         });
         if (cancelled) return;
@@ -1844,6 +2146,32 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       }),
       ...liveRows.filter((row) => !terminalSymbols.has(String(row?.symbol || "").toUpperCase())),
     ];
+    // Registry-driven completeness: when a group is active, ensure EVERY registered
+    // commodity for that group appears as a matrix row. Symbols with no live quote
+    // render honestly as "—" (never fabricated). Fixes "Industrial shows only HG".
+    if (selectedCommodityGroup && selectedCommodityGroup !== "all") {
+      const def = COMMODITY_GROUP_DEFS[selectedCommodityGroup];
+      if (def) {
+        const have = new Set(mergedRows.map((r) => String(r?.symbol || "").toUpperCase()));
+        for (const sym of def.symbols) {
+          const key = String(sym).toUpperCase();
+          if (have.has(key)) continue;
+          const terminal = COMMODITY_TERMINAL_UNIVERSE.find((t) => t.symbol === key);
+          mergedRows.push({
+            symbol: sym,
+            name: terminal?.name || sym,
+            group: selectedCommodityGroup,
+            region: selectedCommodityRegion || "global",
+            unit: terminal?.unit || "",
+            source: terminal?.source || "Registry",
+            latestPrice: undefined,
+            dailyChangePct: undefined,
+            ytdChangePct: undefined,
+            oneYearReturnPct: undefined,
+          });
+        }
+      }
+    }
     const rows = mergedRows.filter((row) => {
       const inGroup = selectedCommodityGroup === "all" || String(row?.group || "").toLowerCase() === selectedCommodityGroup;
       if (!inGroup) return false;
@@ -1912,6 +2240,18 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
     const decliners = pickFirstNumber(breadth.decliners, breadth.declineCount, breadth.declines, breadth.losers) ?? 0;
     const newHighs = pickFirstNumber(breadth.newHighs, breadth.highs52w, breadth.highs) ?? 0;
     const newLows = pickFirstNumber(breadth.newLows, breadth.lows52w, breadth.lows) ?? 0;
+    // Market-intelligence layer (provider-agnostic): advance/decline + 52w highs/lows
+    // reconstructed from the normalized breadth counts so the strip cards read lib output.
+    const adRows = [
+      ...Array.from({ length: advancers }, () => ({ changePct: 1 })),
+      ...Array.from({ length: decliners }, () => ({ changePct: -1 })),
+    ];
+    const ad = advanceDecline(adRows);
+    const hlRows = [
+      ...Array.from({ length: newHighs }, () => ({ week52High: true })),
+      ...Array.from({ length: newLows }, () => ({ week52Low: true })),
+    ];
+    const hl = weekHighsLows(hlRows);
     const above50 = pickFirstNumber(breadth.above50dmaPct, breadth.above50dma, breadth.participation50) ?? 0;
     const above200 = pickFirstNumber(breadth.above200dmaPct, breadth.above200dma, breadth.participation200) ?? 0;
     const breadthScore = clampNumber(Math.round((above50 * 0.55 + above200 * 0.45) - Math.max(0, newLows - newHighs) * 0.08), 0, 100);
@@ -1955,6 +2295,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       weightPct: concentrationTotal > 0 ? (row.weightBase / concentrationTotal) * 24.6 : 0,
     }));
     const concentrationPct = concentrationDisplay.reduce((sum, row) => sum + row.weightPct, 0);
+    // Market-intelligence layer: HHI-style concentration from the real mega-cap row list.
+    const concentration = marketConcentration(concentrationRows.map((row) => ({ name: row.symbol, weight: row.weightPct })));
+    // Institutional flow score from sector-level net flow (provider-normalized).
+    const instFlow = institutionalFlowScore(
+      (filteredEquities.sectorPerformance || []).map((row) => ({ netFlow: pickFirstNumber(row?.flowUsdBn, row?.flow, row?.netFlowUsdBn) ?? 0 })),
+    );
     const sectorMatrixRows = (filteredEquities.sectorPerformance || []).slice(0, 8).map((row, idx) => {
       const daily = pickFirstNumber(row?.daily, row?.[rangeKey], row?.weekly) ?? 0;
       const weekly = pickFirstNumber(row?.weekly, row?.monthly, row?.ytd) ?? daily;
@@ -2072,6 +2418,9 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       decliners,
       newHighs,
       newLows,
+      adLine: ad.adLine,
+      breadthRatio: ad.ratio,
+      hlNet: hl.net,
       above50,
       above200,
       topSector,
@@ -2080,6 +2429,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
       earningsBreadth,
       concentrationDisplay,
       concentrationPct,
+      concentrationHhi: concentration.hhi,
+      instFlow,
       sectorMatrixRows,
       breadthTapeSeries,
       breadthHistogram,
@@ -2391,8 +2742,15 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         insight={activeTab === "equities" ? equitiesHubInsight : activeTab === "macro" ? regimeExplain : null}
         equitiesDeskSnapshot={activeTab === "equities" ? equitiesDeskSnapshot : null}
         timeRange={timeRange}
+        selectedGeoCode={selectedGeoCode}
+        setSelectedGeoCode={setSelectedGeoCode}
         macroExecutive={macroExecutive}
         commoditiesExecutive={commoditiesExecutive}
+        selectedCommodityGroup={selectedCommodityGroup}
+        onSelectCommodityGroup={setSelectedCommodityGroup}
+        selectedCommodityGroups={selectedCommodityGroups}
+        onToggleCommodityGroup={toggleCommodityGroup}
+        onOpenResearch={onOpenResearch}
         onCommoditySelect={(symbol) => {
           const nextSymbol = String(symbol || "").trim().toUpperCase();
           if (!nextSymbol) return;
@@ -2476,21 +2834,24 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         >
           Save View
         </button>
+        {activeTab === "macro" ? <MacroCountrySelector /> : null}
       </div>
     );
 
   return (
-    <AnalyticsLayout
-      eyebrow="Analytics"
-      title={deskAnalyticsLocked ? "Desk analytics locked" : analyticsLayoutTitle}
-      description={deskAnalyticsLocked ? "Upgrade the workspace to Desk to view this analytics workspace." : analyticsLayoutDescription}
-      updatedAt={currentUpdatedAt}
-      isRefreshing={currentRefreshing}
-      activeTab={activeTab}
-      onTabChange={setActiveTab}
-      toolbar={deskAnalyticsLocked ? null : analyticsToolbar}
-      notice={actionNotice}
-    >
+    <MacroCountryProvider defaultCountry={selectedGeoCode}>
+      <MacroCountryBridge onCountryChange={setSelectedGeoCode} />
+      <AnalyticsLayout
+        eyebrow="Analytics"
+        title={deskAnalyticsLocked ? "Desk analytics locked" : analyticsLayoutTitle}
+        description={deskAnalyticsLocked ? "Upgrade the workspace to Desk to view this analytics workspace." : analyticsLayoutDescription}
+        updatedAt={currentUpdatedAt}
+        isRefreshing={currentRefreshing}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        toolbar={deskAnalyticsLocked ? null : analyticsToolbar}
+        notice={actionNotice}
+      >
 
       {/* Loading / error */}
       {currentBlockingLoad && <LoadingSkeleton label={`Loading ${activeTab} analytics...`} />}
@@ -2507,6 +2868,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
           onExchange={setGlobalExchange}
           onAssetClass={setGlobalAssetClass}
         />
+      )}
+
+      {/* Africa Desk — isolated, MyStocks-backed, exchange-scoped. Does not use
+          the generic desks' data hooks. Rendered only for the africa tab. */}
+      {!currentBlockingLoad && activeTab === "africa" && (
+        <AfricaDesk />
       )}
 
       {currentError && !currentHasLoaded && !currentBlockingLoad && (
@@ -2529,8 +2896,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
           <p>Options, equities, macro, and commodities desk workspaces are restricted to Desk subscriptions. Crypto analytics remains available here.</p>
         </section>
       ) : null}
-      {!currentBlockingLoad && !deskAnalyticsLocked && renderResearchBoard()}
-      {!currentBlockingLoad && !deskAnalyticsLocked && !(currentError && !currentHasLoaded) ? (
+      {!currentBlockingLoad && !deskAnalyticsLocked && activeTab !== "africa" && renderResearchBoard()}
+      {!currentBlockingLoad && !deskAnalyticsLocked && !(currentError && !currentHasLoaded) && activeTab !== "africa" ? (
         <ResearchWorkspacePanel
           scope={activeTab}
           title={`${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Research Workspace`}
@@ -2613,7 +2980,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             fontSize: 12,
                             borderRadius: 8,
                             cursor: "pointer",
-                            background: selectedPerpExchange === ex ? "rgba(255,255,255,0.2)" : "transparent",
+                            background: selectedPerpExchange === ex ? "var(--color-border-medium)" : "transparent",
                             border: `1px solid ${selectedPerpExchange === ex ? "var(--color-interactive)" : "var(--color-border-medium)"}`,
                             color: selectedPerpExchange === ex ? "var(--color-interactive)" : "var(--color-data-slate)",
                             transition: "all 0.2s ease"
@@ -2900,11 +3267,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       label: "Venue",
                       render: (v) => {
                         const exLower = String(v || "").toLowerCase();
-                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                           : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
-                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
+                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                           : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
@@ -2944,11 +3311,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       label: "Venue",
                       render: (v) => {
                         const exLower = String(v || "").toLowerCase();
-                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                           : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
-                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
+                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                           : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
@@ -2986,11 +3353,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       label: "Venue",
                       render: (v) => {
                         const exLower = String(v || "").toLowerCase();
-                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                        const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                           : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                           : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
-                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
+                          : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                           : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
                         return (
                           <span style={{ fontSize: 10, fontWeight: "bold", padding: "2px 6px", borderRadius: 4, background: venueStyle.bg, border: `1px solid ${venueStyle.border}`, color: venueStyle.color }}>
@@ -3133,15 +3500,15 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           } else if (moneyness === "OTM") {
                             moneyStyle = { color: "var(--color-data-amber-bright)", bg: "rgba(251,146,60,0.1)", border: "rgba(251,146,60,0.2)" };
                           } else if (moneyness === "ATM") {
-                            moneyStyle = { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" };
+                            moneyStyle = { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" };
                           }
 
                           const exLower = String(r.exchange || "").toLowerCase();
-                          const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                          const venueStyle = exLower.includes("deribit") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                             : exLower.includes("binance") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
                             : exLower.includes("derive") ? { color: "var(--color-data-secondary)", bg: "rgba(163,163,163,0.1)", border: "rgba(163,163,163,0.2)" }
-                            : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
-                            : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "rgba(255,255,255,0.1)", border: "rgba(255,255,255,0.2)" }
+                            : exLower.includes("lighter") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
+                            : exLower.includes("variational") ? { color: "var(--color-data-primary)", bg: "var(--color-interactive-soft)", border: "var(--color-border-medium)" }
                             : { color: "var(--color-data-slate)", bg: "rgba(160, 160, 160, 0.06)", border: "rgba(160, 160, 160, 0.15)" };
 
                           return (
@@ -3376,14 +3743,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         {
                           label: "Advancers / Decliners",
                           value: `${equitiesDeskSnapshot.advancers.toLocaleString()} / ${equitiesDeskSnapshot.decliners.toLocaleString()}`,
-                          helper: `Ratio ${(equitiesDeskSnapshot.advancers / Math.max(1, equitiesDeskSnapshot.decliners)).toFixed(2)}`,
+                          helper: `A/D ${equitiesDeskSnapshot.adLine >= 0 ? "+" : ""}${equitiesDeskSnapshot.adLine} · Ratio ${Number.isFinite(equitiesDeskSnapshot.breadthRatio) ? equitiesDeskSnapshot.breadthRatio.toFixed(2) : "—"}`,
                           tone: equitiesDeskSnapshot.advancers >= equitiesDeskSnapshot.decliners ? "positive" : "negative",
                           sparkline: equitiesDeskSnapshot.breadthTapeSeries.map((value, idx) => value - idx * 0.18),
                         },
                         {
                           label: "New Highs - Lows (200)",
                           value: `${equitiesDeskSnapshot.newHighs} / ${equitiesDeskSnapshot.newLows}`,
-                          helper: formatSignedValue(equitiesDeskSnapshot.newHighs - equitiesDeskSnapshot.newLows, 0),
+                          helper: `Net ${equitiesDeskSnapshot.hlNet >= 0 ? "+" : ""}${equitiesDeskSnapshot.hlNet}`,
                           tone: equitiesDeskSnapshot.newHighs >= equitiesDeskSnapshot.newLows ? "positive" : "negative",
                           sparkline: equitiesDeskSnapshot.breadthHistogram,
                         },
@@ -3487,7 +3854,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         </div>
 
                         <div className="analytics-equities-watch-section">
-                          <span>Mega-cap concentration</span>
+                          <span>Mega-cap concentration · HHI {equitiesDeskSnapshot.concentrationHhi} {equitiesDeskSnapshot.concentrationHhi >= 2500 ? "(concentrated)" : "(competitive)"}</span>
                           <div className="analytics-equities-watch-table">
                             {equitiesDeskSnapshot.concentrationDisplay.map((row) => (
                               <div key={row.symbol} className="analytics-equities-watch-row">
@@ -3501,7 +3868,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         </div>
 
                         <div className="analytics-equities-watch-section">
-                          <span>Corporate Events</span>
+                          <span>Corporate Events · Institutional flow {equitiesDeskSnapshot.instFlow >= 0 ? "+" : ""}{equitiesDeskSnapshot.instFlow}</span>
                           <div className="analytics-equities-watch-table">
                             {equitiesDeskSnapshot.earningsRiskRows.map((row) => (
                               <div key={row.id} className="analytics-equities-watch-row">
@@ -3730,7 +4097,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   padding: "2px 8px",
                                   borderRadius: 999,
                                   border: "1px solid rgba(160, 160, 160, 0.25)",
-                                  background: selected ? "rgba(255,255,255,0.16)" : "rgba(5,5,5,0.4)",
+                                  background: selected ? "var(--color-interactive-soft)" : "var(--color-surface-depth)",
                                   color: selected ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                                   fontSize: 11,
                                   cursor: "pointer",
@@ -3937,7 +4304,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                   padding: "2px 8px",
                                   borderRadius: 999,
                                   border: "1px solid rgba(160, 160, 160, 0.25)",
-                                  background: selected ? "rgba(255,255,255,0.16)" : "rgba(5,5,5,0.4)",
+                                  background: selected ? "var(--color-interactive-soft)" : "var(--color-surface-depth)",
                                   color: selected ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                                   fontSize: 11,
                                   cursor: "pointer",
@@ -4041,7 +4408,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <select
                         value={selectedMMFCountry}
                         onChange={(e) => setSelectedMMFCountry(e.target.value)}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                        style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                       >
                         <option value="ALL">All Countries</option>
                         <option value="KE">Kenya (KE)</option>
@@ -4139,7 +4506,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <select
                         value={selectedREITCountry}
                         onChange={(e) => setSelectedREITCountry(e.target.value)}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
+                        style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}
                       >
                         <option value="ALL">All Countries</option>
                         <option value="KE">Kenya (KE)</option>
@@ -4333,8 +4700,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           style={{
                             padding: "6px 10px",
                             borderRadius: 8,
-                            border: `1px solid ${selectedMarketView === item.key ? "rgba(255,255,255,0.5)" : "rgba(160, 160, 160, 0.2)"}`,
-                            background: selectedMarketView === item.key ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)",
+                            border: `1px solid ${selectedMarketView === item.key ? "var(--color-border-strong)" : "rgba(160, 160, 160, 0.2)"}`,
+                            background: selectedMarketView === item.key ? "var(--color-interactive-soft)" : "var(--color-surface-panel)",
                             color: selectedMarketView === item.key ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
                             cursor: "pointer",
                             fontSize: 12,
@@ -4473,7 +4840,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               style={{
                                 padding: "4px 8px",
                                 borderRadius: 6,
-                                background: "rgba(5,5,5,0.7)",
+                                background: "var(--color-surface-depth)",
                                 border: "1px solid rgba(160, 160, 160, 0.2)",
                                 color: annualReturnsPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                                 cursor: annualReturnsPageIndex === 0 ? "default" : "pointer",
@@ -4488,7 +4855,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               style={{
                                 padding: "4px 8px",
                                 borderRadius: 6,
-                                background: "rgba(5,5,5,0.7)",
+                                background: "var(--color-surface-depth)",
                                 border: "1px solid rgba(160, 160, 160, 0.2)",
                                 color: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                                 cursor: (annualReturnsPageIndex + 1) * ANNUAL_RETURNS_PAGE_SIZE >= filteredEquities.annualReturns.length ? "default" : "pointer",
@@ -4720,7 +5087,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         multiple
                         value={compareGeos}
                         onChange={(e) => setCompareGeos(Array.from(e.target.selectedOptions).map((o) => o.value))}
-                        style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
+                        style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 180 }}
                       >
                         {macroGeographies
                           .filter((g) => selectedGeoType === "Global" ? g.type === "Global" : g.type === selectedGeoType)
@@ -4734,7 +5101,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             key={`cmp-chip-${code}`}
                             type="button"
                             onClick={() => setCompareGeos((prev) => prev.filter((c) => c !== code))}
-                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(160, 160, 160, 0.25)", background: "rgba(5,5,5,0.55)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
+                            style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid rgba(160, 160, 160, 0.25)", background: "var(--color-surface-depth)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
                           >
                             {code} ×
                           </button>
@@ -4758,11 +5125,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No map rows."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={mapIndicator} onChange={(e) => setMapIndicator(e.target.value)} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         {(macroIndicators || []).map((ind) => <option key={`map-ind-${ind.code}`} value={ind.code}>{ind.name || ind.code}</option>)}
                       </select>
-                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <input type="date" value={mapDate} onChange={(e) => setMapDate(e.target.value)} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={mapLayer} onChange={(e) => setMapLayer(e.target.value)} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="choropleth">Choropleth</option>
                         <option value="bubble">Bubble</option>
                       </select>
@@ -4783,19 +5150,19 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No calendar events."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
-                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <input type="date" value={calendarFilters.from} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, from: e.target.value }))} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <input type="date" value={calendarFilters.to} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, to: e.target.value }))} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }} />
+                      <select value={calendarFilters.importance} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, importance: e.target.value }))} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Importance</option>
                         <option value="high">High</option>
                         <option value="medium">Medium</option>
                         <option value="low">Low</option>
                       </select>
-                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={calendarFilters.geography} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, geography: e.target.value }))} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Geographies</option>
                         {macroGeographies.map((geo) => <option key={`cal-geo-${geo.code}`} value={geo.code}>{geo.code}</option>)}
                       </select>
-                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={calendarFilters.indicatorType} onChange={(e) => setCalendarFilters((prev) => ({ ...prev, indicatorType: e.target.value }))} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">All Types</option>
                         {macroCategoryOptions.map((cat) => <option key={`cal-type-${cat.key}`} value={cat.key}>{cat.label}</option>)}
                       </select>
@@ -4819,13 +5186,13 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   emptyText="No rankings rows."
                   headerExtra={
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={rankingScope} onChange={(e) => setRankingScope(e.target.value)} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="all">Scope: All</option>
                         <option value="g20">G20</option>
                         <option value="dm">Developed</option>
                         <option value="em">Emerging</option>
                       </select>
-                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} style={{ background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
                         <option value="value_desc">Sort: Highest</option>
                         <option value="value_asc">Sort: Lowest</option>
                         <option value="delta_desc">Sort: Delta</option>
@@ -4851,14 +5218,14 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       <button
                         type="button"
                         onClick={() => setForecastToggle((v) => !v)}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(160, 160, 160, 0.25)", background: forecastToggle ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: forecastToggle ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(160, 160, 160, 0.25)", background: forecastToggle ? "var(--color-interactive-soft)" : "var(--color-surface-panel)", color: forecastToggle ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
                       >
                         Forecast {forecastToggle ? "On" : "Off"}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConsensusVisible((v) => !v)}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(160, 160, 160, 0.25)", background: consensusVisible ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)", color: consensusVisible ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(160, 160, 160, 0.25)", background: consensusVisible ? "var(--color-interactive-soft)" : "var(--color-surface-panel)", color: consensusVisible ? "var(--color-interactive)" : "var(--color-data-slate-bright)", cursor: "pointer", fontSize: 12 }}
                       >
                         Consensus {consensusVisible ? "Shown" : "Hidden"}
                       </button>
@@ -4885,7 +5252,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 </div>
 
                 <div style={{ overflowX: "auto" }}>
-                  <table className="analytics-inline-table">
+                  <table className="analytics-inline-table analytics-macro-terminal-table">
                     <thead>
                       <tr style={{ borderBottom: "1px solid rgba(160, 160, 160, 0.15)", color: "var(--color-text-secondary)", textAlign: "left" }}>
                         <th style={{ padding: "8px 16px", fontWeight: "bold", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Indicator</th>
@@ -4947,18 +5314,18 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                             </td>
 
                             {/* Current value */}
-                            <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold", fontSize: 13, color: "var(--color-text-primary)" }}>
-                              {Number.isFinite(current) ? `${current.toFixed(2)}${row.unit ? ` ${row.unit}` : ""}` : "—"}
+                            <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: "bold", fontSize: 13, color: "var(--color-text-primary)" }} title={row.source ? `Source: ${providerLabel(row.source)}` : undefined}>
+                              {Number.isFinite(current) ? formatMacroNumber(current, { kind: row.unit === "%" ? "percentage" : "decimal", digits: 2 }) : "—"}
                               {delta !== null && (
                                 <span style={{ display: "block", fontSize: 9, color: delta > 0 ? "var(--color-data-up)" : delta < 0 ? "var(--color-data-down)" : "var(--color-data-slate)", marginTop: 1 }}>
-                                  {delta > 0 ? "+" : ""}{delta.toFixed(2)} vs prior
+                                  {delta > 0 ? "+" : ""}{formatMacroNumber(delta, { digits: 2 })} vs prior
                                 </span>
                               )}
                             </td>
 
                             {/* Prior value */}
                             <td style={{ padding: "10px 8px", textAlign: "right", color: "var(--color-text-secondary)", fontFamily: "monospace", fontSize: 11 }}>
-                              {hasPrior ? prior.toFixed(2) : "—"}
+                              {hasPrior ? formatMacroNumber(prior, { kind: row.unit === "%" ? "percentage" : "decimal", digits: 2 }) : "—"}
                             </td>
 
                             {/* Trend arrow */}
@@ -5212,31 +5579,11 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                 exec={commoditiesExecutive}
                 verdict={commoditiesExecutive?.theme || "Unavailable"}
                 verdictTone="neutral"
+                onSelectGroup={setSelectedCommodityGroup}
+                selectedGroup={selectedCommodityGroup}
               />
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  {COMMODITY_GROUPS.map((group) => {
-                    const active = selectedCommodityGroup === group;
-                    return (
-                      <button
-                        key={group}
-                        type="button"
-                        onClick={() => setSelectedCommodityGroup(group)}
-                        style={{
-                          padding: "6px 10px",
-                          borderRadius: 8,
-                          border: active ? "1px solid var(--color-interactive)" : "1px solid var(--color-border-subtle)",
-                          background: active ? "rgba(255,255,255,0.16)" : "var(--color-surface-elevated)",
-                          color: active ? "var(--color-interactive)" : "var(--color-text-secondary)",
-                          cursor: "pointer",
-                          fontSize: 12,
-                          textTransform: "capitalize",
-                        }}
-                      >
-                        {group}
-                      </button>
-                    );
-                  })}
                   <select
                     value={selectedCommodityRegion}
                     onChange={(e) => setSelectedCommodityRegion(e.target.value)}
@@ -5259,8 +5606,25 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     <option value="5Y">5Y</option>
                     <option value="MAX">MAX</option>
                   </select>
+                  <button
+                    type="button"
+                    className="analytics-btn secondary"
+                    onClick={() => setGroupProfileOpen(true)}
+                    style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--color-border-subtle)", background: "var(--color-surface-elevated)", color: "var(--color-text-secondary)", cursor: "pointer", fontSize: 12 }}
+                  >
+                    Group Profile
+                  </button>
                 </div>
                 <ProviderStatusStrip providers={commoditiesData.providers || providerStatus} />
+
+                {groupProfileOpen ? (
+                  <GroupProfileDrawer
+                    group={selectedCommodityGroup === "all" ? "energy" : selectedCommodityGroup}
+                    onClose={() => setGroupProfileOpen(false)}
+                    onOpenCompanyProfile={onOpenCommodityProfile}
+                    onOpenResearch={onOpenCommodityResearch}
+                  />
+                ) : null}
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                   <AnalyticsStatCard
@@ -5302,7 +5666,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     style={{
                       flex: "1 1 280px",
                       minWidth: 220,
-                      background: "rgba(5,5,5,0.75)",
+                      background: "var(--color-surface-depth)",
                       border: "1px solid rgba(160, 160, 160, 0.2)",
                       color: "var(--color-data-slate-bright)",
                       borderRadius: 8,
@@ -5355,7 +5719,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           padding: "6px 10px",
                           borderRadius: 8,
                           border: `1px solid ${active ? "var(--color-interactive)" : "var(--color-border-subtle)"}`,
-                          background: active ? "rgba(255,255,255,0.16)" : "var(--color-surface-elevated)",
+                          background: active ? "var(--color-interactive-soft)" : "var(--color-surface-elevated)",
                           color: active ? "var(--color-interactive)" : "var(--color-text-secondary)",
                           cursor: "pointer",
                           fontSize: 12,
@@ -5389,7 +5753,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       style={{
                         padding: "4px 8px",
                         borderRadius: 6,
-                        background: "rgba(5,5,5,0.7)",
+                        background: "var(--color-surface-depth)",
                         border: "1px solid rgba(160, 160, 160, 0.2)",
                         color: commodityAssetsPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                         cursor: commodityAssetsPageIndex === 0 ? "default" : "pointer",
@@ -5405,7 +5769,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                       style={{
                         padding: "4px 8px",
                         borderRadius: 6,
-                        background: "rgba(5,5,5,0.7)",
+                        background: "var(--color-surface-depth)",
                         border: "1px solid rgba(160, 160, 160, 0.2)",
                         color: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                         cursor: (commodityAssetsPageIndex + 1) * COMMODITY_ASSETS_PAGE_SIZE >= (filteredCommodities.rows || []).length ? "default" : "pointer",
@@ -5436,6 +5800,24 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                   { key: "dailyChangePct", label: "Daily", align: "right", render: (v) => formatPercent(v) },
                   { key: "ytdChangePct", label: "YTD", align: "right", render: (v) => formatPercent(v) },
                   { key: "oneYearReturnPct", label: "1Y", align: "right", render: (v) => formatPercent(v) },
+                  {
+                    key: "actions",
+                    label: "Actions",
+                    align: "right",
+                    render: (v, row) => {
+                      const sym = String(row?.symbol || v || "").trim().toUpperCase();
+                      if (!sym) return "—";
+                      return (
+                        <span className="commodity-row-actions" onClick={(e) => e.stopPropagation()}>
+                          <button type="button" className="commodity-action-btn" title="Open Research Workspace" onClick={() => onOpenCommodityResearch?.({ symbol: sym })}>Research</button>
+                          <button type="button" className="commodity-action-btn" title="Open Profile" onClick={() => onOpenCommodityProfile?.({ symbol: sym })}>Profile</button>
+                          <button type="button" className="commodity-action-btn" title="Open Transmission" onClick={() => onOpenCommodityTransmission?.(sym)}>Transmission</button>
+                          <button type="button" className="commodity-action-btn" title="Add to Watchlist" onClick={() => onAddCommodityToWatchlist?.(sym)}>Watch</button>
+                          <button type="button" className="commodity-action-btn" title="Copy symbol" onClick={() => { try { navigator.clipboard?.writeText(sym); } catch {} }}>Copy</button>
+                        </span>
+                      );
+                    },
+                  },
                 ]}
                 rows={(filteredCommodities.rows || [])
                   .slice(
@@ -5467,7 +5849,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         style={{
                           padding: "4px 8px",
                           borderRadius: 6,
-                          background: "rgba(5,5,5,0.7)",
+                          background: "var(--color-surface-depth)",
                           border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: commodityPriceSeriesPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: commodityPriceSeriesPageIndex === 0 ? "default" : "pointer",
@@ -5483,7 +5865,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         style={{
                           padding: "4px 8px",
                           borderRadius: 6,
-                          background: "rgba(5,5,5,0.7)",
+                          background: "var(--color-surface-depth)",
                           border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: (commodityPriceSeriesPageIndex + 1) * COMMODITY_PRICE_SERIES_PAGE_SIZE >= (commoditiesData.priceSeries || []).length ? "default" : "pointer",
@@ -5516,7 +5898,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
                     {/* Left: Custom flow ledger */}
-                    <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
+                    <div style={{ background: "var(--color-surface-depth)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
                       <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Flow Ledger</div>
                       <table className="analytics-inline-table">
                         <thead>
@@ -5541,8 +5923,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                     padding: "2px 6px",
                                     borderRadius: 4,
                                     fontSize: 10,
-                                    background: String(row.type).toLowerCase().includes("etf") ? "rgba(255,255,255,0.1)" : "rgba(163,163,163,0.1)",
-                                    border: String(row.type).toLowerCase().includes("etf") ? "1px solid rgba(255,255,255,0.2)" : "1px solid rgba(163,163,163,0.2)",
+                                    background: String(row.type).toLowerCase().includes("etf") ? "var(--color-interactive-soft)" : "rgba(163,163,163,0.1)",
+                                    border: String(row.type).toLowerCase().includes("etf") ? "1px solid var(--color-border-medium)" : "1px solid rgba(163,163,163,0.2)",
                                     color: String(row.type).toLowerCase().includes("etf") ? "var(--color-data-primary)" : "var(--color-data-secondary)"
                                   }}>
                                     {row.type}
@@ -5569,7 +5951,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     </div>
 
                     {/* Right: Net Allocation Visual Bars */}
-                    <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)", display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ background: "var(--color-surface-depth)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)", display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Volume Intensity</div>
                         <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>Relative traded-volume shifts by day</div>
@@ -5642,7 +6024,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         style={{
                           padding: "4px 8px",
                           borderRadius: 6,
-                          background: "rgba(5,5,5,0.7)",
+                          background: "var(--color-surface-depth)",
                           border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: commoditySeasonalityPageIndex === 0 ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: commoditySeasonalityPageIndex === 0 ? "default" : "pointer",
@@ -5658,7 +6040,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                         style={{
                           padding: "4px 8px",
                           borderRadius: 6,
-                          background: "rgba(5,5,5,0.7)",
+                          background: "var(--color-surface-depth)",
                           border: "1px solid rgba(160, 160, 160, 0.2)",
                           color: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "var(--color-data-slate-dim)" : "var(--color-data-slate-bright)",
                           cursor: (commoditySeasonalityPageIndex + 1) * COMMODITY_SEASONALITY_PAGE_SIZE >= (commoditiesData.seasonality || []).length ? "default" : "pointer",
@@ -5730,7 +6112,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
                     {/* Left: Interactive Curve Ladder */}
-                    <div style={{ background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
+                    <div style={{ background: "var(--color-surface-depth)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
                       <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Curve Ladder</div>
                       <table className="analytics-inline-table">
                         <thead>
@@ -5750,12 +6132,12 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                                 key={`cv-row-${idx}`}
                                 style={{
                                   borderBottom: "1px solid rgba(160, 160, 160, 0.08)",
-                                  background: isPrompt ? "rgba(255,255,255,0.06)" : "transparent",
+                                  background: isPrompt ? "var(--color-surface-hover)" : "transparent",
                                   fontWeight: isPrompt ? "bold" : "normal",
                                 }}
                               >
                                 <td style={{ padding: "8px 4px", color: isPrompt ? "var(--color-interactive)" : "var(--color-text-primary)" }}>
-                                  {row.contract} {isPrompt && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,255,255,0.2)", marginLeft: 4 }}>PROMPT</span>}
+                                  {row.contract} {isPrompt && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "var(--color-border-medium)", marginLeft: 4 }}>PROMPT</span>}
                                 </td>
                                 <td style={{ padding: "8px 4px", textAlign: "right" }}>{formatMoney(row.price, 2)}</td>
                                 <td style={{ padding: "8px 4px", textAlign: "right", color: spreadColor }}>
@@ -5779,7 +6161,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                     </div>
 
                     {/* Right: SVG Visual Curve Plot */}
-                    <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", background: "rgba(5,5,5,0.4)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
+                    <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", background: "var(--color-surface-depth)", borderRadius: 6, padding: 12, border: "1px solid var(--color-border-subtle)" }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: "bold", color: "var(--color-text-primary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Structure Chart</div>
                         <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginBottom: 12 }}>Visual mapping of prices over chronological tenors</div>
@@ -5937,8 +6319,8 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                               gap: 4,
                               padding: "2px 6px",
                               borderRadius: 4,
-                              background: "rgba(255,255,255,0.1)",
-                              border: "1px solid rgba(255,255,255,0.25)",
+                              background: "var(--color-interactive-soft)",
+                              border: "1px solid var(--color-border-medium)",
                               color: "var(--color-interactive)",
                               fontSize: 10,
                               fontWeight: "bold"
@@ -5974,7 +6356,7 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
                           },
                         ])
                       }
-                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.16)", color: "var(--color-interactive)", cursor: "pointer", fontSize: 11, fontWeight: "bold" }}
+                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--color-border-strong)", background: "var(--color-interactive-soft)", color: "var(--color-interactive)", cursor: "pointer", fontSize: 11, fontWeight: "bold" }}
                     >
                       + Add Workspace Alert
                     </button>
@@ -6085,10 +6467,26 @@ export function AnalyticsModule({ backendUrl, hasDeskFeatureAccess = false }) {
         />
       ) : null}
     </AnalyticsLayout>
+    </MacroCountryProvider>
   );
 }
 
-function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null }) {
+// Bridges the canonical macro country (context) into the existing selectedGeoCode
+// state that drives the macro detail fetch effect. Single source of truth = context;
+// selectedGeoCode is a downstream mirror so all existing fetch logic keeps working.
+function MacroCountryBridge({ onCountryChange }) {
+  const { selectedCountry } = useMacroCountry();
+  const lastRef = React.useRef(selectedCountry);
+  React.useEffect(() => {
+    if (lastRef.current !== selectedCountry) {
+      lastRef.current = selectedCountry;
+      onCountryChange(selectedCountry);
+    }
+  }, [selectedCountry, onCountryChange]);
+  return null;
+}
+
+function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null, selectedGeoCode = "USA", setSelectedGeoCode = () => {}, backendUrl = "", selectedCommodityGroup = "all", onSelectCommodityGroup = () => {}, selectedCommodityGroups = null, onToggleCommodityGroup = () => {}, onOpenResearch = null }) {
   if (!config) return null;
   const rows = Array.isArray(config.rows) ? config.rows : [];
   const metrics = Array.isArray(config.metrics) ? config.metrics : [];
@@ -6108,6 +6506,14 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
         onCommoditySelect={onCommoditySelect}
         macroExecutive={macroExecutive}
         commoditiesExecutive={commoditiesExecutive}
+        selectedGeoCode={selectedGeoCode}
+        setSelectedGeoCode={setSelectedGeoCode}
+        backendUrl={backendUrl}
+        selectedCommodityGroup={selectedCommodityGroup}
+        onSelectCommodityGroup={onSelectCommodityGroup}
+        selectedCommodityGroups={selectedCommodityGroups}
+        onToggleCommodityGroup={onToggleCommodityGroup}
+        onOpenResearch={onOpenResearch}
       />
     );
   }
@@ -6221,7 +6627,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
   );
 }
 
-const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null }) {
+const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null, selectedGeoCode = "USA", setSelectedGeoCode = () => {}, backendUrl = "", selectedCommodityGroup = "all", onSelectCommodityGroup = () => {}, selectedCommodityGroups = null, onToggleCommodityGroup = () => {}, onOpenResearch = null }) {
   const isEquities = activeTab === "equities";
   const isOptions = activeTab === "options";
   const isMacro = activeTab === "macro";
@@ -6231,6 +6637,8 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
   const visibleRail = rail.length ? rail : [{ label: "Source", value: "Pending", helper: "Awaiting data" }];
   const curveRows = visibleRows.slice(0, 6);
   const maxCurve = Math.max(...curveRows.map((row) => Math.abs(Number(String(row.secondary).replace(/[^0-9.-]/g, ""))) || 1), 1);
+  const [macroWatchPins, toggleMacroWatch] = useMacroWatchlist();
+  const [commodityFilterGroup, setCommodityFilterGroup] = React.useState(null);
 
   if (isOptions) {
     const optionsMeta = config.optionsMeta || {};
@@ -6500,6 +6908,11 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
       topSector: null,
       above50: 0,
       above200: 0,
+      adLine: 0,
+      breadthRatio: 0,
+      hlNet: 0,
+      concentrationHhi: 0,
+      instFlow: 0,
     };
     return (
       <section className="analytics-desk-shell analytics-factor-desk analytics-equities-live-desk">
@@ -6516,14 +6929,14 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             {
               label: "Advancers / Decliners",
               value: `${snapshot.advancers.toLocaleString()} / ${snapshot.decliners.toLocaleString()}`,
-              helper: `Ratio ${(snapshot.advancers / Math.max(1, snapshot.decliners)).toFixed(2)}`,
+              helper: `A/D ${snapshot.adLine >= 0 ? "+" : ""}${snapshot.adLine} · Ratio ${Number.isFinite(snapshot.breadthRatio) ? snapshot.breadthRatio.toFixed(2) : "—"}`,
               tone: snapshot.advancers >= snapshot.decliners ? "positive" : "negative",
               sparkline: snapshot.breadthTapeSeries.map((value, idx) => value - idx * 0.18),
             },
             {
               label: "New Highs - Lows (200)",
               value: `${snapshot.newHighs} / ${snapshot.newLows}`,
-              helper: formatSignedValue(snapshot.newHighs - snapshot.newLows, 0),
+              helper: `Net ${snapshot.hlNet >= 0 ? "+" : ""}${snapshot.hlNet}`,
               tone: snapshot.newHighs >= snapshot.newLows ? "positive" : "negative",
               sparkline: snapshot.breadthHistogram,
             },
@@ -6628,7 +7041,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             </div>
 
             <div className="analytics-equities-watch-section">
-              <span>Mega-cap concentration</span>
+              <span>Mega-cap concentration · HHI {snapshot.concentrationHhi} {snapshot.concentrationHhi >= 2500 ? "(concentrated)" : "(competitive)"}</span>
               <div className="analytics-equities-watch-table">
                 {snapshot.concentrationDisplay.map((row) => (
                   <div key={row.symbol} className="analytics-equities-watch-row">
@@ -6642,7 +7055,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             </div>
 
             <div className="analytics-equities-watch-section">
-              <span>Corporate Events</span>
+              <span>Corporate Events · Institutional flow {snapshot.instFlow >= 0 ? "+" : ""}{snapshot.instFlow}</span>
               <div className="analytics-equities-watch-table">
                 {snapshot.earningsRiskRows.map((row) => (
                   <div key={row.id} className="analytics-equities-watch-row">
@@ -6716,7 +7129,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             <div className="analytics-equities-internals">
               <div><span>% Above 50DMA</span><strong>{formatPercent(snapshot.above50)}</strong></div>
               <div><span>% Above 200DMA</span><strong>{formatPercent(snapshot.above200)}</strong></div>
-              <div><span>High / Low Spread</span><strong>{formatSignedValue(snapshot.newHighs - snapshot.newLows, 0)}</strong></div>
+              <div><span>High / Low Spread</span><strong>{formatSignedValue(snapshot.hlNet, 0)}</strong></div>
               <div><span>Top Sector</span><strong>{snapshot.topSector?.sector || "—"}</strong></div>
             </div>
           </div>
@@ -6785,6 +7198,56 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             verdictTone={macroExecutive.tone || "neutral"}
           />
         ) : null}
+        <ExecutiveSignalStrip tiles={buildMacroSignalTiles({ macroRows: sourceOverviewRows, riskRows, fxRates: fxRows, exec: macroExecutive })} />
+        <DecisionBanner text={buildMacroDecisionText({ regimeLabel: macroExecutive?.regime, exec: macroExecutive })} />
+
+        {/* Phase 1 — Tier-1 intelligence rail (Liquidity / Rates / Growth / Inflation).
+            Below Macro Regime, above the Macro Terminal (new hierarchy). Real per-country
+            series via CountryRegistry + provider adapters; honest Unavailable states. */}
+        <MacroTierRail
+          countryCode={selectedGeoCode}
+          regimeLabel={macroExecutive?.regime || null}
+          regimeTone={macroExecutive?.tone || "neutral"}
+          baseUrl={backendUrl}
+        />
+
+        {/* Phase 2 — FX Intelligence, Central Bank Monitor, Financial Conditions.
+            React to the same selectedGeoCode so country switching reloads real
+            datasets. FX uses the Yahoo adapter (honest Unavailable until the backend
+            wires Yahoo); Central Bank / Financial Conditions are reference-only
+            (no backend feed yet) — never fabricated policy intelligence. */}
+        <MacroFxModule countryCode={selectedGeoCode} baseUrl={backendUrl} />
+        <MacroCentralBankModule />
+        <MacroFinancialConditionsModule />
+
+        {/* Phase 3 — Global Trade, Capital Flows, Sovereign Bonds, Credit, Economic
+            Surprise. Reuse MacroThemeModule + CountryRegistry taxonomy. Trade /
+            Capital Flows resolve via World Bank; Bonds / Credit / Surprise render
+            honest Unavailable until those backend feeds land. */}
+        <MacroGlobalTradeModule countryCode={selectedGeoCode} baseUrl={backendUrl} />
+        <MacroCapitalFlowsModule countryCode={selectedGeoCode} baseUrl={backendUrl} />
+        <MacroSovereignBondsModule countryCode={selectedGeoCode} baseUrl={backendUrl} />
+        <MacroCreditModule countryCode={selectedGeoCode} baseUrl={backendUrl} />
+        <MacroSurpriseModule countryCode={selectedGeoCode} baseUrl={backendUrl} />
+
+        {/* Phase 4 — Risk Appetite, Cross-Asset Dashboard, Cross-Asset Transmission.
+            Reuse the canonical cross-asset map (CROSS_ASSET_BY_COUNTRY) + regime label.
+            Real symbol mapping; live price/beta feeds pending → honest Unavailable. */}
+        <MacroRiskAppetiteModule regimeLabel={macroExecutive?.regime || null} regimeTone={macroExecutive?.tone || "neutral"} />
+        <MacroCrossAssetModule countryCode={selectedGeoCode} />
+        <MacroTransmissionModule countryCode={selectedGeoCode} regimeLabel={macroExecutive?.regime || null} regimeTone={macroExecutive?.tone || "neutral"} />
+
+        {/* Phase 5 — Country Profile + Macro Research Workspace entry.
+            Country Profile is real reference data (CountryRegistry). Research
+            Workspace bridges to the existing app research surface. */}
+        <MacroCountryProfileModule countryCode={selectedGeoCode} />
+        <MacroResearchWorkspaceModule
+          countryCode={selectedGeoCode}
+          regimeLabel={macroExecutive?.regime || null}
+          regimeTone={macroExecutive?.tone || "neutral"}
+          onOpenResearch={onOpenResearch}
+        />
+
         <div className="analytics-macro-topline">
           <div className="analytics-desk-hero analytics-macro-hero">
             <div>
@@ -6792,6 +7255,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
               {config.hideTitle ? null : <h2>{config.title}</h2>}
               <p>{config.summary}</p>
               <SourceQualityStrip fallback={config.quality} items={[config.quality, ...sourceOverviewRows.slice(0, 2), ...riskRows.slice(0, 1)]} />
+              <MacroCountryMetaStrip countryCode={selectedGeoCode} exec={macroExecutive} updatedAt={updatedAt} />
             </div>
             <div className="analytics-desk-command amber">
               <span>{config.primaryLabel}</span>
@@ -6812,25 +7276,24 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
         </div>
 
         <div className="analytics-macro-grid">
+          <GrowthInflationQuadrant macroRows={sourceOverviewRows} exec={macroExecutive} />
+          <CrossAssetDashboard riskRows={riskRows} countryCode={selectedGeoCode} />
+          <MacroWatchlist macroRows={sourceOverviewRows} pins={macroWatchPins} onToggle={toggleMacroWatch} />
+          <ActiveTransmission
+            signals={[
+              ...(macroExecutive ? signalsFromMacroExecutive(macroExecutive).map((s) => ({ label: s.label, positive: s.positive !== false })) : []),
+              ...(commoditiesExecutive ? signalsFromCommoditiesExecutive(commoditiesExecutive).map((s) => ({ label: s.label, positive: s.positive !== false })) : []),
+            ]}
+            rootConfidence={macroExecutive?.confidence ?? 70}
+            title="Active Transmission"
+          />
           <div className="analytics-desk-panel analytics-macro-map">
             <div className="analytics-desk-panel-head">
-              <span>Rates / growth matrix</span>
-              <strong>Country signal stack</strong>
+              <span>Rates / growth terminal</span>
+              <strong>Country Signal Stack · {getCountryCoverage(selectedGeoCode).name}</strong>
               <em>{formatDateTime(updatedAt)}</em>
             </div>
-            <div className="analytics-macro-lanes">
-              {visibleRows.map((row, idx) => (
-                <div key={row.id || `${row.asset}-${idx}`} className="analytics-macro-lane">
-                  <strong>{row.asset}</strong>
-                  <span>{row.tertiary}</span>
-                  <b>{row.primary}</b>
-                  <em>{row.secondary}</em>
-                  <i className={`analytics-desk-chip ${row.tone || "neutral"}`}>{row.signal}</i>
-                  <SourceQualityBadge quality={row.source ? row : config.quality} compact />
-                  <small>{row.source || "Macro feed"}{row.asOf ? ` · ${row.asOf}` : ""}</small>
-                </div>
-              ))}
-            </div>
+            <MacroRatesTerminal rows={visibleRows} updatedAt={updatedAt} />
           </div>
 
           <aside className="analytics-desk-panel analytics-macro-calendar">
@@ -6860,7 +7323,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
               {riskRows.length ? riskRows.map((row, idx) => (
                 <article key={row.id || `risk-${idx}`} className={`analytics-macro-risk-card ${String(row.status || "").toLowerCase().includes("elevated") ? "warning" : "neutral"}`}>
                   <span>{row.indicator}</span>
-                  <strong>{row.value == null ? "—" : `${Number(row.value).toFixed(2)}${row.unit ? ` ${row.unit}` : ""}`}</strong>
+                  <strong>{row.value == null ? "—" : formatMacroNumber(row.value, { kind: row.unit === "%" ? "percentage" : "decimal", digits: 2 })}{row.unit && row.unit !== "%" ? ` ${row.unit}` : ""}</strong>
                   <em>{row.status || "Normal"}</em>
                 </article>
               )) : <div className="analytics-options-watch-empty">No risk rows.</div>}
@@ -7010,6 +7473,15 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
         }];
 
     const leader = terminalRows[0] || {};
+    // V2: Commodity Allocation Guidance — pure derivation (no hook; cheap + deterministic).
+    const allocationRecs = buildCommodityAllocation(terminalRows, commoditiesExecutive?.regime || null);
+    // Group filter used to cross-sync lower sections from a recommendation click.
+    const groupMatch = (r) => {
+      if (commodityFilterGroup) return String(r.group || r.category || "").toLowerCase() === String(commodityFilterGroup).toLowerCase();
+      const active = selectedCommodityGroups;
+      if (!active || active.size === 0) return true; // All
+      return active.has(String(r.group || r.category || "").toLowerCase());
+    };
     const selectedSymbol = toSymbol(commodityMeta.selectedSymbol || leader.symbol || "CMD");
     const selectedTerminalRow =
       terminalRows.find((row) => toSymbol(row.symbol || row.asset) === selectedSymbol) ||
@@ -7030,8 +7502,8 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
       }
     };
     const selectedCurvePoints = normalizeCurvePoints(commodityMeta.selectedSymbol || leader.symbol || "CMD");
-    const compareDeskRows = (compareRows.length ? compareRows : terminalRows).slice(0, 5);
-    const compareCurveRows = useMemo(() => compareDeskRows.map((row, idx) => {
+    const compareDeskRows = (compareRows.length ? compareRows : terminalRows).filter(groupMatch).slice(0, 5);
+    const compareCurveRows = compareDeskRows.map((row, idx) => {
       const spot = parseNumeric(row?.price) ?? parseNumeric(row?.latestPrice) ?? parseNumeric(row?.primary) ?? 0;
       const rawSlope = Number(row?.slope);
       const fallbackSlope = Number(row?.dailyChangePct);
@@ -7066,8 +7538,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
         structure: Number(curveSlope) < -0.25 ? "Backwardation" : Number(curveSlope) > 0.25 ? "Contango" : "Flat",
         tone: Number(curveSlope) < 0 ? "negative" : Number(curveSlope) > 0 ? "positive" : "neutral",
       };
-    }),
-    [compareDeskRows]);
+    });
     const realCurveCompareRows = compareCurveRows.filter((row) => row.hasRealCurve);
     const maxCurveAbs = Math.max(...realCurveCompareRows.map((row) => Math.abs(Number(row.slope) || 0)), 1);
     const physicalStressRows = physicalStress.length
@@ -7158,108 +7629,56 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             exec={commoditiesExecutive}
             verdict={commoditiesExecutive.theme || "Unavailable"}
             verdictTone="neutral"
+            onSelectGroup={onSelectCommodityGroup}
+            selectedGroup={selectedCommodityGroup}
+            selectedGroups={selectedCommodityGroups}
+            onToggleGroup={onToggleCommodityGroup}
           />
         ) : null}
-        <div className="analytics-commodity-commandbar">
-          <div className="analytics-commodity-titleblock">
-            <span>{config.kicker}</span>
-            <h2>Commodities Curve Desk</h2>
-            <p>{config.summary}</p>
-            <SourceQualityStrip fallback={config.quality} items={[config.quality, ...terminalRows.slice(0, 2), ...fundamentals.slice(0, 1), ...flows.slice(0, 1)]} />
-          </div>
-          <div className="analytics-commodity-controls">
-            <label>
-              <span>Group</span>
-              <strong>{commodityMeta.selectedGroup || "all"}</strong>
-            </label>
-            <label>
-              <span>Curve</span>
-              <strong>{selectedCurvePoints.length > 1 ? `${selectedCurvePoints.length} nodes` : "Front month"}</strong>
-            </label>
-            <label>
-              <span>Timeframe</span>
-              <strong>{commodityMeta.selectedTimeRange || "1D"}</strong>
-            </label>
-            <button type="button" onClick={() => handleRefreshAnalytics("Commodities")}>Refresh</button>
+        {/* V2 GroupContextStrip: consolidated view of active commodity-group filter set.
+            Registry-driven (COMMODITY_GROUP_DEFS). Renders only when ≥1 group is active. */}
+        {selectedCommodityGroups && selectedCommodityGroups.size > 0 ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "4px 0 12px" }} aria-label="Active commodity group filters">
+            <span style={{ fontSize: 11, letterSpacing: "0.08em", color: "var(--color-data-slate)" }}>FILTERING</span>
+            {[...selectedCommodityGroups].map((g) => (
+              <button
+                key={g}
+                type="button"
+                onClick={() => onToggleCommodityGroup(g)}
+                title={`Remove ${COMMODITY_GROUP_DEFS[g]?.label || g} from filter`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--color-border-subtle)", background: "var(--color-surface-elevated)", color: "var(--color-text-primary)", cursor: "pointer", fontSize: 12 }}
+              >
+                {COMMODITY_GROUP_DEFS[g]?.label || g}
+                <span style={{ color: "var(--color-text-secondary)", fontSize: 14, lineHeight: 1 }}>×</span>
+              </button>
+            ))}
             <button
               type="button"
-              onClick={() =>
-                handleSaveAnalyticsView(
-                  {
-                    tab: "commodities",
-                    group: selectedCommodityGroup,
-                    view: selectedCommodityView,
-                    symbol: selectedCommoditySymbol,
-                    compare: compareCommoditySymbols,
-                  },
-                  "Commodities desk view saved."
-                )
-              }
+              onClick={() => onToggleCommodityGroup("all")}
+              style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid var(--color-border-subtle)", background: "transparent", color: "var(--color-text-secondary)", cursor: "pointer", fontSize: 11 }}
             >
-              Save View
+              Clear all
             </button>
           </div>
-        </div>
-
-        <div className="analytics-commodity-tape">
-          <article className="analytics-commodity-regime">
-            <span>Commodity Regime</span>
-            {selectedCurvePoints.length > 1 ? (
-              <>
-                <strong>{Number(leader.slope) < 0 ? "Backwardation / Supply Tight" : "Contango / Carry Favored"}</strong>
-                <em>Confidence: {Math.min(98, Math.max(42, Math.round(Math.abs(Number(leader.slope) || 0) * 6 + 48)))} / 100</em>
-              </>
-            ) : (
-              <>
-                <strong>Term structure unavailable</strong>
-                <em>Only front-month pricing is sourced — real curve requires a multi-contract futures feed.</em>
-              </>
-            )}
-          </article>
-          <article className="analytics-commodity-regime analytics-commodity-regime-secondary">
-            <span>Selected Contract</span>
-            <strong>{selectedTerminalRow.symbol || commodityMeta.selectedSymbol || leader.symbol || "CMD"}</strong>
-            <em>{commodityMeta.selectedRow?.name || selectedTerminalRow.asset || leader.asset || "Desk focus"}</em>
-          </article>
-          {terminalRows.slice(0, 7).map((row, idx) => (
-            <button
-              key={`commodity-tape-${row.id || idx}`}
-              type="button"
-              className={`analytics-commodity-ticker ${toSymbol(row.symbol) === selectedSymbol ? "active" : ""}`}
-              onClick={() => handleCommodityFocus(row.symbol)}
-              aria-pressed={toSymbol(row.symbol) === selectedSymbol}
-              aria-label={`Show ${row.symbol} commodity detail`}
-            >
-              <span>{row.symbol}</span>
-              <strong className={row.tone}>{formatPercent(row.daily || row.slope || 0)}</strong>
-              <em>{row.demand || row.region || "Monitor"}</em>
-              <SourceQualityBadge quality={row.source ? row : config.quality} compact />
-              <CommodityCurveSparkline
-                points={buildCurvePreview(row)}
-                tone={row.tone}
-                className="analytics-mini-curve"
-              />
-            </button>
-          ))}
-        </div>
-
-        <div className="analytics-commodity-focus-read">
-          <div>
-            <span>Selected commodity</span>
-            <strong>{selectedTerminalRow.symbol || selectedSymbol}</strong>
-            <em>{selectedTerminalRow.asset || commodityMeta.selectedRow?.name || "Desk focus"}</em>
+        ) : null}
+        <ExecutiveSignalStrip tiles={buildCommoditySignalTiles({ rows: terminalRows, exec: commoditiesExecutive })} />
+        <DecisionBanner text={buildCommodityDecisionText({ rows: terminalRows })} />
+        <CommodityAllocationGuidance
+          recommendations={allocationRecs}
+          onFilterGroup={(groups) => setCommodityFilterGroup(groups && groups[0] ? groups[0] : null)}
+          regime={commoditiesExecutive?.regime || null}
+          updatedAt={commoditiesExecutive?.freshness?.label || null}
+        />
+        {commodityFilterGroup ? (
+          <div className="deskv2-alloc-activefilter">
+            Filtering desk by <b>{commodityFilterGroup}</b>
+            <button type="button" onClick={() => setCommodityFilterGroup(null)}>Clear</button>
           </div>
-          <div>
-            <span>Curve read</span>
-            <strong>{selectedCurvePoints.length > 1 ? `${selectedCurvePoints.length} contract nodes` : "Front-month only"}</strong>
-            <em>{selectedCurvePoints.length > 1 ? "Term structure is available for slope review." : "No synthetic curve is drawn until the backend returns multiple contracts."}</em>
-          </div>
-          <div>
-            <span>Physical read</span>
-            <strong>{selectedTerminalRow.inventory || "Monitor"}</strong>
-            <em>{selectedTerminalRow.demand || selectedTerminalRow.risk || "Demand and risk signals populate as fundamentals load."}</em>
-          </div>
-        </div>
+        ) : null}
+        <CommodityRotationHeatmap rows={terminalRows} />
+        <HonestUnavailable title="CFTC Positioning" reason="No CFTC commitment-of-traders feed is configured. Replace fake flow attribution with commercials / managed-money net positioning when a provider is supplied." source="CFTC (not configured)" />
+        <HonestUnavailable title="Inventory Intelligence" reason="No inventory time-series (5Y average, weekly change) is available. Price history only — cannot derive a decision-grade inventory verdict." source="Commodities feed" />
+        <HonestUnavailable title="Physical Market / Freight" reason="No Baltic Dry, port congestion, or shipping-cost feed is configured. Supply-chain indicators unavailable." source="Freight (not configured)" />
 
         <div className="analytics-commodity-terminal-grid">
           <div className="analytics-desk-panel analytics-commodity-matrix">
@@ -7287,7 +7706,7 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
                   </tr>
                 </thead>
                 <tbody>
-                  {terminalRows.map((row, idx) => (
+                  {terminalRows.filter(groupMatch).map((row, idx) => (
                     <tr
                       key={`commodity-row-${row.id || idx}`}
                       className={toSymbol(row.symbol) === selectedSymbol ? "active" : ""}
@@ -7412,12 +7831,12 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
           <div className="analytics-desk-panel analytics-commodity-inventory">
             <div className="analytics-commodity-panel-head">
               <div>
-                <span>Inventory Monitor</span>
-                <strong>Latest physical-market changes</strong>
+                <span>Physical Market Monitor</span>
+                <strong>Inventory · warehouse · weekly · YoY · status · source</strong>
               </div>
               <em>Data as of {formatDateTime(updatedAt)}</em>
             </div>
-            {(seasonalityMonitorRows.length ? seasonalityMonitorRows : (flows.length ? flows : terminalRows)).slice(0, 7).map((row, idx) => (
+            {(seasonalityMonitorRows.length ? seasonalityMonitorRows : (flows.length ? flows : terminalRows)).filter(groupMatch).slice(0, 7).map((row, idx) => (
               <div key={`inventory-${row.id || idx}`} className="analytics-inventory-row">
                 <span>
                   {row.month
@@ -7448,11 +7867,11 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
           <div className="analytics-desk-panel analytics-commodity-queue">
             <div className="analytics-commodity-panel-head">
               <div>
-                <span>Supply Shock Queue</span>
-                <strong>Event risk ranked for the desk</strong>
+                <span>Live Supply Risk Queue</span>
+                <strong>Ranked · Probability × Impact × Duration × Supply Importance</strong>
               </div>
             </div>
-            {supplyQueue.map((item, idx) => (
+            {supplyQueue.filter((it) => !commodityFilterGroup || String(it.region || it.group || it.commodityGroup || "").toLowerCase() === String(commodityFilterGroup).toLowerCase()).map((item, idx) => (
               <div key={`queue-${idx}`} className="analytics-shock-row">
                 <strong>{item.event}</strong>
                 <span>{item.region}</span>
@@ -7460,7 +7879,12 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
                 <b className={item.severity === "High" ? "negative" : item.severity === "Medium" ? "warning" : "positive"}>{item.severity}</b>
               </div>
             ))}
+
           </div>
+
+          {(commodityFilterGroup || selectedCommodityGroup) && selectedCommodityGroup !== "all" ? (
+            <GroupContextStrip group={(commodityFilterGroup || selectedCommodityGroup) === "all" ? "energy" : commodityFilterGroup || selectedCommodityGroup} />
+          ) : null}
 
           <div className="analytics-desk-panel analytics-commodity-alerts">
             <div className="analytics-commodity-panel-head">
@@ -7477,7 +7901,14 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
               </div>
             )) : <AnalyticsDeskEmpty title="No commodity alerts" description="Save an alert from a catalyst or price rule to monitor this desk." />}
           </div>
-        </div>
+
+          <MacroContextEnhanced
+            macroData={macroData}
+            executive={commoditiesExecutive}
+            driver={commoditiesExecutive?.theme || (selectedCommodityGroup !== "all" ? COMMODITY_GROUP_DEFS[selectedCommodityGroup]?.label : "Commodities")}
+            horizonLabel={commoditiesExecutive ? "1–4 weeks" : "—"}
+          />
+          </div>
 
         <div className="analytics-commodity-footer">
           <span>Coverage</span>
@@ -7564,8 +7995,8 @@ function GeographySwitcher({ selectedGeoType, onChange, regimeLabel, regimeScore
             style={{
               padding: "6px 12px",
               borderRadius: 8,
-              border: `1px solid ${selectedGeoType === type ? "rgba(255,255,255,0.5)" : "rgba(160, 160, 160, 0.2)"}`,
-              background: selectedGeoType === type ? "rgba(255,255,255,0.16)" : "var(--color-surface-panel)",
+              border: `1px solid ${selectedGeoType === type ? "var(--color-border-strong)" : "rgba(160, 160, 160, 0.2)"}`,
+              background: selectedGeoType === type ? "var(--color-interactive-soft)" : "var(--color-surface-panel)",
               color: selectedGeoType === type ? "var(--color-interactive)" : "var(--color-data-slate-bright)",
               cursor: "pointer",
               fontSize: 12
@@ -7623,7 +8054,7 @@ function GeographySearch({
         placeholder={`Search ${selectedGeoType.toLowerCase()}...`}
         value={searchQuery}
         onChange={(e) => onSearchChange(e.target.value)}
-        style={{ width: "100%", background: "rgba(5,5,5,0.7)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
+        style={{ width: "100%", background: "var(--color-surface-depth)", border: "1px solid rgba(160, 160, 160, 0.2)", color: "var(--color-data-slate-bright)", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}
       />
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
         {recentGeoCodes.slice(0, 5).map((code) => (
@@ -7631,7 +8062,7 @@ function GeographySearch({
             key={`recent-${code}`}
             type="button"
             onClick={() => onSelectGeo(code)}
-            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(160, 160, 160, 0.25)", background: "rgba(5,5,5,0.5)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
+            style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(160, 160, 160, 0.25)", background: "var(--color-surface-depth)", color: "var(--color-data-slate-bright)", fontSize: 11, cursor: "pointer" }}
           >
             Recent: {code}
           </button>
@@ -7651,8 +8082,8 @@ function GeographySearch({
                 gap: 8,
                 borderRadius: 8,
                 padding: "7px 8px",
-                border: `1px solid ${active ? "rgba(255,255,255,0.5)" : "rgba(160, 160, 160, 0.16)"}`,
-                background: active ? "rgba(255,255,255,0.12)" : "rgba(5,5,5,0.45)"
+                border: `1px solid ${active ? "var(--color-border-strong)" : "rgba(160, 160, 160, 0.16)"}`,
+                background: active ? "var(--color-interactive-soft)" : "var(--color-surface-depth)"
               }}
             >
               <button
@@ -7742,6 +8173,121 @@ function SourceQualityBadge({ quality, compact = false }) {
 
 function SourceQualityStrip({ items = [], fallback }) {
   return null;
+}
+
+/* ===== Rates / Growth Terminal (compact institutional macro terminal) =====
+   Presentation-only redesign of the macro lanes. No API/calc changes.
+   Maps existing macro row fields: asset, primary, secondary, tertiary,
+   signal, tone, source, asOf, delta. No history/series exist -> detail is honest. */
+function MacroRatesTerminal({ rows = [], updatedAt }) {
+  const [sort, setSort] = React.useState("impact");
+  const [expanded, setExpanded] = React.useState(null); // row id
+  const [focus, setFocus] = React.useState(-1);
+
+  const norm = (s) => String(s || "").toLowerCase();
+  const toneOf = (r) => {
+    const t = norm(r.tone);
+    if (t.includes("pos") || t.includes("up") || t.includes("improve")) return "pos";
+    if (t.includes("neg") || t.includes("down") || t.includes("weaken")) return "neg";
+    return "neutral";
+  };
+  const toNum = (v) => { const n = Number(String(v).replace(/[^0-9.-]/g, "")); return Number.isFinite(n) ? n : NaN; };
+  const change = (r) => { const d = toNum(r.delta); return Number.isFinite(d) ? d : toNum(r.secondary) - toNum(r.primary); };
+  const trendGlyph = (r) => { const c = change(r); if (!Number.isFinite(c) || c === 0) return "—"; return c > 0 ? "▲" : "▼"; };
+  const contribution = (r) => {
+    const t = toneOf(r); const sig = norm(r.signal);
+    if (t === "pos") return "Supports expansion";
+    if (t === "neg") return sig.includes("inflation") || sig.includes("price") ? "Adds inflation pressure" : "Signals softening";
+    return "Neutral";
+  };
+
+  const sorted = React.useMemo(() => {
+    const arr = [...(rows || [])];
+    const by = {
+      impact: () => arr.sort((a, b) => Math.abs(toNum(a.delta) || 0) - Math.abs(toNum(b.delta) || 0)),
+      change: () => arr.sort((a, b) => Math.abs(change(b)) - Math.abs(change(a))),
+      release: () => arr.sort((a, b) => String(b.asOf || "").localeCompare(String(a.asOf || ""))),
+      alpha: () => arr.sort((a, b) => String(a.asset).localeCompare(String(b.asset))),
+    };
+    (by[sort] || by.impact)();
+    return arr;
+  }, [rows, sort]);
+
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setFocus((f) => Math.min(sorted.length - 1, f + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setFocus((f) => Math.max(0, f - 1)); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const r = sorted[focus]; if (r) setExpanded((x) => (x === r.id ? null : r.id)); }
+    else if (e.key === "Escape") { setExpanded(null); }
+  };
+
+  if (!sorted.length) {
+    return (
+      <div className="deskv2-macro-terminal deskv2-macro-empty">
+        <strong>Data unavailable</strong>
+        <span>No macro indicators returned for this geography.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="deskv2-macro-terminal" tabIndex={0} onKeyDown={onKey} role="grid" aria-label="Rates and growth terminal">
+      <div className="deskv2-mterminal-head">
+        <span className="col-name">Indicator</span>
+        <span className="col-val">Value</span>
+        <span className="col-delta">Δ Prev</span>
+        <span className="col-trend">Trend</span>
+        <span className="col-contrib">Regime Contribution</span>
+        <span
+          className="col-sort"
+          role="button"
+          tabIndex={-1}
+          onClick={() => setSort((s) => (s === "release" ? "impact" : s === "impact" ? "change" : s === "change" ? "alpha" : "release"))}
+          title="Cycle sort: impact → change → alpha → release"
+        >Sort: {sort}</span>
+      </div>
+      <div className="deskv2-mterminal-body">
+        {sorted.map((r, idx) => {
+          const t = toneOf(r);
+          const isOpen = expanded === r.id;
+          return (
+            <React.Fragment key={r.id || `mr-${idx}`}>
+              <div
+                className={`deskv2-mrow tone-${t} ${focus === idx ? "focused" : ""} ${isOpen ? "open" : ""}`}
+                role="row"
+                tabIndex={-1}
+                aria-expanded={isOpen}
+                onClick={() => setExpanded((x) => (x === r.id ? null : r.id))}
+                onFocus={() => setFocus(idx)}
+              >
+                <span className="col-name">{r.asset}</span>
+                <span className="col-val">{r.primary}</span>
+                <span className={`col-delta ${t}`}>{trendGlyph(r)} {Number.isFinite(change(r)) ? `${change(r) >= 0 ? "+" : ""}${change(r).toFixed(2)}` : "—"}</span>
+                <span className={`col-trend ${t}`}>{trendGlyph(r)}</span>
+                <span className="col-contrib">{contribution(r)}</span>
+                <span className="col-date">{r.asOf ? formatDateTime(r.asOf) : "—"}</span>
+                <span className="col-source">{r.source || "Macro feed"}</span>
+              </div>
+              {isOpen ? (
+                <div className="deskv2-mrow-detail" role="row">
+                  <div className="mr-detail-grid">
+                    <div><label>Current</label><span>{r.primary}</span></div>
+                    <div><label>Previous</label><span>{r.secondary}</span></div>
+                    <div><label>Release</label><span>{r.asOf ? formatDateTime(r.asOf) : "—"}</span></div>
+                    <div><label>Source</label><span>{r.source || "Macro feed"}</span></div>
+                    <div><label>Category</label><span>{r.tertiary || "—"}</span></div>
+                    <div><label>Status</label><span>{r.signal || "—"}</span></div>
+                  </div>
+                  <div className="mr-detail-note">
+                    30-day sparkline, consensus, and historical percentile are not available in the current feed — no series is returned for these indicators.
+                  </div>
+                </div>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const OPTIONS_PROXY_EXCHANGE_MAP = {

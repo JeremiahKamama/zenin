@@ -17,6 +17,12 @@ export function AssetHeader({
   const isWatching = Boolean(isInWatchlist?.(asset, undefined, { strictStockMeta: true }));
   const changePositive = displayedChangePercent >= 0;
   const exchange = asset?.exchange || asset?.marketType || asset?.type || "—";
+  // MyStocks rows carry a provider flag from the backend; surface honest
+  // provenance (source + exchange + local currency) for African listings.
+  const isMyStocks = asset?.provider === "mystocks";
+  const provenance = isMyStocks
+    ? ["MyStocks", asset?.exchange, asset?.currency].filter(Boolean).join(" · ")
+    : null;
 
   return (
     <header className="am-header">
@@ -26,6 +32,11 @@ export function AssetHeader({
           <div className="am-sub">
             <span className="am-company">{asset?.name}</span>
             <span className="am-exchange">{exchange}</span>
+            {provenance ? (
+              <span className="am-provenance" title="Source provenance for this African listing">
+                {provenance}
+              </span>
+            ) : null}
           </div>
         </div>
 

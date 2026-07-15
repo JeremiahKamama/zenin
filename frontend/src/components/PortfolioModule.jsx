@@ -6,6 +6,8 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { chartColors } from "../utils/chartTheme";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
+import { deriveBrokerageBadge, formatLastSync, maskAccountNumber, findDuplicateSymbols } from "../utils/brokerageStatus.js";
+import { classifyPortfolioInstrument, PORTFOLIO_BUCKETS } from "../utils/portfolioInstrumentClassifier.js";
 import { formatPercent } from "../utils/format";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
@@ -19,11 +21,17 @@ import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
 // Portfolio Intelligence — feature modules + normalized data layer.
 import { PortfolioOverview } from "./portfolioIntelligence/PortfolioOverview";
 import { PortfolioAnalysis, PORTFOLIO_ANALYSIS_TABS } from "./portfolioIntelligence/PortfolioAnalysis";
-import { PortfolioIntelligenceRail } from "./portfolioIntelligence/PortfolioIntelligenceRail";
+import { useRegimeIntelligence } from "./portfolioIntelligence/useRegimeIntelligence";
 import { deriveOrderLedgerFromConnections } from "./portfolioIntelligence/services/OrderNormalizationService";
 import { normalizeExecutions } from "./portfolioIntelligence/services/ExecutionService";
 import { buildAlerts } from "./portfolioIntelligence/services/AlertEngine";
+import { relatedByKind, NODE_KIND } from "../utils/relationshipGraph";
 import { createPortfolioHealth } from "./portfolioIntelligence/models/domainModels";
+import { NotificationTransmission } from "../transmission/TransmissionSurfaces";
+import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { DeferredChart } from "./DeferredChart.jsx";
+import { EtfRecommendations } from "./EtfRecommendations";
+import { CORE_ETF_SEED } from "../utils/assetGraph";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -153,7 +161,11 @@ export function PortfolioModule({
   onOpenMarketContext,
   onOpenConnections,
   connectedAccounts = [],
-  onOpenPlans
+  brokerageAccounts = [],
+  brokerageSummary = null,
+  onConnectBrokerage,
+  onOpenPlans,
+  indicatorContext,
 }){
   const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
     ? getAppRuntimeConfig().ui.g7Currencies
@@ -288,6 +300,30 @@ export function PortfolioModule({
   const portfolioValue = useMemo(() => {
     return (filteredPortfolio || []).reduce((sum, item) => sum + ((Number(item?.price) || 0) * (Number(item?.quantity) || 0)), 0);
   }, [filteredPortfolio]);
+
+  // Brokerage (SnapTrade pilot) read-model split. Manual and brokerage holdings
+  // stay SEPARATE by design — we never auto-merge same-symbol positions. The
+  // aggregate is only used for the headline value; connected holdings render in
+  // their own group with source attribution + a duplicate-exposure notice.
+  const brokerageReadModel = useMemo(() => {
+    const manualHoldings = Array.isArray(filteredPortfolio) ? filteredPortfolio : [];
+    const manualValue = portfolioValue;
+    const brokerageHoldings = Array.isArray(brokerageSummary?.holdings) ? brokerageSummary.holdings : [];
+    const brokerageValue = Number(brokerageSummary?.brokerageValue) || 0;
+    const aggregateValue = manualValue + brokerageValue;
+    const duplicateSymbols = findDuplicateSymbols(manualHoldings, brokerageHoldings);
+    return {
+      manualHoldings,
+      brokerageHoldings,
+      manualValue,
+      brokerageValue,
+      aggregateValue,
+      duplicateSymbols,
+      lastSyncAt: brokerageSummary?.lastSyncAt || null,
+      requiresReconnect: Boolean(brokerageSummary?.requiresReconnect),
+      syncFailed: Boolean(brokerageSummary?.syncFailed)
+    };
+  }, [filteredPortfolio, portfolioValue, brokerageSummary]);
 
 // ✅ 2) compute metrics next
 const derivedAccountMetrics = useMemo(
@@ -516,6 +552,33 @@ const isProfitable = currentAccountEquity >= initialBalance;
     return [...normalize(groups.sector, "Sector"), ...normalize(groups.country, "Country"), ...normalize(groups.currency, "Currency")];
   }, [portfolio]);
 
+  // Rec 10 — derive portfolio gaps from current exposure vs the ETF
+  // seed's exposure universe. Missing = seed exposure token not present
+  // in the portfolio's actual holdings. 100% from real data.
+  const etfGaps = useMemo(() => {
+    const held = new Set((exposureRows || []).map((r) => String(r.name).toLowerCase()));
+    const universe = new Set();
+    Object.values(CORE_ETF_SEED).forEach((m) => (m.exposure || []).forEach((e) => universe.add(e.toLowerCase())));
+    const missing = [...universe].filter((u) => !held.has(u));
+    return { missingSectors: missing, missingCountries: [], wantExposure: [] };
+  }, [exposureRows]);
+
+  // Phase 3: asset-aware Portfolio Exposure. When the Indicator Modal opens
+  // Portfolio with an indicator context, surface the real sector exposures that
+  // indicator maps to (via RelationshipGraph), weighted by actual portfolio
+  // holdings. No fabricated percentages — only sectors the graph links AND the
+  // portfolio actually holds are shown; otherwise an honest unavailable state.
+  const indicatorExposure = useMemo(() => {
+    if (!indicatorContext) return null;
+    const linked = relatedByKind(String(indicatorContext).toUpperCase(), "sector", 3)
+      .map((n) => String(n.label || n.id).toUpperCase());
+    const linkedSet = new Set(linked);
+    const matched = (Array.isArray(exposureRows) ? exposureRows : [])
+      .filter((r) => linkedSet.has(String(r.name).toUpperCase()));
+    const totalLinkedWeight = matched.reduce((s, r) => s + (Number(r.weight) || 0), 0);
+    return { linked, matched, totalLinkedWeight };
+  }, [indicatorContext, exposureRows]);
+
   const attributionSummary = useMemo(() => {
     const sectorTop = attributionRows?.sector?.[0] || null;
     const regionTop = attributionRows?.region?.[0] || null;
@@ -661,8 +724,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const combinedHoldings = useMemo(() => {
     const spotRows = (Array.isArray(filteredPortfolio) ? filteredPortfolio : []).map((item, index) => {
       const currency = item?.currency || item?.quotedCurrency || "USD";
+      // MyStocks (African) rows carry priceUsd from the backend; prefer it so a
+      // mixed-currency portfolio values correctly without relying on possibly
+      // absent local FX rates. Fall back to local price + convertToUSD otherwise.
+      const priceUsd = Number(item?.priceUsd);
       const rawValue = (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
-      const positionValue = convertToUSD(rawValue, currency, spotPrices);
+      const positionValue = Number.isFinite(priceUsd)
+        ? priceUsd * (Number(item?.quantity) || 0)
+        : convertToUSD(rawValue, currency, spotPrices);
       const symbolKey = String(item?.symbol || item?.name || "unknown").trim().toUpperCase();
       const marketKey = String(item?.marketType || item?.type || "spot").trim().toLowerCase();
       const fallbackKey = `${symbolKey}-${marketKey}-${Number(item?.quantity) || 0}-${index}`;
@@ -679,6 +748,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         positionGain,
         rawValue,
         currency,
+        bucket: classifyPortfolioInstrument({ symbol: symbolKey, marketType: marketKey, category: item?.category, instrumentType: item?.instrumentType, type: item?.type, hasRealPosition: Boolean(item?.quantity && Number(item?.quantity) !== 0) }),
         row: item
       };
     });
@@ -901,6 +971,49 @@ const isProfitable = currentAccountEquity >= initialBalance;
       currency: pickTop("currency")
     };
   }, [exposureRows]);
+
+  // §7 — instrument-class exposure buckets (Equities/ETFs/Crypto/Commodities/
+  // Bonds/FX/Cash/Other). Computed from the classified combinedHoldings so every
+  // valuation/allocation/rebalance consumer shares one classifier. Currency codes
+  // with no real position fall to "Other" (excluded from tradable totals).
+  const exposureBuckets = useMemo(() => {
+    const totals = Object.fromEntries(PORTFOLIO_BUCKETS.map((b) => [b, 0]));
+    let fxStale = false;
+    for (const row of combinedHoldings) {
+      const b = row.bucket || "Other";
+      totals[b] = (totals[b] || 0) + Number(row.positionValue || 0);
+      // Mark partial FX conversion coverage when an FX/fx-valued row lacks a
+      // usable spot rate for its quote currency.
+      if (b === "FX" && row.currency && row.currency !== "USD") {
+        const rate = spotPrices?.[row.currency];
+        if (!rate || !Number.isFinite(Number(rate))) fxStale = true;
+      }
+    }
+    const grand = Object.values(totals).reduce((s, v) => s + v, 0) || 1;
+    const out = PORTFOLIO_BUCKETS.map((b) => ({
+      bucket: b,
+      value: totals[b] || 0,
+      weight: ((totals[b] || 0) / grand) * 100,
+    })).sort((a, b) => b.value - a.value);
+    return { rows: out, totals, fxConversionPartial: fxStale, grand };
+  }, [combinedHoldings, spotPrices]);
+
+  // §7 — rebalance gating. This lives after exposureBuckets so FX conversion
+  // coverage is available during render; no recommendation is shown as actionable
+  // until holdings, prices, targets, and FX conversion are all usable.
+  const { rebalanceActionable, rebalanceBlockedReason } = useMemo(() => {
+    if (!actionableRebalanceRows.length) {
+      return { rebalanceActionable: false, rebalanceBlockedReason: "Insufficient data for an actionable rebalance recommendation. Review instrument data and currency conversion coverage." };
+    }
+    const hasStale = actionableRebalanceRows.some((row) => Number(row.price || 0) <= 0);
+    if (hasStale) {
+      return { rebalanceActionable: false, rebalanceBlockedReason: "Insufficient data for an actionable rebalance recommendation. Review instrument data and currency conversion coverage." };
+    }
+    if (exposureBuckets.fxConversionPartial) {
+      return { rebalanceActionable: false, rebalanceBlockedReason: "FX conversion coverage is partial. Resolve quote-currency rates before rebalancing FX exposure." };
+    }
+    return { rebalanceActionable: true, rebalanceBlockedReason: null };
+  }, [actionableRebalanceRows, exposureBuckets]);
 
   const bestPerformer = useMemo(() => {
     const rows = Array.isArray(filteredPortfolio) ? filteredPortfolio : [];
@@ -1358,6 +1471,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
   };
 
   const openInsightFlow = (flow, selection = null) => {
+    if (flow === "rebalancing" && !rebalanceActionable) {
+      setFlowOutcome({
+        title: "Rebalance blocked",
+        message: rebalanceBlockedReason || "Rebalance data is not ready yet.",
+        tone: "warning",
+      });
+      return;
+    }
     setActiveInsightFlow(flow);
     setInsightFlowStep(selection ? 2 : 1);
     setFlowSelection(selection);
@@ -1774,9 +1895,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
     },
   }), [projectedAlignment.after]);
 
+  // P3 — subscribe to the IntelligenceBus (Phase 4) so the Portfolio Summary
+  // reflects the current macro regime + commodity exposure without prop-drilling
+  // or local recompute.
+  const regimeIntelligence = useRegimeIntelligence();
+
   const portfolioSummaryCards = useMemo(() => {
     const optionsWeight = currentAccountEquity > 0 ? (totalOptionsValue / currentAccountEquity) * 100 : 0;
-    return [
+    const cards = [
       {
         label: "Total Value",
         value: formatMoney(currentAccountEquity),
@@ -1814,6 +1940,28 @@ const isProfitable = currentAccountEquity >= initialBalance;
         tone: healthStatus.tone,
       },
     ];
+    // P3 — Tier-1 external intelligence cards, fed by the IntelligenceBus (Phase 4).
+    // Macro regime + commodity exposure now flow into the Portfolio Summary instead
+    // of being trapped in the Macro desk. Honest empty state when the bus is silent.
+    if (regimeIntelligence?.regime) {
+      const r = regimeIntelligence.regime;
+      cards.push({
+        label: "Macro Regime",
+        value: r.label || "Unavailable",
+        detail: `Conf ${r.confidence ?? "—"} · ${r.risk || "—"} risk`,
+        tone: r.tone === "positive" ? "positive" : r.tone === "negative" ? "negative" : "neutral",
+      });
+    }
+    if (regimeIntelligence?.macroSignal?.affectedAssets?.length) {
+      const aff = regimeIntelligence.macroSignal.affectedAssets;
+      cards.push({
+        label: "Commodity Exposure",
+        value: `${aff.length} drivers`,
+        detail: aff.slice(0, 3).map((a) => a.label).join(", ") || "None mapped",
+        tone: "neutral",
+      });
+    }
+    return cards;
   }, [
     benchmarkSnapshot.relativePct,
     benchmarkSnapshot.returnPct,
@@ -1828,6 +1976,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
     totalGainLoss,
     totalOptionsValue,
     totalReturnPct,
+    regimeIntelligence?.regime,
+    regimeIntelligence?.macroSignal,
   ]);
 
   const attentionCards = useMemo(() => {
@@ -2201,6 +2351,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   </div>
                 </div>
               ))}
+              {recentExecutionNotifications.slice(0, 1).map((notification) => (
+                <NotificationTransmission key={`tx-${notification.id}`} driver="Oil" affectedHoldings={5} />
+              ))}
             </div>
           ) : null}
         </div>
@@ -2398,7 +2551,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
     );
   };
 
-  const renderInsightFlow = () => {
+  const InsightFlowOverlay = () => {
+    const dialogRef = useFocusTrap({ open: !!activeInsightFlow, onClose: closeInsightFlow });
     if (!activeInsightFlow) return null;
     const steps = insightFlowSteps[activeInsightFlow] || [];
     const pickExposure = flowSelection || exposureFlowData.top;
@@ -2860,11 +3014,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
             <div className="portfolio-v2-flow-two-col" style={{ alignItems: 'center' }}>
               <div style={{ pointerEvents: 'none' }}>
-                <ReactApexChart
-                  options={donutOptions}
-                  series={[100 - totalDrift, totalDrift]}
-                  type="donut"
-                />
+                <DeferredChart height={214}>
+                  <ReactApexChart
+                    options={donutOptions}
+                    series={[100 - totalDrift, totalDrift]}
+                    type="donut"
+                  />
+                </DeferredChart>
               </div>
               <div className="portfolio-v2-flow-mini-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <div className="portfolio-v2-flow-kpi-card" style={{ padding: '12px' }}>
@@ -3031,7 +3187,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         : "Rebalancing Suggestions Flow";
 
     return (
-      <div className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true">
+      <div ref={dialogRef} className="portfolio-v2-flow-overlay" role="dialog" aria-modal="true">
         <div className="portfolio-v2-flow-shell">
           <div className="portfolio-v2-flow-top">
             <h2>{flowTitle}</h2>
@@ -3113,6 +3269,81 @@ const isProfitable = currentAccountEquity >= initialBalance;
     });
   }, []);
 
+  // Next Best Action (spec §3): one dominant, above-the-fold action derived from
+  // concentration → drift → tax → healthy. Routes into existing insight flows
+  // with relevant context preselected. Uses Brandv2 surfaces (no colored hero).
+  const nextBestAction = useMemo(() => {
+    const topExposure = exposureSummary?.sector || exposureSummary?.country || exposureSummary?.currency || null;
+    const concentrationPct = topExposure ? Number(topExposure.weight || 0) : 0;
+    const highRiskConcentration = concentrationPct >= 35;
+
+    if (highRiskConcentration && topExposure) {
+      return {
+        tone: "risk",
+        label: "Priority risk",
+        title: "Review concentration risk",
+        desc: `${topExposure.name} is ${concentrationPct.toFixed(1)}% of the book — the single largest concentration. A move against it outweighs diversification elsewhere.`,
+        cta: "Inspect exposure",
+        onAction: () => openInsightFlow("exposure", topExposure),
+      };
+    }
+
+    if (topDriftRow) {
+      const drift = Number(topDriftRow.drift || 0);
+      const align = projectedAlignment?.after != null
+        ? ` Rebalancing is projected to improve target alignment from ${Math.round(projectedAlignment.before)}% to ${Math.round(projectedAlignment.after)}%.`
+        : "";
+      return {
+        tone: "warning",
+        label: "Recommended action",
+        title: "Review rebalance plan",
+        desc: `Largest drift: ${topDriftRow.symbol} at ${drift >= 0 ? "+" : ""}${drift.toFixed(1)}% vs target.${align}`,
+        cta: "Review & rebalance",
+        onAction: () => openInsightFlow("rebalancing", topDriftRow),
+      };
+    }
+
+    if (lossHarvestSnapshot?.count) {
+      return {
+        tone: "neutral",
+        label: "Opportunity",
+        title: "Review tax impact",
+        desc: `${lossHarvestSnapshot.count} position(s) sit on unrealized losses — an estimated ${formatMoney(Number(lossHarvestSnapshot.estimatedSavings || 0))} tax offset is available via harvesting.`,
+        cta: "Review tax impact",
+        onAction: () => openInsightFlow("exposure", lossHarvestSnapshot.top),
+      };
+    }
+
+    return {
+      tone: "healthy",
+      label: "On track",
+      title: "Portfolio is within current targets",
+      desc: "Holdings are inside drift bands and concentration limits. No immediate action required.",
+      cta: "Review allocation",
+      onAction: () => openPortfolioTab("exposure"),
+    };
+  }, [exposureSummary, topDriftRow, projectedAlignment, lossHarvestSnapshot, openInsightFlow, openPortfolioTab]);
+
+  const renderNextBestAction = () => (
+    <section
+      className={`portfolio-next-best-action portfolio-next-best-action--${nextBestAction.tone}`}
+      aria-label="Next best action"
+    >
+      <div className="portfolio-next-best-action__body">
+        <div className="portfolio-next-best-action__label">{nextBestAction.label}</div>
+        <h2 className="portfolio-next-best-action__title">{nextBestAction.title}</h2>
+        <p className="portfolio-next-best-action__desc">{nextBestAction.desc}</p>
+      </div>
+      <div className="portfolio-next-best-action__cta">
+        <button
+          type="button"
+          className="portfolio-command-primary-cta"
+          onClick={nextBestAction.onAction}
+        >{nextBestAction.cta}</button>
+      </div>
+    </section>
+  );
+
   return (
     <div className="portfolio-module portfolio-v2 portfolio-exec-page portfolio-command-page">
       <header className="portfolio-command-header">
@@ -3120,7 +3351,36 @@ const isProfitable = currentAccountEquity >= initialBalance;
           <span className="portfolio-command-eyebrow">Portfolio</span>
           <h1>Portfolio Command Center</h1>
           <p>Actionable intelligence. Clear next step.</p>
-        </div>
+          </div>
+          {indicatorContext ? (
+          <div className="indicator-context-banner portfolio-indicator-context">
+            <span>Exposure filtered to <b>{String(indicatorContext).toUpperCase()}</b></span>
+            {indicatorExposure ? (
+              <div className="indicator-exposure-panel">
+                {indicatorExposure.matched.length ? (
+                  <div className="indicator-exposure-rows">
+                    {indicatorExposure.matched.map((r) => (
+                      <div key={r.name} className="indicator-exposure-row">
+                        <span>{r.name}</span>
+                        <strong className={Number(r.weight) >= 0 ? "up" : "down"}>{Number(r.weight).toFixed(1)}%</strong>
+                      </div>
+                    ))}
+                    <div className="indicator-exposure-total">
+                      <span>Linked exposure</span><strong>{indicatorExposure.totalLinkedWeight.toFixed(1)}%</strong>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="indicator-exposure-empty">
+                    Portfolio exposure for this indicator has not yet been computed.
+                    {indicatorExposure.linked.length
+                      ? ` Related themes: ${indicatorExposure.linked.slice(0, 6).join(", ")}.`
+                      : ""} As positions are mapped through the Relationship Graph, they will appear here.
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
+          ) : null}
         <div className="portfolio-command-header-actions">
           <WorkspaceScopeSelector />
           <select
@@ -3162,6 +3422,33 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </button>
         </div>
       </header>
+
+      {/* Connected brokerage (SnapTrade pilot) status — above the fold, distinct
+          from manual holdings. Never implies trading; read-only only. */}
+      {brokerageReadModel.brokerageHoldings.length > 0 || brokerageReadModel.brokerageValue > 0 ? (
+        <section className="portfolio-brokerage-banner" aria-label="Connected brokerage accounts">
+          <div className="portfolio-brokerage-banner-head">
+            <span className="portfolio-brokerage-banner-title">Brokerage accounts · Read-only</span>
+            <span className="portfolio-brokerage-banner-value">{formatCurrency(brokerageReadModel.brokerageValue)}</span>
+          </div>
+          <div className="portfolio-brokerage-banner-meta">
+            <span>{brokerageReadModel.brokerageHoldings.length} connected position{brokerageReadModel.brokerageHoldings.length === 1 ? "" : "s"}</span>
+            <span>{formatLastSync(brokerageReadModel.lastSyncAt)}</span>
+            {brokerageReadModel.requiresReconnect ? (
+              <span className="provider-trust-pill provider-trust-pill-warn">Needs reconnection</span>
+            ) : null}
+            {brokerageReadModel.syncFailed ? (
+              <span className="provider-trust-pill provider-trust-pill-danger">Sync failed</span>
+            ) : null}
+            <button type="button" className="portfolio-v2-link" onClick={handleOpenConnections}>Manage</button>
+          </div>
+          {brokerageReadModel.duplicateSymbols.length > 0 ? (
+            <div className="portfolio-brokerage-duplicate" role="note">
+              <strong>Duplicate exposure:</strong> {brokerageReadModel.duplicateSymbols.join(", ")} appear in both your manual and brokerage holdings. They are shown separately — Zenin does not merge them.
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <PortfolioOverview
         summary={{
@@ -3216,7 +3503,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   </div>
                 </div>
                 <div className="portfolio-command-drift-visual">
-                  <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={214} />
+                  <DeferredChart height={214}>
+                    <ReactApexChart options={rebalanceDonutOptions} series={driftDistribution} type="donut" height={214} />
+                  </DeferredChart>
                   <div className="portfolio-command-drift-legend">
                     <span><i className="risk" />Overweight</span>
                     <span><i className="info" />Underweight</span>
@@ -3289,7 +3578,28 @@ const isProfitable = currentAccountEquity >= initialBalance;
                     <li className={feeDashboard.tradeCount > 0 ? "positive" : "neutral"}>{feeDashboard.tradeCount > 0 ? "Fee history available" : "Fee history still sparse"}</li>
                   </ul>
                 </div>
-                <button type="button" className="portfolio-command-primary-cta" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>
+                <div className="portfolio-command-exposure-buckets">
+                  <div className="portfolio-command-exposure-buckets__head">
+                    <span>Instrument exposure</span>
+                    <em>{formatMoney(exposureBuckets.grand)}</em>
+                  </div>
+                  <table>
+                    <caption className="sr-only">Portfolio value and allocation by instrument class</caption>
+                    <thead><tr><th scope="col">Bucket</th><th scope="col">Value</th><th scope="col">Weight</th></tr></thead>
+                    <tbody>
+                      {exposureBuckets.rows.map((row) => (
+                        <tr key={row.bucket}>
+                          <th scope="row">{row.bucket}</th>
+                          <td>{formatMoney(row.value)}</td>
+                          <td>{row.weight.toFixed(1)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {exposureBuckets.fxConversionPartial ? <p className="portfolio-command-exposure-buckets__note">FX conversion coverage is partial; affected FX values may be incomplete.</p> : null}
+                </div>
+                {!rebalanceActionable ? <p id="rebalance-blocked-reason" className="portfolio-command-rebalance-blocked" role="status"><strong>Rebalance blocked</strong>{rebalanceBlockedReason}</p> : null}
+                <button type="button" className="portfolio-command-primary-cta" disabled={!rebalanceActionable} aria-describedby={!rebalanceActionable ? "rebalance-blocked-reason" : undefined} onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>
                   Review &amp; Rebalance
                 </button>
               </div>
@@ -3297,6 +3607,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
           </div>
         }
       />
+
+      {renderNextBestAction()}
 
       <PortfolioAnalysis
         activeTab={activePortfolioTab}
@@ -3314,13 +3626,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
           // equals activePortfolioTab (set by onTabChange); no state write here.
           return renderPortfolioTabContent();
         }}
-        rail={
-          <PortfolioIntelligenceRail
-            alertContext={alertContextForRail}
-            onRefreshAlerts={handleRefreshAlerts}
-            refreshing={railRefreshing}
-          />
-        }
+        rail={null}
       />
 
       {activePortfolioTab !== "prediction" ? (
@@ -3353,8 +3659,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
           )}
         </section>
       ) : null}
-
-      {renderInsightFlow()}
+      {renderNextBestAction()}
+      <InsightFlowOverlay />
 
       {showPredictionGuide ? (
         <div className="portfolio-v2-flow-overlay" onClick={() => setShowPredictionGuide(false)}>
@@ -3508,7 +3814,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
         open={showConnectionsModal}
         onClose={() => setShowConnectionsModal(false)}
         accounts={connectedAccounts}
+        brokerageAccounts={brokerageAccounts}
         onAddConnection={onOpenConnections}
+        onConnectBrokerage={onConnectBrokerage}
       />
     </div>
   );
@@ -3526,6 +3834,8 @@ function PortfolioSavedWorkspaceDrawer({
   onReviewItem
 }) {
   if (!open) return null;
+
+  const dialogRef = useFocusTrap({ open, onClose });
 
   const sections = [
     {
@@ -3603,6 +3913,7 @@ function PortfolioSavedWorkspaceDrawer({
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
+        ref={dialogRef}
         className="home-v3-detail-drawer saved-items-drawer"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
@@ -3648,7 +3959,8 @@ function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction }) {
   );
 }
 
-function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnection }) {
+function PortfolioConnectionsModal({ open, onClose, accounts = [], brokerageAccounts = [], onAddConnection, onConnectBrokerage }) {
+  const dialogRef = useFocusTrap({ open, onClose });
   if (!open) return null;
 
   const renderScopeBadge = (account) => {
@@ -3663,26 +3975,31 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnecti
     return <span className={`provider-trust-pill provider-trust-pill-${tone}`}>{label}</span>;
   };
 
+  const totalCount = accounts.length + brokerageAccounts.length;
+
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
+        ref={dialogRef}
         className="home-v3-detail-drawer saved-items-drawer portfolio-connections-drawer"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Connected exchanges"
+        aria-label="Connected accounts"
         style={{ maxWidth: 760 }}
       >
         <div className="home-v3-drawer-head">
           <div className="saved-items-section-head">
-            <strong>Connected Exchanges</strong>
-            <span>{accounts.length ? `${accounts.length} connected venue${accounts.length === 1 ? "" : "s"}` : "No connected venues yet."}</span>
+            <strong>Connected Accounts</strong>
+            <span>{totalCount ? `${totalCount} connected source${totalCount === 1 ? "" : "s"}` : "No connected sources yet."}</span>
           </div>
           <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
         </div>
         <div className="saved-items-drawer-content">
+          {/* Manual / exchange-key sources (existing pathway — untouched) */}
           {accounts.length ? (
             <section className="saved-items-section">
+              <div className="saved-items-section-eyebrow">Workspace sources</div>
               {accounts.map((account) => {
                 const trust = account?.providerTrust;
                 const cannotTrade = trust ? trust.cannotTrade : true;
@@ -3704,18 +4021,53 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], onAddConnecti
                 );
               })}
             </section>
-          ) : (
+          ) : null}
+
+          {/* Brokerage (SnapTrade pilot) sources — read-only, never merged */}
+          {brokerageAccounts.length ? (
+            <section className="saved-items-section">
+              <div className="saved-items-section-eyebrow">Brokerage accounts · Read-only</div>
+              {brokerageAccounts.map((account) => {
+                const badge = deriveBrokerageBadge(account);
+                const institution = account?.institutionName || account?.providerMeta?.institutionName || account?.provider || "Brokerage";
+                const accountNumber = maskAccountNumber(account?.accountNumber || account?.providerMeta?.accountNumber);
+                return (
+                  <div key={account.id || account.connectionId || `${account.sourceKind}-${account.accountId}`} className="saved-items-row connection-row connection-row--brokerage">
+                    <div className="saved-items-row-copy">
+                      <strong>{institution}</strong>
+                      <span>
+                        <span className="connection-source-kind">{String(account.sourceKind || "snaptrade").toUpperCase()}</span>
+                        {account.accountName ? ` · ${account.accountName}` : ""}
+                        {accountNumber ? ` · ${accountNumber}` : ""}
+                      </span>
+                      <span className="connection-row-trust-note">Read-only brokerage connection. Zenin cannot trade or withdraw.</span>
+                    </div>
+                    <div className="saved-items-row-meta">
+                      <span className={`provider-trust-pill provider-trust-pill-${badge.tone === "ok" ? "verified" : badge.tone}`}>{badge.label}</span>
+                      <span>{formatLastSync(account.lastSyncedAt || account.lastSyncAt)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
+
+          {totalCount === 0 ? (
             <section className="saved-items-section">
               <div className="saved-items-empty">
-                <strong>No exchanges connected</strong>
-                <span>Connect a venue to unlock portfolio sync, activity context, and shared desk monitoring.</span>
+                <strong>No accounts connected</strong>
+                <span>Connect an exchange key for workspace context, or link a read-only brokerage to preserve portfolio context.</span>
               </div>
             </section>
-          )}
+          ) : null}
+
           <div className="saved-items-drawer-actions">
             <button type="button" className="portfolio-v2-link" onClick={onClose}>Close</button>
             <button type="button" className="portfolio-command-primary-cta subtle" onClick={() => { onClose(); onAddConnection?.(); }}>
               Add Connection
+            </button>
+            <button type="button" className="portfolio-command-primary-cta subtle" onClick={() => { onClose(); onConnectBrokerage?.(); }}>
+              Connect brokerage
             </button>
           </div>
         </div>

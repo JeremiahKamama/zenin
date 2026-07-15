@@ -27,7 +27,7 @@ const COVERAGE_SEED = {
     { id: "massive", name: "Massive", status: "active", category: "Market Data", regions: ["Global", "Americas", "Europe", "Asia-Pacific", "Africa"], assetClasses: ["Equities", "ETFs", "Bonds", "FX", "Commodities", "Corporate Actions"], capabilities: ["quotes", "fundamentals", "breadth", "flows", "earnings"], priority: 1, note: "Primary global equities + fundamentals adapter." },
     { id: "fmp", name: "Financial Modeling Prep", status: "active", category: "Fundamentals", regions: ["Americas", "Europe", "Asia-Pacific"], assetClasses: ["Equities", "ETFs", "Bonds", "Options"], capabilities: ["fundamentals", "earnings", "ratios", "financials"], priority: 2, note: "Secondary fundamentals + estimates source." },
     { id: "yahoo", name: "Yahoo Finance", status: "active", category: "Market Data", regions: ["Global"], assetClasses: ["Equities", "ETFs", "FX", "Crypto", "Commodities"], capabilities: ["quotes", "history", "breadth"], priority: 3, note: "Fallback quote + history provider." },
-    { id: "mystocks", name: "MyStocks Africa", status: "active", category: "Regional (Africa)", regions: ["Africa"], assetClasses: ["Equities", "Bonds", "Money Market Funds", "REITs", "Corporate Actions"], capabilities: ["quotes", "fundamentals", "dividends", "ipos", "corporateActions"], priority: 1, note: "Primary Africa equities, bonds, MMF, REITs, and corporate actions adapter." },
+    { id: "mystocks", name: "MyStocks Africa", status: "unconfigured", category: "Regional (Africa)", regions: ["Africa"], assetClasses: ["Equities", "Bonds", "Money Market Funds", "REITs", "Corporate Actions"], capabilities: ["quotes", "fundamentals", "dividends", "ipos", "corporateActions"], priority: 1, note: "Primary Africa equities, bonds, MMF, REITs, and corporate actions adapter. Status is derived from real server configuration/health, not seeded." },
     { id: "finviz", name: "Finviz", status: "degraded", category: "Screener", regions: ["Americas"], assetClasses: ["Equities", "ETFs"], capabilities: ["screener", "breadth", "maps"], priority: 4, note: "US-centric screener + breadth; rate-limited." },
   ],
   markets: [
@@ -55,10 +55,10 @@ const COVERAGE_SEED = {
   datasets: [
     { id: "market_breadth", name: "Market Breadth", provider: "massive", region: "Global", assetClass: "Equities", cadence: "intraday", status: "active" },
     { id: "equity_fundamentals", name: "Equity Fundamentals", provider: "fmp", region: "Americas", assetClass: "Equities", cadence: "daily", status: "active" },
-    { id: "africa_quotes", name: "Africa Quotes", provider: "mystocks", region: "Africa", assetClass: "Equities", cadence: "realtime", status: "active" },
-    { id: "africa_corporate_actions", name: "Africa Corporate Actions", provider: "mystocks", region: "Africa", assetClass: "Corporate Actions", cadence: "daily", status: "active" },
-    { id: "dividend_calendar", name: "Dividend Calendar", provider: "mystocks", region: "Africa", assetClass: "Equities", cadence: "daily", status: "active" },
-    { id: "ipo_pipeline", name: "IPO Pipeline", provider: "mystocks", region: "Africa", assetClass: "Equities", cadence: "daily", status: "active" },
+    { id: "africa_quotes", name: "Africa Quotes", provider: "mystocks", region: "Africa", assetClass: "Equities", cadence: "realtime", status: "unconfigured" },
+    { id: "africa_corporate_actions", name: "Africa Corporate Actions", provider: "mystocks", region: "Africa", assetClass: "Corporate Actions", cadence: "daily", status: "unconfigured" },
+    { id: "dividend_calendar", name: "Dividend Calendar", provider: "mystocks", region: "Africa", assetClass: "Equities", cadence: "daily", status: "unconfigured" },
+    { id: "ipo_pipeline", name: "IPO Pipeline", provider: "mystocks", region: "Africa", assetClass: "Equities", cadence: "daily", status: "unconfigured" },
     { id: "fx_rates", name: "FX Rates", provider: "yahoo", region: "Global", assetClass: "FX", cadence: "realtime", status: "active" },
     { id: "commodity_prices", name: "Commodity Prices", provider: "yahoo", region: "Global", assetClass: "Commodities", cadence: "realtime", status: "active" },
   ],
@@ -70,12 +70,14 @@ const COVERAGE_SEED = {
   ],
   apiHealth: [
     { provider: "massive", endpoint: "/v1/quotes", status: "healthy", latencyMs: 120, uptimePct: 99.9, lastCheck: new Date().toISOString() },
-    { provider: "mystocks", endpoint: "/v1/africa/quotes", status: "healthy", latencyMs: 240, uptimePct: 99.2, lastCheck: new Date().toISOString() },
+    // MyStocks apiHealth is derived from a real /account health check at read time
+    // (see buildProviderHealth); no seeded "healthy" entry to avoid false signals.
     { provider: "fmp", endpoint: "/v3/profile", status: "degraded", latencyMs: 880, uptimePct: 97.4, lastCheck: new Date().toISOString() },
     { provider: "finviz", endpoint: "/screener", status: "degraded", latencyMs: 1500, uptimePct: 91.0, lastCheck: new Date().toISOString() },
   ],
   syncJobs: [
-    { id: "sync-africa-quotes", provider: "mystocks", dataset: "africa_quotes", status: "success", lastRun: new Date(Date.now() - 60000).toISOString(), durationMs: 4200, rows: 1840 },
+    // No seeded "mystocks" sync job — there is no real MyStocks sync process yet.
+    // Real sync status (if implemented) would be reported here from an actual run.
     { id: "sync-us-fundamentals", provider: "fmp", dataset: "equity_fundamentals", status: "running", lastRun: new Date().toISOString(), durationMs: null, rows: null },
     { id: "sync-breadth", provider: "massive", dataset: "market_breadth", status: "failed", lastRun: new Date(Date.now() - 3600000).toISOString(), durationMs: 310, rows: 0 },
   ],
@@ -160,8 +162,51 @@ function buildRegistry() {
   };
 }
 
+function buildProviderHealth() {
+  // Derive provider health from REAL configuration + (for MyStocks) a live check.
+  // Never return seeded "healthy"/"success" for MyStocks when no key is set.
+  const providers = COVERAGE_SEED.providers.map((p) => ({ id: p.id, status: p.status }));
+  const mystocks = providers.find((p) => p.id === "mystocks");
+  if (mystocks) {
+    let provider = null;
+    try {
+      provider = require("./mystocks").createMyStocksProvider();
+    } catch {
+      provider = null;
+    }
+    if (!provider || !provider.isConfigured()) {
+      mystocks.status = "unconfigured";
+    }
+    // If configured, attempt a live health check (non-fatal if it fails).
+    if (provider && provider.isConfigured()) {
+      try {
+        const client = provider.getClient();
+        if (client) {
+          const hc = client.healthCheck();
+          mystocks.status = hc.state || "unavailable";
+          mystocks.latencyMs = hc.latencyMs;
+          mystocks.lastCheckedAt = hc.lastCheckedAt;
+          mystocks.capabilities = ["search", "quotes", "history", "profiles", "dividends", "corporateActions"];
+          mystocks.limitations = ["eod_only_ohlcv", "partial_fundamentals"];
+        }
+      } catch {
+        mystocks.status = "unavailable";
+      }
+    }
+  }
+  return providers;
+}
+
 function createCoverageRouter() {
   const router = express.Router();
+
+  router.get("/health", (req, res) => {
+    try {
+      return res.json({ updatedAt: new Date().toISOString(), providers: buildProviderHealth() });
+    } catch (error) {
+      return res.status(500).json({ error: "Failed to build provider health", detail: error.message });
+    }
+  });
 
   router.get("/", (req, res) => {
     try {

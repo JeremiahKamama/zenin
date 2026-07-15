@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "./data-table/DataTable";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { WatchlistTransmission } from "../transmission/TransmissionSurfaces";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
 import { zeninFetchJson } from "../utils/zeninFetch";
 import { getCurrencySymbol, inferAssetCurrency } from "../utils/currencyUtils";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { normalizeInstrumentSymbol, resolveCurrencyInstrument } from "../utils/currencyInstruments.js";
 import { DensePanelHeader, GuidedEmptyState, InlineControlGroup } from "./CompactWorkspaceUI";
+import { IntelligenceCenter } from "./intelligence/index.jsx";
 import { SharedWatchlistWorkspacePanel } from "./InstitutionalPanels";
 import {
   UNSUPPORTED_IMPORT_EXTENSIONS,
@@ -110,18 +113,19 @@ export function Watchlist({
   const [importError, setImportError] = useState("");
   const [importNotice, setImportNotice] = useState("");
   const [importBusy, setImportBusy] = useState(false);
-
   const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
   const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
   const normalizeCategory = (value) => String(value || "").trim().toLowerCase();
   const normalizeTheme = (value) => String(value || "").trim().toLowerCase();
   const resolveWatchlistCategory = (asset) => {
     const kind = normalizeAssetKind(asset);
-    if (kind === "stock" || kind === "etf") return "stocks";
+    if (kind === "etf") return "etfs";
+    if (kind === "stock") return "stocks";
     if (kind === "crypto") return "crypto";
     if (kind === "bond") return "bonds";
     if (kind === "indicator") return "indicators";
     if (kind === "commodity") return "commodities";
+    if (kind === "forex" || kind === "currency") return "currencies";
     
     // Fallback
     const explicitCategory = normalizeCategory(asset?.category);
@@ -138,6 +142,13 @@ export function Watchlist({
     if (rawType === "indicator" || rawCategory === "indicators" || marketType === "macro") return "indicator";
     if (rawType === "bond" || rawCategory === "bonds") return "bond";
     if (["commodity", "commodities", "metal", "metals"].includes(rawType) || ["commodities", "metals"].includes(rawCategory)) return "commodity";
+    // FX pair or currency code (curated universe).
+    if (rawType === "forex" || rawType === "currency" || rawType === "fx" || rawCategory === "currencies" || marketType === "forex") {
+      // Disambiguate: a slash pair or =X provider form is an FX pair, else a code.
+      const sym = normalizeInstrumentSymbol(asset?.symbol || asset?.name || rawType);
+      const inst = resolveCurrencyInstrument(sym);
+      return inst?.kind || "currency";
+    }
     if (asset?.theme || rawCategory === "stocks") return "stock";
     return rawType || "stock";
   };
@@ -532,6 +543,59 @@ useEffect(() => {
     return asset?.marketType ? String(asset.marketType).toUpperCase() : "Tracked";
   };
 
+  // ── §5 Watchlist row quote-status contract ────────────────────────────────
+  // Derives a trustworthy provenance state from the real signals already on the
+  // row: live feed status (liveStatus) and the last live tick (_liveUpdatedAt).
+  // Never infers "Live" when provenance metadata is missing.
+  const QUOTE_STALE_MS = 60 * 1000;
+  const deriveQuoteStatus = (asset, status = liveStatus, now = Date.now()) => {
+    const price = asset?.price != null;
+    const tick = asset?._liveUpdatedAt ? Number(asset._liveUpdatedAt) : null;
+    const tickAge = tick != null ? now - tick : null;
+    if (!price) {
+      return { state: "unavailable", source: null, asOf: null, reason: "No quote available" };
+    }
+    if (status === "connected" && tick != null && tickAge != null && tickAge <= QUOTE_STALE_MS) {
+      return { state: "live", source: "Live feed", asOf: tick, reason: null };
+    }
+    if (tick != null && tickAge != null && tickAge > QUOTE_STALE_MS) {
+      return { state: "stale", source: "Catalog", asOf: tick, reason: "Last tick older than 60s" };
+    }
+    if (status === "idle" && tick == null) {
+      return { state: "unknown", source: null, asOf: null, reason: "Provenance unknown" };
+    }
+    return { state: "cached", source: "Catalog", asOf: null, reason: "Snapshot, no live tick this session" };
+  };
+  const QUOTE_STATUS_LABEL = {
+    live: "Live",
+    cached: "Cached",
+    stale: "Stale",
+    unavailable: "Unavailable",
+    unknown: "Status unknown",
+  };
+  const QuoteStatusBadge = ({ asset }) => {
+    const s = deriveQuoteStatus(asset);
+    const label = QUOTE_STATUS_LABEL[s.state] || "Status unknown";
+    // MyStocks rows carry the provider flag from the backend; surface it so the
+    // provenance label reads "Live · MyStocks" etc. (spec §2 labelling).
+    const providerTag = asset?.provider === "mystocks" ? "MyStocks" : null;
+    const detail = [
+      s.source ? `Source: ${s.source}` : null,
+      s.asOf ? `As-of: ${new Date(s.asOf).toLocaleTimeString()}` : null,
+      s.reason ? s.reason : null,
+    ].filter(Boolean).join(" · ");
+    return (
+      <span
+        className={`quote-status quote-status-${s.state}`}
+        role="status"
+        aria-label={`Quote ${label}${providerTag ? `, ${providerTag}` : ""}${detail ? `, ${detail}` : ""}`}
+        title={detail || label}
+      >
+        {label}{providerTag ? ` · ${providerTag}` : ""}
+      </span>
+    );
+  };
+
   const getGuestSignupHref = () => {
     if (typeof window === "undefined") return "/auth?mode=signup&next=%2Fapp%3Fsection%3Dwatchlist";
     const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -626,7 +690,12 @@ useEffect(() => {
       header: "Last",
       align: "right",
       sortable: false,
-      cell: (asset) => formatAssetPrice(asset),
+      cell: (asset) => (
+        <span className="watchlist-last-cell">
+          {formatAssetPrice(asset)}
+          <QuoteStatusBadge asset={asset} />
+        </span>
+      ),
     },
     {
       key: "priceChangePercent",
@@ -643,6 +712,12 @@ useEffect(() => {
           </span>
         );
       },
+    },
+    {
+      key: "transmission",
+      header: "Transmission",
+      sortable: false,
+      cell: (asset) => <WatchlistTransmission count={Number(asset?.transmissionCount ?? 0) || 0} node={asset.symbol} />,
     },
     {
       key: "thesis",
@@ -1124,6 +1199,7 @@ useEffect(() => {
                           {asset.price != null && (
                             <div className="asset-price">
                               <span className="price-val">{formatAssetPrice(asset)}</span>
+                              <QuoteStatusBadge asset={asset} />
                               {asset.isMarketOpen === false && (
                                 <span className="market-closed-dash" title={`Market Closed: ${asset.marketStatus || 'Holiday/Weekend'}`} style={{ color: "var(--color-text-secondary)", marginLeft: "4px", fontSize: "0.9rem" }}>–</span>
                               )}
@@ -1286,6 +1362,5 @@ useEffect(() => {
         />
       ) : null}
     </>
-
   );
 }

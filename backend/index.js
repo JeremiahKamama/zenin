@@ -26,6 +26,67 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { spawn } = require("child_process");
 const fs = require("fs");
+
+// ── First-Class ETFs & Currencies backend catalog (spec §2) ───────────────
+// Self-contained (CommonJS) mirror of frontend/src/utils/currencyInstruments.js.
+// Curated liquid universes only — no uncontrolled provider-wide search.
+const CURATED_FX_PAIRS = [
+  "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
+  "AUD/USD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
+];
+const CURATED_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD"];
+const FX_BASE_QUOTE = {
+  "EUR/USD": ["EUR", "USD"], "GBP/USD": ["GBP", "USD"], "USD/JPY": ["USD", "JPY"],
+  "USD/CHF": ["USD", "CHF"], "USD/CAD": ["USD", "CAD"], "AUD/USD": ["AUD", "USD"],
+  "NZD/USD": ["NZD", "USD"], "EUR/GBP": ["EUR", "GBP"], "EUR/JPY": ["EUR", "JPY"],
+  "GBP/JPY": ["GBP", "JPY"],
+};
+const FX_NAMES = {
+  "EUR/USD": "Euro / US Dollar", "GBP/USD": "British Pound / US Dollar",
+  "USD/JPY": "US Dollar / Japanese Yen", "USD/CHF": "US Dollar / Swiss Franc",
+  "USD/CAD": "US Dollar / Canadian Dollar", "AUD/USD": "Australian Dollar / US Dollar",
+  "NZD/USD": "New Zealand Dollar / US Dollar", "EUR/GBP": "Euro / British Pound",
+  "EUR/JPY": "Euro / Japanese Yen", "GBP/JPY": "British Pound / Japanese Yen",
+};
+const CCY_NAMES = {
+  USD: "US Dollar", EUR: "Euro", GBP: "British Pound", JPY: "Japanese Yen",
+  CHF: "Swiss Franc", CAD: "Canadian Dollar", AUD: "Australian Dollar", NZD: "New Zealand Dollar",
+};
+const CURATED_ETF_LIST = [
+  ["SPY", "SPDR S&P 500 ETF Trust", "State Street"], ["QQQ", "Invesco QQQ Trust", "Invesco"],
+  ["VTI", "Vanguard Total Stock Market ETF", "Vanguard"], ["IWM", "iShares Russell 2000 ETF", "BlackRock"],
+  ["VOO", "Vanguard S&P 500 ETF", "Vanguard"], ["IVV", "iShares Core S&P 500 ETF", "BlackRock"],
+  ["VEA", "Vanguard FTSE Developed Markets ETF", "Vanguard"], ["VWO", "Vanguard FTSE Emerging Markets ETF", "Vanguard"],
+  ["AGG", "iShares Core US Aggregate Bond ETF", "BlackRock"], ["TLT", "iShares 20+ Year Treasury Bond ETF", "BlackRock"],
+  ["GLD", "SPDR Gold Shares", "State Street"], ["SLV", "iShares Silver Trust", "BlackRock"],
+  ["ARKK", "ARK Innovation ETF", "ARK"], ["EEM", "iShares MSCI Emerging Markets ETF", "BlackRock"],
+  ["KWEB", "KR CCSI China Internet ETF", "KraneShares"],
+  ["XLE", "Energy Select Sector SPDR", "State Street"], ["USO", "United States Oil Fund", "US Commodity Funds"],
+  ["BNO", "United States Brent Oil Fund", "US Commodity Funds"], ["UNG", "United States Natural Gas Fund", "US Commodity Funds"],
+  ["COPX", "Global X Copper Miners ETF", "Global X"], ["GDX", "VanEck Gold Miners ETF", "VanEck"],
+  ["WEAT", "Teucrium Wheat Fund", "Teucrium"], ["CORN", "Teucrium Corn Fund", "Teucrium"],
+  ["SOYB", "Teucrium Soybean Fund", "Teucrium"], ["XLB", "Materials Select Sector SPDR", "State Street"],
+];
+const CURATED_ETF_RESULTS = CURATED_ETF_LIST.map(([symbol, name, issuer]) => ({
+  symbol, name, type: "etf", category: "etfs", marketType: "equity",
+  instrumentType: "security", exchange: "NYSE/NASDAQ", provider: issuer || "Market Data", source: "curated_etf_universe",
+}));
+const CURATED_FX_RESULTS = [
+  ...CURATED_FX_PAIRS.map((pair) => {
+    const [base, quote] = FX_BASE_QUOTE[pair];
+    return {
+      symbol: pair, providerSymbol: `${base}${quote}=X`, name: FX_NAMES[pair],
+      type: "forex", kind: "forex", marketType: "forex", category: "currencies",
+      instrumentType: "fx-pair", baseCurrency: base, quoteCurrency: quote,
+      currency: quote, exchange: "FX", provider: "Yahoo Finance", source: "curated_fx_universe",
+    };
+  }),
+  ...CURATED_CURRENCIES.map((code) => ({
+    symbol: code, name: CCY_NAMES[code], type: "currency", kind: "currency",
+    marketType: "macro", category: "currencies", instrumentType: "currency-code",
+    currency: code, provider: "Forex Factory / Macro feeds", source: "curated_currency_universe",
+  })),
+];
 const {
   validate,
   signupSchema,
@@ -128,7 +189,9 @@ const {
   getBrokerageRegistry
 } = require("./brokerage/infrastructure/bootstrap");
 const { createSyncEngine, startBackgroundSync, stopBackgroundSync } = require("./brokerage/application/SyncEngine");
+const { startJournalReminderScheduler, stopJournalReminderScheduler } = require("./journalReminderWorker");
 const { createBrokerageService } = require("./brokerage/application/BrokerageService");
+const { featureFlags } = require("./brokerage/application/featureFlags");
 const { registerBrokerageRoutes } = require("./brokerage/http/routes");
 const {
   getProviderRegistry: getMarketIntelRegistry,
@@ -142,6 +205,8 @@ const {
 } = require("./market-intel");
 const { initializeMarketIntelTables } = require("./market-intel/infrastructure/database");
 const { registerMarketIntelRoutes } = require("./market-intel/http/routes");
+const { registerDocumentIntelligenceRoutes } = require("./services/providers/DocumentIntelligenceProvider/routes");
+const { registerETFIntelligenceRoutes } = require("./services/providers/ETFIntelligenceProvider/routes");
 const {
   CompanyProfileService,
   registerCompanyProfileRoutes: registerNewCompanyProfileRoutes
@@ -3932,7 +3997,10 @@ registerBrokerageRoutes(app, {
   attachActiveWorkspace,
   requireWorkspaceMember,
   apiError,
-  handleServerError
+  handleServerError,
+  featureFlags,
+  env: process.env,
+  requireAdmin: (req) => isSignedInAdmin(req) && hasStrongAdminAuth(req?.auth?.user)
 });
 
 // ---- Market Intelligence Routes ----
@@ -4001,6 +4069,42 @@ function getMarketNotificationService() {
   return marketNotificationService;
 }
 
+// ---- Document Intelligence stream worker (Sec API) ----
+let secApiStreamWorker;
+
+function getSecApiStreamWorker() {
+  if (!secApiStreamWorker) {
+    const notifier = getMarketNotificationService();
+    secApiStreamWorker = new (require("./market-intel/application/SecApiStreamWorker").SecApiStreamWorker)({
+      db,
+      notifier: {
+        notify: (recipient, title, body, opts) => notifier.send(recipient, title, body, opts),
+      },
+      // Match a symbol to users who watch or hold it (for alerts).
+      matcher: async (symbol) => {
+        if (!db || !symbol) return [];
+        try {
+          const res = await db.query(
+            `SELECT DISTINCT wm.user_id, wm.workspace_id
+             FROM workspace_watchlist_members wm
+             WHERE wm.symbol = $1
+             UNION
+             SELECT DISTINCT hm.user_id, hm.workspace_id
+             FROM portfolio_holdings hm
+             WHERE hm.symbol = $1`,
+            [symbol.toUpperCase()]
+          );
+          return res.rows;
+        } catch (_) {
+          return [];
+        }
+      },
+      eventBus: app?.locals?.eventBus || null,
+    });
+  }
+  return secApiStreamWorker;
+}
+
 registerMarketIntelRoutes(app, {
   service: getMarketIntelService(),
   alertRules: getMarketAlertRules(),
@@ -4011,6 +4115,11 @@ registerMarketIntelRoutes(app, {
   apiError,
   handleServerError
 });
+
+// ARW Evolution — Document Intelligence (SEC EDGAR) + ETF Intelligence (ETFdb).
+// Provider-agnostic routes; ARW never touches providers directly.
+registerDocumentIntelligenceRoutes(app);
+registerETFIntelligenceRoutes(app);
 
 if (ENABLE_NEW_COMPANY_PROFILE) {
   registerNewCompanyProfileRoutes(app, getCompanyProfileService(), {
@@ -7837,6 +7946,56 @@ app.get("/api/forex/rates", async (_req, res) => {
   }
 });
 
+// FX pair quote — provider symbol is the Yahoo =X form (e.g. EURUSD=X).
+// Returns honest empty (null price + stale) on provider failure; never a
+// synthetic/zero value. Currency codes are NOT quoteable here.
+app.get("/api/fx/:symbol/price", async (req, res) => {
+  const raw = String(req.params.symbol || "").trim().toUpperCase();
+  // Normalize EURUSD / EUR/USD / EURUSD=X => EURUSD=X
+  const providerSymbol = raw.includes("/")
+    ? `${raw.replace("/", "")}X`
+    : raw.endsWith("=X") ? raw : `${raw}X`;
+  const baseQuote = providerSymbol.replace("=X", "");
+  const pairDisplay = `${baseQuote.slice(0, 3)}/${baseQuote.slice(3)}`;
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}?range=1d&interval=1d`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch(url, { signal: ctrl.signal, headers: { "User-Agent": "Zenin/1.0" } });
+    clearTimeout(t);
+    if (!resp.ok) throw new Error(`yahoo_fx_http_${resp.status}`);
+    const json = await resp.json();
+    const result = json?.chart?.result?.[0];
+    const meta = result?.meta || {};
+    const last = meta.regularMarketPrice ?? meta.previousClose ?? null;
+    const prev = meta.previousClose ?? meta.chartPreviousClose ?? null;
+    const changePct = (typeof last === "number" && typeof prev === "number" && prev)
+      ? ((last - prev) / prev) * 100 : null;
+    res.json({
+      symbol: pairDisplay,
+      providerSymbol,
+      price: typeof last === "number" ? last : null,
+      changePct: typeof changePct === "number" ? Number(changePct.toFixed(4)) : null,
+      updatedAt: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : new Date().toISOString(),
+      source: "Yahoo Finance",
+      stale: false,
+      unavailable: false,
+    });
+  } catch (error) {
+    res.json({
+      symbol: pairDisplay,
+      providerSymbol,
+      price: null,
+      changePct: null,
+      updatedAt: new Date().toISOString(),
+      source: "Yahoo Finance",
+      stale: true,
+      unavailable: true,
+      stale_reason: error?.message || "fx_quote_fetch_failed",
+    });
+  }
+});
+
 app.get("/api/data/providers", async (_req, res) => {
   const [fred, bls] = await Promise.all([
     fetchFredMacroMetrics().then((result) => result.status).catch((error) => buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable")),
@@ -7848,9 +8007,125 @@ app.get("/api/data/providers", async (_req, res) => {
       fred,
       bls,
       eia: buildProviderStatus("EIA", Boolean(EIA_API_KEY), EIA_API_KEY ? "configured" : "missing_key", EIA_API_KEY ? "Energy series configured for commodity fundamentals" : "API key not configured"),
-      massive: getMassiveStatus()
+      massive: getMassiveStatus(),
+      mystocks: mystocksIntegration.getMyStocksStatus()
     })
   });
+});
+
+// ── MyStocks Africa market-data + company routes (backend-only, no key leakage) ──
+function mystocksEnvelope(data, { unavailable = false, stale = false, staleReason = null } = {}) {
+  return {
+    source: "MyStocks Africa",
+    provider: "mystocks",
+    updatedAt: new Date().toISOString(),
+    stale,
+    unavailable,
+    stale_reason: staleReason,
+    requestId: null,
+    data,
+  };
+}
+
+app.get("/api/company-profile/mystocks/:symbol", async (req, res) => {
+  const symbol = String(req.params.symbol || "").trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const profile = await mystocksIntegration.getMyStocksProfile(symbol);
+    if (!profile) return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: "mystocks_profile_unavailable" }));
+    return res.json(mystocksEnvelope(profile));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/status", async (req, res) => {
+  const exchange = req.query.exchange ? String(req.query.exchange).toUpperCase() : null;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("status", { exchange });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_market_status_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/movers", async (req, res) => {
+  const exchange = req.query.exchange ? String(req.query.exchange).toUpperCase() : null;
+  const direction = req.query.direction || "top_gainers";
+  const limit = Number(req.query.limit) || 20;
+  const page = Number(req.query.page) || 1;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("movers", { exchange, direction, limit, page });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_movers_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/holidays", async (req, res) => {
+  const exchange = req.query.exchange ? String(req.query.exchange).toUpperCase() : null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("holidays", { exchange, from, to });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_holidays_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/settlement", async (_req, res) => {
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("settlement");
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_settlement_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/dividends", async (req, res) => {
+  const exchange = req.query.exchange ? String(req.query.exchange).toUpperCase() : null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("dividends", { exchange, from, to });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_dividends_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/intelligence", async (req, res) => {
+  const exchange = req.query.exchange ? String(req.query.exchange).toUpperCase() : null;
+  const limit = Number(req.query.limit) || 20;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("intel", { exchange, limit });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_intel_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/bonds", async (req, res) => {
+  const country = req.query.country ? String(req.query.country).toUpperCase() : null;
+  const type = req.query.type || null;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("bonds", { country, type });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_bonds_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
+});
+
+app.get("/api/market/funds", async (req, res) => {
+  const country = req.query.country ? String(req.query.country).toUpperCase() : null;
+  const type = req.query.type || null;
+  try {
+    const data = await mystocksIntegration.getMyStocksMarket("funds", { country, type });
+    return res.json(mystocksEnvelope(data, data ? {} : { unavailable: true, staleReason: "mystocks_funds_unavailable" }));
+  } catch (err) {
+    return res.json(mystocksEnvelope(null, { unavailable: true, staleReason: err.message }));
+  }
 });
 
 app.get("/api/history", validate(historyQuerySchema, "query"), async (req, res) => {
@@ -7886,9 +8161,19 @@ app.get("/api/history", validate(historyQuerySchema, "query"), async (req, res) 
         history = cryptoHistory.history;
         source = cryptoHistory.source;
       } else {
-        const stockHistory = await fetchHistoryFromYahoo(resolvedSymbol, interval);
-        history = stockHistory.history;
-        source = stockHistory.source || "yahoo";
+        // MyStocks Africa is primary for exchange-qualified African listings.
+        let msHistory = null;
+        if (mystocksIntegration.isEligible(rawSymbol, "history")) {
+          msHistory = await mystocksIntegration.getMyStocksHistory(rawSymbol, String(interval || "1D").toLowerCase()).catch(() => null);
+        }
+        if (msHistory && msHistory.candles && msHistory.candles.length) {
+          history = msHistory.candles;
+          source = "mystocks";
+        } else {
+          const stockHistory = await fetchHistoryFromYahoo(resolvedSymbol, interval);
+          history = stockHistory.history;
+          source = stockHistory.source || "yahoo";
+        }
       }
       const nextPayload = {
         history: Array.isArray(history) ? history : [],
@@ -8068,6 +8353,29 @@ app.get("/api/search", validate(searchQuerySchema, "query"), async (req, res) =>
     if (normalizedType === "crypto") {
       const hyperResults = await fetchHyperliquidSearchResults(q);
       results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
+    } else if (normalizedType === "etf" || normalizedType === "etfs") {
+      // Curated ETF catalog only (CORE_ETF_SEED + commodity-linked). Inline here
+      // to keep the backend self-contained (CommonJS) and avoid ESM cross-import.
+      const ql = String(q || "").trim().toLowerCase();
+      results = CURATED_ETF_RESULTS
+        .filter((row) => `${row.symbol} ${row.name}`.toLowerCase().includes(ql))
+        .slice(0, 12);
+    } else if (normalizedType === "currency" || normalizedType === "currencies" || normalizedType === "forex") {
+      const ql = String(q || "").trim().toLowerCase();
+      results = CURATED_FX_RESULTS
+        .filter((row) => `${row.symbol} ${row.name} ${row.baseCurrency || ""} ${row.quoteCurrency || ""}`.toLowerCase().includes(ql))
+        .sort((a, b) => {
+          const rank = (row) => {
+            const symbol = String(row.symbol || "").toLowerCase();
+            const name = String(row.name || "").toLowerCase();
+            if (symbol === ql) return 0;
+            if (name === `${ql} currency`) return 1;
+            if (symbol.startsWith(ql) || name.startsWith(ql)) return 2;
+            return 3;
+          };
+          return rank(a) - rank(b) || String(a.symbol).localeCompare(String(b.symbol));
+        })
+        .slice(0, 5);
     } else if (normalizedType === "commodity" || normalizedType === "commodities") {
       results = COMMODITY_UNIVERSE
         .filter((row) => `${row.symbol} ${row.name} ${row.group} ${row.region}`.toLowerCase().includes(String(q || "").toLowerCase()))
@@ -8088,6 +8396,29 @@ app.get("/api/search", validate(searchQuerySchema, "query"), async (req, res) =>
       results = searchForexFactoryCountries(q, 20);
     } else {
       results = await searchYahooFinance(q, normalizedType);
+    }
+    // MyStocks Africa: primary for African exchange-qualified listings. Merge
+    // when searching stocks/etfs/bonds/funds (or with an explicit Africa filter).
+    const africaTypes = ["stock", "stocks", "etf", "etfs", "bond", "bonds", "fund", "funds", "tradfi"];
+    const wantsAfrica = (req.query.region && String(req.query.region).toLowerCase() === "africa") || req.query.exchange;
+    if (africaTypes.includes(normalizedType) || wantsAfrica) {
+      const msResults = await mystocksIntegration
+        .searchMyStocks({ q, type: normalizedType === "tradfi" ? "stock" : normalizedType, exchange: req.query.exchange, country: req.query.country, limit: 12 })
+        .catch(() => []);
+      if (msResults.length) {
+        // Dedupe by provider+exchange+symbol; rank exact exchange-qualified first.
+        const seen = new Set(results.map((r) => `${r.provider || "yahoo"}:${r.exchange || ""}:${r.symbol}`));
+        const merged = [...results];
+        for (const r of msResults) {
+          const key = `${r.provider}:${r.exchange || ""}:${r.symbol}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push(r);
+        }
+        const rank = (r) => (r.provider === "mystocks" && r.symbol && r.symbol.includes(".") ? 0 : 1);
+        merged.sort((a, b) => rank(a) - rank(b) || String(a.symbol).localeCompare(String(b.symbol)));
+        results = merged.slice(0, 24);
+      }
     }
     res.json({ results });
   } catch (error) {
@@ -9115,6 +9446,31 @@ app.get("/api/prices", validate(pricesQuerySchema, "query"), async (req, res) =>
           updatedAt: new Date().toISOString(),
           stale: false
         };
+        // MyStocks Africa: primary for exchange-qualified African listings.
+        const msQuotes = await mystocksIntegration.getMyStocksQuotes(symbols).catch(() => new Map());
+        if (msQuotes && msQuotes.size) {
+          for (const [sym, q] of msQuotes) {
+            const z = q._zenin || {};
+            nextPayload.prices[sym] = {
+              symbol: sym,
+              price: z.price != null ? z.price : null,
+              priceChangePercent: z.changePercent != null ? z.changePercent : null,
+              currency: z.currency || null,
+              priceUsd: z.priceUsd != null ? z.priceUsd : null,
+              source: "MyStocks Africa",
+              provider: "mystocks",
+              exchange: z.exchange || null,
+              country: z.country || null,
+              updatedAt: z.updatedAt || nextPayload.updatedAt,
+              quoteState: z.quoteState || "live"
+            };
+          }
+          nextPayload.providers = summarizePriceProviders(nextPayload.prices, "MyStocks Africa");
+          nextPayload.dataProviders = buildDataProviderStatus({
+            massive: getMassiveStatus(),
+            mystocks: mystocksIntegration.getMyStocksStatus()
+          });
+        }
       }
 
       const priceRows = nextPayload?.prices && typeof nextPayload.prices === "object" ? Object.values(nextPayload.prices) : [];
@@ -13318,6 +13674,49 @@ app.get("/api/commodities/:symbol/price", async (req, res) => {
   }
 });
 
+// ETF live price — Yahoo Finance chart endpoint (keyless, Node-native fetch).
+// yfinance (fetch_prices.py) is environmentally unreliable in this workspace, so
+// we hit query1.finance.yahoo.com directly. Returns only sourced fields; AUM /
+// holdings / flows are intentionally omitted (no feed yet) → UI shows honest
+// "Unavailable". Never fabricates.
+async function fetchYahooEtfQuote(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+  const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!r.ok) throw new Error(`yahoo ${r.status}`);
+  const j = await r.json();
+  const m = j?.chart?.result?.[0]?.meta;
+  if (!m || typeof m.regularMarketPrice !== "number") return null;
+  const prev = Number(m.chartPreviousClose) || Number(m.previousClose) || null;
+  const price = Number(m.regularMarketPrice);
+  const changePct = prev ? ((price - prev) / prev) * 100 : null;
+  return {
+    symbol: String(m.symbol || symbol).toUpperCase(),
+    name: m.longName || m.shortName || null,
+    instrumentType: m.instrumentType || null,
+    price,
+    changePct: Number.isFinite(changePct) ? Number(changePct.toFixed(2)) : null,
+    dayHigh: Number(m.regularMarketDayHigh) || null,
+    dayLow: Number(m.regularMarketDayLow) || null,
+    week52High: Number(m.fiftyTwoWeekHigh) || null,
+    week52Low: Number(m.fiftyTwoWeekLow) || null,
+    volume: Number(m.regularMarketVolume) || null,
+    currency: m.currency || "USD",
+    source: "Yahoo Finance"
+  };
+}
+
+app.get("/api/etf/:symbol/price", async (req, res) => {
+  const symbol = String(req.params.symbol || "").toUpperCase();
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const q = await fetchYahooEtfQuote(symbol);
+    if (!q) return res.json({ updatedAt: new Date().toISOString(), symbol, source: "Yahoo Finance", unavailable: true, price: null, changePct: null });
+    res.json({ updatedAt: new Date().toISOString(), ...q });
+  } catch (error) {
+    res.json({ updatedAt: new Date().toISOString(), symbol, source: "Yahoo Finance", unavailable: true, price: null, changePct: null });
+  }
+});
+
 app.get("/api/commodities/:symbol/fundamentals", async (req, res) => {
   const item = getCommodity(req.params.symbol);
   try {
@@ -14826,11 +15225,11 @@ const MACRO_ANALYTICS_SNAPSHOT_SCOPE = "analytics-macro-v1";
 const MACRO_ANALYTICS_SNAPSHOT_PARAMS = { scope: "macro" };
 const MACRO_ANALYTICS_TTL_MS = 10 * 60 * 1000; // 10 min
 
-async function buildMacroAnalyticsPayload() {
-  console.log("[Analytics] Building macro desk payload...");
+async function buildMacroAnalyticsPayload(geo = "USA") {
+  console.log(`[Analytics] Building macro desk payload for ${geo}...`);
 
   const [macroData, riskIndicators, fredStatus, blsStatus] = await Promise.all([
-    fetchAnalyticsMacroRows("USA").catch((error) => { console.warn("[Macro] USA macro data fetch failed:", error?.message || error); return []; }),
+    fetchAnalyticsMacroRows(geo).catch((error) => { console.warn(`[Macro] ${geo} macro data fetch failed:`, error?.message || error); return []; }),
     fetchAnalyticsRiskIndicators().catch((error) => { console.warn("[Macro] Risk indicators fetch failed:", error?.message || error); return []; }),
     fetchFredMacroMetrics().then((r) => r.status).catch((error) => buildProviderStatus("FRED", Boolean(FRED_API_KEY), "unavailable", error?.message || "FRED unavailable")),
     fetchBlsMacroMetrics().then((r) => r.status).catch((error) => buildProviderStatus("BLS", Boolean(BLS_API_KEY), "unavailable", error?.message || "BLS unavailable"))
@@ -14850,9 +15249,11 @@ async function buildMacroAnalyticsPayload() {
     console.warn("[Macro] FX rates build failed:", err?.message || err);
   }
 
+  const isUSA = String(geo).toUpperCase() === "USA";
   return {
     updatedAt: new Date().toISOString(),
-    source: "FRED + BLS + World Bank + Yahoo Finance",
+    source: isUSA ? "FRED + BLS + World Bank + Yahoo Finance" : "World Bank + Yahoo Finance",
+    country: geo,
     macroData,
     fxRates,
     forexMovers,
@@ -14902,11 +15303,12 @@ const MACRO_FALLBACK_PAYLOAD = Object.freeze({
   annualReturns: []
 });
 
-async function getMacroAnalyticsPayload({ ttlMs = MACRO_ANALYTICS_TTL_MS, forceRefresh = false } = {}) {
+async function getMacroAnalyticsPayload({ geo = "USA", ttlMs = MACRO_ANALYTICS_TTL_MS, forceRefresh = false } = {}) {
+  const snapshotParams = { ...MACRO_ANALYTICS_SNAPSHOT_PARAMS, geo };
   if (!forceRefresh) {
     const fresh = await readFreshSnapshot(
       MACRO_ANALYTICS_SNAPSHOT_SCOPE,
-      MACRO_ANALYTICS_SNAPSHOT_PARAMS,
+      snapshotParams,
       ttlMs
     );
     if (fresh) return fresh;
@@ -14914,11 +15316,11 @@ async function getMacroAnalyticsPayload({ ttlMs = MACRO_ANALYTICS_TTL_MS, forceR
 
   return withInflightDedup(
     MACRO_ANALYTICS_SNAPSHOT_SCOPE,
-    MACRO_ANALYTICS_SNAPSHOT_PARAMS,
+    snapshotParams,
     async () => {
       try {
-        const payload = await buildMacroAnalyticsPayload();
-        await writeAllSnapshots(MACRO_ANALYTICS_SNAPSHOT_SCOPE, MACRO_ANALYTICS_SNAPSHOT_PARAMS, payload);
+        const payload = await buildMacroAnalyticsPayload(geo);
+        await writeAllSnapshots(MACRO_ANALYTICS_SNAPSHOT_SCOPE, snapshotParams, payload);
         return payload;
       } catch (err) {
         console.error("[Macro] Failed to build macro analytics:", err?.message || err);
@@ -14929,14 +15331,15 @@ async function getMacroAnalyticsPayload({ ttlMs = MACRO_ANALYTICS_TTL_MS, forceR
 }
 
 app.get('/api/analytics/macro', async (req, res) => {
+  const geo = String(req.query.geo || "USA").toUpperCase();
   try {
-    const payload = await getMacroAnalyticsPayload();
+    const payload = await getMacroAnalyticsPayload({ geo });
     return res.json(payload);
   } catch (error) {
     console.error("[Analytics] Macro error:", error);
     const stale = await readServiceSnapshot(
       MACRO_ANALYTICS_SNAPSHOT_SCOPE,
-      MACRO_ANALYTICS_SNAPSHOT_PARAMS
+      { ...MACRO_ANALYTICS_SNAPSHOT_PARAMS, geo }
     );
     if (stale?.payload) {
       return res.json(stale.payload);
@@ -14955,6 +15358,8 @@ const EQUITIES_ANALYTICS_TTL_MS = 15 * 60 * 1000;
 
 const { createEquitiesProvider } = require("./providers/equitiesProvider");
 const equitiesProvider = createEquitiesProvider({ fetchFinvizQuotes });
+// MyStocks Africa — backend-only integration (never exposes keys to frontend).
+const mystocksIntegration = require("./providers/mystocks/integration");
 
 async function buildEquitiesAnalyticsPayload() {
   console.log("[Analytics] Fetching live equities data...");
@@ -15727,6 +16132,16 @@ function startMarketIntelBackgroundJobs() {
   }, 7 * 24 * 60 * 60 * 1000);
   marketIntelBgTimers.push(weeklyInterval);
   if (typeof weeklyInterval.unref === "function") weeklyInterval.unref();
+
+  // Document Intelligence stream (Sec API): starts only when configured.
+  try {
+    const worker = getSecApiStreamWorker();
+    if (worker.start()) {
+      console.log("[document-intelligence] Sec API stream worker started.");
+    }
+  } catch (err) {
+    console.warn("[document-intelligence] Stream worker not started:", err.message);
+  }
 }
 
 function scheduleDailyRefresh(cache, svc) {
@@ -15803,6 +16218,11 @@ async function startServer() {
         console.log("[market-intel] Background job scheduler started.");
       }
 
+      // Trade-journaling reminder scheduler (Phase 2)
+      if (process.env.JOURNAL_REMINDER_SCHEDULER !== "false") {
+        startJournalReminderScheduler();
+      }
+
       resolve();
     });
   });
@@ -15856,6 +16276,7 @@ async function stopServer() {
   clearInterval(wsPushTimer);
   stopBackgroundSync();
   stopMarketIntelBackgroundJobs();
+  stopJournalReminderScheduler();
   try {
     if (massiveStocksSocket) {
       try { massiveStocksSocket.close(); } catch {}

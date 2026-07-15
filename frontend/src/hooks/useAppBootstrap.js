@@ -1,5 +1,6 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 import { zeninFetch } from "../utils/zeninFetch";
+import { hydrateProviderHealth } from "../utils/DataCoverageRegistry";
 
 export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
   const [data, setData] = useState(null);
@@ -68,6 +69,10 @@ export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
     };
 
     load();
+
+    // Hydrate live provider health (MyStocks wired flag) from the backend.
+    // Fire-and-forget: never blocks the splash; failures keep static defaults.
+    hydrateProviderHealth().catch(() => {});
 
     return () => {
       cancelled = true;

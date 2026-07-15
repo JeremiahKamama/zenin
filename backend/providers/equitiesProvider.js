@@ -101,15 +101,32 @@ function makeYahooAdapter() {
   };
 }
 
-// --- Adapter: MyStocks Africa (structured; degrades when absent) ---
+// --- Adapter: MyStocks Africa (real backend-only integration) ---
+let mystocksProvider = null;
+function getMyStocksProvider() {
+  if (!mystocksProvider) {
+    try {
+      mystocksProvider = require("./mystocks").createMyStocksProvider();
+    } catch {
+      mystocksProvider = null;
+    }
+  }
+  return mystocksProvider;
+}
 function makeMyStocksAdapter() {
   return {
     id: "mystocks",
-    isConfigured: () => Boolean(process.env.MYSTOCKS_AFRICA_API_KEY),
-    async fetchQuotes() {
-      if (!process.env.MYSTOCKS_AFRICA_API_KEY) throw new Error("mystocks_unconfigured");
-      // Real MyStocks Africa adapter would go here. Not fabricated.
-      throw new Error("mystocks_not_implemented");
+    isConfigured: () => {
+      const p = getMyStocksProvider();
+      return Boolean(p && p.isConfigured());
+    },
+    async fetchQuotes(symbols) {
+      const p = getMyStocksProvider();
+      if (!p || !p.isConfigured()) throw new Error("mystocks_unconfigured");
+      // Only African exchange-qualified symbols are eligible; others fall through.
+      const quotes = await p.fetchQuotes(symbols);
+      if (!quotes || quotes.size === 0) throw new Error("mystocks_empty");
+      return quotes;
     },
   };
 }
