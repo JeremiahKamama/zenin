@@ -11,21 +11,19 @@
  * table styles, no cyan/purple/gradients.
  */
 import React, { useState, useMemo } from 'react';
-import {
-  Globe,
-  Database,
-  Server,
-  Layers,
-  Link as LinkIcon,
-  Activity,
-  RefreshCw,
-  History,
-  ShieldCheck,
-  ChevronRight,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-} from 'lucide-react';
+import Globe from 'lucide-react/dist/esm/icons/globe.mjs';
+import Database from 'lucide-react/dist/esm/icons/database.mjs';
+import Server from 'lucide-react/dist/esm/icons/server.mjs';
+import Layers from 'lucide-react/dist/esm/icons/layers.mjs';
+import LinkIcon from 'lucide-react/dist/esm/icons/link.mjs';
+import Activity from 'lucide-react/dist/esm/icons/activity.mjs';
+import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw.mjs';
+import History from 'lucide-react/dist/esm/icons/history.mjs';
+import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.mjs';
+import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
+import AlertTriangle from 'lucide-react/dist/esm/icons/triangle-alert.mjs';
+import CheckCircle2 from 'lucide-react/dist/esm/icons/circle-check.mjs';
+import XCircle from 'lucide-react/dist/esm/icons/circle-x.mjs';
 import { COVERAGE_SEED, resolveProviderPriority } from './coverageSeed';
 
 const TABS = [

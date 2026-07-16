@@ -1,88 +1,82 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Users, 
-  Settings as SettingsIcon, 
-  Database, 
-  Activity, 
-  Shield, 
-  LogOut, 
-  BarChart3, 
-  Search, 
-  Bell, 
-  ChevronDown, 
-  ExternalLink,
-  Plus,
-  Filter,
-  MoreVertical,
-  Edit,
-  Trash2,
-  CheckCircle2,
-  AlertCircle,
-  Clock,
-  ArrowUpRight,
-  ArrowDownRight,
-  Download,
-  Mail,
-  Smartphone,
-  Globe,
-  Lock,
-  UserPlus,
-  Calendar,
-  ChevronRight,
-  ChevronLeft,
-  ChevronFirst,
-  ChevronLast,
-  Edit3,
-  Link as LinkIcon,
-  ShieldAlert,
-  UserCheck,
-  History,
-  Copy,
-  HardDrive,
-  Layers,
-  CloudUpload,
-  Terminal,
-  Table,
-  Server,
-  Zap,
-  Activity as ActivityIcon,
-  RefreshCw,
-  MoreHorizontal,
-  Maximize2,
-  X,
-  FileText as LogsIcon,
-  CreditCard as BillingIcon,
-  ShieldCheck,
-  ShieldCheck as AuditIcon,
-  LayoutGrid as IntegrationsIcon,
-  Cpu,
-  ShieldX,
-  ZapOff,
-  Flame,
-  Terminal as TerminalIcon,
-  Pin,
-  MapPin,
-  FileCode,
-  CheckSquare,
-  Box,
-  CreditCard,
-  Sun,
-  Moon,
-  Laptop,
-  Monitor,
-  Webhook,
-  Key,
-  RotateCcw,
-  FileKey,
-  AlertTriangle,
-  RotateCw,
-  MousePointer2,
-  LayoutGrid,
-  List,
-  MessageSquare,
-  BarChart,
-  Code
-} from 'lucide-react';
+import Users from 'lucide-react/dist/esm/icons/users.mjs';
+import SettingsIcon from 'lucide-react/dist/esm/icons/settings.mjs';
+import Database from 'lucide-react/dist/esm/icons/database.mjs';
+import Activity from 'lucide-react/dist/esm/icons/activity.mjs';
+import Shield from 'lucide-react/dist/esm/icons/shield.mjs';
+import LogOut from 'lucide-react/dist/esm/icons/log-out.mjs';
+import BarChart3 from 'lucide-react/dist/esm/icons/chart-column.mjs';
+import Search from 'lucide-react/dist/esm/icons/search.mjs';
+import Bell from 'lucide-react/dist/esm/icons/bell.mjs';
+import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
+import ExternalLink from 'lucide-react/dist/esm/icons/external-link.mjs';
+import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
+import Filter from 'lucide-react/dist/esm/icons/filter.mjs';
+import MoreVertical from 'lucide-react/dist/esm/icons/ellipsis-vertical.mjs';
+import Edit from 'lucide-react/dist/esm/icons/pencil.mjs';
+import Trash2 from 'lucide-react/dist/esm/icons/trash-2.mjs';
+import CheckCircle2 from 'lucide-react/dist/esm/icons/circle-check.mjs';
+import AlertCircle from 'lucide-react/dist/esm/icons/circle-alert.mjs';
+import Clock from 'lucide-react/dist/esm/icons/clock.mjs';
+import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right.mjs';
+import ArrowDownRight from 'lucide-react/dist/esm/icons/arrow-down-right.mjs';
+import Download from 'lucide-react/dist/esm/icons/download.mjs';
+import Mail from 'lucide-react/dist/esm/icons/mail.mjs';
+import Smartphone from 'lucide-react/dist/esm/icons/smartphone.mjs';
+import Globe from 'lucide-react/dist/esm/icons/globe.mjs';
+import Lock from 'lucide-react/dist/esm/icons/lock.mjs';
+import UserPlus from 'lucide-react/dist/esm/icons/user-plus.mjs';
+import Calendar from 'lucide-react/dist/esm/icons/calendar.mjs';
+import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
+import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
+import ChevronFirst from 'lucide-react/dist/esm/icons/chevrons-left.mjs';
+import ChevronLast from 'lucide-react/dist/esm/icons/chevrons-right.mjs';
+import Edit3 from 'lucide-react/dist/esm/icons/square-pen.mjs';
+import LinkIcon from 'lucide-react/dist/esm/icons/link.mjs';
+import ShieldAlert from 'lucide-react/dist/esm/icons/shield-alert.mjs';
+import UserCheck from 'lucide-react/dist/esm/icons/user-check.mjs';
+import History from 'lucide-react/dist/esm/icons/history.mjs';
+import Copy from 'lucide-react/dist/esm/icons/copy.mjs';
+import HardDrive from 'lucide-react/dist/esm/icons/hard-drive.mjs';
+import Layers from 'lucide-react/dist/esm/icons/layers.mjs';
+import CloudUpload from 'lucide-react/dist/esm/icons/cloud-upload.mjs';
+import Terminal from 'lucide-react/dist/esm/icons/terminal.mjs';
+import Table from 'lucide-react/dist/esm/icons/table.mjs';
+import Server from 'lucide-react/dist/esm/icons/server.mjs';
+import Zap from 'lucide-react/dist/esm/icons/zap.mjs';
+import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw.mjs';
+import MoreHorizontal from 'lucide-react/dist/esm/icons/ellipsis.mjs';
+import Maximize2 from 'lucide-react/dist/esm/icons/maximize-2.mjs';
+import X from 'lucide-react/dist/esm/icons/x.mjs';
+import LogsIcon from 'lucide-react/dist/esm/icons/file-text.mjs';
+import BillingIcon from 'lucide-react/dist/esm/icons/credit-card.mjs';
+import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.mjs';
+import LayoutGrid from 'lucide-react/dist/esm/icons/layout-grid.mjs';
+import Cpu from 'lucide-react/dist/esm/icons/cpu.mjs';
+import ShieldX from 'lucide-react/dist/esm/icons/shield-x.mjs';
+import ZapOff from 'lucide-react/dist/esm/icons/zap-off.mjs';
+import Flame from 'lucide-react/dist/esm/icons/flame.mjs';
+import Pin from 'lucide-react/dist/esm/icons/pin.mjs';
+import MapPin from 'lucide-react/dist/esm/icons/map-pin.mjs';
+import FileCode from 'lucide-react/dist/esm/icons/file-code.mjs';
+import CheckSquare from 'lucide-react/dist/esm/icons/square-check-big.mjs';
+import Box from 'lucide-react/dist/esm/icons/box.mjs';
+import CreditCard from 'lucide-react/dist/esm/icons/credit-card.mjs';
+import Sun from 'lucide-react/dist/esm/icons/sun.mjs';
+import Moon from 'lucide-react/dist/esm/icons/moon.mjs';
+import Laptop from 'lucide-react/dist/esm/icons/laptop.mjs';
+import Monitor from 'lucide-react/dist/esm/icons/monitor.mjs';
+import Webhook from 'lucide-react/dist/esm/icons/webhook.mjs';
+import Key from 'lucide-react/dist/esm/icons/key.mjs';
+import RotateCcw from 'lucide-react/dist/esm/icons/rotate-ccw.mjs';
+import FileKey from 'lucide-react/dist/esm/icons/file-key.mjs';
+import AlertTriangle from 'lucide-react/dist/esm/icons/triangle-alert.mjs';
+import RotateCw from 'lucide-react/dist/esm/icons/rotate-cw.mjs';
+import MousePointer2 from 'lucide-react/dist/esm/icons/mouse-pointer-2.mjs';
+import List from 'lucide-react/dist/esm/icons/list.mjs';
+import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
+import BarChart from 'lucide-react/dist/esm/icons/chart-no-axes-column-increasing.mjs';
+import Code from 'lucide-react/dist/esm/icons/code.mjs';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -100,6 +94,11 @@ import { adminFetch } from './utils/adminFetch';
 import { copyTextToClipboard, downloadCsvFile, downloadJsonFile } from './utils/adminUi';
 import CoverageRegistryView from './CoverageRegistryView';
 import { COVERAGE_SEED } from './coverageSeed';
+
+const ActivityIcon = Activity;
+const AuditIcon = ShieldCheck;
+const IntegrationsIcon = LayoutGrid;
+const TerminalIcon = Terminal;
 
 ChartJS.register(
   CategoryScale,
