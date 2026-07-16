@@ -113,8 +113,8 @@ export default function AuthPage() {
 
   const handleGuestEntry = () => {
     try {
-      // Mark this browser as a guest full-access session so the app can
-      // treat the user like a dev/full-access user without backend auth.
+      // Enter the app as a guest: the full UI renders with empty/placeholder
+      // states (no backend session). Flag retained for dev full-access parity.
       localStorage.setItem("zenin_guest_full_access", "1");
     } catch {}
     const guestTarget = new URL(getGuestWorkspacePath(), window.location.origin);

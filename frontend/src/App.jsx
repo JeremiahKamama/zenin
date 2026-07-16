@@ -649,7 +649,7 @@ function formatPlanLabel(plan, billingCycle = "monthly") {
 }
 
 function getGuestWorkspaceLabel() {
-  return "Demo Workspace";
+  return "Guest";
 }
 
 function normalizeCurrentPlan(plan) {
@@ -4690,7 +4690,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   useEffect(() => {
     if (accessCheckLoading) {
-      setBootPhase(isGuestQueryRequested() ? "opening_demo_mode" : "checking_session");
+      setBootPhase("checking_session");
     } else if (bootstrapLoading) {
       setBootPhase("loading_workspace");
     } else if (bootstrapData && !bootstrapError) {
@@ -4700,7 +4700,6 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const bootPhaseCopy = (() => {
     switch (bootPhase) {
-      case "opening_demo_mode": return "Opening demo workspace";
       case "loading_workspace": return "Loading workspace";
       case "syncing_market_data": return "Syncing market data";
       case "checking_session":
@@ -6959,7 +6958,9 @@ const handleOptionTradeClosed = async (tradeId) => {
     return () => window.removeEventListener("keydown", handler);
   }, [accessibleSections, openWorkspaceSection]); // eslint-disable-line react-hooks/exhaustive-deps
   const usesWorkspaceShell = routeState.type !== "company";
-  const shouldRenderGuestPreview = isExplicitGuestMode && (activeSection === "Home" || Boolean(GUEST_PREVIEW_BY_SECTION[activeSection]));
+  // Demo workspace disabled: guests now see the full app (real modules with
+  // empty/placeholder states, since they have no backend session).
+  const shouldRenderGuestPreview = false;
   const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
   const sharedWatchlistLocked = sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed;
   const hasDeskFeatureAccess = isAdmin || normalizeCurrentPlan(currentPlan) === "desk";
