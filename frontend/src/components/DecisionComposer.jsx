@@ -310,7 +310,7 @@ export default function DecisionComposer({
                     type="button"
                     onClick={() => setField("side", isActive ? "" : d.value)}
                     className={cn(
-                      "h-[42px] rounded-lg text-sm font-semibold transition-all duration-150 border cursor-pointer",
+                      "h-[42px] rounded-lg text-sm font-semibold transition-colors duration-150 border cursor-pointer",
                       isActive
                         ? d.value === "BUY"
                           ? "border-[rgba(16,185,129,0.4)] bg-[rgba(16,185,129,0.10)] text-emerald-400"
@@ -335,7 +335,7 @@ export default function DecisionComposer({
                   type="button"
                   onClick={() => setField("confidence", level)}
                   className={cn(
-                    "w-10 h-10 rounded-lg text-sm font-semibold transition-all duration-150 border cursor-pointer",
+                    "w-10 h-10 rounded-lg text-sm font-semibold transition-colors duration-150 border cursor-pointer",
                     entryDraft.confidence === level
                       ? "border-[var(--color-focus)] bg-[var(--color-focus)] text-[var(--color-text-inverse)]"
                       : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:border-[var(--color-border-medium)] hover:text-[var(--color-text-secondary)]"
@@ -428,7 +428,7 @@ export default function DecisionComposer({
                               setField("emotion", isActive ? "" : em.value)
                             }
                             className={cn(
-                              "px-2.5 py-1.5 rounded-md text-[12px] font-medium transition-all duration-150 border cursor-pointer",
+                              "px-2.5 py-1.5 rounded-md text-[12px] font-medium transition-colors duration-150 border cursor-pointer",
                               isActive
                                 ? "border-[var(--color-border-strong)] bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]"
                                 : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:border-[var(--color-border-medium)] hover:text-[var(--color-text-secondary)]"
@@ -453,7 +453,7 @@ export default function DecisionComposer({
                         setField("timeframe", entryDraft.timeframe === tf ? "" : tf)
                       }
                       className={cn(
-                        "px-4 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider transition-all duration-150 border cursor-pointer",
+                        "px-4 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider transition-colors duration-150 border cursor-pointer",
                         entryDraft.timeframe === tf
                           ? "border-[var(--color-border-strong)] bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]"
                           : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:border-[var(--color-border-medium)] hover:text-[var(--color-text-secondary)]"
@@ -564,7 +564,7 @@ export default function DecisionComposer({
                           <button
                             type="button"
                             onClick={() => removeAttachment(idx)}
-                            className="shrink-0 ml-2 p-1 rounded-md opacity-50 hover:opacity-100 hover:bg-[var(--color-surface-hover)] transition-all duration-100"
+                            className="shrink-0 ml-2 p-1 rounded-md opacity-50 hover:opacity-100 hover:bg-[var(--color-surface-hover)] transition-colors duration-100"
                           >
                             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                               <line x1="3" y1="3" x2="9" y2="9" />
@@ -621,7 +621,7 @@ export default function DecisionComposer({
               className={cn(
                 "h-[38px] px-4 rounded-lg text-sm font-medium",
                 "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
-                "hover:bg-[var(--color-surface-hover)] transition-all duration-150"
+                "hover:bg-[var(--color-surface-hover)] transition-colors duration-150"
               )}
             >
               Cancel
@@ -638,7 +638,7 @@ export default function DecisionComposer({
                   !String(entryDraft.side || "").trim()
                 }
                 className={cn(
-                  "h-[38px] px-5 rounded-lg text-sm font-semibold transition-all duration-150",
+                  "h-[38px] px-5 rounded-lg text-sm font-semibold transition-colors duration-150",
                   String(entryDraft.symbol || "").trim() &&
                     String(entryDraft.side || "").trim()
                     ? "bg-[var(--color-interactive)] text-[var(--color-text-inverse)] hover:bg-[var(--color-interactive-hover)]"

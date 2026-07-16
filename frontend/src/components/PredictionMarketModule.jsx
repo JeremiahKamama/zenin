@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DataHealthBadge } from "@/components/ui/async-state";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 
@@ -376,7 +377,7 @@ const computeWhalePnl = (item, options = {}) => {
               {predictionSnapshot?.updatedAt ? `Updated ${new Date(predictionSnapshot.updatedAt).toLocaleString()}` : "—"}
             </div>
             <span className={`data-health-badge ${predictionLoading ? "loading" : predictionStale ? "hazard" : "ok"}`} title={predictionLoading ? "Refreshing prediction snapshot" : predictionStale ? "Showing previous prediction snapshot" : "Prediction snapshot is up to date"}>
-              <span className={`status-icon ${predictionLoading ? "spinner" : ""}`}>{predictionLoading ? "⟳" : predictionStale ? "⚠" : "✓"}</span>
+              <DataHealthBadge status={predictionLoading ? "loading" : predictionStale ? "stale" : "ok"} />
               Snapshot
             </span>
           </div>
@@ -625,7 +626,7 @@ const computeWhalePnl = (item, options = {}) => {
                 <div className="asset-count">Top holders and positions</div>
               </div>
               <span className={`data-health-badge ${marketDetailsLoading ? "loading" : marketDetailsStale ? "hazard" : "ok"}`} title={marketDetailsLoading ? "Refreshing market details" : marketDetailsStale ? "Showing previous market-detail snapshot" : "Market details are up to date"}>
-                <span className={`status-icon ${marketDetailsLoading ? "spinner" : ""}`}>{marketDetailsLoading ? "⟳" : marketDetailsStale ? "⚠" : "✓"}</span>
+                <DataHealthBadge status={marketDetailsLoading ? "loading" : marketDetailsStale ? "stale" : "ok"} />
                 Details
               </span>
               <button className="close-btn" onClick={() => setSelectedPredictionMarket(null)}>&times;</button>

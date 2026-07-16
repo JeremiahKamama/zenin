@@ -12,6 +12,8 @@
 // =============================================================================
 
 import { memo } from "react";
+import { PortfolioTransmission } from "../../transmission/TransmissionSurfaces";
+import { StatusIndicator } from "../StatusIndicator.jsx";
 
 function PortfolioOverviewImpl({ summary, attention, recommendedChanges }) {
   return (
@@ -42,25 +44,39 @@ function PortfolioOverviewImpl({ summary, attention, recommendedChanges }) {
           ) : null}
         </div>
         <div className="portfolio-command-attention-grid">
-          {(attention?.cards || []).map((card) => (
-            <button
-              key={card.id}
-              type="button"
-              className={`portfolio-command-attention-card ${card.tone || "neutral"}`}
-              onClick={card.onClick}
-            >
-              <div>
-                <span>{card.title}</span>
-                <strong>{card.metric}</strong>
-                <em>{card.detail}</em>
-              </div>
-              <b>{card.action}</b>
-            </button>
-          ))}
+          {(attention?.cards || []).map((card) => {
+            const toneMap = { risk: "risk", warning: "warning", accent: "warning", negative: "risk", healthy: "healthy", neutral: "neutral", info: "info" };
+            const stTone = toneMap[card.tone] || "neutral";
+            return (
+              <button
+                key={card.id}
+                type="button"
+                className={`portfolio-command-attention-card ${card.tone || "neutral"}`}
+                onClick={card.onClick}
+              >
+                <div>
+                  <span className="portfolio-command-attention-head">
+                    {card.title}
+                    <StatusIndicator tone={stTone} detail={card.metric} />
+                  </span>
+                  <strong>{card.metric}</strong>
+                  <em>{card.detail}</em>
+                </div>
+                <b>{card.action}</b>
+              </button>
+            );
+          })}
         </div>
       </section>
 
       <section className="portfolio-command-rebalance">{recommendedChanges}</section>
+
+      <PortfolioTransmission
+        topDriver="Oil"
+        currentEffect={{ label: "Negative Technology", tone: "negative" }}
+        affectedHoldings={6}
+        exposure="Medium"
+      />
     </>
   );
 }

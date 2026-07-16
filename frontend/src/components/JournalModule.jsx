@@ -7,8 +7,23 @@ import { loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceCollection, sav
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
+import {
+  fetchNeedsJournaling,
+  dismissJournalEvent,
+  snoozeJournalEvent,
+  linkJournalEvent,
+  classifyJournalEvent,
+  fetchJournalReports,
+  generateJournalReport,
+  fetchJournalPrefs,
+  saveJournalPrefs,
+} from "../utils/journalEvents";
 import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup, MetricStrip } from "./CompactWorkspaceUI";
+import { AsyncState, DataFreshnessSummary, ResponsiveActionBar, normalizeFreshnessStatus } from "@/components/ui/async-state";
+import { Button } from "@/components/ui/button";
 import DecisionComposer from "./DecisionComposer";
+import { DecisionLedgerTransmission } from "../transmission/TransmissionSurfaces";
+import { fetchDecisionOutcomes } from "../utils/decisionOutcomes";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const TRADE_REPORT_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -74,6 +89,108 @@ export function JournalModule({
   // any snapshot has been generated).
   const [snapshotsByDate, setSnapshotsByDate] = useState(() => new Map());
   const [snapshotsLoadedFor, setSnapshotsLoadedFor] = useState("");
+  // Phase 3: trade-journaling "Needs journaling" queue + event drawer.
+  // Loaded lazily when the queue tab is active; refreshed after actions.
+  const [needsJournaling, setNeedsJournaling] = useState([]);
+  const [isQueueLoading, setIsQueueLoading] = useState(false);
+  const [queueError, setQueueError] = useState(null);
+  const [activeJournalEvent, setActiveJournalEvent] = useState(null);
+  const [isEventDrawerOpen, setIsEventDrawerOpen] = useState(false);
+  const [eventActionState, setEventActionState] = useState({ id: null, busy: false });
+  // Reuses the component's existing legacy toast state (setToast) for action
+  // feedback, consistent with <JournalToast> rendered at the root.
+
+  const loadNeedsJournaling = useCallback(async () => {
+    setIsQueueLoading(true);
+    setQueueError(null);
+    try {
+      const items = await fetchNeedsJournaling();
+      setNeedsJournaling(items || []);
+    } catch (err) {
+      setQueueError(err?.message || "Failed to load journaling queue");
+      setNeedsJournaling([]);
+    } finally {
+      setIsQueueLoading(false);
+    }
+  }, []);
+
+  const openJournalEvent = useCallback((event) => {
+    setActiveJournalEvent(event);
+    setIsEventDrawerOpen(true);
+  }, []);
+
+  const refreshQueueAfterAction = useCallback((updatedEvent) => {
+    // Remove acted-on events from the open queue; keep the rest.
+    setNeedsJournaling((prev) =>
+      updatedEvent && updatedEvent.status && updatedEvent.status !== "open"
+        ? prev.filter((e) => e.id !== updatedEvent.id)
+        : prev
+    );
+  }, []);
+
+  const handleDismissEvent = useCallback(async (event) => {
+    setEventActionState({ id: event.id, busy: true });
+    try {
+      const updated = await dismissJournalEvent(event.id);
+      setToast({ message: `${event.symbol || "Event"} removed from the journaling queue.`, tone: "info" });
+      refreshQueueAfterAction(updated || { id: event.id, status: "dismissed" });
+      setActiveJournalEvent((prev) => (prev && prev.id === event.id ? null : prev));
+      setIsEventDrawerOpen(false);
+    } catch (err) {
+      setToast({ message: err?.message || "Please try again.", tone: "error" });
+    } finally {
+      setEventActionState({ id: null, busy: false });
+    }
+  }, [refreshQueueAfterAction]);
+
+  const handleSnoozeEvent = useCallback(async (event, days = 1) => {
+    setEventActionState({ id: event.id, busy: true });
+    try {
+      const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const updated = await snoozeJournalEvent(event.id, until);
+      setToast({ message: `${event.symbol || "Event"} snoozed for ${days} day${days === 1 ? "" : "s"}.`, tone: "info" });
+      refreshQueueAfterAction(updated || { id: event.id, status: "snoozed" });
+      setActiveJournalEvent((prev) => (prev && prev.id === event.id ? null : prev));
+      setIsEventDrawerOpen(false);
+    } catch (err) {
+      setToast({ message: err?.message || "Please try again.", tone: "error" });
+    } finally {
+      setEventActionState({ id: null, busy: false });
+    }
+  }, [refreshQueueAfterAction]);
+
+  const handleJournalEvent = useCallback(async (event, payload = {}) => {
+    setEventActionState({ id: event.id, busy: true });
+    try {
+      const updated = await linkJournalEvent(event.id, payload);
+      setToast({ message: `${event.symbol || "Event"} marked as journaled.`, tone: "positive" });
+      refreshQueueAfterAction(updated || { id: event.id, status: "journaled" });
+      setActiveJournalEvent((prev) => (prev && prev.id === event.id ? null : prev));
+      setIsEventDrawerOpen(false);
+    } catch (err) {
+      setToast({ message: err?.message || "Please try again.", tone: "error" });
+    } finally {
+      setEventActionState({ id: null, busy: false });
+    }
+  }, [refreshQueueAfterAction]);
+
+  const handleClassifyEvent = useCallback(async (event, classification, reason) => {
+    setEventActionState({ id: event.id, busy: true });
+    try {
+      const updated = await classifyJournalEvent(event.id, classification, reason);
+      setToast({ message: `${event.symbol || "Event"} classified as ${classification.replace(/_/g, " ")}.`, tone: "positive" });
+      // Classification does not remove the event from the queue; refresh to
+      // reflect the new classification in the list payload.
+      await loadNeedsJournaling();
+      return updated || { id: event.id, classification };
+    } catch (err) {
+      setToast({ message: err?.message || "Could not classify event.", tone: "error" });
+      throw err;
+    } finally {
+      setEventActionState({ id: null, busy: false });
+    }
+  }, [loadNeedsJournaling]);
+
   const [journalEntries, setJournalEntries] = useState(() => {
     try {
       const parsed = JSON.parse(localStorage.getItem("zenin_journal_entries") || "[]");
@@ -2057,7 +2174,19 @@ export function JournalModule({
             />
           )}
           <JournalTabNav activeTab={journalView} onChange={setJournalView} />
-          {journalView === "overview" ? (
+          {journalView === "queue" ? (
+            <JournalNeedsJournalingView
+              items={needsJournaling}
+              isLoading={isQueueLoading}
+              error={queueError}
+              onLoad={loadNeedsJournaling}
+              onOpenEvent={openJournalEvent}
+              onDismiss={handleDismissEvent}
+              onSnooze={handleSnoozeEvent}
+              eventActionState={eventActionState}
+              formatValue={formatValue}
+            />
+          ) : journalView === "overview" ? (
             <JournalDebriefDashboard
               dateKey={activeDebriefDate}
               syncTimestampLabel={syncTimestampLabel}
@@ -2094,6 +2223,7 @@ export function JournalModule({
               onAddToJournal={addReviewToJournal}
               onNewEntry={openNewEntry}
               reviewModeActive={isReviewModeActive}
+              onClassify={handleClassifyEvent}
             />
           ) : journalView === "entries" ? (
             <JournalEntriesView
@@ -2160,6 +2290,13 @@ export function JournalModule({
               onCreateReviewTask={createReviewTask}
               formatValue={formatValue}
             />
+          ) : journalView === "reports" ? (
+            <JournalReportsView
+              onToast={notify}
+              formatValue={formatValue}
+            />
+          ) : journalView === "settings" ? (
+            <JournalSettingsView onToast={notify} />
           ) : journalView === "review" ? (
             <JournalReviewView
               analytics={analytics}
@@ -2237,11 +2374,13 @@ function JournalDebriefHeader({
   onSaveSnapshot
 }) {
   return (
-    <CompactPageHeader
+    <>
+      <CompactPageHeader
       className="journal-debrief-head"
       eyebrow="Journal"
       title="Decision Ledger"
       description="A compact record of decision theses, evidence, outcomes, and follow-up reviews."
+    >
       actions={(
         <div className="journal-debrief-head-actions">
           <div className="journal-debrief-action-cluster">
@@ -2262,7 +2401,19 @@ function JournalDebriefHeader({
           </div>
         </div>
       )}
+    </CompactPageHeader>
+    <DecisionLedgerTransmission regime="Expansion" driver="Energy" tone="bullish" confidence={84} />
+    <JournalEventDrawer
+      event={activeJournalEvent}
+      isOpen={isEventDrawerOpen}
+      onClose={() => setIsEventDrawerOpen(false)}
+      onJournal={handleJournalEvent}
+      onSnooze={handleSnoozeEvent}
+      onDismiss={handleDismissEvent}
+      onClassify={onClassify}
+      actionState={eventActionState}
     />
+    </>
   );
 }
 
@@ -2299,7 +2450,8 @@ function JournalDebriefDashboard(props) {
     reviewComposerRef,
     onAddToJournal,
     onNewEntry,
-    reviewModeActive = false
+    reviewModeActive = false,
+    onClassify
   } = props || {};
   const safeRuleAdherence = ruleAdherence == null ? "—" : `${ruleAdherence.toFixed(0)}%`;
   const safeDiscipline = emotionalDiscipline == null ? "—" : `${emotionalDiscipline.toFixed(0)}%`;
@@ -2578,10 +2730,13 @@ function JournalStatsGrid({ stats }) {
 function JournalTabNav({ activeTab, onChange }) {
   const tabs = [
     ["overview", "Overview"],
+    ["queue", "Needs Journaling"],
     ["entries", "Entries"],
     ["calendar", "Calendar"],
     ["analytics", "Analytics"],
-    ["review", "Review"]
+    ["reports", "Reports"],
+    ["review", "Review"],
+    ["settings", "Settings"]
   ];
   return (
     <nav className="journal-tab-nav" aria-label="Journal views">
@@ -2924,6 +3079,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
   const [marketFilter, setMarketFilter] = useState("all");
   const [sortBy, setSortBy] = useState("time-asc");
   const [visibleCount, setVisibleCount] = useState(25);
+  const [showFilters, setShowFilters] = useState(false);
 
   const assetOptions = useMemo(
     () => [...new Set(rows.map((row) => String(row.symbol || "").trim().toUpperCase()).filter(Boolean))],
@@ -2971,6 +3127,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
   }, [rows, search, assetFilter, setupFilter, statusFilter, marketFilter, sortBy]);
 
   const visibleRows = filteredRows.slice(0, visibleCount);
+  const hasDecisions = filteredRows.length > 0;
   const totalPnl = filteredRows.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
   const winners = filteredRows.filter((row) => Number(row.pnl || 0) > 0);
   const losers = filteredRows.filter((row) => Number(row.pnl || 0) < 0);
@@ -3015,7 +3172,7 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
     colors: filteredRows.map((row) => chartColors.pnl(row.pnl)),
     xaxis: {
       labels: {
-        style: { colors: chartColors.muted(), fontSize: "11px" }
+        style: { colors: chartColors.muted(), fontSize: "var(--fs-sm)" }
       }
     },
     yaxis: {
@@ -3086,80 +3243,94 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
     <section className="journal-day-view">
       <div className="journal-day-view-head">
         <div>
-          <div className="journal-breadcrumb">Journal <span>/</span> Calendar <span>/</span> View Decisions</div>
+          <nav className="journal-breadcrumb" aria-label="Breadcrumb">Journal <span>/</span> Calendar <span>/</span> View Decisions</nav>
           <h3>Decisions for {dateKey || "Selected Day"}</h3>
+          <p className="journal-day-view-desc">Review the decisions made on this day and capture what you learned.</p>
         </div>
         <div className="journal-day-view-actions">
           <button type="button" className="journal-btn secondary" onClick={exportDayCsv}>Export</button>
-          <button type="button" className="journal-btn primary" onClick={onNewEntry}>
-            <span aria-hidden="true">+</span> Add New Entry
-          </button>
+          <button type="button" className="journal-btn primary" onClick={onNewEntry}>Add decision</button>
         </div>
       </div>
 
       <div className="journal-day-toolbar">
-        <button type="button" className="journal-btn secondary" onClick={onBack}>← Back to Calendar</button>
+        <button type="button" className="journal-btn secondary" onClick={onBack}>Back to Calendar</button>
         <div className="journal-day-date-nav">
-          <button type="button" className="journal-kebab" disabled={!previousDate} onClick={() => previousDate && onNavigateDate(previousDate)}>‹</button>
-          <div>{dateKey || "—"}</div>
-          <button type="button" className="journal-kebab" disabled={!nextDate} onClick={() => nextDate && onNavigateDate(nextDate)}>›</button>
+          <button type="button" className="journal-kebab" aria-label="Previous day" disabled={!previousDate} onClick={() => previousDate && onNavigateDate(previousDate)}>‹</button>
+          <time dateTime={dateKey}>{dateKey || "Selected Day"}</time>
+          <button type="button" className="journal-kebab" aria-label="Next day" disabled={!nextDate} onClick={() => nextDate && onNavigateDate(nextDate)}>›</button>
         </div>
         <label className="journal-search journal-day-search">
           <span aria-hidden="true">⌕</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search symbol, strategy, notes..." />
+          <span className="sr-only">Search decisions</span>
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search symbol, strategy, or notes" />
         </label>
+        <button type="button" className="journal-btn secondary" aria-expanded={showFilters} aria-controls="journal-day-filters" onClick={() => setShowFilters((value) => !value)}>Filters</button>
       </div>
 
-      <div className="journal-day-filter-row">
-        <label>
-          <select value={assetFilter} onChange={(event) => setAssetFilter(event.target.value)}>
-            <option value="all">All Assets</option>
-            {assetOptions.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
-          </select>
-        </label>
-        <label>
-          <select value={setupFilter} onChange={(event) => setSetupFilter(event.target.value)}>
-            <option value="all">All Strategies</option>
-            {setupOptions.map((setup) => <option key={setup} value={setup}>{setup}</option>)}
-          </select>
-        </label>
-        <label>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            <option value="all">All Statuses</option>
-            <option value="closed">Closed</option>
-            <option value="open">Open</option>
-            <option value="review">Review</option>
-          </select>
-        </label>
-        <label>
-          <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}>
-            <option value="all">Market Type</option>
-            {marketOptions.map((market) => <option key={market} value={market}>{market}</option>)}
-          </select>
-        </label>
-      </div>
+      {showFilters && (
+        <div id="journal-day-filters" className="journal-day-filter-row">
+          <label><span>Asset</span>
+            <select value={assetFilter} onChange={(event) => setAssetFilter(event.target.value)}>
+              <option value="all">All Assets</option>
+              {assetOptions.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+            </select>
+          </label>
+          <label><span>Strategy</span>
+            <select value={setupFilter} onChange={(event) => setSetupFilter(event.target.value)}>
+              <option value="all">All Strategies</option>
+              {setupOptions.map((setup) => <option key={setup} value={setup}>{setup}</option>)}
+            </select>
+          </label>
+          <label><span>Status</span>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+              <option value="all">All Statuses</option>
+              <option value="closed">Closed</option>
+              <option value="open">Open</option>
+              <option value="review">Review</option>
+            </select>
+          </label>
+          <label><span>Market type</span>
+            <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}>
+              <option value="all">Market Type</option>
+              {marketOptions.map((market) => <option key={market} value={market}>{market}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
 
       <div className="journal-day-summary-grid">
         <article className="journal-card journal-day-stat-card">
-          <span className="journal-card-label">Total P&amp;L</span>
-          <strong className={totalPnl >= 0 ? "positive" : "negative"}>{formatValue(totalPnl, true)}</strong>
-        </article>
-        <article className="journal-card journal-day-stat-card">
           <span className="journal-card-label">Decisions</span>
           <strong>{filteredRows.length}</strong>
+          <small>{hasDecisions ? "Captured for this day" : "No decisions captured"}</small>
         </article>
+
         <article className="journal-card journal-day-stat-card">
-          <span className="journal-card-label">Winners</span>
-          <strong className="positive">{winners.length}</strong>
+          <span className="journal-card-label">Total P&amp;L</span>
+          <strong className={totalPnl >= 0 ? "positive" : "negative"}>{hasDecisions ? formatValue(totalPnl, true) : "Not available"}</strong>
+          <small>{hasDecisions ? "For the selected day" : "Appears after outcomes are recorded"}</small>
         </article>
+
         <article className="journal-card journal-day-stat-card">
-          <span className="journal-card-label">Losers</span>
-          <strong className="negative">{losers.length}</strong>
+          <span className="journal-card-label">Win rate</span>
+          <strong>{hasDecisions ? `${winRate.toFixed(1)}%` : "Not available"}</strong>
+          <small>{hasDecisions ? "Based on recorded outcomes" : "Appears after decisions are reviewed"}</small>
         </article>
-        <article className="journal-card journal-day-stat-card">
-          <span className="journal-card-label">Win Rate</span>
-          <strong>{winRate.toFixed(1)}%</strong>
-        </article>
+
+        {hasDecisions && (
+          <>
+            <article className="journal-card journal-day-stat-card">
+              <span className="journal-card-label">Winners</span>
+              <strong className="positive">{winners.length}</strong>
+            </article>
+
+            <article className="journal-card journal-day-stat-card">
+              <span className="journal-card-label">Losers</span>
+              <strong className="negative">{losers.length}</strong>
+            </article>
+          </>
+        )}
       </div>
 
       <div className="journal-day-layout">
@@ -3230,16 +3401,25 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
                   </article>
                 );
               }) : (
-                <JournalEmptyState
-                  title="No decisions match these filters"
-                  description="Try adjusting the date filters or journal search to see more decisions."
-                />
+                filteredRows.length === 0 && !search && assetFilter === "all" && setupFilter === "all" && statusFilter === "all" && marketFilter === "all" ? (
+                  <JournalEmptyState
+                    title="Start your first decision review"
+                    description="Capture your thesis, conviction, outcome, and lesson for this day."
+                    cta="Add your first decision"
+                    onAction={onNewEntry}
+                  />
+                ) : (
+                  <JournalEmptyState
+                    title="No decisions match these filters"
+                    description="Try adjusting the date, filters, or search query."
+                  />
+                )
               )}
             </div>
           </section>
         </div>
 
-        <aside className="journal-day-aside">
+        <aside className={`journal-day-aside ${hasDecisions ? "" : "is-empty"}`}>
           <section className="journal-card">
             <div className="journal-section-head"><h3>Day Breakdown</h3></div>
             <div className="journal-day-breakdown-grid">
@@ -3253,43 +3433,47 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
             </div>
           </section>
 
-          <section className="journal-card">
-            <div className="journal-section-head"><h3>Intraday P&amp;L by Decision</h3></div>
-            {filteredRows.length ? (
-              <Chart options={intradayOptions} series={intradaySeries} type="bar" height={220} />
-            ) : (
-              <p className="journal-day-empty-copy">No decision chart data for this day.</p>
-            )}
-          </section>
+          {hasDecisions && (
+            <>
+              <section className="journal-card">
+                <div className="journal-section-head"><h3>Intraday P&amp;L by Decision</h3></div>
+                {filteredRows.length ? (
+                  <Chart options={intradayOptions} series={intradaySeries} type="bar" height={220} />
+                ) : (
+                  <p className="journal-day-empty-copy">No decision chart data for this day.</p>
+                )}
+              </section>
 
-          <section className="journal-card">
-            <div className="journal-section-head"><h3>Notes &amp; Review</h3></div>
-            <div className="journal-day-notes-list">
-              {notesBlocks.map((item) => (
-                <div key={item.label}>
-                  <span>{item.label}</span>
-                  <p>{item.value}</p>
+              <section className="journal-card">
+                <div className="journal-section-head"><h3>Review</h3></div>
+                <div className="journal-day-notes-list">
+                  {notesBlocks.map((item) => (
+                    <div key={item.label}>
+                      <span>{item.label}</span>
+                      <p>{item.value}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </section>
+              </section>
 
-          <section className="journal-card">
-            <div className="journal-section-head"><h3>Attachments / Screenshots</h3></div>
-            <div className="journal-day-attachments">
-              {attachments.length ? attachments.map((item) => (
-                <a key={item.id} className="journal-day-attachment" href={item.href} target="_blank" rel="noreferrer">
-                  <strong>{item.label}</strong>
-                  <span>Open link</span>
-                </a>
-              )) : (
-                <div className="journal-day-attachment empty">
-                  <strong>No attachments yet</strong>
-                  <span>Add chart links in journal entries to see them here.</span>
+              <section className="journal-card">
+                <div className="journal-section-head"><h3>Attachments</h3></div>
+                <div className="journal-day-attachments">
+                  {attachments.length ? attachments.map((item) => (
+                    <a key={item.id} className="journal-day-attachment" href={item.href} target="_blank" rel="noreferrer">
+                      <strong>{item.label}</strong>
+                      <span>Open link</span>
+                    </a>
+                  )) : (
+                    <div className="journal-day-attachment empty">
+                      <strong>No attachments yet</strong>
+                      <span>Add chart links in journal entries to see them here.</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </section>
+              </section>
+            </>
+          )}
         </aside>
       </div>
     </section>
@@ -3422,6 +3606,7 @@ function JournalReviewView({ analytics, mistakeRows, setupPnlRows, reviewNote, s
           <div key={label} className="journal-card"><span>{label}</span><strong>{text}</strong></div>
         ))}
       </div>
+      <DecisionOutcomesPanel formatValue={formatValue} />
     </section>
   );
 }
@@ -3500,5 +3685,709 @@ function JournalEmptyState({ title, description, cta, onAction }) {
       onAction={onAction}
       className="journal-empty-state"
     />
+  );
+}
+
+// ── Phase 3: "Needs journaling" queue ──────────────────────────────────────
+// Lists open + decision_relevant trade events surfaced by the backend, with
+// quick actions (open detail / dismiss / snooze). Journaling an event is done
+// from the drawer, which links it to a journal entry.
+function JournalNeedsJournalingView({
+  items,
+  isLoading,
+  error,
+  onLoad,
+  onOpenEvent,
+  onDismiss,
+  onSnooze,
+  eventActionState,
+  formatValue,
+}) {
+  useEffect(() => {
+    onLoad();
+  }, [onLoad]);
+
+  const busyId = eventActionState?.id;
+  const isBusy = eventActionState?.busy;
+
+  if (isLoading) {
+    return (
+      <section className="journal-card journal-needs-journaling">
+        <p className="journal-muted">Loading journaling queue…</p>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="journal-card journal-needs-journaling">
+        <p className="journal-muted">Could not load the journaling queue.</p>
+        <button type="button" className="journal-btn secondary" onClick={onLoad}>Retry</button>
+      </section>
+    );
+  }
+
+  if (!items || items.length === 0) {
+    return (
+      <JournalEmptyState
+        title="Nothing needs journaling"
+        description="When you execute or sync a decision-relevant trade, it shows up here so you can capture the thesis, emotion, and lesson while it's fresh."
+        cta={{ label: "Refresh", onClick: onLoad }}
+      />
+    );
+  }
+
+  return (
+    <section className="journal-card journal-needs-journaling">
+      <div className="journal-needs-head">
+        <h2>Needs journaling</h2>
+        <span className="journal-count-pill">{items.length}</span>
+      </div>
+      <p className="journal-muted">Open decision-relevant events. Journal them while the trade is fresh, or snooze and revisit later.</p>
+      <ul className="journal-event-list">
+        {items.map((event) => {
+          const notional = typeof event.notional === "number" ? event.notional : null;
+          const occurred = event.occurredAt ? new Date(event.occurredAt) : null;
+          return (
+            <li key={event.id} className="journal-event-row">
+              <button
+                type="button"
+                className="journal-event-main"
+                onClick={() => onOpenEvent(event)}
+                aria-label={`Open ${event.symbol || "event"} detail`}
+              >
+                <span className="journal-event-symbol">{event.symbol || "—"}</span>
+                <span className="journal-event-meta">
+                  {[event.side, event.eventType, event.assetType].filter(Boolean).join(" · ")}
+                </span>
+                {notional != null && (
+                  <span className="journal-event-notional">{formatValue(notional, true)}</span>
+                )}
+                {occurred && (
+                  <span className="journal-event-when">
+                    {occurred.toLocaleDateString([], { month: "short", day: "numeric" })}
+                  </span>
+                )}
+              </button>
+              <span className="journal-event-actions">
+                <button
+                  type="button"
+                  className="journal-btn ghost"
+                  disabled={isBusy && busyId === event.id}
+                  onClick={() => onSnooze(event, 1)}
+                >
+                  Snooze
+                </button>
+                <button
+                  type="button"
+                  className="journal-btn secondary"
+                  disabled={isBusy && busyId === event.id}
+                  onClick={() => onDismiss(event)}
+                >
+                  Dismiss
+                </button>
+                <button
+                  type="button"
+                  className="journal-btn primary"
+                  onClick={() => onOpenEvent(event)}
+                >
+                  Journal
+                </button>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+// ── Phase 4: decision outcomes surface ─────────────────────────────────────
+function DecisionOutcomesPanel({ formatValue = () => "" }) {
+  const [items, setItems] = useState([]);
+  const [aggregated, setAggregated] = useState({ byResult: {}, totalPnl: 0, winCount: 0, lossCount: 0, total: 0 });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await fetchDecisionOutcomes();
+      setItems(Array.isArray(result.items) ? result.items : []);
+      setAggregated(result.aggregated || { byResult: {}, totalPnl: 0, winCount: 0, lossCount: 0, total: 0 });
+    } catch (err) {
+      // Graceful: never block the rest of the review surface.
+      setError(err?.message || "Could not load decision outcomes.");
+      setItems([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const safePnl = typeof aggregated.totalPnl === "number" ? aggregated.totalPnl : 0;
+  const total = aggregated.total || 0;
+  const reviewed = aggregated.total || 0; // outcomes endpoint only returns reviewed
+  const unreviewed = 0; // backend outcome rows are reviewed-only; keep explicit for clarity
+
+  // Distribution by symbol.
+  const bySymbol = useMemo(() => {
+    const acc = {};
+    for (const it of items) {
+      const sym = it.symbol || "—";
+      acc[sym] = acc[sym] || { count: 0, pnl: 0, win: 0, loss: 0 };
+      acc[sym].count += 1;
+      const pnl = typeof it?.outcome?.pnl === "number" ? it.outcome.pnl : 0;
+      acc[sym].pnl += pnl;
+      if (pnl > 0) acc[sym].win += 1;
+      if (pnl < 0) acc[sym].loss += 1;
+    }
+    return Object.entries(acc).sort((a, b) => b[1].pnl - a[1].pnl).slice(0, 8);
+  }, [items]);
+
+  // Distribution by setup / decision type (sourceType).
+  const bySetup = useMemo(() => {
+    const acc = {};
+    for (const it of items) {
+      const setup = it.sourceType || it.setup || "—";
+      acc[setup] = acc[setup] || { count: 0, pnl: 0 };
+      acc[setup].count += 1;
+      acc[setup].pnl += typeof it?.outcome?.pnl === "number" ? it.outcome.pnl : 0;
+    }
+    return Object.entries(acc).sort((a, b) => b[1].count - a[1].count).slice(0, 8);
+  }, [items]);
+
+  // Repeated mistakes.
+  const mistakes = useMemo(() => {
+    const acc = {};
+    for (const it of items) {
+      const tag = it?.outcome?.mistakeTag;
+      if (!tag) continue;
+      acc[tag] = acc[tag] || { count: 0, pnl: 0 };
+      acc[tag].count += 1;
+      acc[tag].pnl += typeof it?.outcome?.pnl === "number" ? it.outcome.pnl : 0;
+    }
+    return Object.entries(acc).sort((a, b) => b[1].count - a[1].count).slice(0, 6);
+  }, [items]);
+
+  const linkToThread = (it) => {
+    if (it?.sourceId) {
+      window.location.hash = `#/decisions/${encodeURIComponent(it.sourceId)}`;
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="journal-card journal-outcomes">
+        <div className="journal-section-head"><h3>Decision Outcomes</h3></div>
+        <p className="journal-card-label">Loading outcomes…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="journal-card journal-outcomes">
+      <div className="journal-section-head">
+        <h3>Decision Outcomes</h3>
+        <span>{error ? "unavailable" : `${reviewed} reviewed`}</span>
+      </div>
+      {error ? (
+        <p className="journal-card-label">{error}</p>
+      ) : (
+        <>
+          <div className="journal-review-summary">
+            <div><span>Reviewed</span><strong>{reviewed}</strong></div>
+            <div><span>Unreviewed</span><strong>{unreviewed}</strong></div>
+            <div><span>Winning</span><strong className="positive">{aggregated.winCount}</strong></div>
+            <div><span>Losing</span><strong className="negative">{aggregated.lossCount}</strong></div>
+            <div><span>Total P&amp;L</span><strong className={safePnl >= 0 ? "positive" : "negative"}>{formatValue(safePnl, true)}</strong></div>
+          </div>
+
+          <h4 className="journal-outcomes-subhead">By symbol</h4>
+          <div className="journal-compact-table">
+            {bySymbol.length === 0 ? <p className="journal-card-label">No outcomes yet.</p> : bySymbol.map(([sym, v]) => (
+              <div key={sym}>
+                <span>{sym}</span>
+                <span>{v.count}x</span>
+                <strong className={v.pnl >= 0 ? "positive" : "negative"}>{formatValue(v.pnl, true)}</strong>
+                <button type="button" className="journal-link" onClick={() => linkToThread({ sourceId: sym })}>view</button>
+              </div>
+            ))}
+          </div>
+
+          <h4 className="journal-outcomes-subhead">By setup / type</h4>
+          <div className="journal-compact-table">
+            {bySetup.length === 0 ? <p className="journal-card-label">No outcomes yet.</p> : bySetup.map(([setup, v]) => (
+              <div key={setup}>
+                <span>{setup}</span>
+                <span>{v.count}x</span>
+                <strong className={v.pnl >= 0 ? "positive" : "negative"}>{formatValue(v.pnl, true)}</strong>
+              </div>
+            ))}
+          </div>
+
+          {mistakes.length > 0 ? (
+            <>
+              <h4 className="journal-outcomes-subhead">Repeated mistakes</h4>
+              <div className="journal-compact-table">
+                {mistakes.map(([tag, v]) => (
+                  <div key={tag}>
+                    <span>{tag}</span>
+                    <span>{v.count}x</span>
+                    <strong className="negative">{formatValue(v.pnl, true)}</strong>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Drawer for a single journal event: shows the normalized event detail and
+// lets the user journal it (link to an entry), snooze, or dismiss.
+function JournalEventDrawer({ event, isOpen, onClose, onJournal, onSnooze, onDismiss, onClassify, actionState }) {
+  const [canonical, setCanonical] = useState(null);
+  const [detailError, setDetailError] = useState(null);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [isClassifying, setIsClassifying] = useState(false);
+  const [classifyError, setClassifyError] = useState(null);
+  const [reason, setReason] = useState("");
+
+  // Fetch canonical event details whenever the drawer opens for a new event.
+  useEffect(() => {
+    if (!isOpen || !event?.id) return undefined;
+    let cancelled = false;
+    setIsDetailLoading(true);
+    setDetailError(null);
+    setClassifyError(null);
+    setReason("");
+    setCanonical(null);
+    (async () => {
+      try {
+        const detail = await fetchJournalEvent(event.id);
+        if (cancelled) return;
+        if (!detail) {
+          setDetailError("This event is no longer available.");
+          return;
+        }
+        setCanonical(detail);
+      } catch (err) {
+        if (cancelled) return;
+        // 404 => deleted/stale event; surface gracefully, keep list payload.
+        if (err?.status === 404) {
+          setDetailError("This event was removed or is no longer available.");
+        } else {
+          setDetailError(err?.message || "Could not load event details.");
+        }
+      } finally {
+        if (!cancelled) setIsDetailLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen, event?.id]);
+
+  const shown = canonical || event;
+  if (!isOpen || !event) return null;
+  const busy = actionState?.busy && actionState?.id === event.id;
+  const notional = typeof shown.notional === "number" ? shown.notional : null;
+  const occurred = shown.occurredAt ? new Date(shown.occurredAt) : null;
+  const CLASSIFICATIONS = [
+    { value: "decision_relevant", label: "Decision-relevant" },
+    { value: "informational", label: "Informational" },
+    { value: "noise", label: "Noise" },
+  ];
+  const currentClassification = shown.classification;
+  const rows = [
+    ["Event type", shown.eventType],
+    ["Side", shown.side],
+    ["Asset type", shown.assetType],
+    ["Market type", shown.marketType],
+    ["Platform", shown.platform],
+    ["Quantity", shown.quantity != null ? String(shown.quantity) : "—"],
+    ["Price", shown.price != null ? String(shown.price) : "—"],
+    ["Notional", notional != null ? String(notional) : "—"],
+    ["Occurred", occurred ? occurred.toLocaleString() : "—"],
+    ["Classification", currentClassification],
+    ["Status", shown.status],
+  ].filter(([, value]) => value != null && value !== "");
+
+  const handleClassify = async (classification) => {
+    if (!onClassify || isClassifying || busy) return;
+    setIsClassifying(true);
+    setClassifyError(null);
+    try {
+      const updated = await onClassify(event, classification, reason);
+      if (updated) setCanonical(updated);
+      setReason("");
+    } catch (err) {
+      setClassifyError(err?.message || "Could not save classification.");
+    } finally {
+      setIsClassifying(false);
+    }
+  };
+
+  return (
+    <div className="journal-drawer-backdrop" onMouseDown={onClose}>
+      <aside
+        className="journal-detail-drawer"
+        ref={undefined}
+        tabIndex={-1}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${event.symbol || "Event"} journal detail`}
+      >
+        <div className="journal-drawer-head">
+          <div>
+            <span className="journal-card-label">{shown.assetType || "Event"}</span>
+            <h3>{shown.symbol || "Untitled event"}</h3>
+            <p>{occurred ? occurred.toLocaleDateString() : "—"} · <span className="journal-card-label">{shown.status}</span></p>
+          </div>
+          <button type="button" className="journal-kebab" onClick={onClose} aria-label="Close event detail">×</button>
+        </div>
+        {isDetailLoading ? (
+          <div className="journal-drawer-section"><p className="journal-card-label">Loading event details…</p></div>
+        ) : detailError ? (
+          <div className="journal-drawer-section"><p className="journal-card-label">{detailError}</p></div>
+        ) : (
+          <>
+            <section className="journal-drawer-section">
+              <h4>Event detail</h4>
+              {rows.map(([label, value]) => (
+                <div key={label}><span>{label}</span><strong>{String(value)}</strong></div>
+              ))}
+            </section>
+            <section className="journal-drawer-section">
+              <h4>Classification</h4>
+              <p className="journal-card-label">
+                Current: <strong>{currentClassification || "unclassified"}</strong>
+              </p>
+              <div className="journal-classify-actions" role="group" aria-label="Classify event">
+                {CLASSIFICATIONS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    className={`journal-btn ${currentClassification === c.value ? "primary" : "secondary"}`}
+                    disabled={isClassifying || busy}
+                    aria-pressed={currentClassification === c.value}
+                    onClick={() => handleClassify(c.value)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                className="journal-classify-reason"
+                placeholder="Optional reason (why this classification?)"
+                value={reason}
+                maxLength={500}
+                disabled={isClassifying || busy}
+                onChange={(e) => setReason(e.target.value)}
+                rows={2}
+              />
+              {classifyError ? <p className="journal-card-label journal-classify-error">{classifyError}</p> : null}
+            </section>
+          </>
+        )}
+        <div className="journal-drawer-actions">
+          <button
+            type="button"
+            className="journal-btn primary"
+            disabled={busy || isClassifying}
+            onClick={() => onJournal(event, {})}
+          >
+            Mark journaled
+          </button>
+          <button
+            type="button"
+            className="journal-btn secondary"
+            disabled={busy || isClassifying}
+            onClick={() => onSnooze(event, 1)}
+          >
+            Snooze 1 day
+          </button>
+          <button
+            type="button"
+            className="journal-btn danger"
+            disabled={busy || isClassifying}
+            onClick={() => onDismiss(event)}
+          >
+            Dismiss
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+// ── Phase 4/5: periodic reports view ────────────────────────────────────────
+const REPORT_CADENCES = ["daily", "weekly", "quarterly", "half_year", "yearly"];
+
+function JournalReportsView({ onToast = () => {}, formatValue = () => "" }) {
+  const [reports, setReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [generating, setGenerating] = useState(null);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const items = await fetchJournalReports();
+      setReports(Array.isArray(items) ? items : []);
+    } catch (err) {
+      setError(err?.message || "Failed to load reports.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleGenerate = async (cadence) => {
+    setGenerating(cadence);
+    try {
+      const report = await generateJournalReport({ cadence });
+      if (report) {
+        setReports((prev) => {
+          const without = prev.filter((r) => !(r.cadence === cadence && r.periodKey === report.periodKey));
+          return [report, ...without];
+        });
+        onToast(`${cadence} report generated.`, "positive");
+      }
+    } catch (err) {
+      onToast(err?.message || "Generate failed.", "error");
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  const buildCsv = (report) => {
+    const s = report?.summary || {};
+    const rows = [
+      ["Cadence", report?.cadence || ""],
+      ["Period", report?.periodKey || ""],
+      ["Total events", s.total ?? 0],
+      ["Decision-relevant", (s.byClassification && s.byClassification.decision_relevant) ?? 0],
+      ["Operational", (s.byClassification && s.byClassification.operational) ?? 0],
+      ["Unknown", (s.byClassification && s.byClassification.unknown) ?? 0],
+      ["Open", (s.byStatus && s.byStatus.open) ?? 0],
+      ["Journaled", (s.byStatus && s.byStatus.journaled) ?? 0],
+      ["Dismissed", (s.byStatus && s.byStatus.dismissed) ?? 0],
+      ["Needs journaling", s.needsJournaling ?? 0],
+      ["Decision notional", s.totalNotional ?? 0],
+    ];
+    return rows.map((r) => r.join(",")).join("\n");
+  };
+
+  const download = (filename, content, mime) => {
+    const blob = new Blob([content], { type: mime || "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportCsv = (report) => download(`journal-report-${report.cadence}-${report.periodKey}.csv`, buildCsv(report), "text/csv");
+  const handleExportJson = (report) => download(`journal-report-${report.cadence}-${report.periodKey}.json`, JSON.stringify(report, null, 2), "application/json");
+  const latestReportAt = reports
+    .map((report) => report?.generatedAt || report?.createdAt || report?.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  const reportFreshness = normalizeFreshnessStatus({
+    generatedAt: latestReportAt,
+    stale: !reports.length,
+    refreshing: isLoading || Boolean(generating),
+    sourceLabel: "Journal events backend",
+    nextAction: reports.length ? "Review unjournaled events or export a report." : "Generate a report cadence.",
+    maxFreshMinutes: 1440,
+  });
+
+  return (
+    <section className="journal-reports-view">
+      <CompactPageHeader
+        className="journal-reports-head"
+        eyebrow="Trade Journaling"
+        title="Periodic Reports"
+        description="Calendar-based digests (daily, weekly, quarterly, half-year, yearly) aggregated from your trade-journal events."
+      />
+      <DataFreshnessSummary {...reportFreshness} className="journal-reports-freshness" />
+      <div className="journal-reports-generate-row">
+        {REPORT_CADENCES.map((cadence) => (
+          <Button
+            key={cadence}
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={generating === cadence}
+            onClick={() => handleGenerate(cadence)}
+          >
+            {generating === cadence ? `Generating ${cadence}…` : `Generate ${cadence}`}
+          </Button>
+        ))}
+      </div>
+      <AsyncState
+        status={isLoading ? "loading" : error ? "error" : reports.length ? "ready" : "empty"}
+        error={error}
+        onRetry={load}
+        retryLabel="Reload reports"
+        loading={<div className="journal-reports-loading">Loading report history…</div>}
+        empty={
+          <GuidedEmptyState
+            eyebrow="Reports"
+            title="No reports yet"
+            description="Generate a daily, weekly, quarterly, half-year, or yearly digest to aggregate your trade-journal events for the current period."
+            steps={["Pick a cadence above to generate the current period.", "Reports are idempotent and refresh as new events arrive."]}
+            className="guided-empty-state--compact"
+          />
+        }
+      >
+        <div className="journal-reports-grid">
+          {reports.map((report) => {
+            const s = report?.summary || {};
+            const freshness = normalizeFreshnessStatus({
+              generatedAt: report?.generatedAt || report?.createdAt || report?.updatedAt,
+              sourceLabel: "Trade-journal events",
+              nextAction: Number(s.needsJournaling || 0) > 0 ? "Journal open events." : "Export or compare against the next period.",
+              maxFreshMinutes: 1440,
+            });
+            return (
+              <article key={`${report.cadence}-${report.periodKey}`} className="journal-report-card">
+                <header className="journal-report-card-head">
+                  <div>
+                    <span className="journal-report-cadence">{report.cadence}</span>
+                    <h4>{report.periodKey}</h4>
+                  </div>
+                  <ResponsiveActionBar
+                    secondary={(
+                      <>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => handleExportCsv(report)}>CSV</Button>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => handleExportJson(report)}>JSON</Button>
+                      </>
+                    )}
+                  />
+                </header>
+                <DataFreshnessSummary {...freshness} className="journal-report-card-freshness" />
+                <dl className="journal-report-metrics">
+                  <div><dt>Events</dt><dd>{s.total ?? 0}</dd></div>
+                  <div><dt>Decision-relevant</dt><dd>{s.byClassification?.decision_relevant ?? 0}</dd></div>
+                  <div><dt>Needs journaling</dt><dd>{s.needsJournaling ?? 0}</dd></div>
+                  <div><dt>Decision notional</dt><dd>{formatValue(s.totalNotional ?? 0, true)}</dd></div>
+                </dl>
+                {Array.isArray(s.topSymbols) && s.topSymbols.length ? (
+                  <div className="journal-report-symbols">
+                    <span className="zenin-eyebrow">Top symbols</span>
+                    <div className="journal-report-symbol-chips">
+                      {s.topSymbols.map((t) => (
+                        <span key={t.symbol} className="journal-report-symbol-chip">{t.symbol} · {t.count}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      </AsyncState>
+    </section>
+  );
+}
+
+// ── Phase 6: journal settings / preferences ────────────────────────────────
+function JournalSettingsView({ onToast = () => {} }) {
+  const [prefs, setPrefs] = useState({ email: true, includeOperational: false, cadence: "weekly" });
+  const [isLoading, setIsLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const loaded = await fetchJournalPrefs();
+        if (active && loaded) setPrefs(loaded);
+      } catch {
+        /* keep defaults */
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const update = async (patch) => {
+    setSaving(true);
+    try {
+      const next = await saveJournalPrefs(patch);
+      if (next) setPrefs(next);
+      onToast("Journal preferences saved.", "positive");
+    } catch (err) {
+      onToast(err?.message || "Save failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (isLoading) return <div className="journal-settings-loading">Loading preferences…</div>;
+
+  return (
+    <section className="journal-settings-view">
+      <CompactPageHeader
+        className="journal-settings-head"
+        eyebrow="Trade Journaling"
+        title="Journal Settings"
+        description="Control journal-reminder emails and how operational trades are treated in digests."
+      />
+      <div className="journal-settings-list">
+        <label className="journal-setting-row">
+          <span>
+            <strong>Email journal reminders</strong>
+            <small>Send in-app detected trades to your email for journaling.</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={Boolean(prefs.email)}
+            disabled={saving}
+            onChange={(e) => update({ email: e.target.checked })}
+          />
+        </label>
+        <label className="journal-setting-row">
+          <span>
+            <strong>Include operational trades in digests</strong>
+            <small>Show deposits, transfers, assignments, and expiries in reports.</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={Boolean(prefs.includeOperational)}
+            disabled={saving}
+            onChange={(e) => update({ includeOperational: e.target.checked })}
+          />
+        </label>
+        <div className="journal-setting-row">
+          <span>
+            <strong>Default report cadence</strong>
+            <small>Period used when scheduling automatic digests.</small>
+          </span>
+          <select
+            value={prefs.cadence || "weekly"}
+            disabled={saving}
+            onChange={(e) => update({ cadence: e.target.value })}
+          >
+            {REPORT_CADENCES.map((c) => (
+              <option key={c} value={c}>{c.replace("_", "-")}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </section>
   );
 }

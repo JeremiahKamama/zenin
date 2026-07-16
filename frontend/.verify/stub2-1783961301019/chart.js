@@ -1,0 +1,1 @@
+const React=require("react"); module.exports={ TradingViewChart: (props)=>React.createElement("div",{className:"tv-chart-stub"}), default:{TradingViewChart:(props)=>React.createElement("div",{className:"tv-chart-stub"})} };

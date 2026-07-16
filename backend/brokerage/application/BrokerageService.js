@@ -84,6 +84,20 @@ function createBrokerageService(deps) {
       return registry.listProviders();
     },
 
+    /** True when the brokerage provider (e.g. SnapTrade) is configured. */
+    providerConfigured() {
+      try {
+        const provider = registry.defaultProvider();
+        // Provider adapters expose isConfigured(env) when they support it.
+        if (typeof provider.isConfigured === "function") {
+          return Boolean(provider.isConfigured(process.env));
+        }
+        return true;
+      } catch (error) {
+        return false;
+      }
+    },
+
     providerCapabilities(providerKey) {
       return registry.providerCapabilities(defaultProviderKey(providerKey));
     },
@@ -177,6 +191,77 @@ function createBrokerageService(deps) {
     async listConnections(workspaceId) {
       const rows = await repository.connections.list(workspaceId);
       return rows.map(sanitizeConnection);
+    },
+
+    /**
+     * Workspace-level brokerage summary: connections, accounts, holdings,
+     * aggregate connected value, sync timestamps, and error/reconnect state.
+     *
+     * Holds NO secrets: every connection is passed through sanitizeConnection,
+     * and account/holding rows are provider-mapped domain objects (no
+     * providerMeta / userSecret / raw credentials are returned).
+     *
+     * Holdings/accounts are aggregated best-effort; a single provider failure
+     * surfaces as an `errors` entry rather than blanking the whole summary.
+     */
+    async getWorkspaceSummary(workspaceId, { source = "manual" } = {}) {
+      const rows = await repository.connections.list(workspaceId);
+      const connections = rows.map(sanitizeConnection);
+
+      const accounts = [];
+      const holdings = [];
+      const errors = [];
+      let lastSyncAt = null;
+      let hasReconnect = false;
+      let hasSyncFailure = false;
+
+      for (const conn of rows) {
+        const provider = resolveProvider(conn.provider);
+        const context = buildProviderContext(conn);
+
+        if (conn.lastSyncedAt) {
+          const ts = new Date(conn.lastSyncedAt).getTime();
+          if (!lastSyncAt || ts > lastSyncAt) lastSyncAt = ts;
+        }
+        if (conn.status === "expired" || conn.status === "revoked") hasReconnect = true;
+        if (conn.status === "error" || conn.syncError) hasSyncFailure = true;
+
+        try {
+          const accts = await provider.listAccounts(conn.providerUserRef, context);
+          for (const a of accts) {
+            accounts.push({ ...a, connectionId: conn.id, sourceKind: conn.provider });
+          }
+        } catch (err) {
+          errors.push({ connectionId: conn.id, message: err?.message || "Failed to load accounts." });
+        }
+
+        try {
+          const positions = await provider.getHoldings(conn.providerUserRef, undefined, context);
+          for (const h of positions) {
+            holdings.push({ ...h, connectionId: conn.id, sourceKind: conn.provider });
+          }
+        } catch (err) {
+          errors.push({ connectionId: conn.id, message: err?.message || "Failed to load holdings." });
+        }
+      }
+
+      const brokerageValue = holdings.reduce(
+        (sum, h) => sum + (Number(h.marketValue) || Number(h.value) || 0),
+        0
+      );
+
+      return {
+        source,
+        available: true,
+        connections,
+        accounts,
+        holdings,
+        brokerageValue: Math.round(brokerageValue * 100) / 100,
+        lastSyncAt: lastSyncAt ? new Date(lastSyncAt).toISOString() : null,
+        requiresReconnect: hasReconnect,
+        syncFailed: hasSyncFailure,
+        errors
+      };
     },
 
     async getConnection(connectionId, workspaceId) {

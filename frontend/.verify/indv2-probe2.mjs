@@ -1,0 +1,14 @@
+import { pathToFileURL } from "url";
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const mod = await import(pathToFileURL(resolve(__dirname, "indv2-bundle.cjs")).href);
+const { withData, noData } = mod.run();
+const chain = withData.match(/imv2-chain">([\s\S]*?)<\/div>\s*<\/section>/)?.[1] || "";
+const chainNodes = [...chain.matchAll(/imv2-chain-name">([^<]+)</g)].map(x=>x[1]);
+console.log("CHAIN NODES:", JSON.stringify(chainNodes));
+const cross = withData.match(/imv2-cross-table[\s\S]*?<\/table>/)?.[0] || "";
+const crossRows = [...cross.matchAll(/<td>([^<]+)<\/td>/g)].map(x=>x[1]);
+console.log("CROSS ROWS (asset/impact/signal/conf):", JSON.stringify(crossRows.slice(0,8)));
+console.log("EMPTY noData has 'No transmission path mapped':", noData.includes("No transmission path mapped"));
+console.log("EMPTY noData has 'No historical series returned from FRED':", noData.includes("No historical series returned from FRED"));

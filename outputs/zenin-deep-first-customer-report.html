@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Zenin Capital Deep First-Customer Finder</title>
+  <style>
+    :root{--bg:#090b0f;--panel:#12161d;--panel2:#191f28;--ink:#f5f2ea;--muted:#9ca6b5;--line:#2b3340;--acid:#d9ff63;--blue:#69b7ff;--orange:#ff8f5a;--cyan:#5ee8d0;--radius:18px;--shadow:0 24px 80px rgba(0,0,0,.38)}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.55}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.3;background:repeating-linear-gradient(135deg,rgba(255,255,255,.018) 0 1px,transparent 1px 12px);mask-image:linear-gradient(#000,transparent 82%)}a{color:inherit}.skip{position:absolute;left:-9999px}.skip:focus{left:16px;top:16px;z-index:9;background:var(--acid);color:#111;padding:10px}
+    .shell{width:min(1180px,calc(100% - 40px));margin:auto;position:relative}.top{display:flex;justify-content:space-between;align-items:center;padding:22px 0;border-bottom:1px solid var(--line)}.brand{font-weight:850;display:flex;align-items:center;gap:10px}.brand i{width:12px;height:12px;border-radius:50%;background:var(--acid);box-shadow:0 0 22px var(--acid)}.meta{display:flex;gap:8px;align-items:center}.chip,.stage{border:1px solid var(--line);border-radius:999px;padding:7px 10px;color:var(--muted);font:750 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.07em}button{background:var(--ink);color:#111;border:0;border-radius:999px;padding:9px 14px;font:800 13px inherit;cursor:pointer}button:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid var(--blue);outline-offset:3px}
+    .hero{display:grid;grid-template-columns:1.45fr .55fr;gap:36px;align-items:end;padding:72px 0 42px}.eyebrow{color:var(--acid);font:750 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.11em}h1{font-size:clamp(48px,7vw,92px);line-height:.92;letter-spacing:-.065em;margin:13px 0 24px}.verdict{font-size:clamp(18px,2.1vw,25px);color:#dce1e9;max-width:820px;margin:0}.hero-card{background:var(--acid);color:#10120d;padding:26px;border-radius:var(--radius);box-shadow:var(--shadow);transform:rotate(1deg)}.hero-card span{font:800 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.08em}.hero-card strong{display:block;font-size:64px;line-height:1;letter-spacing:-.08em;margin:15px 0 6px}.hero-card p{margin:0;font-weight:700;font-size:13px}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:28px}.stats>div{padding:18px;background:var(--panel)}.stats>div+div{border-left:1px solid var(--line)}.stats span,.prospect-grid span,.signal span,.evidence span,blockquote span{display:block;color:var(--muted);font:700 10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}.stats strong{font-size:17px}
+    .best{display:grid;grid-template-columns:180px 1fr auto;gap:24px;align-items:center;padding:25px;background:var(--orange);color:#1b0f09;border-radius:var(--radius);box-shadow:var(--shadow);margin:0 0 72px}.best-label{font:800 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em}.best h2{font-size:clamp(28px,4vw,46px);letter-spacing:-.045em;line-height:1;margin:0 0 8px}.best p{margin:0}.best strong{font-size:44px}
+    .section-head{display:flex;justify-content:space-between;align-items:end;gap:24px;padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:18px}.section-head h2{font-size:clamp(34px,5vw,62px);line-height:.98;letter-spacing:-.055em;margin:0}.section-head p{color:var(--muted);max-width:470px;margin:0}
+    .prospects{display:grid;gap:16px;margin-bottom:76px}.prospect{background:linear-gradient(135deg,var(--panel),#0f1319);border:1px solid var(--line);border-radius:var(--radius);padding:25px;box-shadow:0 12px 38px rgba(0,0,0,.18)}.prospect-head{display:grid;grid-template-columns:54px 1fr 92px;gap:17px;align-items:start}.rank{font:850 24px ui-monospace,monospace;color:var(--acid);padding-top:8px}.identity h3{font-size:29px;letter-spacing:-.04em;margin:6px 0 10px}.stage{display:inline-block}.stage.hot{color:var(--orange);border-color:rgba(255,143,90,.5)}.stage.warm{color:var(--cyan);border-color:rgba(94,232,208,.45)}.score{--score:0;width:88px;height:88px;border-radius:50%;display:grid;place-content:center;text-align:center;background:radial-gradient(circle,var(--panel) 58%,transparent 60%),conic-gradient(var(--acid) calc(var(--score)*1%),var(--line) 0)}.score strong{font-size:26px;line-height:1}.score small{color:var(--muted)}
+    .signal{margin:21px 0 12px;padding:16px;background:var(--panel2);border-left:4px solid var(--acid)}.signal p{font-size:17px;margin:0}.prospect-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.prospect-grid>div,.evidence>div{border:1px solid var(--line);border-radius:12px;padding:15px;background:rgba(255,255,255,.018)}.prospect-grid p,.evidence p{margin:0}blockquote{margin:12px 0 0;padding:16px;border:1px dashed rgba(217,255,99,.55);border-radius:12px;color:#eaf6c6}details{margin-top:10px}summary{cursor:pointer;color:var(--acid);font-weight:800;padding:10px 0}.evidence{display:grid;grid-template-columns:1fr 1fr;gap:9px}.evidence a{display:inline-block;color:var(--blue);margin-top:8px;word-break:break-word}.metrics{display:grid;gap:8px;margin-top:14px}.metric{display:grid;grid-template-columns:145px 1fr 40px;gap:12px;align-items:center;font-size:13px}.track{height:8px;background:var(--line);border-radius:8px;overflow:hidden}.track i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--acid))}
+    .patterns{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:76px}.pattern{display:grid;grid-template-columns:42px 1fr auto;gap:15px;align-items:start;padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.pattern-num{color:var(--acid);font:800 13px ui-monospace,monospace}.pattern h3{margin:0 0 5px}.pattern p{margin:0;color:var(--muted)}.pattern>strong{font-size:30px;color:var(--acid)}
+    .plan{display:grid;grid-template-columns:.8fr 1.2fr;gap:28px;background:var(--acid);color:#111;padding:29px;border-radius:var(--radius);margin-bottom:30px}.plan h2{font-size:38px;line-height:1;letter-spacing:-.045em;margin:10px 0}.plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.plan-grid>div{border:1px solid rgba(0,0,0,.24);border-radius:11px;padding:13px}.plan-grid span{display:block;font:750 10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px}.plan-grid p{margin:0}.limits{border:1px solid var(--line);border-radius:var(--radius);padding:24px;color:var(--muted);margin-bottom:60px}.limits h2{color:var(--ink);margin-top:0}footer{display:flex;justify-content:space-between;gap:20px;border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);font-size:12px}.reveal{animation:rise .4s ease both}@keyframes rise{from{opacity:0;transform:translateY(12px)}}
+    @media(max-width:820px){.shell{width:min(100% - 24px,1180px)}.hero,.plan{grid-template-columns:1fr}.hero{padding-top:44px}.hero-card{transform:none}.stats{grid-template-columns:1fr 1fr}.stats>div+div{border-left:0;border-top:1px solid var(--line)}.best{grid-template-columns:1fr}.prospect-head{grid-template-columns:38px 1fr}.score{grid-column:1/-1}.prospect-grid,.evidence,.patterns,.plan-grid{grid-template-columns:1fr}.meta .chip{display:none}}
+    @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}@media print{body{background:#fff;color:#111}body:before,.top button{display:none}.shell{width:100%}.prospect,.pattern,.limits{background:#fff;color:#111;break-inside:avoid}.prospect-grid span,.signal span,.evidence span,blockquote span{color:#444}}
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to report</a>
+  <div class="shell">
+    <header class="top"><div class="brand"><i></i> First Customer Finder</div><div class="meta"><span class="chip">Public signals only</span><button type="button" onclick="window.print()">Print / Save PDF</button></div></header>
+    <main id="main">
+      <section class="hero"><div><span class="eyebrow">Early-customer report · 2026-07-15</span><h1>Zenin Capital Deep First-Customer Finder</h1><p class="verdict">Zenin has a strong reachable early-customer wedge, but the deep research sharpens it: sell first to spreadsheet-heavy, multi-account investors and options traders who want context and review—not to generic passive investors. The most promising design partners are public builders already creating trackers, while the most promising buyers are people with live pain around broken formulas, manual refreshes, options reconciliation, or fragmented asset coverage.</p></div><aside class="hero-card"><span>Qualified prospects</span><strong>11</strong><p>Potential customers based on public signals.</p></aside></section>
+      <section class="stats"><div><span>Product</span><strong><a href="https://www.zenin.capital/" target="_blank" rel="noreferrer">Zenin Capital</a></strong></div><div><span>Target customer</span><strong>Primary: active self-directed investors and options traders who manage multiple accounts and need live portfolio context, research, and review in one workspace. Adjacent: independent advisors, small research desks, and finance-tool builders seeking a design partner.</strong></div><div><span>High intent</span><strong>2</strong></div><div><span>Average fit score</span><strong>79/100</strong></div></section>
+      <section class="best"><div class="best-label">Highest-confidence prospect</div><div><h2>AllFiredUp3000 (public Reddit handle)</h2><p>Strong pain but the original post is about 1 year old; treat as a design-partner hypothesis.</p></div><strong>88</strong></section>
+      <section><header class="section-head"><h2>People with a reason<br>to care now.</h2><p>Every primary prospect is tied to a public pain, demand, or timing signal. Open the evidence before considering outreach.</p></header><div class="prospects">
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">01</div>
+        <div class="identity">
+          <span class="eyebrow">Options trader / builder</span>
+          <h3>AllFiredUp3000 (public Reddit handle)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:88" aria-label="Fit score 88 out of 100"><strong>88</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Exports Fidelity transactions to CSV, maintains spreadsheet formulas, loads raw data into SQL to double-check profit calculations, and described an unfinished web app for rolled-call matching.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin combines portfolio, options analysis, and decision review around the exact reconciliation job.</p></div>
+        <div><span>Why now</span><p>Strong pain but the original post is about 1 year old; treat as a design-partner hypothesis.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public thread</p></div>
+        <div><span>Caution</span><p>Confirm current activity before outreach.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your Fidelity-to-CSV-to-SQL workflow and unfinished rolled-call tracker describe the reconciliation problem Zenin is trying to consolidate. Is that workflow still active enough to compare against a portfolio-plus-options workspace?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Specific multi-step reconciliation workaround plus an unfinished product effort.</p></div><div><span>Source</span><p>Public Reddit discussion · January 25, 2025; later replies in 2025-2026</p><a href="https://www.reddit.com/r/options/comments/1i99xz7/portfolio_tracker_that_accounts_for_options/" target="_blank" rel="noreferrer">Portfolio tracker that accounts for Options Contracts? ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:60%"></i></div><b>3/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">02</div>
+        <div class="identity">
+          <span class="eyebrow">Portfolio-tracker builder</span>
+          <h3>Adept-Turnover8433 (public Reddit handle)</h3>
+          <span class="stage hot">High intent</span>
+        </div>
+        <div class="score" style="--score:86" aria-label="Fit score 86 out of 100"><strong>86</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Building a customizable stock/crypto tracker with CSV imports, discovery, rules, and watchlists; explicitly looking for people searching for a solution and inviting beta interest.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin overlaps on stock/crypto tracking, watchlists, discovery, company research, and portfolio workflows.</p></div>
+        <div><span>Why now</span><p>Post was approximately 25 days old and asked interested users to test.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public post</p></div>
+        <div><span>Caution</span><p>Likely builder or competitor; frame as peer testing, not a presumptive sale.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>You mentioned an early-beta stock/crypto tracker and looking for people actively searching for a solution. Would you compare workflows with Zenin as a peer beta/design-partner test?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Explicit beta-stage and feedback-seeking post.</p></div><div><span>Source</span><p>Public Reddit discussion · Approximately June 2026</p><a href="https://www.reddit.com/r/investing/comments/1tr2nb4/simple_and_smart_way_to_track_portfolio/" target="_blank" rel="noreferrer">Simple and smart way to track portfolio? ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">03</div>
+        <div class="identity">
+          <span class="eyebrow">Portfolio-tracker builder</span>
+          <h3>toub1s / Inverow (public Reddit handle and project)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:84" aria-label="Fit score 84 out of 100"><strong>84</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Existing trackers were too limited, too bloated, or paywalled; needed stocks and crypto together, multiple portfolios, and different currencies, and moved from Excel to building a tracker.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin provides unified cross-market coverage, portfolio views, research, and tax/jurisdiction context.</p></div>
+        <div><span>Why now</span><p>The public discussion and project mention were about 1 month old.</p></div>
+        <div><span>Suggested channel</span><p>Reply or use the public project channel</p></div>
+        <div><span>Caution</span><p>Their project may already satisfy the need; propose comparison and feedback.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your move from Excel to Inverow because trackers could not combine stocks, crypto, portfolios, and currencies is close to Zenin&#x27;s thesis. Would you compare where each workflow still falls short?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Names concrete cross-asset and multi-currency requirements and links a public project.</p></div><div><span>Source</span><p>Public Reddit discussion · Approximately May-June 2026</p><a href="https://www.reddit.com/r/investing/comments/1tr2nb4/simple_and_smart_way_to_track_portfolio/" target="_blank" rel="noreferrer">Simple and smart way to track portfolio? ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">04</div>
+        <div class="identity">
+          <span class="eyebrow">Options-wheel trader</span>
+          <h3>m0rfeo123 (public Reddit handle)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:81" aria-label="Fit score 81 out of 100"><strong>81</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Shared an Excel wheel tracker, needed GBP/USD conversion, and called out missing monthly, YTD, and year-end overview tabs while soliciting improvements.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin&#x27;s options, portfolio, analytics, and tax surfaces are a natural richer review layer.</p></div>
+        <div><span>Why now</span><p>About 5 months old; active iteration but not immediate demand.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public thread</p></div>
+        <div><span>Caution</span><p>Validate calculations before suggesting a replacement.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your wheel tracker notes—especially GBP/USD conversion and missing monthly/YTD views—look like a useful Zenin test case. Would you compare the spreadsheet against a short options-and-tax workflow demo?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Live spreadsheet, stated feature backlog, and currency requirement.</p></div><div><span>Source</span><p>Public Reddit community thread · Approximately February 2026</p><a href="https://www.reddit.com/r/Optionswheel/comments/1o3b2ir/tools_spreadsheet_megathread/" target="_blank" rel="noreferrer">TOOLS &amp; SPREADSHEET MEGATHREAD ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">05</div>
+        <div class="identity">
+          <span class="eyebrow">Active investor</span>
+          <h3>Portfolio tracker author (public Reddit handle not surfaced in result)</h3>
+          <span class="stage hot">High intent</span>
+        </div>
+        <div class="score" style="--score:85" aria-label="Fit score 85 out of 100"><strong>85</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Says Excel became heavy as positions and ideas grew, with broken formulas, alerts, and closed trades; wants live P/L and exposure plus original trade thesis attached to closed trades.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin&#x27;s decision ledger, portfolio analytics, watchlists, and source-aware data directly match.</p></div>
+        <div><span>Why now</span><p>Post was published February 10, 2026 and explicitly says they are open to AI tools.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public post</p></div>
+        <div><span>Caution</span><p>Use the post&#x27;s public context only; the author identity is not reliably surfaced.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your distinction between live P/L and preserving the thesis behind closed trades stood out. Zenin combines those two workflows; would a short test focused on thesis review and exposure be useful?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Explicit request for alternatives and detailed pain around both live data and decision review.</p></div><div><span>Source</span><p>Public Reddit discussion · February 10, 2026</p><a href="https://www.reddit.com/r/portfolios/comments/1r0p1hv/been_looking_for_a_portfolio_tracker_appsoftware/" target="_blank" rel="noreferrer">Been looking for a portfolio tracker app/software and moving my spreadsheet ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">06</div>
+        <div class="identity">
+          <span class="eyebrow">Advisor-workflow builder</span>
+          <h3>Azure Portfolios / ohthatguy12 (public project)</h3>
+          <span class="stage warm">Trigger present</span>
+        </div>
+        <div class="score" style="--score:83" aria-label="Fit score 83 out of 100"><strong>83</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Built a tracker after watching a financial advisor manually update positions across brokers, copy-paste prices, and recalculate returns; the tool entered public beta after daily use by the advisor&#x27;s clients.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin&#x27;s Desk plan, portfolio aggregation, research, and shared-workspace positioning could support a design-partner or integration conversation.</p></div>
+        <div><span>Why now</span><p>Public beta opened June 22, 2026; very fresh timing.</p></div>
+        <div><span>Suggested channel</span><p>Public project site or Reddit thread</p></div>
+        <div><span>Caution</span><p>This is a likely competitor/design partner, not a straightforward buyer.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your beta story—manual broker exports, copied prices, and recalculated returns for an advisor&#x27;s clients—is a strong shared-workflow case. Would you be open to comparing Zenin Desk with Azure&#x27;s client workflow and identifying integration gaps?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Public launch and client-usage trigger with exact workflow pain.</p></div><div><span>Source</span><p>Public SideProject launch · June 22, 2026</p><a href="https://www.reddit.com/r/SideProject/comments/1ucp6sf/i_built_a_free_portfolio_tracker_after_watching/" target="_blank" rel="noreferrer">I built a free portfolio tracker after watching my dad manage his clients&#x27; investments across dozens of different spreadsheets ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">07</div>
+        <div class="identity">
+          <span class="eyebrow">Cross-asset investor</span>
+          <h3>jbizzle1104 (public Reddit handle)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:78" aria-label="Fit score 78 out of 100"><strong>78</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Tracks crypto, gold, ETFs, individual stocks, and bonds while quantities change through DCA, and says continuous tracking is difficult.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin&#x27;s unified portfolio and cross-market analytics are built for this fragmentation.</p></div>
+        <div><span>Why now</span><p>Approximately 2 months old; current pain but no explicit buying request.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public comment</p></div>
+        <div><span>Caution</span><p>Discovery-first; willingness to pay is not evidenced.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your note about crypto, gold, ETFs, stocks, and bonds changing through DCA captures the cross-asset problem Zenin is built around. Which view would help first: allocation, performance, or keeping the data current?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Direct cross-asset and changing-quantity pain statement.</p></div><div><span>Source</span><p>Public Reddit discussion · Approximately May 2026</p><a href="https://www.reddit.com/r/investing/comments/1tr2nb4/simple_and_smart_way_to_track_portfolio/" target="_blank" rel="noreferrer">Simple and smart way to track portfolio? ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">08</div>
+        <div class="identity">
+          <span class="eyebrow">Spreadsheet-heavy investor</span>
+          <h3>OrangeGhoul (public Reddit handle)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:72" aria-label="Fit score 72 out of 100"><strong>72</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Uses Excel plus a Google Sheet and macro to keep ticker prices current after Yahoo Finance support changed, while preferring a self-built solution.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin can be positioned around source-aware data, live/cached status, and reducing maintenance without forcing broker login.</p></div>
+        <div><span>Why now</span><p>Signal was about 10 days old.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public comment</p></div>
+        <div><span>Caution</span><p>Privacy and control are likely more important than feature breadth.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your Excel-plus-GoogleFinance workaround after Yahoo support changed is exactly the kind of maintenance Zenin tries to make visible and less fragile. Would a no-broker-login workflow be worth testing?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Concrete workaround and a stated preference for roll-your-own tracking.</p></div><div><span>Source</span><p>Public Reddit discussion · Approximately July 5, 2026</p><a href="https://www.reddit.com/r/investingforbeginners/comments/1tlbknh/what_financial_trackers_or_apps_do_people_use_to/" target="_blank" rel="noreferrer">What financial trackers or apps do people use to keep track of progress? ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:60%"></i></div><b>3/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">09</div>
+        <div class="identity">
+          <span class="eyebrow">Mobile-first investor</span>
+          <h3>West_West_313 (public Reddit handle)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:70" aria-label="Fit score 70 out of 100"><strong>70</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Uses bespoke Google Sheets because they have not found an app that does everything they want on iPhone, and publicly linked a brokerage/Roth tracker.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin&#x27;s portfolio, watchlist, and research modules can be tested against mobile-first account review needs.</p></div>
+        <div><span>Why now</span><p>Signal was about 10 days old.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public comment</p></div>
+        <div><span>Caution</span><p>Treat the linked sheet as voluntarily shared but do not inspect or copy private data.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>You said you still use a bespoke brokerage/Roth sheet because no iPhone app does what you need. Could you share the one or two spreadsheet views a mobile portfolio workspace would have to preserve?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Public self-built tracker and explicit app gap.</p></div><div><span>Source</span><p>Public Reddit discussion · Approximately July 5, 2026</p><a href="https://www.reddit.com/r/investingforbeginners/comments/1tlbknh/what-financial-trackers-or-apps-do-people-use-to/" target="_blank" rel="noreferrer">What financial trackers or apps do people use to keep track of progress? ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:60%"></i></div><b>3/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">10</div>
+        <div class="identity">
+          <span class="eyebrow">Open-source wealth-tool builder</span>
+          <h3>SinkPsychological676 / Rikdom (public handle and GitHub project)</h3>
+          <span class="stage warm">Trigger present</span>
+        </div>
+        <div class="score" style="--score:75" aria-label="Fit score 75 out of 100"><strong>75</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Published a local-first wealth portfolio schema and storage toolkit because users need durable data independent of broker apps or SaaS dashboards.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin could learn from or partner around exportability, source health, and privacy-conscious portfolio workflows.</p></div>
+        <div><span>Why now</span><p>Project was published about 2 months ago.</p></div>
+        <div><span>Suggested channel</span><p>GitHub project discussion or public Reddit thread</p></div>
+        <div><span>Caution</span><p>Likely open-source peer or competitor; do not pitch cloud lock-in.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>Your local-first JSON layer addresses the privacy and durability objection that portfolio SaaS often misses. Would you compare Zenin&#x27;s source-aware workspace with a portable-data approach and identify a safe integration boundary?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>Public open-source launch and explicit privacy/durability thesis.</p></div><div><span>Source</span><p>Public Reddit discussion with GitHub project · Approximately May 2026</p><a href="https://www.reddit.com/r/investingforbeginners/comments/1mk4i6q/need_better_way_to_track_investments_across/" target="_blank" rel="noreferrer">Need better way to track investments across multiple accounts (tired of spreadsheets) ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:60%"></i></div><b>3/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:100%"></i></div><b>5/5</b></div></div>
+      </details>
+    </article>
+    <article class="prospect reveal">
+      <header class="prospect-head">
+        <div class="rank">11</div>
+        <div class="identity">
+          <span class="eyebrow">Multi-account investor</span>
+          <h3>FIREambi-1678 (public Reddit handle)</h3>
+          <span class="stage warm">Problem aware</span>
+        </div>
+        <div class="score" style="--score:69" aria-label="Fit score 69 out of 100"><strong>69</strong><small>/100</small></div>
+      </header>
+      <div class="signal"><span>Public signal</span><p>Described similar multi-account spreadsheet pain and switched away from Excel after finding an aggregator, implying a validated but competitive workflow need.</p></div>
+      <div class="prospect-grid">
+        <div><span>Why it fits</span><p>Zenin can differentiate with deeper research, options, prediction-market, and journal context beyond aggregation.</p></div>
+        <div><span>Why now</span><p>Signal is about 1 year old; use for market-learning or reactivation only.</p></div>
+        <div><span>Suggested channel</span><p>Reply to the public thread if active</p></div>
+        <div><span>Caution</span><p>Low freshness and likely already solved; keep outside the first outreach wave.</p></div>
+      </div>
+      <blockquote><span>Suggested opener</span>You mentioned moving away from Excel for multi-account tracking. Zenin is testing whether deeper research and options context can sit on top of that basic aggregation—what did existing tools still fail to cover?</blockquote>
+      <details>
+        <summary>Evidence and score breakdown</summary>
+        <div class="evidence"><div><span>Evidence</span><p>First-person switching signal and stated former workaround.</p></div><div><span>Source</span><p>Public Reddit discussion · Approximately July 2025</p><a href="https://www.reddit.com/r/investingforbeginners/comments/1mk4i6q/need_better_way_to_track_investments_across/" target="_blank" rel="noreferrer">Need better way to track investments across multiple accounts (tired of spreadsheets) ↗</a></div></div>
+        <div class="metrics"><div class="metric"><span>Pain strength</span><div class="track"><i style="width:60%"></i></div><b>3/5</b></div><div class="metric"><span>Product fit</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Timing</span><div class="track"><i style="width:40%"></i></div><b>2/5</b></div><div class="metric"><span>Reachability</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div><div class="metric"><span>Evidence quality</span><div class="track"><i style="width:80%"></i></div><b>4/5</b></div></div>
+      </details>
+    </article></div></section>
+      <section><header class="section-head"><h2>Signals that repeat.</h2><p>Patterns across prospects reveal the strongest positioning, workflow, and outreach angles.</p></header><div class="patterns">
+    <article class="pattern reveal"><span class="pattern-num">01</span><div><h3>Spreadsheet escape is the dominant trigger</h3><p>Broken formulas, manual refreshes, monthly tabs, CSV imports, and bespoke Google Sheets repeatedly create the opening for a live workspace.</p></div><strong>8×</strong></article>
+    <article class="pattern reveal"><span class="pattern-num">02</span><div><h3>Context beats raw performance</h3><p>The most differentiated pain is preserving trade thesis, review history, exposure, and lessons—not merely showing balances.</p></div><strong>3×</strong></article>
+    <article class="pattern reveal"><span class="pattern-num">03</span><div><h3>Multi-account and cross-asset fragmentation</h3><p>Crypto, options, bonds, gold, retirement accounts, multiple brokers, and different currencies are routinely split across tools.</p></div><strong>7×</strong></article>
+    <article class="pattern reveal"><span class="pattern-num">04</span><div><h3>Privacy and portability are buying objections</h3><p>Some prospects prefer local files, manual imports, or no broker login; source-aware data and exportability should be prominent.</p></div><strong>4×</strong></article>
+    <article class="pattern reveal"><span class="pattern-num">05</span><div><h3>Builders are the fastest design-partner channel</h3><p>Public beta launches and open-source projects reveal both strong pain and competitor risk; approach with workflow comparison and feedback, not a hard sell.</p></div><strong>5×</strong></article></div></section>
+      <section class="plan"><div><span class="eyebrow" style="color:#111">Seven-day manual plan</span><h2>Offer a narrow options-and-multi-account workflow audit, with thesis review and portable data as differentiators.</h2></div><div class="plan-grid"><div><span>First step</span><p>Manually reply to the five freshest/highest-intent public threads: the February 2026 thesis-review request, Azure Portfolios, Adept-Turnover8433, OrangeGhoul, and the options-wheel tracker.</p></div><div><span>Follow-up</span><p>Ask for the shape of their current spreadsheet or CSV—not account credentials—then offer a 15-minute comparison using dummy or redacted data.</p></div><div><span>Success signal</span><p>Five source-based replies, three workflow conversations, one design-partner test, and one clear disqualifier/objection within seven days.</p></div><div><span>Research scope</span><p>Public English-language Reddit and public project discussions, primarily 2025-2026; 10 qualified prospects across explicit demand, workarounds, switching, and builder signals.</p></div></div></section>
+      <section class="limits"><h2>Use this shortlist responsibly</h2><ul><li>All records are potential customers or design partners inferred from public signals, not confirmed buyers.</li><li>Reddit handles are public pseudonyms; no private identity resolution or enrichment was attempted.</li><li>Builders and open-source authors may be competitors, so separate design-partner learning from buyer qualification.</li><li>Several sources are community discussions with limited identity and no verified company affiliation.</li><li>Do not inspect or copy any linked private spreadsheet data; ask for redacted schemas or dummy data only.</li><li>Public posts can be stale, edited, or automated; validate current relevance before outreach.</li><li>No messages, replies, forms, follows, or CRM records were created.</li></ul></section>
+    </main>
+    <footer><span>Generated by $first-customer-finder</span><span>Outreach is never sent automatically.</span></footer>
+  </div>
+</body>
+</html>

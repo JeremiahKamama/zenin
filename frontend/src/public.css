@@ -253,7 +253,7 @@ body.page-dark-theme #root {
   color: var(--text);
   cursor: pointer;
   z-index: 2100;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
 }
 
 .zc-home .menu-toggle:hover {
@@ -2789,7 +2789,7 @@ body.page-dark-theme #root {
   padding: 0 16px;
   color: var(--color-text-primary);
   font-size: 15px;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
   margin-bottom: 24px;
 }
 
@@ -2815,7 +2815,7 @@ body.page-dark-theme #root {
   justify-content: center;
   gap: 8px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
   border: 1px solid transparent;
 }
 
@@ -2843,6 +2843,46 @@ body.page-dark-theme #root {
 .auth-v2-btn-ghost:hover:not(:disabled) {
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
+}
+
+/* Live password requirements (signup). Accessible: icon + text, not color alone. */
+.auth-v2-password-reqs {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-panel);
+}
+.auth-v2-req-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.auth-v2-req {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+.auth-v2-req-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.auth-v2-req.met { color: var(--color-success); }
+.auth-v2-req.met .auth-v2-req-icon { color: var(--color-success); }
+.auth-v2-req.unmet { color: var(--color-text-muted); }
+.auth-v2-req-summary {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
 }
 
 .auth-v2-divider {
@@ -4130,7 +4170,7 @@ body.light-theme-active .auth-v2-rule-list li::before {
   border-radius: 50%;
   border: 1px solid var(--color-border-medium, #262626);
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0.7rem; transition: all 150ms ease;
+  font-size: 0.7rem; transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease, transform 150ms ease;
 }
 .ob-tl-item.is-done .ob-tl-dot { background: #fff; color: #0a0a0a; border-color: #fff; }
 .ob-tl-item.is-current .ob-tl-dot {
@@ -4180,7 +4220,7 @@ body.light-theme-active .auth-v2-rule-list li::before {
 .ob-opt-mark {
   flex: 0 0 18px; width: 18px; height: 18px; margin-top: 1px;
   border-radius: 50%; border: 1px solid var(--color-border-strong, #404040);
-  position: relative; transition: all 150ms ease;
+  position: relative; transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease, transform 150ms ease;
 }
 .ob-opt.is-selected .ob-opt-mark { border-color: #fff; background: #fff; }
 .ob-opt-body { display: flex; flex-direction: column; gap: 3px; }
@@ -4305,7 +4345,7 @@ select.ob-input { padding-right: 36px; appearance: none;
 .ob-btn {
   height: 44px; padding: 0 22px; border-radius: 10px;
   font-size: 0.875rem; font-weight: 600; cursor: pointer;
-  border: 1px solid transparent; transition: all 150ms ease;
+  border: 1px solid transparent; transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease, transform 150ms ease;
 }
 .ob-btn-primary { background: #fff; color: #0a0a0a; }
 .ob-btn-primary:hover { background: rgba(255,255,255,0.88); }
@@ -4456,7 +4496,7 @@ select.ob-input { padding-right: 36px; appearance: none;
   border: 1px solid var(--color-border-strong, #404040);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 0.72rem; color: transparent;
-  transition: all 250ms ease;
+  transition: color 250ms ease, background-color 250ms ease, border-color 250ms ease, opacity 250ms ease, transform 250ms ease;
 }
 .ob-personalize-row.is-on .ob-personalize-check { background: #fff; color: #0a0a0a; border-color: #fff; }
 .ob-personalize-reflect { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }

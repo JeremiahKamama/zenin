@@ -14,12 +14,18 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        default:
+          "bg-primary text-primary-foreground hover:bg-[var(--color-interactive-hover)]",
         // White fill on dark / near-black on light. The institutional default.
         primary:
           "bg-primary text-primary-foreground hover:bg-[var(--color-interactive-hover)]",
         // Elevated surface with primary text — recedes, still legible.
         secondary:
           "bg-secondary text-secondary-foreground border border-[var(--color-border-default)] hover:bg-[var(--color-surface-hover)]",
+        // Utility actions: refresh, export, save-view, filters, and other
+        // supporting workflow actions. Quiet by default; only surface-hover on hover.
+        tertiary:
+          "bg-transparent text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[color:var(--color-text-primary)]",
         // Transparent until hovered. Motion (opacity / surface) is the feedback.
         ghost:
           "bg-transparent text-[color:inherit] hover:bg-[var(--color-surface-hover)]",
@@ -39,7 +45,7 @@ const buttonVariants = cva(
         sm: "h-[var(--control-height-sm)] px-3 text-[var(--fs-body)]",
         md: "h-[var(--control-height-md)] px-4 text-[var(--fs-base)]",
         lg: "h-[var(--control-height-md)] px-6 text-[var(--fs-md)]",
-        icon: "h-[var(--control-height-sm)] w-[var(--control-height-sm)] p-0",
+        icon: "h-[var(--control-height-standard)] w-[var(--control-height-standard)] min-h-[var(--control-height-standard)] min-w-[var(--control-height-standard)] p-0",
       },
     },
     defaultVariants: { variant: "primary", size: "md" },

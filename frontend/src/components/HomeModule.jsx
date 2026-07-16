@@ -9,6 +9,14 @@ import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWor
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { zeninFetchJson } from "../utils/zeninFetch";
+import MarketSignals2 from "./market/MarketSignals2";
+import { useWorkspaceRouter } from "../utils/useWorkspaceRouter";
+import MacroContextEnhanced from "./market/MacroContextEnhanced";
+import PortfolioImpactEnhanced from "./market/PortfolioImpactEnhanced";
+import FeedHealth from "./market/FeedHealth";
+import StableSignalTables from "./market/StableSignalTables";
+import { StatusIndicator } from "./StatusIndicator.jsx";
+import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { DashboardLayout, DashboardHero, DashboardGrid } from "./layout/DashboardLayout";
 import {
   Select,
@@ -21,6 +29,7 @@ import {
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
+import { formatLastSync } from "../utils/brokerageStatus.js";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 
@@ -110,9 +119,12 @@ export function HomeModule({
   onViewFullMetrics,
   onOpenWatchlist,
   onOpenAnalytics,
+  onOpenIntelligence,
   onOpenResearch,
   openMarketContextOnMount = false,
-  onMarketContextOpened
+  onMarketContextOpened,
+  brokerageSummary = null,
+  onConnectBrokerage
 }) {
   const moversHorizons = getAppRuntimeConfig()?.ui?.moversHorizons || {
     daily: { label: "Daily", interval: "1D" },
@@ -147,6 +159,10 @@ export function HomeModule({
   const [flowActionLabel, setFlowActionLabel] = useState("");
   const [homeLastUpdatedAt, setHomeLastUpdatedAt] = useState(Date.now());
   const [homeToast, setHomeToast] = useState("");
+  const [refreshState, setRefreshState] = useState("idle"); // idle | refreshing | success | error
+  const [refreshError, setRefreshError] = useState("");
+  const [saveViewState, setSaveViewState] = useState("idle"); // idle | saving | success | error
+  const homeRefreshingRef = useRef(false);
   const [selectedHoldingDetail, setSelectedHoldingDetail] = useState(null);
   const [selectedActivityDetail, setSelectedActivityDetail] = useState(null);
   const [showAllActivity, setShowAllActivity] = useState(false);
@@ -263,11 +279,22 @@ export function HomeModule({
     const symbol = String(asset?.symbol || "").toUpperCase();
     
     if (type.includes("crypto") || type === "stablecoin" || type === "exchange token" || marketType === "spot") return "crypto";
-    if (type.includes("forex") || type.includes("fx") || symbol.includes("/") || asset?.pair) return "forex";
+    if (type === "etf" || type === "etfs" || marketType === "etf") return "etf";
+    if (type.includes("forex") || type.includes("fx") || symbol.includes("/") || asset?.pair || marketType === "forex") return "forex";
+    if (type === "currency" || marketType === "macro" || type.includes("currency")) return "currency";
     if (type.includes("commodity") || ["GLD", "GC", "CL", "NG"].includes(symbol)) return "commodity";
     if (type.includes("option")) return "option";
     
     return "equity";
+  };
+
+  // Map a mover class to the backend /interval-performance `type` param.
+  // ETFs/currency/FX route to the curated catalog endpoints; equity/commodity
+  // fall back to tradfi; crypto stays crypto.
+  const moverPerfType = (moverType) => {
+    if (moverType === "crypto") return "crypto";
+    if (moverType === "etf" || moverType === "forex" || moverType === "currency") return moverType;
+    return "tradfi";
   };
 
   const moversUniverse = useMemo(() => {
@@ -356,7 +383,7 @@ export function HomeModule({
         cursor += 1;
         const asset = moversUniverse[index];
         const symbol = asset.symbol;
-        const moverType = asset.__moverType === "crypto" ? "crypto" : "tradfi";
+        const moverType = moverPerfType(asset.__moverType);
         const key = `${symbol}:${moverType}`;
         if (moversPerfCacheRef.current.has(key)) {
           nextByKey[key] = moversPerfCacheRef.current.get(key);
@@ -386,7 +413,7 @@ export function HomeModule({
         if (signal.aborted) return;
         const hydrated = {};
         moversUniverse.forEach((asset) => {
-          const moverType = asset.__moverType === "crypto" ? "crypto" : "tradfi";
+          const moverType = moverPerfType(asset.__moverType);
           const key = `${asset.symbol}:${moverType}`;
           const perf = nextByKey[key] || moversPerfCacheRef.current.get(key);
           if (perf) hydrated[key] = perf;
@@ -404,7 +431,7 @@ export function HomeModule({
 
   const getMoverChange = (asset) => {
     const symbol = String(asset?.symbol || "").toUpperCase();
-    const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
+    const moverType = moverPerfType(asset?.__moverType);
     const key = `${symbol}:${moverType}`;
     const perf = moversPerformanceByKey[key];
     const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
@@ -420,7 +447,7 @@ export function HomeModule({
   const moversCoverage = useMemo(() => {
     const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
     return moversUniverse.reduce((summary, asset) => {
-      const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
+      const moverType = moverPerfType(asset?.__moverType);
       const key = `${String(asset?.symbol || "").toUpperCase()}:${moverType}`;
       const perf = moversPerformanceByKey[key];
       const exactValue = Number(perf?.[intervalCode]);
@@ -664,13 +691,41 @@ export function HomeModule({
     return nextTasks;
   };
 
-  const handleRefreshDashboard = (toastMessage = "Dashboard refreshed.") => {
-    setHomeLastUpdatedAt(Date.now());
+  // Truthful refresh (spec §2): never claims success before the refresh
+  // actually completes. We re-trigger the real data fetches (nonce bump) and
+  // confirm against a live provider endpoint; on failure we keep the previous
+  // confirmed timestamp and surface a recovery message.
+  const handleRefreshDashboard = async (toastMessage) => {
+    if (homeRefreshingRef.current) return; // disable duplicate clicks
+    homeRefreshingRef.current = true;
+    setRefreshState("refreshing");
+    setRefreshError("");
     setMarketRefreshNonce((prev) => prev + 1);
-    setHomeToast(toastMessage);
+
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    try {
+      // Real liveness probe — an actual provider call, not a local-state bump.
+      await zeninFetchJson("/macro-indicators?country=USA", { signal: controller?.signal });
+      // Only now is the refresh confirmed complete.
+      setHomeLastUpdatedAt(Date.now());
+      setRefreshState("success");
+      if (toastMessage) setHomeToast(toastMessage);
+    } catch (error) {
+      setRefreshState("error");
+      const prev = new Date(homeLastUpdatedAt);
+      const stamp = Number.isNaN(prev.getTime())
+        ? "last confirmed data"
+        : `last confirmed data from ${prev.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      const message = `Couldn’t refresh market data. Showing the ${stamp}.`;
+      setRefreshError(message);
+      setHomeToast(message);
+    } finally {
+      homeRefreshingRef.current = false;
+    }
   };
 
   const handleSaveHomeView = async () => {
+    setSaveViewState("saving");
     const nextViews = appendStoredRecord(HOME_SAVED_VIEWS_STORAGE_KEY, {
       id: `home-view-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -685,10 +740,12 @@ export function HomeModule({
     setSavedHomeViews(nextViews);
     try {
       await syncHomeCollection("home:saved_views", nextViews, 25);
+      setSaveViewState("success");
       setHomeToast(`View saved in ${getSaveTargetLabel()}. Open Saved Items to reapply it later.`);
     } catch (error) {
+      setSaveViewState("error");
       console.warn("Home view save failed.", error);
-      setHomeToast(`Could not sync the view: ${error?.message || "workspace save failed"}`);
+      setHomeToast(`Couldn't save view — retry. ${error?.message || "workspace save failed"}`);
     }
   };
 
@@ -1052,7 +1109,7 @@ export function HomeModule({
     const intervalCode = moversHorizons[moversHorizon]?.interval || "1D";
     const rows = (Array.isArray(moversUniverse) ? moversUniverse : []).reduce((acc, asset, idx) => {
       const symbol = String(asset?.symbol || "").toUpperCase();
-      const moverType = asset?.__moverType === "crypto" ? "crypto" : "tradfi";
+      const moverType = moverPerfType(asset?.__moverType);
       const key = `${symbol}:${moverType}`;
       const perf = moversPerformanceByKey[key];
       const exactValue = Number(perf?.[intervalCode]);
@@ -1518,6 +1575,9 @@ export function HomeModule({
     0
   );
 
+  // Metadata-driven workspace router for intelligence objects (spec §7–§8).
+  const openWorkspace = useWorkspaceRouter({ onOpenResearch, onOpenAnalytics, onSelectAsset });
+
   const marketSignals = useMemo(() => {
     const strongestGainer = marketDetailGainers[0] || gainers[0];
     const strongestLoser = marketDetailLosers[0] || losers[0];
@@ -1855,6 +1915,7 @@ export function HomeModule({
     losers.length ||
     todayView.headlines.length ||
     eventRows.length ||
+    upcomingEvents.length ||
     quickActions.length
   );
   const marketContextPreviewRows = useMemo(() => {
@@ -1869,6 +1930,21 @@ export function HomeModule({
     }).slice(0, 4);
   }, [marketDetailGainers, marketDetailLosers]);
   const nextMarketEvent = upcomingEvents[0] || null;
+  const marketCatalystPreview = upcomingEvents.slice(0, 3);
+  const marketEventSourceLabel = eventsData.length
+    ? "Economic calendar"
+    : eventRows.length
+      ? "Earnings calendar"
+      : "Event feed";
+  const openIntelligenceCalendar = () => {
+    if (typeof onOpenIntelligence === "function") {
+      onOpenIntelligence({ focus: "events" });
+      return;
+    }
+    if (typeof onOpenAnalytics === "function") {
+      onOpenAnalytics("calendar");
+    }
+  };
 
   const attentionCards = [
     ...(missingFlowRows.length ? [{
@@ -1925,7 +2001,8 @@ export function HomeModule({
     "research-trigger": ["Trigger", "Action", "Saving", "Complete"]
   };
 
-  const renderAttentionFlow = () => {
+  const AttentionFlowOverlay = () => {
+    const dialogRef = useFocusTrap({ open: !!activeAttentionFlow, onClose: closeAttentionFlow });
     if (!activeAttentionFlow) return null;
     const steps = attentionFlowSteps[activeAttentionFlow] || [];
 
@@ -2201,7 +2278,7 @@ export function HomeModule({
     }
 
     return (
-      <div className="home-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Action Center user flow">
+      <div ref={dialogRef} className="home-v2-flow-overlay" role="dialog" aria-modal="true" aria-label="Action Center user flow">
         <div className="home-v2-flow-shell">
           <div className="home-v2-flow-top">
             <h2>{activeAttentionFlow === "missing" ? "Missing Data Flow" : activeAttentionFlow === "rebalance" ? "Rebalancing Flow" : activeAttentionFlow === "research-trigger" ? "Research Trigger Flow" : "Volatility Alert Flow"}</h2>
@@ -2351,11 +2428,18 @@ export function HomeModule({
         openAttentionFlow("volatility", volatilityMatch, 2);
         return;
       }
-      const match = [portfolio, watchlistAssets, assets, moversUniverse]
+      const match = [moversUniverse, portfolio, watchlistAssets, assets]
         .flat()
         .find((entry) => String(entry?.symbol || "").trim().toUpperCase() === symbol);
       if (match) {
-        onSelectAsset?.(match);
+        // Carry the resolved mover class so the Asset Modal opens the correct
+        // surface (ETF / FX pair / currency-code) instead of defaulting to equity.
+        const enriched = {
+          ...match,
+          type: match.type || match.__moverType || "equity",
+          marketType: match.marketType || (match.__moverType === "forex" ? "forex" : undefined),
+        };
+        onSelectAsset?.(enriched);
       } else {
         setHomeToast(symbol ? `Saved alert for ${symbol} is ready for review.` : "Saved alert is ready for review.");
       }
@@ -2477,6 +2561,12 @@ export function HomeModule({
               </div>
               <button type="button" onClick={() => onViewAllPositions?.()}>View holdings</button>
             </div>
+            <PortfolioImpactEnhanced
+              rows={portfolioImpactRows}
+              totalImpact={totalPortfolioImpact}
+              regimeLabel={riskOn ? "Risk-On" : "Risk-Off"}
+              onOpenPortfolio={() => onViewAllPositions?.()}
+            />
             <div className="market-impact-table">
               <div className="market-impact-row market-impact-header">
                 <span>Asset</span>
@@ -2538,19 +2628,21 @@ export function HomeModule({
               <button type="button" onClick={() => onOpenAnalytics?.()}>Open analytics</button>
             </div>
             <div className="market-signal-list">
-              {marketSignals.length ? marketSignals.map((signal) => (
-                <div key={signal.title} className="market-signal-row">
-                  <MarketAssetLogo symbol={signal.title} type={signal.type} />
-                  <div><strong>{signal.title}</strong><span>{signal.text}</span></div>
-                  <MarketTypeBadge type={signal.type} />
-                  <span className={`market-signal-tone ${signal.tone}`}>{signal.tone}</span>
-                  <em>{signal.source}</em>
-                </div>
-              )) : (
-                <div className="market-empty-row">No live cross-market signals are available for this scope yet.</div>
-              )}
+              <MarketSignals2
+                gainers={marketDetailGainers}
+                losers={marketDetailLosers}
+                calendarEvents={upcomingEvents}
+                earningsEvents={eventRows}
+                optionsExposure={optionsTheta}
+                regimeLabel={riskOn ? "Risk-On" : "Risk-Off"}
+                onOpenWorkspace={openWorkspace}
+                onOpenResearch={onOpenResearch}
+                onOpenDesk={(desk) => onOpenAnalytics?.(desk)}
+                onSelectAsset={onSelectAsset}
+              />
             </div>
             <div className="market-powered-by">Signals update from the same feeds driving movers, macro context, and event coverage.</div>
+            <FeedHealth />
           </div>
 
           <div className="market-context-panel">
@@ -2558,6 +2650,7 @@ export function HomeModule({
               <div><h3>Macro Context</h3><p>Country-level macro indicators from the live backend feed.</p></div>
               <button type="button" onClick={() => onOpenAnalytics?.()}>Open analytics</button>
             </div>
+            <MacroContextEnhanced macroData={macroData} onOpenMacroDesk={() => onOpenAnalytics?.()} />
             <div className="market-macro-table">
               {macroContextRows.length ? macroContextRows.map((row) => (
                 <div key={row.indicator} className="market-macro-row">
@@ -2575,23 +2668,56 @@ export function HomeModule({
 
           <div className="market-context-panel">
             <div className="market-panel-head">
+              <div><h3>Signal Tables</h3><p>Stable intelligence schema across asset classes. Columns populate automatically as backend support expands.</p></div>
+            </div>
+            <StableSignalTables macroData={macroData} />
+          </div>
+
+          <div className="market-context-panel">
+            <div className="market-panel-head">
               <div>
-                <h3>Upcoming Events</h3>
-                <p>Economic calendar first, then earnings events when macro calendar rows are sparse.</p>
+                <h3>Next Catalyst</h3>
+                <p>Compact event readout for this market context. Full calendar lives in Intelligence.</p>
               </div>
-              <button type="button" onClick={() => onOpenAnalytics?.()}>Open calendar</button>
+              <button type="button" onClick={openIntelligenceCalendar}>View in Intelligence</button>
             </div>
-            <div className="market-event-list">
-              {upcomingEvents.length ? upcomingEvents.map((event) => (
-                <div key={`${event.date}-${event.title}`} className="market-event-row">
-                  <span className="market-event-date">{String(event.date).slice(0, 8)}</span>
-                  <div><strong>{event.title}</strong><span>{event.time}</span></div>
-                  <em className={`market-event-impact ${String(event.impact).toLowerCase().split(" ")[0]}`}>{event.impact}</em>
+            {nextMarketEvent ? (
+              <div className="market-catalyst-preview">
+                <div className="market-catalyst-hero">
+                  <div className="market-catalyst-date">
+                    <strong>{nextMarketEvent.date || "Soon"}</strong>
+                    <span>{nextMarketEvent.time || "Scheduled"}</span>
+                  </div>
+                  <div className="market-catalyst-copy">
+                    <span>{marketEventSourceLabel}</span>
+                    <strong>{nextMarketEvent.title}</strong>
+                    <p>{String(nextMarketEvent.impact || "Watch")} impact · {nextMarketEvent.country || "Global"} · {upcomingEvents.length} event{upcomingEvents.length === 1 ? "" : "s"} tracked</p>
+                  </div>
                 </div>
-              )) : (
-                <div className="market-empty-row">No upcoming live events were returned by the backend feed.</div>
-              )}
-            </div>
+                <div className="market-catalyst-next-list" aria-label="Upcoming catalyst preview">
+                  {marketCatalystPreview.map((event, index) => (
+                    <button
+                      type="button"
+                      key={`${event.title}-${event.date}-${index}`}
+                      className="market-catalyst-next-row"
+                      onClick={openIntelligenceCalendar}
+                    >
+                      <span>{event.date || "Upcoming"}</span>
+                      <strong>{event.title}</strong>
+                      <em>{event.impact || "Watch"}</em>
+                    </button>
+                  ))}
+                </div>
+                <div className="market-catalyst-footer">
+                  <span>Freshness: updated {new Date(homeLastUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  <button type="button" onClick={openIntelligenceCalendar}>Open full event calendar</button>
+                </div>
+              </div>
+            ) : (
+              <div className="market-empty-row">
+                No near-term catalyst is available in Market Context. Open Intelligence for the full calendar and saved research catalysts.
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -2599,7 +2725,7 @@ export function HomeModule({
   }
 
   return (
-    <div className="view-container home-dashboard home-exec">
+    <div className="view-container home-dashboard home-exec workspace-page">
       {homeToast ? <div className="home-v3-toast" role="status">{homeToast}</div> : null}
       <header className="home-exec-page-header">
         <div className="home-exec-heading">
@@ -2613,16 +2739,34 @@ export function HomeModule({
           </div>
         </div>
         <div className="home-exec-command-bar">
-          <div className="home-exec-sync-block home-exec-command-chip">
+          <div className="home-exec-sync-block home-exec-command-chip" aria-live="polite">
             <span>Sync State</span>
             <strong>{new Date(homeLastUpdatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</strong>
+            {refreshState === "refreshing" && <span className="home-refresh-state home-refresh-state--refreshing"><span className="home-refresh-state__spinner" aria-hidden="true" /><span>Refreshing market context…</span></span>}
+            {refreshState === "success" && <span className="home-refresh-state home-refresh-state--fresh"><span className="home-refresh-state__dot" aria-hidden="true" /><span>Updated just now</span></span>}
+            {refreshState === "error" && <span className="home-refresh-state home-refresh-state--error"><span className="home-refresh-state__dot" aria-hidden="true" /><span>{refreshError || "Refresh failed"}</span></span>}
+            {refreshState === "idle" && <span className="home-refresh-state home-refresh-state--stale"><span className="home-refresh-state__dot" aria-hidden="true" /><span>Showing last confirmed data</span></span>}
           </div>
           <div className="home-exec-header-actions">
             <button type="button" className="home-exec-btn secondary" onClick={() => setShowSavedItemsDrawer(true)}>
               Saved Items{savedItemsCount ? ` (${savedItemsCount})` : ""}
             </button>
-            <button type="button" className="home-exec-btn secondary" onClick={() => handleRefreshDashboard("Dashboard refreshed.")}>Refresh</button>
-            <button type="button" className="home-exec-btn primary" onClick={handleSaveHomeView}>Save View</button>
+            <button
+              type="button"
+              className="home-exec-btn secondary"
+              onClick={() => handleRefreshDashboard("Dashboard refreshed.")}
+              disabled={refreshState === "refreshing"}
+              aria-busy={refreshState === "refreshing"}
+              aria-label="Refresh market data"
+            >{refreshState === "refreshing" ? "Refreshing…" : "Refresh"}</button>
+            <button
+              type="button"
+              className="home-exec-btn primary"
+              onClick={handleSaveHomeView}
+              disabled={saveViewState === "saving"}
+              aria-busy={saveViewState === "saving"}
+              aria-label="Save current Home view"
+            >{saveViewState === "saving" ? "Saving…" : saveViewState === "success" ? "Saved" : saveViewState === "error" ? "Retry save" : "Save View"}</button>
           </div>
         </div>
       </header>
@@ -2644,6 +2788,25 @@ export function HomeModule({
                 <span>Total return {totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%</span>
                 <span>{positionsCount} positions in scope</span>
               </div>
+              {/* Connected brokerage (SnapTrade pilot): value + freshness, read-only,
+                  never merged into account equity. Links to Portfolio → Connected Accounts. */}
+              {Array.isArray(brokerageSummary?.holdings) && brokerageSummary.holdings.length > 0 ? (
+                <div className="home-exec-brokerage-tile">
+                  <span className="home-exec-brokerage-label">Connected brokerage · Read-only</span>
+                  <span className="home-exec-brokerage-value">{formatMoney(Number(brokerageSummary.brokerageValue) || 0)}</span>
+                  <span className="home-exec-brokerage-meta">
+                    {brokerageSummary.holdings.length} position{brokerageSummary.holdings.length === 1 ? "" : "s"} · {formatLastSync(brokerageSummary.lastSyncAt)}
+                    {brokerageSummary.requiresReconnect ? " · Needs reconnection" : ""}
+                    {brokerageSummary.syncFailed ? " · Sync failed" : ""}
+                  </span>
+                  <button type="button" className="home-exec-brokerage-link" onClick={() => onViewAllPositions?.()}>Manage in Portfolio</button>
+                </div>
+              ) : onConnectBrokerage ? (
+                <div className="home-exec-brokerage-tile home-exec-brokerage-tile--empty">
+                  <span className="home-exec-brokerage-label">Brokerage · Read-only</span>
+                  <button type="button" className="home-exec-brokerage-link" onClick={onConnectBrokerage}>Connect a brokerage</button>
+                </div>
+              ) : null}
             </div>
             <div className="home-exec-timeframe-strip home-exec-command-strip">
               <label className="home-exec-control-label" htmlFor="hero-interval">Timeframe</label>
@@ -2711,7 +2874,10 @@ export function HomeModule({
             <div className={`home-exec-health-card ${healthTone}`}>
               <div>
                 <span>Health</span>
-                <strong>{healthState}</strong>
+                <StatusIndicator
+                  tone={healthTone === "optimal" ? "healthy" : healthTone === "watch" ? "warning" : "risk"}
+                  label={healthState}
+                />
               </div>
               <em>{visibleAttentionCards.length ? `${visibleAttentionCards.length} active signals` : "No urgent issues"}</em>
             </div>
@@ -2732,7 +2898,10 @@ export function HomeModule({
             <article key={card.id} className={`home-exec-signal-row ${card.variant}`}>
               <div className="home-exec-signal-main">
                 <div className="home-exec-signal-head">
-                  <span className={`home-exec-severity ${card.variant}`}>{card.severity}</span>
+                  <StatusIndicator
+                    tone={card.variant === "critical" ? "risk" : card.variant === "warning" ? "warning" : "info"}
+                    label={card.severity}
+                  />
                   <h3>{card.title}</h3>
                 </div>
                 <p>{card.text}</p>
@@ -3008,63 +3177,10 @@ export function HomeModule({
             </div>
           </section>
 
-          <section className="home-exec-panel home-exec-allocation-panel">
-            <div className="home-exec-section-head">
-              <div className="home-exec-section-title-row">
-                <h2>Capital Mix</h2>
-                <p>Portfolio composition between deployed crypto exposure and liquid reserve.</p>
-              </div>
-              <button type="button" className="home-exec-link" onClick={() => onViewAllPositions?.()}>View Breakdown</button>
-            </div>
-            {allocationBreakdown.total > 0 ? (
-              <>
-                <div className="home-exec-allocation-chart">
-                  <ReactApexChart
-                    options={{
-                      chart: { type: "donut", background: "transparent" },
-                      labels: ["Crypto", "Cash"],
-                      legend: { show: false },
-                      stroke: { width: 2, colors: [chartColors.surface()] },
-                      colors: [chartColors.info(), chartColors.success()],
-                      dataLabels: { enabled: false },
-                      tooltip: { y: { formatter: (val) => `${Number(val).toFixed(1)}%` } },
-                      plotOptions: { pie: { donut: { size: "70%" } } }
-                    }}
-                    series={[
-                      Number(allocationBreakdown.cryptoPercent.toFixed(2)),
-                      Number(allocationBreakdown.cashPercent.toFixed(2))
-                    ]}
-                    type="donut"
-                    height={184}
-                  />
-                  <div className="home-exec-donut-center"><span>Total</span><strong>{formatCompactMoney(allocationBreakdown.total)}</strong></div>
-                </div>
-                <div className="home-exec-allocation-legend">
-                  <div className="home-exec-legend-row">
-                    <div className="home-exec-legend-left">
-                      <span className="dot crypto" />
-                      <span>Crypto</span>
-                    </div>
-                    <strong>{allocationBreakdown.cryptoPercent.toFixed(0)}% / {formatMoney(allocationBreakdown.cryptoValue)}</strong>
-                  </div>
-                  <div className="home-exec-legend-row">
-                    <div className="home-exec-legend-left">
-                      <span className="dot cash" />
-                      <span>Cash</span>
-                    </div>
-                    <strong>{allocationBreakdown.cashPercent.toFixed(0)}% / {formatMoney(allocationBreakdown.cashValue)}</strong>
-                  </div>
-                </div>
-                {allocationBreakdown.cashPercent >= 80 ? <div className="home-exec-warning">Cash concentration is high.</div> : null}
-              </>
-            ) : (
-              <HomeEmptyState title="No allocation data" description="Add holdings to see portfolio allocation." cta="Add Position" onAction={() => onViewAllPositions?.()} />
-            )}
-          </section>
         </aside>
         </section>
       </div>
-      {renderAttentionFlow()}
+      <AttentionFlowOverlay />
       <HomeDetailDrawer
         title={selectedHoldingDetail ? String(selectedHoldingDetail.symbol || "Holding").toUpperCase() : ""}
         open={!!selectedHoldingDetail}
@@ -3147,10 +3263,11 @@ function HomeEmptyState({ title, description, cta, onAction }) {
 }
 
 function HomeDetailDrawer({ open, title, rows, onClose }) {
+  const dialogRef = useFocusTrap({ open, onClose });
   if (!open) return null;
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
-      <aside className="home-v3-detail-drawer" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
+      <aside ref={dialogRef} className="home-v3-detail-drawer" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
         <div className="home-v3-drawer-head">
           <h2>{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
@@ -3176,6 +3293,8 @@ function HomeSavedItemsDrawer({
   onReviewItem
 }) {
   if (!open) return null;
+
+  const dialogRef = useFocusTrap({ open, onClose });
 
   const sections = [
     {
@@ -3239,6 +3358,7 @@ function HomeSavedItemsDrawer({
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
+        ref={dialogRef}
         className="home-v3-detail-drawer saved-items-drawer"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
@@ -3277,6 +3397,8 @@ function HomeSignalArchiveDrawer({
   onClear
 }) {
   if (!open) return null;
+
+  const dialogRef = useFocusTrap({ open, onClose });
 
   const activeSnoozedItems = (Array.isArray(snoozedItems) ? snoozedItems : []).filter(
     (item) => new Date(item?.snoozeUntil || 0).getTime() > Date.now()
@@ -3318,6 +3440,7 @@ function HomeSignalArchiveDrawer({
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
       <aside
+        ref={dialogRef}
         className="home-v3-detail-drawer"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
@@ -3348,10 +3471,14 @@ function HomeSignalArchiveDrawer({
 }
 
 function HomeSignalDismissModal({ card, onClose, onConfirm }) {
+  // Destructive confirmation: click-outside must NOT dismiss it (spec §5).
+  // Escape is allowed (equivalent to Cancel) so keyboard users aren't trapped.
+  const dialogRef = useFocusTrap({ open: !!card, onClose, dismissable: false, dismissOnEscape: true });
   if (!card) return null;
   return (
-    <div className="home-v3-drawer-overlay home-signal-modal-overlay" onMouseDown={onClose}>
+    <div className="home-v3-drawer-overlay home-signal-modal-overlay" onMouseDown={(event) => event.stopPropagation()}>
       <div
+        ref={dialogRef}
         className="home-signal-modal"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"

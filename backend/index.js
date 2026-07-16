@@ -129,6 +129,13 @@ const {
   decisionThreadReviewSchema,
   decisionThreadLinkResearchSchema,
   decisionThreadJournalSchema,
+  journalEventListSchema,
+  journalEventClassifySchema,
+  journalEventSnoozeSchema,
+  journalEventLinkSchema,
+  journalReportListSchema,
+  journalReportGenerateSchema,
+  journalPrefsSchema,
   dailyBriefingGenerateSchema,
 } = require("./validation");
 
@@ -190,6 +197,41 @@ const {
 } = require("./brokerage/infrastructure/bootstrap");
 const { createSyncEngine, startBackgroundSync, stopBackgroundSync } = require("./brokerage/application/SyncEngine");
 const { startJournalReminderScheduler, stopJournalReminderScheduler } = require("./journalReminderWorker");
+const { generateAllDueReports } = require("./database");
+
+// ── Trade-journaling periodic report scheduler (Phase 4) ───────────────────
+// Idempotent sweep: regenerates the current period for all 5 cadences across
+// every workspace with journal events. Runs on a long interval; the generate
+// path is an upsert so re-runs never duplicate rows.
+let journalReportTimer = null;
+const JOURNAL_REPORT_INTERVAL_MS = 60 * 60 * 1000; // hourly
+
+async function runJournalReportSweep() {
+  try {
+    const { generated } = await generateAllDueReports({ timeZone: process.env.TZ || "UTC" });
+    if (generated) console.log(`[JournalReports] sweep generated ${generated} report(s).`);
+  } catch (err) {
+    console.error("[JournalReports] sweep error:", err && err.message);
+  }
+}
+
+function startJournalReportScheduler({ intervalMs = JOURNAL_REPORT_INTERVAL_MS } = {}) {
+  if (journalReportTimer) return;
+  // Generate once shortly after boot so reports exist without waiting an hour.
+  const kickoff = setTimeout(runJournalReportSweep, 30 * 1000);
+  if (kickoff.unref) kickoff.unref();
+  journalReportTimer = setInterval(runJournalReportSweep, intervalMs);
+  if (journalReportTimer.unref) journalReportTimer.unref();
+  console.log("[JournalReports] scheduler started.");
+}
+
+function stopJournalReportScheduler() {
+  if (journalReportTimer) {
+    clearInterval(journalReportTimer);
+    journalReportTimer = null;
+  }
+}
+
 const { createBrokerageService } = require("./brokerage/application/BrokerageService");
 const { featureFlags } = require("./brokerage/application/featureFlags");
 const { registerBrokerageRoutes } = require("./brokerage/http/routes");
@@ -4868,6 +4910,156 @@ app.get("/api/decision-threads/outcomes", requireSignedIn, attachActiveWorkspace
     res.json({ items, aggregated });
   } catch (err) {
     handleServerError(res, "Failed to load decision outcomes", err);
+  }
+});
+
+// ── Trade journaling: journal events (Phase 3) ────────────────────────────
+app.get("/api/journal-events", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, validate(journalEventListSchema, "query"), async (req, res) => {
+  try {
+    const items = await userWorkspace.journalEvents.list(req.auth.userId, req.query, req.workspace.workspace.id);
+    res.json({ items });
+  } catch (err) {
+    handleServerError(res, "Failed to load journal events", err);
+  }
+});
+
+// The "Needs journaling" queue: open + decision_relevant events.
+app.get("/api/journal-events/needs-journaling", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const items = await userWorkspace.journalEvents.list(
+      req.auth.userId,
+      { status: "open", classification: "decision_relevant", pageSize: 200 },
+      req.workspace.workspace.id
+    );
+    res.json({ items });
+  } catch (err) {
+    handleServerError(res, "Failed to load journaling queue", err);
+  }
+});
+
+app.get("/api/journal-events/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const event = await userWorkspace.journalEvents.getById(req.auth.userId, req.params.id, req.workspace.workspace.id);
+    if (!event) return res.status(404).json({ error: "Journal event not found" });
+    res.json({ event });
+  } catch (err) {
+    handleServerError(res, "Failed to load journal event", err);
+  }
+});
+
+app.post("/api/journal-events/:id/classify", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalEventClassifySchema), async (req, res) => {
+  try {
+    const event = await userWorkspace.journalEvents.classifyEvent(req.auth.userId, req.params.id, req.body.classification, req.body.reason, req.workspace.workspace.id);
+    if (!event) return res.status(404).json({ error: "Journal event not found" });
+    res.json({ event });
+  } catch (err) {
+    handleServerError(res, "Failed to classify journal event", err);
+  }
+});
+
+app.post("/api/journal-events/:id/dismiss", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const event = await userWorkspace.journalEvents.dismiss(req.auth.userId, req.params.id, req.workspace.workspace.id);
+    if (!event) return res.status(404).json({ error: "Journal event not found" });
+    res.json({ event });
+  } catch (err) {
+    handleServerError(res, "Failed to dismiss journal event", err);
+  }
+});
+
+app.post("/api/journal-events/:id/snooze", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalEventSnoozeSchema), async (req, res) => {
+  try {
+    const event = await userWorkspace.journalEvents.snooze(req.auth.userId, req.params.id, req.body.until, req.workspace.workspace.id);
+    if (!event) return res.status(404).json({ error: "Journal event not found" });
+    res.json({ event });
+  } catch (err) {
+    handleServerError(res, "Failed to snooze journal event", err);
+  }
+});
+
+app.post("/api/journal-events/:id/link", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalEventLinkSchema), async (req, res) => {
+  try {
+    const event = await userWorkspace.journalEvents.link(req.auth.userId, req.params.id, req.body, req.workspace.workspace.id);
+    if (!event) return res.status(404).json({ error: "Journal event not found" });
+    res.json({ event });
+  } catch (err) {
+    handleServerError(res, "Failed to link journal event", err);
+  }
+});
+
+// Reminder tasks for the workspace (initial + follow_up pairs).
+app.get("/api/journal-reminders", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const items = await userWorkspace.journalReminders.list(req.auth.userId, req.workspace.workspace.id);
+    res.json({ items });
+  } catch (err) {
+    handleServerError(res, "Failed to load journal reminders", err);
+  }
+});
+
+// ── Trade journaling: periodic reports (Phase 4) ──────────────────────────
+app.get("/api/journal-reports", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, validate(journalReportListSchema, "query"), async (req, res) => {
+  try {
+    const items = await userWorkspace.journalReports.list(req.auth.userId, req.query, req.workspace.workspace.id);
+    res.json({ items });
+  } catch (err) {
+    handleServerError(res, "Failed to load journal reports", err);
+  }
+});
+
+app.get("/api/journal-reports/:cadence", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const report = await userWorkspace.journalReports.getLatest(req.auth.userId, req.params.cadence, req.workspace.workspace.id);
+    if (!report) return res.status(404).json({ error: "No report for this cadence yet" });
+    res.json({ report });
+  } catch (err) {
+    handleServerError(res, "Failed to load journal report", err);
+  }
+});
+
+app.post("/api/journal-reports/generate", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalReportGenerateSchema), async (req, res) => {
+  try {
+    const report = await userWorkspace.journalReports.generate(req.auth.userId, req.body, req.workspace.workspace.id);
+    // Optional on-demand email digest (Phase 5). Only when the caller asks AND
+    // email delivery is production-ready AND the workspace opts in.
+    let emailed = false;
+    if (req.body.email) {
+      const prefs = await userWorkspace.journalReminders.getPrefs(req.auth.userId, req.workspace.workspace.id);
+      if (prefs.email && isEmailDeliveryProductionReady()) {
+        const email = await userWorkspace.journalReminders.getUserEmail(req.auth.userId);
+        if (email) {
+          await sendJournalReportEmail(email, {
+            cadence: report.cadence,
+            periodKey: report.periodKey,
+            report,
+            workspaceName: req.workspace?.workspace?.name || "Zenin workspace",
+          });
+          emailed = true;
+        }
+      }
+    }
+    res.json({ report, emailed });
+  } catch (err) {
+    handleServerError(res, "Failed to generate journal report", err);
+  }
+});
+
+// ── Trade journaling preferences (Phase 6) ────────────────────────────────
+app.get("/api/journal-prefs", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const prefs = await userWorkspace.journalReminders.getPrefs(req.auth.userId, req.workspace.workspace.id);
+    res.json({ prefs });
+  } catch (err) {
+    handleServerError(res, "Failed to load journal preferences", err);
+  }
+});
+
+app.put("/api/journal-prefs", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalPrefsSchema), async (req, res) => {
+  try {
+    const prefs = await userWorkspace.journalReminders.setPrefs(req.auth.userId, req.body, req.workspace.workspace.id);
+    res.json({ prefs });
+  } catch (err) {
+    handleServerError(res, "Failed to save journal preferences", err);
   }
 });
 
@@ -16222,6 +16414,10 @@ async function startServer() {
       if (process.env.JOURNAL_REMINDER_SCHEDULER !== "false") {
         startJournalReminderScheduler();
       }
+      // Trade-journaling periodic report scheduler (Phase 4)
+      if (process.env.JOURNAL_REPORT_SCHEDULER !== "false") {
+        startJournalReportScheduler();
+      }
 
       resolve();
     });
@@ -16277,6 +16473,7 @@ async function stopServer() {
   stopBackgroundSync();
   stopMarketIntelBackgroundJobs();
   stopJournalReminderScheduler();
+  stopJournalReportScheduler();
   try {
     if (massiveStocksSocket) {
       try { massiveStocksSocket.close(); } catch {}

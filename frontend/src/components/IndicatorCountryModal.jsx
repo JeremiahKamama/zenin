@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DataHealthBadge } from "@/components/ui/async-state";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { zeninFetch } from "../utils/zeninFetch";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
@@ -27,6 +28,24 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
   const [stale, setStale] = useState(false);
   const [notice, setNotice] = useState("");
   const [selectedMetric, setSelectedMetric] = useState(null);
+
+  // Related-indicator drill-down: the V2 modal emits this event (no close) so
+  // we swap the open metric in place, reusing the same modal instance.
+  useEffect(() => {
+    const onSelect = (e) => {
+      const code = String(e?.detail?.code || "").toUpperCase();
+      if (!code) return;
+      setSelectedMetric((current) => {
+        if (current && String(current.code || "").toUpperCase() === code) return current;
+        const next = Array.isArray(snapshot?.metrics)
+          ? snapshot.metrics.find((m) => String(m.code || "").toUpperCase() === code)
+          : null;
+        return next || current;
+      });
+    };
+    window.addEventListener("zenin:selectIndicator", onSelect);
+    return () => window.removeEventListener("zenin:selectIndicator", onSelect);
+  }, [snapshot]);
 
   useEffect(() => {
     if (!countryCode) return undefined;
@@ -125,7 +144,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
           <div className="chart-section indicator-country-content">
             <div className="indicator-country-meta">
               <span className={`data-health-badge ${loading ? "loading" : stale ? "hazard" : "ok"}`}>
-                <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : stale ? "⚠" : "✓"}</span>
+                <DataHealthBadge status={loading ? "loading" : stale ? "stale" : "ok"} />
                 Indicators
               </span>
             </div>

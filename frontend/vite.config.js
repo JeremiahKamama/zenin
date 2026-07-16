@@ -38,7 +38,12 @@ export default defineConfig(({ mode }) => {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
       },
     },
-    server: { port: 5173 },
+    server: {
+      port: 5173,
+      // Dev-only: disable HTTP caching so live verification always fetches the
+      // freshest modules (prevents stale ESM module-graph when iterating).
+      headers: { "Cache-Control": "no-store" },
+    },
     build: {
       // 'hidden' generates sourcemaps for Sentry upload but omits the
       // sourceMappingURL comment from the deployed JS, so maps are never

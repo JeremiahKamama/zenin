@@ -26,7 +26,8 @@ import {
   Star,
   TrendingUp,
   BookOpen,
-  FileText
+  FileText,
+  Radar
 } from "lucide-react";
 
 // Common props for all icons to maintain consistency
@@ -78,6 +79,10 @@ export function BriefingIcon() {
 
 export function DecisionsIcon() {
   return <GitCommitHorizontal {...iconProps} />;
+}
+
+export function IntelligenceIcon() {
+  return <Radar {...iconProps} />;
 }
 
 export function TaxIcon() {
@@ -137,5 +142,6 @@ export default {
   LogoutIcon,
   StarIcon,
   TrendingUpIcon,
-  FileTextIcon
+  FileTextIcon,
+  IntelligenceIcon
 };

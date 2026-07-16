@@ -501,10 +501,67 @@ async function sendAlertEmail(email, alert = {}) {
   }
 }
 
+/**
+ * Journaling reminder email (immediate prompt or 24h follow-up).
+ * Reuses the generic alert pipeline; only fires when email delivery is
+ * production-ready and the user has opted in (checked by the caller).
+ * @returns {Promise<{sent: boolean, error?: object}>}
+ */
+async function sendJournalReminderEmail(email, payload = {}) {
+  const reminderType = String(payload.reminderType || "initial").toLowerCase();
+  const symbol = String(payload.symbol || "").trim().toUpperCase();
+  const side = String(payload.side || "").trim().toUpperCase();
+  const isFollowUp = reminderType === "follow_up";
+  const title = isFollowUp ? "Journaling follow-up" : "New trade to journal";
+  const body = isFollowUp
+    ? `Reminder: you haven't journaled ${symbol || "your recent trade"} yet. Capture the thesis and outcome while it's fresh.`
+    : `${side ? side + " " : ""}${symbol || "A recent trade"} was detected. Journal the decision and thesis now.`;
+  return sendAlertEmail(email, {
+    type: "journal_reminder",
+    title,
+    body,
+    symbol,
+    severity: "info",
+    workspaceName: payload.workspaceName || "Zenin workspace",
+    actionUrl: payload.actionUrl || process.env.FRONTEND_URL || "https://www.zenin.capital",
+  });
+}
+
+// Periodic trade-journaling digest (Phase 5). `report` is the structured summary
+// produced by the journalReports engine. Sent only when email delivery is
+// production-ready and the workspace opts in (prefs.email).
+async function sendJournalReportEmail(email, payload = {}) {
+  const { cadence = "daily", periodKey = "", report = {} } = payload;
+  const summary = report.summary || {};
+  const cadenceLabel = String(cadence || "daily").replace("_", "-").toUpperCase();
+  const total = summary.total || 0;
+  const decisions = (summary.byClassification && summary.byClassification.decision_relevant) || 0;
+  const needs = summary.needsJournaling || 0;
+  const top = Array.isArray(summary.topSymbols) ? summary.topSymbols.slice(0, 5) : [];
+  const topLine = top.length
+    ? `\n\nTop symbols:\n${top.map((t) => `• ${t.symbol} (${t.count})`).join("\n")}`
+    : "";
+  const body =
+    `Your ${cadenceLabel} trading-journal digest for ${periodKey || "this period"}:\n` +
+    `• ${total} event(s) tracked\n` +
+    `• ${decisions} decision-relevant\n` +
+    `• ${needs} still need journaling${topLine}`;
+  return sendAlertEmail(email, {
+    type: "journal_report",
+    title: `${cadenceLabel} journal digest — ${periodKey || "Zenin"}`,
+    body,
+    severity: "info",
+    workspaceName: payload.workspaceName || "Zenin workspace",
+    actionUrl: payload.actionUrl || process.env.FRONTEND_URL || "https://www.zenin.capital",
+  });
+}
+
 module.exports = {
   getEmailDeliveryConfig,
   isEmailDeliveryProductionReady,
   sendAlertEmail,
+  sendJournalReminderEmail,
+  sendJournalReportEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
 };

@@ -992,13 +992,13 @@ const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict,
     : "var(--color-text-primary)";
   const drivers = kind === "macro" ? (exec.drivers || []) : [];
   return (
-    <div className="analytics-card" style={{ display: "grid", gap: 16, borderLeft: `3px solid ${toneColor}` }}>
+    <div className="analytics-card" style={{ display: "grid", gap: 16, borderColor: toneColor }}>
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
         <div style={{ display: "grid", gap: 4 }}>
-          <div className="analytics-card-label" style={{ letterSpacing: "0.08em" }}>
-            {kind === "macro" ? "MACRO REGIME" : "COMMODITY MARKET STATE"}
+          <div className="analytics-card-label" style={{ letterSpacing: 0, textTransform: "none" }}>
+            {kind === "macro" ? "Macro regime" : "Commodity market state"}
           </div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: toneColor, lineHeight: 1.1 }}>{verdict}</div>
+          <div style={{ fontSize: "var(--fs-2xl)", fontWeight: 600, color: toneColor, lineHeight: 1.15 }}>{verdict}</div>
           {exec.explain ? <div className="analytics-card-subtitle" style={{ maxWidth: 520 }}>{exec.explain}</div> : null}
         </div>
         <div style={{ display: "grid", gap: 6, minWidth: 150 }}>
@@ -2744,6 +2744,7 @@ export function AnalyticsModule({
         timeRange={timeRange}
         selectedGeoCode={selectedGeoCode}
         setSelectedGeoCode={setSelectedGeoCode}
+        macroData={macroData}
         macroExecutive={macroExecutive}
         commoditiesExecutive={commoditiesExecutive}
         selectedCommodityGroup={selectedCommodityGroup}
@@ -2782,6 +2783,8 @@ export function AnalyticsModule({
       ? selectedCommoditySymbol || "WTI"
       : activeTab === "options"
       ? (optionsData.greeks || optionsData.optionsVolumeByAsset || [])[0]?.asset || "Vol surface"
+      : activeTab === "africa"
+      ? "MyStocks Africa"
       : selectedPerpExchange || "Perp flow";
   const activeDeskTimeframe =
     activeTab === "commodities"
@@ -3421,10 +3424,10 @@ export function AnalyticsModule({
                             return (
                               <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 80 }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                  <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: "bold", color: barColor }}>{num.toFixed(3)}</span>
+                                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--fs-xs)", fontWeight: 600, color: barColor }}>{num.toFixed(3)}</span>
                                 </div>
                                 <div style={{ position: "relative", height: 6, background: "var(--color-surface-hover)", borderRadius: 99, overflow: "hidden", border: "1px solid rgba(160, 160, 160, 0.08)" }}>
-                                  <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: barGrad, borderRadius: 99, transition: "width 0.3s ease" }} />
+                                  <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: barGrad, borderRadius: 99 }} />
                                 </div>
                               </div>
                             );
@@ -6486,7 +6489,7 @@ function MacroCountryBridge({ onCountryChange }) {
   return null;
 }
 
-function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null, selectedGeoCode = "USA", setSelectedGeoCode = () => {}, backendUrl = "", selectedCommodityGroup = "all", onSelectCommodityGroup = () => {}, selectedCommodityGroups = null, onToggleCommodityGroup = () => {}, onOpenResearch = null }) {
+function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroData = EMPTY_MACRO, macroExecutive = null, commoditiesExecutive = null, selectedGeoCode = "USA", setSelectedGeoCode = () => {}, backendUrl = "", selectedCommodityGroup = "all", onSelectCommodityGroup = () => {}, selectedCommodityGroups = null, onToggleCommodityGroup = () => {}, onOpenResearch = null }) {
   if (!config) return null;
   const rows = Array.isArray(config.rows) ? config.rows : [];
   const metrics = Array.isArray(config.metrics) ? config.metrics : [];
@@ -6504,6 +6507,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
         equitiesDeskSnapshot={equitiesDeskSnapshot}
         timeRange={timeRange}
         onCommoditySelect={onCommoditySelect}
+        macroData={macroData}
         macroExecutive={macroExecutive}
         commoditiesExecutive={commoditiesExecutive}
         selectedGeoCode={selectedGeoCode}
@@ -6627,7 +6631,7 @@ function AnalyticsResearchBoard({ config, activeTab, updatedAt, insight, equitie
   );
 }
 
-const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroExecutive = null, commoditiesExecutive = null, selectedGeoCode = "USA", setSelectedGeoCode = () => {}, backendUrl = "", selectedCommodityGroup = "all", onSelectCommodityGroup = () => {}, selectedCommodityGroups = null, onToggleCommodityGroup = () => {}, onOpenResearch = null }) {
+const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ config, activeTab, updatedAt, insight, rows, metrics, rail, equitiesDeskSnapshot = null, timeRange = "1D", onCommoditySelect = null, macroData = EMPTY_MACRO, macroExecutive = null, commoditiesExecutive = null, selectedGeoCode = "USA", setSelectedGeoCode = () => {}, backendUrl = "", selectedCommodityGroup = "all", onSelectCommodityGroup = () => {}, selectedCommodityGroups = null, onToggleCommodityGroup = () => {}, onOpenResearch = null }) {
   const isEquities = activeTab === "equities";
   const isOptions = activeTab === "options";
   const isMacro = activeTab === "macro";

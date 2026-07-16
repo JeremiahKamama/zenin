@@ -52,7 +52,7 @@ export function deriveLaunchSummary(answers = {}, plan) {
   let portfolio = "Not imported";
   if (portfolioMethod === "sample") portfolio = "Sample portfolio";
   else if (portfolioMethod === "manual") portfolio = "Manual entry";
-  else if (portfolioMethod === "broker") portfolio = "Brokerage (coming soon)";
+  else if (portfolioMethod === "broker") portfolio = "Brokerage (read-only SnapTrade link)";
 
   const watchlistCount = Array.isArray(answers.watchlists) ? answers.watchlists.length : 0;
 

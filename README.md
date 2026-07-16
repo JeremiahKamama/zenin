@@ -1,504 +1,190 @@
-Hello World examples
-====================
-
-Files added:
-
-- `hello.py` - Minimal Python Hello World.
-- `stream_hello_baseten.py` - Streaming example using Baseten/OpenAI client. Set `BASETEN_API_KEY` before running.
-
-Run:
-
-```bash
-python3 hello.py
-export BASETEN_API_KEY="your_key_here"
-python3 stream_hello_baseten.py
-```
 # Zenin
 
-Zenin is a multi-asset trading dashboard that combines portfolio management, options analytics, prediction-market tracking, and journal/reporting workflows with a PostgreSQL-backed backend.
+Zenin is a multi-asset investment intelligence workspace for individual investors. It brings portfolio context, market data, research, macro events, and decision workflows into one place so users can understand what may affect their investments—not simply track prices.
 
-This README reflects the current implementation in this repository.
+> Zenin provides research and decision-support tools only. It is not investment, tax, legal, or financial advice.
 
-## Runtime auth (backend-managed)
+## What Zenin can do
 
-VITE_API_URL=https://api.your-domain.example
-to backend auth endpoints (`/api/auth/*`) rather than a hosted Supabase Auth instance.
+- **Home:** Review portfolio snapshot, performance, positions, movers, market context, saved views, alerts, and next-step handoffs.
+- **Watchlist:** Search, add, import, organise, and monitor multi-asset watchlists; inspect earnings and macro context; save shared desk views where the workspace plan allows it.
+- **Research:** Open contextual asset research from a Watchlist, Portfolio, Home, or Intelligence surface, with portfolio-aware actions and related-market handoffs.
+- **Portfolio:** Track holdings, valuation, performance, exposure, rebalance planning, trade records, exports, alerts, and persisted workspace views.
+- **Intelligence and Analytics:** Review market signals, event calendars, macro regime context, research queues, cross-market analytics desks, and provider health.
+- **Options and predictions:** Explore options chains, strategy/calculator workflows, whale activity, and prediction-market snapshots.
+- **Journal and tax:** Capture trade decisions and reviews, inspect outcomes, and estimate tax scenarios from recorded activity.
 
-Frontend build env in `frontend/.env`:
+## Supported assets and research behavior
 
-```bash
-VITE_API_URL=https://api.your-domain.example
-```
+| Asset class | Examples | Primary Zenin surface | Data behavior |
+| --- | --- | --- | --- |
+| Stocks | `AAPL`, `NVDA` | Asset / company research | Price-bearing when provider coverage is available; company and earnings research is provider-dependent. |
+| Crypto | `BTC`, `ETH` | Asset research and crypto analytics | Price-bearing when supported by the configured market-data provider. |
+| Commodities | Gold, oil, copper | Commodity research | Market and reference coverage vary by contract and provider. |
+| ETFs | `SPY`, `IWM` | ETF research | Fund-focused research and comparison surfaces; live quote and holdings coverage is provider-dependent. |
+| FX pairs | `EUR/USD`, `USD/CHF` | Currency Research Workspace, pair mode | Price-bearing when FX quote/history data is available. |
+| Currency codes | `USD`, `EUR` | Currency Research Workspace, currency mode | Macro/research entities, not standalone traded instruments; they do not receive fabricated price data. |
+| Macro indicators | Country or economic indicators | Macro research and Analytics | Calendar and macro-series coverage vary by country and source. |
+| Bonds | Sovereigns and fixed-income instruments | Watchlist / Portfolio context | Coverage depends on the configured provider and instrument. |
+| Options | Equity and crypto options | Options workspace | Chain, Greek, and trade-tape coverage vary by venue and provider. |
 
-Backend env in `backend/.env`:
+Data freshness, source coverage, and availability vary by instrument and upstream provider. Zenin surfaces cached, stale, unavailable, and reference-only states where the underlying data does not support a live result.
 
-```bash
-DATABASE_URL=postgresql://...runtime-or-pooler-url...
-PGSSLMODE=require
-PGSSL_REJECT_UNAUTHORIZED=true
-```
+## Product capabilities
 
-Render deployment note:
+### Home and Portfolio
 
-- Set `DATABASE_URL` on the backend service to your runtime Postgres URL.
-- Set `VITE_API_URL` on the frontend build to point at your deployed backend API.
+- Portfolio snapshot, performance controls, positions, movers, risk and market-context handoffs.
+- Holdings, allocation and exposure views, instrument-class buckets, saved views, exports, alerts, and rebalance planning.
+- Authenticated workspace persistence for portfolio, balances, trades, saved views, and decision-support records.
+- Guest mode can preview the workspace without representing local preview actions as live brokerage execution.
 
-## Entry flows
+### Watchlist
 
-- `GET /` shows the public homepage (marketing/overview).
-- `GET /app` opens the trading app only when an auth session is present.
-- `GET /auth` opens sign up, sign in, and Supabase-backed password recovery flows.
-- `Open App` from the homepage now performs a preflight check:
-  - verifies whether a valid auth session exists (`/api/auth/me`)
-  - syncs subscription tier (`starter`/`pro`/`desk`) and billing cycle (`monthly`/`yearly`)
-  - redirects unauthenticated users to `GET /auth?mode=signin&next=/app`
-- Demo guest mode is explicit: use `GET /app?guest=1` to open the app without sign-in.
+- Search and add Stocks, Crypto, Bonds, Indicators, Commodities, ETFs, and Currencies / FX.
+- Categorised Watchlists, stock themes, tracked ordering, shared desk views, and plan-gated shared Watchlist access.
+- Import symbols or rows from supported text, CSV/TSV, spreadsheet, platform, and document workflows.
+- Earnings context for tracked stocks, macro-indicator context, alert assignments, and journal/research handoffs.
 
-## What the web app can do
+### Asset and market research
 
-### 1) Public homepage and app entry
-- Public landing page at `/` with product overview and quick entry CTAs
-- Dedicated auth workspace at `/auth` for sign up, sign in, OAuth, and password recovery
-- Full app workspace at `/app` (including company deep-dive routes at `/app/company/:symbol`)
-- Direct `/app` entry redirects unauthenticated users to `/auth`; demo guest entry remains available with `?guest=1`.
-- Responsive homepage mock dashboard now includes:
-  - portfolio performance card + company profile summary card
-  - top positions/top movers percentage-only preview rows
-  - no buying-power card in the homepage snapshot
-  - responsive mobile menu behavior with right-aligned menu toggle
+- Contextual Asset Modal with watchlist, research, portfolio, desk, journal, profile, and comparison actions where supported.
+- Company, commodity, macro, ETF, and Currency Research Workspaces.
+- ETF-specific reference fields and comparisons; no stock-only company metrics are presented as ETF data.
+- FX-pair research distinguishes a tradable pair from a standalone currency research entity.
+- Intelligence views bring together event timelines, transmission paths, affected holdings, market signals, macro regime context, and research queues.
 
-### 2) Home
-- Account and balance summary cards with trend indicators
-- Portfolio performance chart with interval (`1D` to `MAX`) and mode controls (Area, Bar, Line)
-- Top positions by value with live price/gain overlays
-- Top movers (gainers/losers) with timeframe selector (`daily`, `weekly`, `quarterly`, `ytd`, `yearly`)
-- Saved Home actions now persist through workspace collections when signed in, with local browser fallback for guests
-- Home missing-data, volatility-alert, journal-note, saved-view, and rebalance-plan flows now report real save failures instead of demo-only success states
+### Options, predictions, journal, and tax
 
-### 3) Watchlist
-- Category-based asset browsing (stocks, crypto, bonds, metals, commodities, indicators)
-- Starred/watchlist-only views with ordering preserved from DB
-- Shared Desk watchlists are gated by workspace plan; locked workspaces show read-only category context instead of stale shared rows
-- TradFi/crypto/indicator search with fuzzy matching
-- Stock theme filters (default + custom themes)
-- Earnings calendar cards for stock watchlist symbols (cached with long refresh cadence to avoid reload-time re-pulls)
-- Macro indicators + country indicator search powered by Forex Factory calendar data mapping
+- Equity and crypto options workflows, options calculator, strategy simulator, and whale-trade views.
+- Polymarket-based prediction snapshots, category browsing, and market detail views.
+- Trade journal, decision records, calendar P&L, outcome review, and analytics.
+- Indicative tax-estimation workflows for supported jurisdictions.
 
- `VITE_API_URL` (Backend API URL used by the frontend for auth and data requests)
-- Integrated **Finviz Market Intel**:
-  - Analyst ratings & price targets
-  - Insider trading activity
-  - Real-time news feed & sentiment indicators
-- 10-year (40-quarter) historical earnings table with surprise tracking
- `DATABASE_URL` (Postgres runtime connection string used by the backend)
-
-### 5) Portfolio
-- Buy/sell via asset modal and persisted trade execution
--- Set `DATABASE_URL` to the runtime Postgres connection string in Render.
-- Portfolio charts and performance snapshots
-- Per-position entry-price aware gain calculations
-- Mobile-safe rebalancing table layout with improved horizontal overflow behavior
-- Saved Portfolio views, exposure alerts, journal insights, CSV exports, queued rebalance previews, and rebalance execution history now persist through workspace collections
-- Authenticated rebalance execution uses the existing backend trade execution hook; guest mode saves an explicit preview instead of pretending orders were placed
-
-### 6) Options
-- Crypto options chain (Derive/Lyra-style provider route)
-- Spot price fallback via Hyperliquid when needed
-- Whale options trades table with min-notional filtering and pagination
-- **Options Strategy Simulator**:
-  - Express market views (Bullish, Bearish, Rangebound, etc.) to generate multi-leg strategies
-  - Heuristic probability scoring and payoff labels
-  - Direct execution from simulator into trade tickets
-- **Options Calculator**:
-  - multi-leg setup, Greeks, and net P&L
-  - Interactive payoff charts
-  - Saved calculations persisted to DB
-
-### 7) Predictions
-- Prediction market snapshots for Polymarket
-- Category browsing (`geopolitics`, `crypto`, `tech`, `politics`, `finance`)
-- Whale transaction table with sort/filter/pagination
-- Market details modal with holder distribution and position splits
-
-### 8) Journal & Analytics
-- Recent execution history with asset detail expansion
-- Trade Entry Journal persistence with `Entry Form` + `View Entries` workflow
-- Auto-journal draft creation from executed trades, with editable thesis/review fields
-- **Calendar PnL visualization**: Daily profit/loss heatmap with symbol filtering
-- **Advanced Analytics**:
-  - Success metrics (Win rate, Profit Factor, Expectancy)
-  - Portfolio distribution and risk metrics
-- **Traded Assets Report**: Paginated overview with live price refresh and total volume tracking
-- Responsive cross-market Analytics tab stack (`Crypto`, `Options`, `Equities`, `Macro`, `Commodities`) for mobile
-- Journal table mobile hardening with sticky first column and controlled horizontal scrolling
-
-### 9) Tax Estimator
-- Capital gains estimates for 40+ global jurisdictions (US, UK, India, Brazil, UAE, etc.)
-- Short-term vs. Long-term liability logic per region
-- **Jurisdiction Recommendation**: Suggests lower-tax alternatives based on your declared gains
-- CSV and PDF export support
-
-### 10) Account and security
-- **Supabase Auth Transition**: Sign up, sign in, OAuth, email changes, and password recovery now route through Supabase-backed identity.
-- **MFA Transition**: Legacy in-app TOTP/passkey/backup-code controls are hidden for signed-in users until Supabase-backed management is exposed.
-- **Account Lockout**: Brute-force protection with automatic 15-minute lockout after 5 failed login attempts.
-- **Session Lifecycle**: Central session checks run through `/api/auth/me` and the Supabase session exchange.
-- **Advanced Encryption**: Exchange API credentials are encrypted at rest.
-- **OAuth Discovery**: Supabase OAuth is wired from the frontend; backend legacy provider scaffolding remains for migration cleanup.
-
-### 11) Settings & account panel
-- Profile controls route email and password changes through the active Supabase auth surfaces
-- General preferences (timezone, refresh cadence, visibility controls)
-- Connected accounts modal distinguishes live-sync providers from read-only metadata sources
-- Notification + layout preference toggles
-
-### 12) Admin Console (New)
-- **Centralized Governance**: Dedicated administrative portal at `admin.zenin.capital`.
-- **System Overview**: Real-time monitoring of platform users, active sessions, and multi-asset trade volume.
-- **User Management**: Lifecycle controls for account suspension, plan migration, and administrative role assignment.
-- **Platform Health**: Live health indicators for API, Database, and Auth services.
-- **Audit Logging**: Comprehensive administrative audit trail and system error monitoring.
-
-## Current progress (as of May 18, 2026)
-
-- **Security Hardening (Post-Audit) shipped**:
-  - **Injection Protection**: Parameterized passkey queries to prevent SQL injection.
-  - **At-Rest Encryption**: All TOTP secrets and Exchange API keys/secrets are encrypted with **AES-256-GCM**.
-  - **One-way Hashing**: Backup codes and session tokens are stored using secure one-way hashes (`SHA-256`).
-  - **Session Rotation**: Forced revocation and re-issuance of sessions after any 2FA modification.
-  - **Account Lockout**: Automated brute-force protection implemented across the sign-in flow.
-  - **CSRF Protection**: Global `Origin` header validation for all mutating API requests.
-  - **Data Privacy**: Stripped all sensitive credentials (hashes, secrets, raw backup codes) from frontend-facing API responses.
-  - **Challenge TTL**: Implemented expiration and background eviction for WebAuthn challenges.
-- **Auth foundation implemented**: Server-side auth/session/reset-token flows exist and are rate-limited.
-- **User data isolation implemented**: Signed-in users read/write isolated balance, portfolio, watchlist, trade journal, and options calculation data.
-- **Homepage Open App preflight shipped**: CTA now verifies prior login + account tier context before app entry.
-- **Pricing-tier account linkage shipped**: Plan selection writes user `currentPlan/currentBillingCycle` and persists account context after auth.
-- **Auth UX redesign shipped**: `/auth` now uses staged screens aligned to onboarding/sign-in/reset/passkey flow states.
-- **Guest demos are explicit**: Direct `/app` now requires auth; append `?guest=1` for demo workspaces.
-- **Integration test harness added**: Backend integration suite exists for auth lifecycle, password reset, and user-isolation scenarios.
-- **Homepage responsive refactor completed**: Snapshot cards and footer device preview were updated to prevent overlap and improve mobile behavior.
-- **Dark theme hardening completed**: Homepage/app surfaces (including sidebar) are now enforced to dark-theme styling.
-- **Analytics runtime fix shipped**: Resolved `selectedPerpExchange is not defined` crash in the Analytics module.
-- **Watchlist earnings fetch optimization shipped**: Earnings calendar now uses extended caching windows (frontend + backend) to avoid unnecessary reload fetches.
-- **Indicator source migration shipped**: Watchlist indicators now resolve via Forex Factory calendar source mapping instead of EODHD dependency.
-- **Mobile responsiveness fixes shipped**: Cross-market Analytics pills now stack cleanly on small screens; Journal and Portfolio tables were hardened for mobile overflow and clipping scenarios.
-- **Home and Portfolio action persistence shipped**: Remaining demo-only save/export/rebalance flows now use workspace persistence or authenticated backend execution hooks, and failure states are surfaced instead of fake success messages.
-- **Zenin Admin Console finalized**:
-  - **Production Deployment**: Hosted at `admin.zenin.capital` with dynamic API resolution.
-  - **Premium Dashboard**: Custom-designed administrative interface for real-time system monitoring.
-  - **Secure Access**: Integrated with central auth system (`/api/auth/me`) with strict `isAdmin` enforcement.
-  - **Interactive Management**: Full CRUD capabilities for user accounts and platform settings.
-
-## Current limitations (as of May 18, 2026)
-
-- **External Data Availability**: While we have added robust field-mapping fallbacks for the Options Chain (Derive) and prioritized high-coverage US symbols in Search, features depending on Polymarket or specific Crypto APIs may still show temporary stale or error states if upstream routes are rate-limited or unavailable.
-- **Execution Connectivity**: Connected Accounts are read-only. Binance, Bybit, and Hyperliquid can sync portfolio data; other venues are stored as metadata until provider adapters are available. Live trade routing to external venues is not implemented.
-- **Auth enforcement mode**: Homepage `Open App` and direct `/app` entry validate session/tier first; guest demos are opt-in via `?guest=1`.
-- **OAuth provider setup**: Google/Apple/GitHub/Microsoft routes are scaffolded in backend; production OAuth client credentials/callback exchange are not yet configured.
-- **MFA management**: Password recovery uses Supabase email delivery; advanced MFA/passkey management is not yet exposed in the in-app Settings panel.
-- **Tax Accuracy**: The Tax Estimator provides indicative flat-rate estimates for retail traders. It is not professional tax advice and may not reflect specific deductions or local surcharges.
-- **Options Heuristics**: Strategy Simulator use heuristic probabilities; they are for guidance and do not replace professional risk analysis.
-- **Homepage device preview assets**: Footer laptop/phone visuals currently use themed mock content (not live in-app screenshots).
-- **Priority 3 unfinished UX actions**: Some secondary exports, empty-state CTAs, and settings/security controls still need backend-backed behavior or stronger product labeling.
+Strategy probabilities, tax estimates, and prediction-market signals are informational outputs. They should be independently reviewed before any investment decision.
 
 ## Data sources and integrations
 
-- **Hyperliquid**: Crypto search, pricing contexts, and fallback spot data.
-- **Polymarket (Gamma API)**: Prediction snapshots, market details, holder/position data.
-- **Finviz**: Market Intel (Insider trades, Ratings, News) and supplemental fundamental metrics.
-- **Yahoo Finance (`yfinance`)**: TradFi symbol search, history, earnings, and fundamentals.
-- **Derive/Lyra**: Options chain data and whale trade tape.
-- **Forex Factory Calendar Feed**: Indicator-country search and macro indicator event mapping in Watchlist.
-- **CoinGecko**: Supplemental crypto metadata.
-- **Telegram MTProto**: Optional ingestion for Derive whale flow.
+Zenin uses a mix of provider APIs and reference-data adapters. Current integrations include:
 
-## MTProto whale ingestion (implemented)
+- **Yahoo Finance / yfinance** for TradFi search, history, earnings, and fundamentals.
+- **Finviz** for market intelligence and supplemental company metrics.
+- **Hyperliquid** for crypto market context and fallback spot data.
+- **Polymarket Gamma API** for prediction-market snapshots and market detail.
+- **Derive/Lyra and Deribit routes** for options data, depending on the workflow and configured provider.
+- **Forex Factory** for economic-calendar and indicator mapping.
+- **CoinGecko** for supplemental crypto metadata.
+- **ETFdb worker** for optional ETF research enrichment when explicitly enabled and available.
+- **Telegram MTProto** for optional whale-flow ingestion.
 
-The backend can optionally merge Telegram channel messages into `/api/options/whale-trades`.
+Upstream services can be rate-limited, incomplete, delayed, or unavailable. ETF live data is not guaranteed; the product may fall back to reference data or show a clear unavailable state instead of manufacturing values.
 
-- Channel defaults to: `derivetradetape`
-- Parsed rows are normalized into existing whale table fields:
-  - `symbol`
-  - `expiration`
-  - `referencePrice`
-  - `strategy`
-  - `totalNotional`
-- Endpoint response includes `debug_telegram_ingest` metadata.
+## Architecture
 
-### Required env for Telegram ingestion
-- `TELEGRAM_API_ID`
-- `TELEGRAM_API_HASH`
-- `TELEGRAM_SESSION_STRING`
-
-Optional:
-- `TELEGRAM_CHANNEL_USERNAME` (default `derivetradetape`)
-- `TELEGRAM_FETCH_LIMIT` (default `160`)
-- `TELEGRAM_CACHE_TTL_MS` (default `60000`)
-
-### Generate a session string
-From `backend/`:
-
-```bash
-npm run telegram:session
+```text
+frontend/  React + Vite single-page application
+backend/   Express API, market-data adapters, workspace persistence, auth
+admin/     Administrative application
+docs/      Product, architecture, and audit documentation
 ```
 
-This interactive script logs in and prints a `TELEGRAM_SESSION_STRING` value.
-
-## One-time admin workspace migration (run now)
-
-Use this when you want to immediately copy current tracked portfolio/watchlist into the configured admin workspace without restarting the backend.
-
-### Option A: CLI script (direct DB connection)
-
-From `backend/`:
-
-```bash
-npm run migrate:admin-workspace
-```
-
-Force re-run (ignores one-time marker):
-
-```bash
-npm run migrate:admin-workspace -- --force
-```
-
-### Option B: Admin endpoint (live server)
-
-Route:
-
-- `POST /api/admin/migrations/admin-workspace`
-
-Auth options:
-
-- Signed-in admin user (`ADMIN_EMAIL`)
-- Or header `x-migration-key: <ADMIN_MIGRATION_KEY>`
-
-Example:
-
-```bash
-curl -X POST "https://<your-backend>/api/admin/migrations/admin-workspace?force=false" \
-  -H "x-migration-key: $ADMIN_MIGRATION_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-## Backend API surface (key routes)
-
-### Health/meta
-- `GET /health`
-- `GET /api/categories`
-
-### Market/search/history
-- `GET /api/search`
-- `GET /api/watchlist`
-- `GET /api/prices`
-- `GET /api/crypto-market`
-- `GET /api/history`
-- `GET /api/interval-performance`
-- `GET /api/macro-indicators`
-
-### Earnings
-- `GET /api/earnings`
-- `GET /api/earnings-calendar`
-
-### Options
-- `POST /api/options/crypto`
-- `GET /api/options/equity`
-- `GET /api/options/whale-trades`
-- `GET /api/db/options-calculations`
-- `POST /api/db/options-calculations`
-
-### Predictions
-- `GET /api/prediction/snapshot`
-- `GET /api/prediction/market-details/:marketId`
-
-### Portfolio/watchlist/trades/balance persistence
-- `GET /api/db/portfolio`
-- `POST /api/db/portfolio`
-- `PUT /api/db/portfolio/:id`
-- `DELETE /api/db/portfolio/:id`
-- `GET /api/db/portfolio/symbol/:symbol`
-- `GET /api/db/watchlist`
-- `POST /api/db/watchlist`
-- `DELETE /api/db/watchlist/:symbol`
-- `GET /api/db/watchlist/check/:symbol`
-- `GET /api/db/trades`
-- `POST /api/db/trades`
-- `POST /api/db/execute-trade`
-- `GET /api/db/balance`
-- `POST /api/db/balance`
-
-### Auth & account security
-- `GET /api/auth/me`
-- `POST /api/auth/signup`
-- `POST /api/auth/signin`
-- `POST /api/auth/signout`
-- `POST /api/auth/forgot-password/request`
-- `POST /api/auth/forgot-password/confirm`
-- `POST /api/auth/2fa/enable`
-- `POST /api/auth/2fa/disable`
-- `POST /api/auth/passkeys/register`
-- `POST /api/admin/migrations/admin-workspace`
-- `GET /api/auth/oauth/providers`
-- `POST /api/auth/oauth/start` (scaffold response)
-- `POST /api/auth/oauth/mock` (local/dev social sign-in simulation)
-
-## Persistence
-
-Primary datastore: PostgreSQL.
-
-Main tables used by the app:
-- Legacy/shared tables:
-  - `portfolio_holdings`
-  - `watchlist_assets`
-  - `user_balance`
-  - `options_calculations`
-  - `trade_executions`
-- Auth and user-scoped tables:
-  - `app_users`
-  - `auth_sessions`
-  - `password_reset_tokens`
-  - `user_workspace_balance`
-  - `user_workspace_portfolio`
-  - `user_workspace_watchlist`
-  - `user_workspace_trades`
-  - `user_workspace_options_calculations`
+The frontend uses the backend API for session-aware workspace data, search, market data, research, portfolio, Watchlist, options, and analytics workflows. PostgreSQL is the primary persistence layer.
 
 ## Local development
 
-## Prerequisites
-- Node.js 18+
+### Prerequisites
+
+- Node.js 20+ (required by the backend; recommended for the frontend)
 - npm
 - Python 3.9+
-- PostgreSQL (local or managed)
+- PostgreSQL, local or managed
 
-## Install
+### Configure environment
 
-Backend:
+Start from the checked-in templates:
+
+- [frontend/.env.example](frontend/.env.example)
+- [backend/.env.example](backend/.env.example)
+
+At minimum, configure a reachable PostgreSQL `DATABASE_URL` for backend persistence. Set `VITE_API_URL` in the frontend when the API is not served from the default environment.
+
+Provider keys, billing, email, brokerage, OAuth, error monitoring, and optional ingestion features are configured in the respective environment templates. Do not commit real credentials.
+
+### Install dependencies
 
 ```bash
+# Backend
 cd backend
 npm install
 python3 -m pip install -r requirements.txt
-```
 
-Frontend:
-
-```bash
-cd frontend
+# Frontend (run from the repository root after completing backend setup)
+cd ../frontend
 npm install
 ```
 
-## Run
+### Run locally
 
-Backend:
+In one terminal:
 
 ```bash
 cd backend
 npm run dev
 ```
 
-Frontend:
+In another terminal:
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-## Backend integration tests
+The development frontend is served by Vite. Open `/app` for the authenticated application; `/app?guest=1` is an explicit guest-preview entry point.
 
-Run:
+## Useful commands
+
+### Frontend
+
+```bash
+cd frontend
+npm run dev
+npm run build
+npm run lint:all
+npm run audit:design
+```
+
+### Backend
 
 ```bash
 cd backend
+npm run dev
+npm test
 npm run test:integration
 ```
 
-Notes:
-- These tests exercise auth + per-user data isolation through HTTP endpoints.
-- They require PostgreSQL connectivity (`DATABASE_URL` or local PG config).
-- If the test server cannot connect to Postgres, tests auto-skip and report the connection error.
+Backend integration tests require PostgreSQL connectivity. If the test environment cannot reach the configured database, investigate the connection configuration before treating the result as application verification.
 
-## Environment variables
+## API and deployment
 
-### Frontend
-- `VITE_API_URL` (optional, defaults to deployed API)
-- `VITE_SUPABASE_URL` (Supabase project URL for browser-side Supabase integrations)
-- `VITE_SUPABASE_PUBLISHABLE_KEY` (Supabase publishable key; safe for browser use, unlike service-role keys)
+The backend API is organised around these capability groups:
 
-### Backend
-- `PORT` (default `4000`)
-- `FRONTEND_URL` (CORS allowlist origin)
-- `DATABASE_URL` (recommended)
-- `SUPABASE_URL` (Supabase project URL used by the backend to verify Supabase access tokens)
-- `SUPABASE_PUBLISHABLE_KEY` (Supabase publishable key used for backend-side token verification)
-- `AUTH_HASH_KEY` (required in production; use a 32+ character strong secret for session/reset/OTP hashing and workspace secret encryption)
-- `DERIVE_API_URL` (optional provider override)
+- **Auth and workspaces:** session, account, workspace membership, plans, and settings.
+- **Market data and search:** asset search, prices, history, FX, earnings, macro, and economic calendar data.
+- **Portfolio and Watchlist:** holdings, balances, trades, execution records, Watchlist persistence, imports, and alerts.
+- **Research and analytics:** company profiles, intelligence, macro, commodities, analytics, and provider status.
+- **Options and predictions:** options data, saved calculations, whale trades, and prediction-market snapshots.
+- **Administration:** protected user, platform, billing, incident, integration, and coverage controls.
 
-Render deployment note:
-- Set `DATABASE_URL` to the Supabase runtime connection string in Render.
-- Set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the backend service.
-- `getaddrinfo ENOTFOUND ...` usually means the configured database hostname is stale, misspelled, or not reachable from the deployment environment.
+Deployment configuration is maintained in [render.yaml](render.yaml), [vercel.json](vercel.json), [frontend/vercel.json](frontend/vercel.json), and [backend/vercel.json](backend/vercel.json). Use the service-specific environment templates for deployment configuration; operational migrations and administrative procedures are intentionally not maintained in this top-level README.
 
-Optional Postgres discrete vars (if not using `DATABASE_URL`):
-- `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
-- `PGSSLMODE=disable` for local non-SSL setups
+## Current limitations
 
-Telegram MTProto optional vars:
-- `TELEGRAM_API_ID`
-- `TELEGRAM_API_HASH`
-- `TELEGRAM_SESSION_STRING`
-- `TELEGRAM_CHANNEL_USERNAME`
-- `TELEGRAM_FETCH_LIMIT`
-- `TELEGRAM_CACHE_TTL_MS`
+- Provider coverage, market hours, rate limits, and uptime vary by asset class and instrument.
+- Some results may be cached, stale, unavailable, or reference-only.
+- Connected-account capability is provider-dependent; do not assume every connected venue supports live order routing.
+- OAuth and multi-factor authentication availability depends on deployed provider credentials and enabled server configuration.
+- Tax estimates, strategy outputs, and prediction-market insights are informational and may not reflect an investor’s complete circumstances.
 
-See `backend/.env.example` for template values.
+## Contributing and operational notes
 
-## Next steps
-
-1. Replace `/api/auth/oauth/mock` with real OAuth code exchange (Google/Apple/GitHub/Microsoft) and provider-specific scopes.
-2. Expose Supabase-backed MFA/passkey management in Settings once the supported route is ready.
-3. Add refresh-token rotation / short-lived access tokens and account-level security telemetry (device/session management UI).
-4. Add automated backend tests for auth, session expiry/revocation, and per-user data isolation on all `/api/db/*` endpoints.
-5. Replace homepage footer mock device content with captured in-app Options and Analytics screenshots for production marketing parity.
-
-## Deployment
-
-- `render.yaml` includes backend + static frontend blueprint setup
-- `vercel.json` includes static frontend build/rewrite config
-
-## Repository layout
-
-```text
-backend/
-  index.js
-  database.js
-  data.js
-  fetch_prices.py
-  fetch_history.py
-  fetch_earnings.py
-  search_symbols.py
-  scripts/
-    telegram-session.js
-  requirements.txt
-  Dockerfile
-
-frontend/
-  src/
-    App.jsx
-    styles.css
-    components/
-      HomeModule.jsx
-      Watchlist.jsx
-      PortfolioModule.jsx
-      OptionsModule.jsx
-      OptionsCalculator.jsx
-      PredictionMarketModule.jsx
-      JournalModule.jsx
-      AssetModal.jsx
-      CompanyProfilePage.jsx
-      AnalyticsModule.jsx
-      TaxEstimator.jsx
-      OptionsStrategySimulator.jsx
-```
+Keep user-facing claims tied to implemented routes and configured adapters. When adding a provider or asset class, document its coverage, freshness behavior, fallback state, and limitations alongside the feature.

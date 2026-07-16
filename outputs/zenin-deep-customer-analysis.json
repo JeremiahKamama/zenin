@@ -1,0 +1,99 @@
+{
+  "title": "Zenin Capital Deep First-Customer Finder",
+  "product": "Zenin Capital",
+  "product_url": "https://www.zenin.capital/",
+  "target_customer": "Primary: active self-directed investors and options traders who manage multiple accounts and need live portfolio context, research, and review in one workspace. Adjacent: independent advisors, small research desks, and finance-tool builders seeking a design partner.",
+  "search_scope": "Public English-language Reddit and public project discussions, primarily 2025-2026; 10 qualified prospects across explicit demand, workarounds, switching, and builder signals.",
+  "generated_at": "2026-07-15",
+  "verdict": "Zenin has a strong reachable early-customer wedge, but the deep research sharpens it: sell first to spreadsheet-heavy, multi-account investors and options traders who want context and review—not to generic passive investors. The most promising design partners are public builders already creating trackers, while the most promising buyers are people with live pain around broken formulas, manual refreshes, options reconciliation, or fragmented asset coverage.",
+  "prospects": [
+    {
+      "name": "AllFiredUp3000 (public Reddit handle)", "type": "Options trader / builder", "stage": "Problem aware", "score": 88,
+      "pain_signal": "Exports Fidelity transactions to CSV, maintains spreadsheet formulas, loads raw data into SQL to double-check profit calculations, and described an unfinished web app for rolled-call matching.",
+      "evidence": "Specific multi-step reconciliation workaround plus an unfinished product effort.", "why_fit": "Zenin combines portfolio, options analysis, and decision review around the exact reconciliation job.", "why_now": "Strong pain but the original post is about 1 year old; treat as a design-partner hypothesis.",
+      "source_title": "Portfolio tracker that accounts for Options Contracts?", "source_url": "https://www.reddit.com/r/options/comments/1i99xz7/portfolio_tracker_that_accounts_for_options/", "source_type": "Public Reddit discussion", "signal_date": "January 25, 2025; later replies in 2025-2026", "suggested_channel": "Reply to the public thread", "opener": "Your Fidelity-to-CSV-to-SQL workflow and unfinished rolled-call tracker describe the reconciliation problem Zenin is trying to consolidate. Is that workflow still active enough to compare against a portfolio-plus-options workspace?", "caution": "Confirm current activity before outreach.", "dimensions": {"pain_strength": 5, "product_fit": 5, "timing": 3, "reachability": 4, "evidence_quality": 5}
+    },
+    {
+      "name": "Adept-Turnover8433 (public Reddit handle)", "type": "Portfolio-tracker builder", "stage": "High intent", "score": 86,
+      "pain_signal": "Building a customizable stock/crypto tracker with CSV imports, discovery, rules, and watchlists; explicitly looking for people searching for a solution and inviting beta interest.",
+      "evidence": "Explicit beta-stage and feedback-seeking post.", "why_fit": "Zenin overlaps on stock/crypto tracking, watchlists, discovery, company research, and portfolio workflows.", "why_now": "Post was approximately 25 days old and asked interested users to test.",
+      "source_title": "Simple and smart way to track portfolio?", "source_url": "https://www.reddit.com/r/investing/comments/1tr2nb4/simple_and_smart_way_to_track_portfolio/", "source_type": "Public Reddit discussion", "signal_date": "Approximately June 2026", "suggested_channel": "Reply to the public post", "opener": "You mentioned an early-beta stock/crypto tracker and looking for people actively searching for a solution. Would you compare workflows with Zenin as a peer beta/design-partner test?", "caution": "Likely builder or competitor; frame as peer testing, not a presumptive sale.", "dimensions": {"pain_strength": 4, "product_fit": 5, "timing": 5, "reachability": 4, "evidence_quality": 5}
+    },
+    {
+      "name": "toub1s / Inverow (public Reddit handle and project)", "type": "Portfolio-tracker builder", "stage": "Problem aware", "score": 84,
+      "pain_signal": "Existing trackers were too limited, too bloated, or paywalled; needed stocks and crypto together, multiple portfolios, and different currencies, and moved from Excel to building a tracker.",
+      "evidence": "Names concrete cross-asset and multi-currency requirements and links a public project.", "why_fit": "Zenin provides unified cross-market coverage, portfolio views, research, and tax/jurisdiction context.", "why_now": "The public discussion and project mention were about 1 month old.",
+      "source_title": "Simple and smart way to track portfolio?", "source_url": "https://www.reddit.com/r/investing/comments/1tr2nb4/simple_and_smart_way_to_track_portfolio/", "source_type": "Public Reddit discussion", "signal_date": "Approximately May-June 2026", "suggested_channel": "Reply or use the public project channel", "opener": "Your move from Excel to Inverow because trackers could not combine stocks, crypto, portfolios, and currencies is close to Zenin's thesis. Would you compare where each workflow still falls short?", "caution": "Their project may already satisfy the need; propose comparison and feedback.", "dimensions": {"pain_strength": 4, "product_fit": 5, "timing": 5, "reachability": 4, "evidence_quality": 5}
+    },
+    {
+      "name": "m0rfeo123 (public Reddit handle)", "type": "Options-wheel trader", "stage": "Problem aware", "score": 81,
+      "pain_signal": "Shared an Excel wheel tracker, needed GBP/USD conversion, and called out missing monthly, YTD, and year-end overview tabs while soliciting improvements.",
+      "evidence": "Live spreadsheet, stated feature backlog, and currency requirement.", "why_fit": "Zenin's options, portfolio, analytics, and tax surfaces are a natural richer review layer.", "why_now": "About 5 months old; active iteration but not immediate demand.",
+      "source_title": "TOOLS & SPREADSHEET MEGATHREAD", "source_url": "https://www.reddit.com/r/Optionswheel/comments/1o3b2ir/tools_spreadsheet_megathread/", "source_type": "Public Reddit community thread", "signal_date": "Approximately February 2026", "suggested_channel": "Reply to the public thread", "opener": "Your wheel tracker notes—especially GBP/USD conversion and missing monthly/YTD views—look like a useful Zenin test case. Would you compare the spreadsheet against a short options-and-tax workflow demo?", "caution": "Validate calculations before suggesting a replacement.", "dimensions": {"pain_strength": 4, "product_fit": 4, "timing": 4, "reachability": 4, "evidence_quality": 5}
+    },
+    {
+      "name": "Portfolio tracker author (public Reddit handle not surfaced in result)", "type": "Active investor", "stage": "High intent", "score": 85,
+      "pain_signal": "Says Excel became heavy as positions and ideas grew, with broken formulas, alerts, and closed trades; wants live P/L and exposure plus original trade thesis attached to closed trades.",
+      "evidence": "Explicit request for alternatives and detailed pain around both live data and decision review.", "why_fit": "Zenin's decision ledger, portfolio analytics, watchlists, and source-aware data directly match.", "why_now": "Post was published February 10, 2026 and explicitly says they are open to AI tools.",
+      "source_title": "Been looking for a portfolio tracker app/software and moving my spreadsheet", "source_url": "https://www.reddit.com/r/portfolios/comments/1r0p1hv/been_looking_for_a_portfolio_tracker_appsoftware/", "source_type": "Public Reddit discussion", "signal_date": "February 10, 2026", "suggested_channel": "Reply to the public post", "opener": "Your distinction between live P/L and preserving the thesis behind closed trades stood out. Zenin combines those two workflows; would a short test focused on thesis review and exposure be useful?", "caution": "Use the post's public context only; the author identity is not reliably surfaced.", "dimensions": {"pain_strength": 5, "product_fit": 5, "timing": 4, "reachability": 4, "evidence_quality": 5}
+    },
+    {
+      "name": "Azure Portfolios / ohthatguy12 (public project)", "type": "Advisor-workflow builder", "stage": "Trigger present", "score": 83,
+      "pain_signal": "Built a tracker after watching a financial advisor manually update positions across brokers, copy-paste prices, and recalculate returns; the tool entered public beta after daily use by the advisor's clients.",
+      "evidence": "Public launch and client-usage trigger with exact workflow pain.", "why_fit": "Zenin's Desk plan, portfolio aggregation, research, and shared-workspace positioning could support a design-partner or integration conversation.", "why_now": "Public beta opened June 22, 2026; very fresh timing.",
+      "source_title": "I built a free portfolio tracker after watching my dad manage his clients' investments across dozens of different spreadsheets", "source_url": "https://www.reddit.com/r/SideProject/comments/1ucp6sf/i_built_a_free_portfolio_tracker_after_watching/", "source_type": "Public SideProject launch", "signal_date": "June 22, 2026", "suggested_channel": "Public project site or Reddit thread", "opener": "Your beta story—manual broker exports, copied prices, and recalculated returns for an advisor's clients—is a strong shared-workflow case. Would you be open to comparing Zenin Desk with Azure's client workflow and identifying integration gaps?", "caution": "This is a likely competitor/design partner, not a straightforward buyer.", "dimensions": {"pain_strength": 5, "product_fit": 4, "timing": 5, "reachability": 5, "evidence_quality": 5}
+    },
+    {
+      "name": "jbizzle1104 (public Reddit handle)", "type": "Cross-asset investor", "stage": "Problem aware", "score": 78,
+      "pain_signal": "Tracks crypto, gold, ETFs, individual stocks, and bonds while quantities change through DCA, and says continuous tracking is difficult.",
+      "evidence": "Direct cross-asset and changing-quantity pain statement.", "why_fit": "Zenin's unified portfolio and cross-market analytics are built for this fragmentation.", "why_now": "Approximately 2 months old; current pain but no explicit buying request.",
+      "source_title": "Simple and smart way to track portfolio?", "source_url": "https://www.reddit.com/r/investing/comments/1tr2nb4/simple_and_smart_way_to_track_portfolio/", "source_type": "Public Reddit discussion", "signal_date": "Approximately May 2026", "suggested_channel": "Reply to the public comment", "opener": "Your note about crypto, gold, ETFs, stocks, and bonds changing through DCA captures the cross-asset problem Zenin is built around. Which view would help first: allocation, performance, or keeping the data current?", "caution": "Discovery-first; willingness to pay is not evidenced.", "dimensions": {"pain_strength": 4, "product_fit": 4, "timing": 4, "reachability": 4, "evidence_quality": 4}
+    },
+    {
+      "name": "OrangeGhoul (public Reddit handle)", "type": "Spreadsheet-heavy investor", "stage": "Problem aware", "score": 72,
+      "pain_signal": "Uses Excel plus a Google Sheet and macro to keep ticker prices current after Yahoo Finance support changed, while preferring a self-built solution.",
+      "evidence": "Concrete workaround and a stated preference for roll-your-own tracking.", "why_fit": "Zenin can be positioned around source-aware data, live/cached status, and reducing maintenance without forcing broker login.", "why_now": "Signal was about 10 days old.",
+      "source_title": "What financial trackers or apps do people use to keep track of progress?", "source_url": "https://www.reddit.com/r/investingforbeginners/comments/1tlbknh/what_financial_trackers_or_apps_do_people_use_to/", "source_type": "Public Reddit discussion", "signal_date": "Approximately July 5, 2026", "suggested_channel": "Reply to the public comment", "opener": "Your Excel-plus-GoogleFinance workaround after Yahoo support changed is exactly the kind of maintenance Zenin tries to make visible and less fragile. Would a no-broker-login workflow be worth testing?", "caution": "Privacy and control are likely more important than feature breadth.", "dimensions": {"pain_strength": 3, "product_fit": 4, "timing": 5, "reachability": 4, "evidence_quality": 4}
+    },
+    {
+      "name": "West_West_313 (public Reddit handle)", "type": "Mobile-first investor", "stage": "Problem aware", "score": 70,
+      "pain_signal": "Uses bespoke Google Sheets because they have not found an app that does everything they want on iPhone, and publicly linked a brokerage/Roth tracker.",
+      "evidence": "Public self-built tracker and explicit app gap.", "why_fit": "Zenin's portfolio, watchlist, and research modules can be tested against mobile-first account review needs.", "why_now": "Signal was about 10 days old.",
+      "source_title": "What financial trackers or apps do people use to keep track of progress?", "source_url": "https://www.reddit.com/r/investingforbeginners/comments/1tlbknh/what-financial-trackers-or-apps-do-people-use-to/", "source_type": "Public Reddit discussion", "signal_date": "Approximately July 5, 2026", "suggested_channel": "Reply to the public comment", "opener": "You said you still use a bespoke brokerage/Roth sheet because no iPhone app does what you need. Could you share the one or two spreadsheet views a mobile portfolio workspace would have to preserve?", "caution": "Treat the linked sheet as voluntarily shared but do not inspect or copy private data.", "dimensions": {"pain_strength": 3, "product_fit": 4, "timing": 5, "reachability": 4, "evidence_quality": 4}
+    },
+    {
+      "name": "SinkPsychological676 / Rikdom (public handle and GitHub project)", "type": "Open-source wealth-tool builder", "stage": "Trigger present", "score": 75,
+      "pain_signal": "Published a local-first wealth portfolio schema and storage toolkit because users need durable data independent of broker apps or SaaS dashboards.",
+      "evidence": "Public open-source launch and explicit privacy/durability thesis.", "why_fit": "Zenin could learn from or partner around exportability, source health, and privacy-conscious portfolio workflows.", "why_now": "Project was published about 2 months ago.",
+      "source_title": "Need better way to track investments across multiple accounts (tired of spreadsheets)", "source_url": "https://www.reddit.com/r/investingforbeginners/comments/1mk4i6q/need_better_way_to_track_investments_across/", "source_type": "Public Reddit discussion with GitHub project", "signal_date": "Approximately May 2026", "suggested_channel": "GitHub project discussion or public Reddit thread", "opener": "Your local-first JSON layer addresses the privacy and durability objection that portfolio SaaS often misses. Would you compare Zenin's source-aware workspace with a portable-data approach and identify a safe integration boundary?", "caution": "Likely open-source peer or competitor; do not pitch cloud lock-in.", "dimensions": {"pain_strength": 4, "product_fit": 3, "timing": 4, "reachability": 5, "evidence_quality": 5}
+    },
+    {
+      "name": "FIREambi-1678 (public Reddit handle)", "type": "Multi-account investor", "stage": "Problem aware", "score": 69,
+      "pain_signal": "Described similar multi-account spreadsheet pain and switched away from Excel after finding an aggregator, implying a validated but competitive workflow need.",
+      "evidence": "First-person switching signal and stated former workaround.", "why_fit": "Zenin can differentiate with deeper research, options, prediction-market, and journal context beyond aggregation.", "why_now": "Signal is about 1 year old; use for market-learning or reactivation only.",
+      "source_title": "Need better way to track investments across multiple accounts (tired of spreadsheets)", "source_url": "https://www.reddit.com/r/investingforbeginners/comments/1mk4i6q/need_better_way_to_track_investments_across/", "source_type": "Public Reddit discussion", "signal_date": "Approximately July 2025", "suggested_channel": "Reply to the public thread if active", "opener": "You mentioned moving away from Excel for multi-account tracking. Zenin is testing whether deeper research and options context can sit on top of that basic aggregation—what did existing tools still fail to cover?", "caution": "Low freshness and likely already solved; keep outside the first outreach wave.", "dimensions": {"pain_strength": 3, "product_fit": 4, "timing": 2, "reachability": 4, "evidence_quality": 4}
+    }
+  ],
+  "patterns": [
+    {"title": "Spreadsheet escape is the dominant trigger", "count": 8, "insight": "Broken formulas, manual refreshes, monthly tabs, CSV imports, and bespoke Google Sheets repeatedly create the opening for a live workspace."},
+    {"title": "Context beats raw performance", "count": 3, "insight": "The most differentiated pain is preserving trade thesis, review history, exposure, and lessons—not merely showing balances."},
+    {"title": "Multi-account and cross-asset fragmentation", "count": 7, "insight": "Crypto, options, bonds, gold, retirement accounts, multiple brokers, and different currencies are routinely split across tools."},
+    {"title": "Privacy and portability are buying objections", "count": 4, "insight": "Some prospects prefer local files, manual imports, or no broker login; source-aware data and exportability should be prominent."},
+    {"title": "Builders are the fastest design-partner channel", "count": 5, "insight": "Public beta launches and open-source projects reveal both strong pain and competitor risk; approach with workflow comparison and feedback, not a hard sell."}
+  ],
+  "outreach_plan": {
+    "angle": "Offer a narrow options-and-multi-account workflow audit, with thesis review and portable data as differentiators.",
+    "first_step": "Manually reply to the five freshest/highest-intent public threads: the February 2026 thesis-review request, Azure Portfolios, Adept-Turnover8433, OrangeGhoul, and the options-wheel tracker.",
+    "follow_up": "Ask for the shape of their current spreadsheet or CSV—not account credentials—then offer a 15-minute comparison using dummy or redacted data.",
+    "success": "Five source-based replies, three workflow conversations, one design-partner test, and one clear disqualifier/objection within seven days."
+  },
+  "limits": [
+    "All records are potential customers or design partners inferred from public signals, not confirmed buyers.",
+    "Reddit handles are public pseudonyms; no private identity resolution or enrichment was attempted.",
+    "Builders and open-source authors may be competitors, so separate design-partner learning from buyer qualification.",
+    "Several sources are community discussions with limited identity and no verified company affiliation.",
+    "Do not inspect or copy any linked private spreadsheet data; ask for redacted schemas or dummy data only.",
+    "Public posts can be stale, edited, or automated; validate current relevance before outreach.",
+    "No messages, replies, forms, follows, or CRM records were created."
+  ]
+}

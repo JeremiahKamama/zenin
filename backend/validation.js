@@ -123,19 +123,19 @@ const historyQuerySchema = z.object({
   symbol: symbolSchema,
   interval: z.enum(["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]).optional().default("1d"),
   range: z.enum(["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]).optional().default("1mo"),
-  marketType: z.enum(["spot", "perp", "equity", "options"]).optional().default("equity"),
+  marketType: z.enum(["spot", "perp", "equity", "options", "commodity", "forex", "macro"]).optional().default("equity"),
 });
 
 const pricesQuerySchema = z.object({
   symbols: z.string().optional(),
   symbol: z.string().optional(),
-  type: z.enum(["tradfi", "crypto"]).optional(),
-  quoteType: z.enum(["tradfi", "crypto"]).optional().default("tradfi"),
+  type: z.enum(["tradfi", "crypto", "etf", "forex", "currency"]).optional(),
+  quoteType: z.enum(["tradfi", "crypto", "etf", "forex", "currency"]).optional().default("tradfi"),
 });
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(100),
-  type: z.enum(["tradfi", "crypto", "indicator", "indicators", "commodity", "commodities"]).optional().default("tradfi"),
+  type: z.enum(["tradfi", "crypto", "indicator", "indicators", "commodity", "commodities", "etf", "etfs", "currency", "currencies", "forex"]).optional().default("tradfi"),
 });
 
 const emailRequestSchema = z.object({
@@ -270,6 +270,53 @@ const dailyBriefingGenerateSchema = z.object({
   date: z.string().max(20).optional().nullable(),
 });
 
+// ── Trade journaling (Phase 3) ────────────────────────────────────────────
+const journalEventListSchema = z.object({
+  status: z.enum(["open", "dismissed", "journaled", "snoozed"]).optional(),
+  eventType: z.string().max(40).optional(),
+  classification: z.enum(["decision_relevant", "operational", "unknown"]).optional(),
+  symbol: symbolSchema.optional(),
+  from: z.string().max(40).optional(),
+  to: z.string().max(40).optional(),
+  page: z.coerce.number().int().min(1).max(1000).optional().default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).optional().default(50),
+});
+
+const journalEventClassifySchema = z.object({
+  classification: z.enum(["decision_relevant", "operational", "unknown"]),
+  reason: z.string().max(280).optional().nullable(),
+});
+
+const journalEventSnoozeSchema = z.object({
+  until: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
+});
+
+const journalEventLinkSchema = z.object({
+  journalEntryId: z.string().max(120).optional().nullable(),
+  decisionThreadId: z.string().max(120).optional().nullable(),
+});
+
+// ── Trade journaling reports (Phase 4) ────────────────────────────────────
+const journalReportListSchema = z.object({
+  cadence: z.enum(["daily", "weekly", "quarterly", "half_year", "yearly"]).optional(),
+});
+
+const journalReportGenerateSchema = z.object({
+  cadence: z.enum(["daily", "weekly", "quarterly", "half_year", "yearly"]),
+  periodKey: z.string().max(40).optional().nullable(),
+  periodStart: z.string().datetime().optional().nullable(),
+  periodEnd: z.string().datetime().optional().nullable(),
+  timeZone: z.string().max(64).optional().nullable(),
+  email: z.boolean().optional().nullable(),
+});
+
+// ── Trade journaling preferences (Phase 6) ─────────────────────────────────
+const journalPrefsSchema = z.object({
+  email: z.boolean().optional(),
+  includeOperational: z.boolean().optional(),
+  cadence: z.enum(["daily", "weekly", "quarterly", "half_year", "yearly"]).optional(),
+});
+
 const watchlistBulkSchema = z.object({
   assets: z.array(watchlistAssetSchema),
 });
@@ -374,8 +421,10 @@ const validate = (schema, source = "body") => (req, res, next) => {
   try {
     const result = schema.safeParse(req[source]);
     if (!result.success) {
-      const errors = result.error.errors.map(err => ({
-        path: err.path.join("."),
+      // zod v4 exposes issues as `error.issues`; older APIs used `error.errors`.
+      const errList = (result.error && (result.error.issues || result.error.errors)) || [];
+      const errors = errList.map(err => ({
+        path: (err.path || []).join("."),
         message: err.message
       }));
       return res.status(400).json({
@@ -435,5 +484,12 @@ module.exports = {
   decisionThreadReviewSchema,
   decisionThreadLinkResearchSchema,
   decisionThreadJournalSchema,
+  journalEventListSchema,
+  journalEventClassifySchema,
+  journalEventSnoozeSchema,
+  journalEventLinkSchema,
+  journalReportListSchema,
+  journalReportGenerateSchema,
+  journalPrefsSchema,
   dailyBriefingGenerateSchema,
 };

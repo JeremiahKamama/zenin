@@ -12,6 +12,13 @@ import { AssetChart } from "./assetModal/AssetChart";
 import { PortfolioContext } from "./assetModal/PortfolioContext";
 import { ResearchTabs } from "./assetModal/ResearchTabs";
 import { ResearchToolbar } from "./assetModal/ResearchToolbar";
+import { CommodityModalSummary } from "./assetModal/CommodityModalSummary";
+import { FxPairModalSummary } from "./assetModal/FxPairModalSummary";
+import { CurrencyModalSummary } from "./assetModal/CurrencyModalSummary";
+import { EtfModalSummary } from "./assetModal/EtfModalSummary";
+import { RegulatoryContext } from "./assetModal/RegulatoryContext";
+import { kindSupportsAction } from "../utils/assetRegistry";
+import { resolveCurrencyInstrument, getCurrencyMeta, relatedFxPairs, FX_NAMES } from "../utils/currencyInstruments";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const EARNINGS_FUNDAMENTALS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -29,7 +36,11 @@ export function AssetModal({
   cashBalances = {},
   trades = [],
   spotPrices = {},
-  researchOnly = true
+  researchOnly = true,
+  onJournal,
+  onDecisionLedger,
+  onOpenDesk,
+  onOpenResearch,
 }) {
   const intervals = Array.isArray(getAppRuntimeConfig()?.ui?.assetModalIntervals)
     ? getAppRuntimeConfig().ui.assetModalIntervals
@@ -57,6 +68,7 @@ export function AssetModal({
     if (["etf", "etfs"].includes(rawType)) return "etf";
     if (rawType === "crypto" || marketType === "spot" || marketType === "perp") return "crypto";
     if (rawType === "forex" || rawType === "fx" || marketType === "forex" || rawCategory === "fx") return "forex";
+    if (rawType === "currency" || rawCategory === "currencies" || marketType === "macro") return "currency";
     if (rawType === "indicator" || rawCategory === "indicators" || marketType === "macro") return "indicator";
     if (rawType === "bond" || rawCategory === "bonds") return "bond";
     if (["commodity", "commodities", "metal", "metals"].includes(rawType) || ["commodities", "metals"].includes(rawCategory)) return "commodity";
@@ -77,16 +89,26 @@ export function AssetModal({
       ? "crypto"
       : asset?.type || normalizedAssetKind;
   const isStockResearchEligible = normalizedAssetKind === "stock";
+  const isResearchEligible = kindSupportsAction(normalizedAssetKind, "research");
 
-  // v3: modal is a launcher. Open the Asset Research Workspace route for this asset.
-  const onOpenResearch = useCallback((target) => {
+  // v3: modal is a pure launcher. Routing is owned by the Asset Registry + the
+  // caller's openers (App passes kind-correct onOpenResearch / onViewCompanyProfile
+  // / onOpenDesk). The modal holds ZERO routing logic — it only invokes props.
+  const handleOpenResearch = useCallback((target) => {
     const symbol = String(target?.symbol || asset?.symbol || "").trim().toUpperCase();
     if (!symbol) return;
-    if (typeof window !== "undefined") {
-      window.history.pushState({ page: "asset", symbol }, "", `/app/asset/${encodeURIComponent(symbol)}`);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    }
-  }, [asset]);
+    if (onOpenResearch) onOpenResearch({ symbol });
+  }, [asset, onOpenResearch]);
+
+  const handleOpenProfile = useCallback((target) => {
+    const symbol = String(target?.symbol || asset?.symbol || "").trim().toUpperCase();
+    if (!symbol) return;
+    if (onViewCompanyProfile) onViewCompanyProfile({ symbol });
+  }, [asset, onViewCompanyProfile]);
+
+  const handleOpenDesk = useCallback(() => {
+    if (onOpenDesk) onOpenDesk();
+  }, [onOpenDesk]);
 
   const cleanAsset = useMemo(() => {
     if (!asset) return null;
@@ -232,7 +254,7 @@ export function AssetModal({
   }, [assetSymbol, assetType]);
 
   useEffect(() => {
-    if (!isTradFi || !assetSymbol || isForexAsset) {
+    if (!isTradFi || !assetSymbol || isForexAsset || normalizedAssetKind !== "stock") {
       setEarnings(null);
       setEarningsLoading(false);
       setEarningsStale(false);
@@ -283,7 +305,7 @@ export function AssetModal({
   }, [isTradFi, assetSymbol, isForexAsset]);
 
   useEffect(() => {
-    if (!isTradFi || !assetSymbol || isForexAsset) return;
+    if (!isTradFi || !assetSymbol || isForexAsset || normalizedAssetKind !== "stock") return;
     const controller = new AbortController();
     const { signal } = controller;
     const fetchFinviz = async () => {
@@ -579,69 +601,119 @@ export function AssetModal({
           liveQuote={liveQuote}
           isInWatchlist={isInWatchlist}
           onToggleStar={onToggleStar}
-          onViewCompanyProfile={onViewCompanyProfile}
+          onViewCompanyProfile={handleOpenProfile}
           onClose={onClose}
         />
 
-        <div className="am-body-grid">
-          <AssetChart
-            chartData={chartData}
-            history={history}
-            loading={loading}
-            historyStale={historyStale}
-            historySource={historySource}
-            chartType={chartType}
-            setChartType={setChartType}
-            visibleIndicators={visibleIndicators}
-            setVisibleIndicators={setVisibleIndicators}
-            activeInterval={activeInterval}
-            setActiveInterval={setActiveInterval}
-            intervals={intervals}
-            performanceMap={performanceMap}
-            assetPriceLines={assetPriceLines}
-            tradeMarkers={tradeMarkers}
-            chartExpanded={chartExpanded}
-            setChartExpanded={setChartExpanded}
-            chartResetSignal={chartResetSignal}
-            chartRange={chartRange}
-            formatChartPrice={(value) => {
-              const numeric = Number(value);
-              if (!Number.isFinite(numeric)) return "Price unavailable";
-              return `${currencySymbol}${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-            }}
-            formatChartVolume={(value) => {
-              const numeric = Number(value);
-              if (!Number.isFinite(numeric) || numeric <= 0) return "Vol -";
-              return `Vol ${formatCompactNumber(numeric, numeric >= 1000000 ? 1 : 0)}`;
-            }}
-            formatChartTime={(time) => new Date(Number(time) * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}
-            formatChartReadout={({ mode, point, defaultReadout }) => {
-              if (!point) return defaultReadout;
-              const open = Number(point.open);
-              const high = Number(point.high);
-              const low = Number(point.low);
-              const close = Number(point.close ?? point.value);
-              const volume = Number(point.volume);
-              if ([open, high, low, close].every(Number.isFinite)) {
-                return { mode, price: `C ${`${currencySymbol}${close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}`, detail: `O ${`${currencySymbol}${open.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}  H ${`${currencySymbol}${high.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}  L ${`${currencySymbol}${low.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}  ${formatCompactNumber(volume, numeric >= 1000000 ? 1 : 0) ? `Vol ${formatCompactNumber(volume, numeric >= 1000000 ? 1 : 0)}` : ""}` };
-              }
-              return { ...defaultReadout, detail: Number.isFinite(volume) && volume > 0 ? `Vol ${formatCompactNumber(volume, numeric >= 1000000 ? 1 : 0)}` : defaultReadout.detail };
-            }}
-            crosshairEnabled={crosshairEnabled}
-          />
-
-          <PortfolioContext
+        {/* ── Kind-specific overview summary (above the chart/context grid) ── */}
+        {normalizedAssetKind === "commodity" ? (
+          <CommodityModalSummary asset={asset} liveQuote={liveQuote} />
+        ) : null}
+        {normalizedAssetKind === "etf" ? (
+          <EtfModalSummary asset={asset} liveQuote={liveQuote} portfolio={portfolio} />
+        ) : null}
+        {normalizedAssetKind === "forex" ? (
+          <FxPairModalSummary
             asset={asset}
-            portfolio={portfolio}
-            displayedPrice={displayedPrice}
-            activeCurrency={activeCurrency}
-            currencySymbol={currencySymbol}
-            averageEntryPrice={averageEntryPrice}
-            spotPrices={spotPrices}
-            isInWatchlist={isInWatchlist}
-            onToggleStar={onToggleStar}
+            liveQuote={liveQuote}
+            instrument={resolveCurrencyInstrument(assetSymbol)}
+            historySource={historySource}
+            historyStale={historyStale}
           />
-        </div>
+        ) : null}
+        {normalizedAssetKind === "currency" ? (
+          <CurrencyModalSummary
+            asset={asset}
+            instrument={resolveCurrencyInstrument(assetSymbol)}
+            currencyMeta={getCurrencyMeta(assetSymbol)}
+            relatedPairs={relatedFxPairs(assetSymbol)}
+          />
+        ) : null}
+
+        {/* ── Chart + Portfolio Context: siblings inside .am-body-grid ── */}
+        {normalizedAssetKind === "currency" ? (
+          <div className="am-body-grid">
+            <section className="am-chart-card am-chart-card--research-only">
+              <div className="am-chart-empty">
+                <p className="am-chart-empty-title">Research-only currency entity</p>
+                <p className="muted">{assetSymbol} is a macro / research asset. It carries no standalone tradable quote or chart. Use Related Crosses for price-bearing FX pairs.</p>
+              </div>
+            </section>
+            <PortfolioContext
+              asset={asset}
+              portfolio={portfolio}
+              displayedPrice={displayedPrice}
+              activeCurrency={activeCurrency}
+              currencySymbol={currencySymbol}
+              averageEntryPrice={averageEntryPrice}
+              spotPrices={spotPrices}
+              isInWatchlist={isInWatchlist}
+              onToggleStar={onToggleStar}
+            />
+          </div>
+        ) : (
+          <div className="am-body-grid">
+            <AssetChart
+              chartData={chartData}
+              history={history}
+              loading={loading}
+              historyStale={historyStale}
+              historySource={historySource}
+              chartType={chartType}
+              setChartType={setChartType}
+              visibleIndicators={visibleIndicators}
+              setVisibleIndicators={setVisibleIndicators}
+              activeInterval={activeInterval}
+              setActiveInterval={setActiveInterval}
+              intervals={intervals}
+              performanceMap={performanceMap}
+              assetPriceLines={assetPriceLines}
+              tradeMarkers={tradeMarkers}
+              chartExpanded={chartExpanded}
+              setChartExpanded={setChartExpanded}
+              chartResetSignal={chartResetSignal}
+              chartRange={chartRange}
+              formatChartPrice={(value) => {
+                const numeric = Number(value);
+                if (!Number.isFinite(numeric)) return "Price unavailable";
+                return `${currencySymbol}${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              }}
+              formatChartVolume={(value) => {
+                const numeric = Number(value);
+                if (!Number.isFinite(numeric) || numeric <= 0) return "Vol -";
+                return `Vol ${formatCompactNumber(numeric, numeric >= 1000000 ? 1 : 0)}`;
+              }}
+              formatChartTime={(time) => new Date(Number(time) * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}
+              formatChartReadout={({ mode, point, defaultReadout }) => {
+                if (!point) return defaultReadout;
+                const open = Number(point.open);
+                const high = Number(point.high);
+                const low = Number(point.low);
+                const close = Number(point.close ?? point.value);
+                const volume = Number(point.volume);
+                if ([open, high, low, close].every(Number.isFinite)) {
+                  return { mode, price: `C ${`${currencySymbol}${close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}`, detail: `O ${`${currencySymbol}${open.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}  H ${`${currencySymbol}${high.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}  L ${`${currencySymbol}${low.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}  ${formatCompactNumber(volume, numeric >= 1000000 ? 1 : 0) ? `Vol ${formatCompactNumber(volume, numeric >= 1000000 ? 1 : 0)}` : ""}` };
+                }
+                return { ...defaultReadout, detail: Number.isFinite(volume) && volume > 0 ? `Vol ${formatCompactNumber(volume, numeric >= 1000000 ? 1 : 0)}` : defaultReadout.detail };
+              }}
+              crosshairEnabled={crosshairEnabled}
+            />
+            <PortfolioContext
+              asset={asset}
+              portfolio={portfolio}
+              displayedPrice={displayedPrice}
+              activeCurrency={activeCurrency}
+              currencySymbol={currencySymbol}
+              averageEntryPrice={averageEntryPrice}
+              spotPrices={spotPrices}
+              isInWatchlist={isInWatchlist}
+              onToggleStar={onToggleStar}
+            />
+            {normalizedAssetKind === "stock" ? (
+              <RegulatoryContext asset={asset} />
+            ) : null}
+          </div>
+        )}
 
         <ResearchTabs
           activeTab={activeTab}
@@ -655,9 +727,10 @@ export function AssetModal({
           hasDetailedFundamentals={hasDetailedFundamentals}
           asset={asset}
           assetSymbol={assetSymbol}
-          isStockResearchEligible={isStockResearchEligible}
-          onViewCompanyProfile={onViewCompanyProfile}
-          onOpenResearch={onOpenResearch}
+          isStockResearchEligible={isResearchEligible}
+          assetKind={normalizedAssetKind}
+          onViewCompanyProfile={handleOpenProfile}
+          onOpenResearch={handleOpenResearch}
           formatCompactMoney={formatCompactMoney}
           formatMultiple={formatMultiple}
           formatRatioPercent={formatRatioPercent}
@@ -665,12 +738,16 @@ export function AssetModal({
 
         <ResearchToolbar
           asset={asset}
+          kind={normalizedAssetKind}
           isInWatchlist={isInWatchlist}
           onToggleStar={onToggleStar}
-          onViewCompanyProfile={onViewCompanyProfile}
+          onViewCompanyProfile={handleOpenProfile}
           onClose={onClose}
           onCompare={onCompare}
-          onOpenResearch={onOpenResearch}
+          onOpenResearch={handleOpenResearch}
+          onOpenDesk={handleOpenDesk}
+          onJournal={onJournal}
+          onDecisionLedger={onDecisionLedger}
         />
       </div>
     </div>

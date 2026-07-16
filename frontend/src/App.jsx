@@ -6,21 +6,26 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
+import { PasswordRequirementsList } from "@/components/ui/async-state";
 import { ToastProvider, Toaster } from "@/components/ui/toast";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceScopeProvider } from "./components/WorkspaceScopeContext";
 import "./styles.css";
+import "./styles/intelligence.css";
+import "./styles/brokerage.css";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
 import { updateFXRates, convertToUSD, inferAssetCurrency } from "./utils/currencyUtils";
 import { ZeninLogo } from "./components/Branding";
+import { TransmissionExplorerProvider } from "./transmission/TransmissionExplorerProvider.jsx";
+import { openExplorer as openTransmissionExplorer } from "./transmission/TransmissionEngine.js";
 import {
   AccountIcon,
   AnalyticsIcon,
   BriefingIcon,
-  DecisionsIcon,
   HomeIcon,
+  IntelligenceIcon,
   JournalIcon,
   LiveRailIcon,
   LogoutIcon,
@@ -36,10 +41,40 @@ import {
 } from "./components/SidebarIcons";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
+import { fetchBrokerageWorkspaceSummary } from "./utils/brokerageApi.js";
 import { zeninFetch, zeninFetchJson } from "./utils/zeninFetch";
+import { buildAssetRoute } from "./utils/assetRegistry";
+import { normalizeInstrumentSymbol, resolveCurrencyInstrument, CURATED_ETF_CATALOG } from "./utils/currencyInstruments.js";
+import { ProviderHealthDashboard } from "./components/ProviderHealthDashboard";
+import { IndicatorActionsProvider } from "./utils/indicatorActions";
 import { startRegistration } from "@simplewebauthn/browser";
 import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection } from "./utils/workspacePersistence";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
+
+function AnimatedTradeToast({ toast, onDismiss }) {
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    setIsClosing(false);
+  }, [toast?.id]);
+
+  const dismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    window.setTimeout(onDismiss, 120);
+  };
+
+  if (!toast) return null;
+  return (
+    <div
+      className={`trade-toast ${toast.type} ${isClosing ? "is-closing" : ""}`}
+      onClick={dismiss}
+      style={{ cursor: "pointer" }}
+    >
+      {toast.message}
+    </div>
+  );
+}
 
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
@@ -47,6 +82,8 @@ import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { useMediaQuery, useViewportWidth } from "./hooks/useMediaQuery";
 import { usePlanGate } from "./hooks/usePlanGate";
 import { CommandPalette, useCommandPaletteLauncher } from "./components/CommandPalette";
+import SecurityRecovery from "./components/SecurityRecovery";
+import { searchAssets } from "./utils/assetSearch.js";
 import { enqueueImportSync, flushImportSyncQueue, hasPendingImportSync } from "./utils/importSyncQueue";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import FirstSessionWelcome from "./components/onboarding/launch/FirstSessionWelcome";
@@ -84,8 +121,8 @@ import {
 } from "./utils/revenueCat";
 import { getAppRuntimeConfig, setRuntimeConfigs } from "./config/runtimeConfigStore";
 
-const REQUIRED_WATCHLIST_CATEGORIES = ["indicators", "commodities"];
-const DEFAULT_WATCHLIST_CATEGORIES = ["stocks", "crypto", ...REQUIRED_WATCHLIST_CATEGORIES];
+const REQUIRED_WATCHLIST_CATEGORIES = ["indicators", "commodities", "etfs", "currencies"];
+const DEFAULT_WATCHLIST_CATEGORIES = ["stocks", "bonds", "crypto", "indicators", "commodities", "etfs", "currencies"];
 
 function withRequiredWatchlistCategories(categories = []) {
   const seen = new Set();
@@ -143,10 +180,6 @@ const BriefingModule = lazyWithReloadRetry(
   () => import("./components/BriefingModule").then((mod) => ({ default: mod.BriefingModule })),
   "zenin_lazy_retry_briefing"
 );
-const DecisionThreadModule = lazyWithReloadRetry(
-  () => import("./components/DecisionThreadModule").then((mod) => ({ default: mod.DecisionThreadModule })),
-  "zenin_lazy_retry_decisions"
-);
 const PersonaOnboardingModal = lazyWithReloadRetry(
   () => import("./components/PersonaOnboardingModal").then((mod) => ({ default: mod.PersonaOnboardingModal })),
   "zenin_lazy_retry_persona"
@@ -154,6 +187,11 @@ const PersonaOnboardingModal = lazyWithReloadRetry(
 const PortfolioModule = lazyWithReloadRetry(
   () => import("./components/PortfolioModule").then((mod) => ({ default: mod.PortfolioModule })),
   "zenin_lazy_retry_portfolio"
+);
+
+const SnapTradeConnectionFlow = lazyWithReloadRetry(
+  () => import("./components/brokerage/SnapTradeConnectionFlow").then((mod) => ({ default: mod.SnapTradeConnectionFlow })),
+  "zenin_lazy_retry_brokerage_flow"
 );
 const OptionsModule = lazyWithReloadRetry(
   () => import("./components/OptionsModule").then((mod) => ({ default: mod.OptionsModule })),
@@ -166,6 +204,10 @@ const JournalModule = lazyWithReloadRetry(
 const AnalyticsModule = lazyWithReloadRetry(
   () => import("./components/AnalyticsModule").then((mod) => ({ default: mod.AnalyticsModule })),
   "zenin_lazy_retry_analytics"
+);
+const IntelligenceWorkspace = lazyWithReloadRetry(
+  () => import("./components/IntelligenceWorkspace").then((mod) => ({ default: mod.default })),
+  "zenin_lazy_retry_intelligence"
 );
 const ResearchModule = lazyWithReloadRetry(
   () => import("./components/ResearchModule").then((mod) => ({ default: mod.ResearchModule })),
@@ -199,6 +241,18 @@ const IndicatorCountryModal = lazyWithReloadRetry(
   () => import("./components/IndicatorCountryModal").then((mod) => ({ default: mod.IndicatorCountryModal })),
   "zenin_lazy_retry_indicator_modal"
 );
+const WatchlistCollectModal = lazyWithReloadRetry(
+  () => import("./components/WatchlistCollectModal"),
+  "zenin_lazy_retry_watchlist_collect"
+);
+const AssetAlertBuilder = lazyWithReloadRetry(
+  () => import("./components/AssetAlertBuilder"),
+  "zenin_lazy_retry_alert_builder"
+);
+const AssetCompareDrawer = lazyWithReloadRetry(
+  () => import("./components/AssetCompareDrawer"),
+  "zenin_lazy_retry_compare_drawer"
+);
 const CompanyProfilePage = lazyWithReloadRetry(
   () => import("./components/CompanyProfilePage").then((mod) => ({ default: mod.CompanyProfilePage })),
   "zenin_lazy_retry_company"
@@ -206,6 +260,18 @@ const CompanyProfilePage = lazyWithReloadRetry(
 const AssetResearchWorkspace = lazyWithReloadRetry(
   () => import("./components/AssetResearchWorkspace").then((mod) => ({ default: mod.AssetResearchWorkspace })),
   "zenin_lazy_retry_asset"
+);
+const MacroAssetWorkspace = lazyWithReloadRetry(
+  () => import("./components/macro/MacroAssetWorkspace").then((mod) => ({ default: mod.MacroAssetWorkspace })),
+  "zenin_lazy_retry_macro"
+);
+const CurrencyResearchWorkspace = lazyWithReloadRetry(
+  () => import("./components/CurrencyResearchWorkspace").then((mod) => ({ default: mod.CurrencyResearchWorkspace })),
+  "zenin_lazy_retry_currency"
+);
+const MacroProfilePage = lazyWithReloadRetry(
+  () => import("./components/macro/MacroProfilePage").then((mod) => ({ default: mod.MacroProfilePage })),
+  "zenin_lazy_retry_macro_profile"
 );
 const OnboardingPage = lazyWithReloadRetry(
   () => import("./pages/OnboardingPage").then((mod) => ({ default: mod.default })),
@@ -442,6 +508,50 @@ function getBrowserNotificationPermission() {
   return Notification.permission;
 }
 
+// ── Comparison target normalization (Watchlist Audit remediation §1) ──────
+// Resolve an asset kind from a bare symbol so legacy bare-symbol compare
+// callbacks route to the correct workspace. FX/currency via the currency
+// registry; ETFs via the curated ETF catalog; default equity/stock.
+function resolveAssetKindFromSymbol(symbol) {
+  const raw = String(symbol || "").trim();
+  if (!raw) return "stock";
+  const inst = resolveCurrencyInstrument(raw);
+  if (inst?.kind === "forex" || inst?.kind === "currency") return inst.kind;
+  // CURATED_ETF_CATALOG is an array of { symbol, ... } entries (ticker in symbol).
+  const upper = raw.toUpperCase();
+  if (CURATED_ETF_CATALOG && CURATED_ETF_CATALOG.some((e) => e.symbol === upper)) return "etf";
+  return "stock";
+}
+
+// Accepts a legacy string OR a typed { symbol, kind, compareSymbol } object.
+function normalizeCompareTarget(input, fallbackKind) {
+  if (input == null) return { symbol: "", kind: fallbackKind || "stock" };
+  if (typeof input === "string") {
+    const symbol = String(input).trim().toUpperCase();
+    return { symbol, kind: fallbackKind || resolveAssetKindFromSymbol(symbol) };
+  }
+  const rawSymbol = input.symbol ?? input.a ?? "";
+  const symbol = String(rawSymbol).trim().toUpperCase();
+  const rawKind = input.kind || input.type || fallbackKind;
+  const kind = rawKind ? String(rawKind).toLowerCase() : resolveAssetKindFromSymbol(symbol);
+  const rawCompare = input.compareSymbol ?? input.peerSymbol ?? input.b ?? null;
+  const compareSymbol = rawCompare ? String(rawCompare).trim().toUpperCase() : null;
+  return { symbol, kind, compareSymbol };
+}
+
+// Read ?view=compare&peer=SYMBOL from the URL so compare deep-links / refresh
+// reopen the correct workspace view (Watchlist Audit remediation §1).
+function readCompareViewState() {
+  if (typeof window === "undefined") return undefined;
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get("view");
+  if (!view) return undefined;
+  const peer = params.get("peer");
+  const state = { view };
+  if (peer) state.compareSymbol = peer.trim().toUpperCase();
+  return state;
+}
+
 function parseRouteFromLocation() {
   if (typeof window === "undefined") {
     return { type: "app", symbol: "" };
@@ -450,7 +560,57 @@ function parseRouteFromLocation() {
   if (compareMatch) {
     const raw = decodeURIComponent(compareMatch[1] || "").trim();
     const [a, b] = raw.split("-vs-").map((s) => s.trim().toUpperCase()).filter(Boolean);
-    return { type: "compare", assets: [a, b].filter(Boolean).map((s) => ({ symbol: s, type: "equity" })) };
+    // Resolve actual types (never hard-code equity). If the primary is a
+    // contextual kind (etf/forex/currency), redirect to its ARW compare view.
+    const primaryKind = a ? resolveAssetKindFromSymbol(a) : "stock";
+    if (a && (primaryKind === "etf" || primaryKind === "forex" || primaryKind === "currency")) {
+      const routeKind = primaryKind === "etf" ? "etf" : primaryKind;
+      const r = buildAssetRoute("research", routeKind, a);
+      if (r) {
+        return { type: r.routeType, symbol: r.symbol, state: { view: "compare", compareSymbol: b || null, kind: primaryKind } };
+      }
+    }
+    return { type: "compare", assets: [a, b].filter(Boolean).map((s) => ({ symbol: s, type: resolveAssetKindFromSymbol(s) })) };
+  }
+  const commodityProfileMatch = window.location.pathname.match(/^\/app\/commodities\/([^/]+)\/profile$/i);
+  if (commodityProfileMatch) {
+    return { type: "commodity-profile", symbol: decodeURIComponent(commodityProfileMatch[1] || "").trim().toUpperCase() };
+  }
+  const commodityMatch = window.location.pathname.match(/^\/app\/commodities\/([^/]+)$/i);
+  if (commodityMatch) {
+    return { type: "commodity", symbol: decodeURIComponent(commodityMatch[1] || "").trim().toUpperCase() };
+  }
+  const etfProfileMatch = window.location.pathname.match(/^\/app\/etf\/([^/]+)\/profile$/i);
+  if (etfProfileMatch) {
+    return { type: "etf-profile", symbol: decodeURIComponent(etfProfileMatch[1] || "").trim().toUpperCase() };
+  }
+  const etfMatch = window.location.pathname.match(/^\/app\/etf\/([^/]+)$/i);
+  if (etfMatch) {
+    return {
+      type: "etf",
+      symbol: decodeURIComponent(etfMatch[1] || "").trim().toUpperCase(),
+      state: readCompareViewState()
+    };
+  }
+  const currencyProfileMatch = window.location.pathname.match(/^\/app\/currency\/([^/]+)\/profile$/i);
+  if (currencyProfileMatch) {
+    return { type: "currency-profile", symbol: decodeURIComponent(currencyProfileMatch[1] || "").trim().toUpperCase() };
+  }
+  const currencyMatch = window.location.pathname.match(/^\/app\/currency\/([^/]+)$/i);
+  if (currencyMatch) {
+    return {
+      type: "currency",
+      symbol: decodeURIComponent(currencyMatch[1] || "").trim().toUpperCase(),
+      state: readCompareViewState()
+    };
+  }
+  const macroProfileMatch = window.location.pathname.match(/^\/app\/macro\/([^/]+)\/profile$/i);
+  if (macroProfileMatch) {
+    return { type: "macro-profile", symbol: decodeURIComponent(macroProfileMatch[1] || "").trim().toUpperCase() };
+  }
+  const macroMatch = window.location.pathname.match(/^\/app\/macro\/([^/]+)$/i);
+  if (macroMatch) {
+    return { type: "macro", symbol: decodeURIComponent(macroMatch[1] || "").trim().toUpperCase() };
   }
   const match = window.location.pathname.match(/^\/app\/company\/([^/]+)$/i);
   if (!match) {
@@ -520,8 +680,8 @@ function getPersonaPromptSessionKey(userId) {
 
 function getPersonaSectionOrder(personaKey) {
   if (personaKey === "casual_investor") return ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Journal"];
-  if (personaKey === "active_trader") return ["Briefing", "Watchlist", "Portfolio", "Decisions", "Journal", "Analytics"];
-  if (personaKey === "small_team") return ["Briefing", "Research", "Watchlist", "Decisions", "Journal", "Analytics"];
+  if (personaKey === "active_trader") return ["Briefing", "Watchlist", "Portfolio", "Intelligence", "Journal", "Analytics"];
+  if (personaKey === "small_team") return ["Briefing", "Research", "Watchlist", "Intelligence", "Journal", "Analytics"];
   return null;
 }
 
@@ -842,6 +1002,11 @@ const SIDEBAR_SECTION_META = {
     eyebrow: "Analytics",
     description: "Scan cross-market and macro context."
   },
+  Intelligence: {
+    group: "Research",
+    eyebrow: "Intelligence",
+    description: "Unified market intelligence: signals, transmission, timeline, and diagnostics."
+  },
   Options: {
     group: "Research",
     eyebrow: "Options",
@@ -851,11 +1016,6 @@ const SIDEBAR_SECTION_META = {
     group: "Research",
     eyebrow: "Predictions",
     description: "Monitor prediction markets and event odds."
-  },
-  Decisions: {
-    group: "Tools",
-    eyebrow: "Decisions",
-    description: "Decision threads: briefing → alert → research → journal → review."
   },
   Journal: {
     group: "Tools",
@@ -1062,6 +1222,28 @@ const searchFallbackAssets = (query, type) => {
         type: "commodity",
         category: "commodities",
         marketType: "commodity",
+      }));
+  }
+  if (normalizedType === "etf" || normalizedType === "etfs") {
+    return searchAssets(normalizedQuery, 24)
+      .filter((asset) => asset.kind === "etf")
+      .slice(0, 8)
+      .map((asset) => ({
+        ...asset,
+        type: "etf",
+        category: "etfs",
+        marketType: "equity",
+      }));
+  }
+  if (normalizedType === "currency" || normalizedType === "currencies" || normalizedType === "forex") {
+    return searchAssets(normalizedQuery, 24)
+      .filter((asset) => asset.kind === "currency" || asset.kind === "forex")
+      .slice(0, 8)
+      .map((asset) => ({
+        ...asset,
+        type: asset.type || (String(asset.symbol || "").includes("/") ? "forex" : "currency"),
+        category: "currencies",
+        marketType: asset.marketType || (String(asset.symbol || "").includes("/") ? "forex" : "macro"),
       }));
   }
   const category = normalizedType === "crypto"
@@ -1341,7 +1523,7 @@ function App() {
     ? appRuntimeConfig.connections.venues.prediction
     : [];
 
-  const [categories, setCategories] = useState([]);
+  const [categories, setCategories] = useState(fallbackCategories);
   const [assets, setAssets] = useState([]);
   const [activeCategory, setActiveCategory] = useState("stocks");
   const [activeTheme, setActiveTheme] = useState("");
@@ -1425,6 +1607,15 @@ function App() {
   const searchSectionRef = useRef(null);
   const searchTypeSelectRef = useRef(null);
   const [journalThreadContext, setJournalThreadContext] = useState(null);
+  const [alertBuilder, setAlertBuilder] = useState({ open: false, asset: null });
+  const [compareDrawer, setCompareDrawer] = useState({ open: false, assets: [] });
+  const [taxSubView, setTaxSubView] = useState(() => {
+    if (typeof window === "undefined") return "tax";
+    return localStorage.getItem("zenin_tax_subview") || "tax";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("zenin_tax_subview", taxSubView);
+  }, [taxSubView]);
   const priceCacheRef = useRef(new Map());
   const portfolioRef = useRef([]);
   const searchRequestSeqRef = useRef(0);
@@ -1678,6 +1869,20 @@ function App() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // Consume cross-desk deep-link intents (dispatched by Commodity Allocation Guidance).
+  useEffect(() => {
+    const onNav = (e) => {
+      const detail = e?.detail || {};
+      const kind = detail.kind;
+      if (kind === "portfolio") { setActiveSection("Portfolio"); }
+      else if (kind === "watchlist") { setActiveSection("Watchlist"); }
+      else if (kind === "decisions") { setActiveSection("Intelligence"); }
+      else if (kind === "equities") { if (detail.group) openCommodityResearch({ symbol: detail.group }); else setActiveSection("Analytics"); }
+    };
+    window.addEventListener("zenin:navigate", onNav);
+    return () => window.removeEventListener("zenin:navigate", onNav);
   }, []);
 
   const showTradeToast = (message, type = "info") => {
@@ -1976,10 +2181,16 @@ useEffect(() => {
 
   const normalizeAssetType = (asset) => {
     const raw = String(asset?.type || "").toLowerCase();
+    const category = String(asset?.category || "").toLowerCase();
     const marketType = String(asset?.marketType || "").toLowerCase();
+    // Currency codes are macro research entities, but they are not indicators.
+    // Keep explicit instrument identity ahead of the generic macro fallback so
+    // USD/EUR cannot be dispatched into IndicatorCountryModal.
+    if (raw === "currency" || category === "currencies") return "currency";
+    if (["forex", "fx"].includes(raw) || marketType === "forex") return "forex";
     if (["stock", "stocks", "equity"].includes(raw)) return "stock";
     if (raw === "crypto") return "crypto";
-    if (raw === "indicator" || String(asset?.category || "").toLowerCase() === "indicators") return "indicator";
+    if (raw === "indicator" || category === "indicators") return "indicator";
     if (raw === "bond") return "bond";
     if (["commodity", "commodities", "metal", "metals"].includes(raw)) return "commodity";
     if (["etf", "etfs"].includes(raw)) return "etf";
@@ -1988,6 +2199,21 @@ useEffect(() => {
     if (marketType === "spot" || marketType === "perp") return "crypto";
     if (asset?.theme || asset?.category) return "stock";
     return "stock";
+  };
+
+  const selectSearchResult = (asset) => {
+    if (!asset) return;
+    if (searchType !== "currency") {
+      setSelectedAsset(asset);
+      return;
+    }
+
+    // Currency search only opens a modal after an explicit result choice. The
+    // registry enrichment locks the selected result to currency/forex identity
+    // even though a standalone currency legitimately carries marketType=macro.
+    const instrument = resolveCurrencyInstrument(asset.symbol);
+    if (!instrument) return;
+    setSelectedAsset({ ...asset, ...instrument });
   };
 
   const navigateToAppRoute = () => {
@@ -2102,13 +2328,176 @@ useEffect(() => {
     }
   }, [workspaceLaunched, routeState.type, goToApp, logLaunchState]);
 
-  const navigateToCompare = useCallback((a, b = null) => {
-    const slug = b ? `${a}-vs-${b}` : `${a}`;
-    setRouteState({ type: "compare", assets: [a, b].filter(Boolean).map((s) => ({ symbol: s, type: "equity" })) });
+  // Kind-aware comparison navigation (Watchlist Audit remediation §1/§2).
+  // Accepts a legacy bare symbol (+ optional peer) OR a typed target
+  // { symbol, kind, compareSymbol }. FX/currency → Currency ARW compare;
+  // ETF → ETF Research compare; everything else → generic ComparisonWorkspace.
+  const navigateToCompare = useCallback((input, maybeB = null) => {
+    const target = normalizeCompareTarget(input, null);
+    const symbol = target.symbol;
+    if (!symbol) return;
+    const compareSymbol = target.compareSymbol
+      || (typeof maybeB === "string" && maybeB.trim() ? maybeB.trim().toUpperCase() : null);
+    const kind = target.kind;
+
+    // Contextual workspaces for etf / forex / currency.
+    if (kind === "etf" || kind === "forex" || kind === "currency") {
+      const routeKind = kind === "etf" ? "etf" : kind; // forex/currency both → currency ARW
+      const r = buildAssetRoute("research", routeKind, symbol);
+      if (r) {
+        const view = "compare";
+        const state = { view, compareSymbol: compareSymbol || null, kind };
+        setSelectedAsset(null);
+        setCompanyRouteAsset(null);
+        setRouteState({ type: r.routeType, symbol: r.symbol, state });
+        if (typeof window !== "undefined") {
+          const q = new URLSearchParams({ view });
+          if (compareSymbol) q.set("peer", compareSymbol);
+          window.history.pushState({ page: r.routeType, symbol: r.symbol, state }, "", `${r.path}?${q.toString()}`);
+        }
+        return;
+      }
+    }
+
+    // Generic comparison for stock / crypto / commodity / bond / indicator.
+    const slug = compareSymbol ? `${symbol}-vs-${compareSymbol}` : `${symbol}`;
+    const assets = [
+      { symbol, type: kind || "equity" },
+      compareSymbol ? { symbol: compareSymbol, type: kind || "equity" } : null
+    ].filter(Boolean);
+    setRouteState({ type: "compare", assets });
     if (typeof window !== "undefined") {
       window.history.pushState({ page: "compare" }, "", `/app/compare/${slug}`);
     }
   }, []);
+
+  // ── Indicator Modal action handlers (shared by IndicatorCountryModal +
+  //     Watchlist → IndicatorMetricModal). Pure launcher contract: the modal
+  //     emits these; App owns the real behavior. Local-only where no backend
+  //     exists (pin/alert/export) — persisted to localStorage, confirmed via
+  //     the in-app toast. No fabricated server state. ──────────────────────
+  const LS_PIN = "zenin.indicatorPins";
+  const LS_ALERT = "zenin.indicatorAlerts";
+  const readLS = (k, fb) => {
+    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; }
+  };
+  const writeLS = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+  // Asset-aware navigation state (Phase 1): every navigation preserves where
+  // the user came from + which indicator initiated it, so the destination page
+  // can preselect the correct context.
+  const indicatorNavState = (code) => ({
+    source: "indicator-modal",
+    assetKind: "indicator",
+    symbol: String(code).toUpperCase(),
+    indicator: String(code).toUpperCase(),
+  });
+
+  const indicatorAssetShape = (code, label) => ({
+    symbol: String(code || "").toUpperCase(),
+    name: label,
+    type: "indicator",
+    category: "indicators",
+    marketType: "macro",
+    market: "Macro",
+  });
+
+  const indicatorIsPinned = (code) => {
+    const pins = readLS(LS_PIN, []);
+    return Array.isArray(pins) && pins.some((p) => String(p.code).toUpperCase() === String(code).toUpperCase());
+  };
+
+  const indicatorActions = {
+    isInWatchlist: (asset) => isInWatchlist(indicatorAssetShape(asset?.symbol || asset, asset?.name)),
+    onToggleStar: (asset) => { void toggleWatchlistStar(indicatorAssetShape(asset?.symbol || asset, asset?.name)); },
+    onCompare: (asset) => {
+      const a = typeof asset === "string" ? { kind: "indicator", symbol: asset } : asset || {};
+      setCompareDrawer({ open: true, assets: [{ kind: a.kind || "indicator", symbol: String(a.symbol || "").toUpperCase(), metric: a.metric }] });
+    },
+    onOpenResearch: ({ symbol }) => {
+      const r = buildAssetRoute("research", "indicator", String(symbol).toUpperCase());
+      if (!r) return;
+      setRouteState({ type: r.routeType, symbol: r.symbol, state: indicatorNavState(symbol) });
+      window.history.pushState({ page: r.routeType, symbol: r.symbol, state: indicatorNavState(symbol) }, "", r.path);
+    },
+    onOpenProfile: ({ symbol }) => {
+      const r = buildAssetRoute("profile", "indicator", String(symbol).toUpperCase());
+      if (!r) return;
+      setRouteState({ type: r.routeType, symbol: r.symbol, state: indicatorNavState(symbol) });
+      window.history.pushState({ page: r.routeType, symbol: r.symbol, state: indicatorNavState(symbol) }, "", r.path);
+    },
+    onOpenTransmission: (node) => { try { openTransmissionExplorer(String(node || "").toUpperCase()); } catch {} },
+    onPin: ({ code, label }) => {
+      const pins = readLS(LS_PIN, []);
+      const key = String(code).toUpperCase();
+      const next = pins.some((p) => String(p.code).toUpperCase() === key)
+        ? pins.filter((p) => String(p.code).toUpperCase() !== key)
+        : [...pins, { code: key, label, pinnedAt: new Date().toISOString() }];
+      writeLS(LS_PIN, next);
+      setTradeToast({ id: Date.now(), type: next.length >= pins.length ? "success" : "info", message: next.some((p) => String(p.code).toUpperCase() === key) ? `${label || key} pinned.` : `${label || key} unpinned.` });
+    },
+    isPinned: (code) => indicatorIsPinned(code),
+    onAlert: ({ code, label }) => {
+      // Phase 5: open the Universal Alert Builder (real, registry-driven).
+      setAlertBuilder({ open: true, asset: { kind: "indicator", symbol: String(code).toUpperCase(), label } });
+    },
+    onExport: ({ code, label, metric }) => {
+      const rows = Array.isArray(metric?.series)
+        ? metric.series.map((p) => ({ date: p.date || new Date(Number(p.ts)).toISOString().slice(0, 10), value: p.value }))
+        : [];
+      const csv = ["date,value", ...rows.map((r) => `${r.date},${r.value}`)].join("\n");
+      const json = JSON.stringify({ code, label, source: metric?.source || "FRED", current: metric?.current ?? null, unit: metric?.unit ?? null, series: rows }, null, 2);
+      const blobCsv = new Blob([csv], { type: "text/csv" });
+      const blobJson = new Blob([json], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blobCsv); a.download = `${String(code).toUpperCase()}.csv`; a.click();
+      a.href = URL.createObjectURL(blobJson); a.download = `${String(code).toUpperCase()}.json`; a.click();
+      setTradeToast({ id: Date.now(), type: "success", message: `Exported ${label || code} (CSV + JSON).` });
+    },
+    onCopyLink: ({ code, label }) => {
+      const r = buildAssetRoute("research", "indicator", String(code).toUpperCase());
+      const url = r ? `${window.location.origin}${r.path}` : window.location.href;
+      if (navigator?.clipboard?.writeText) {
+        navigator.clipboard.writeText(url).then(
+          () => setTradeToast({ id: Date.now(), type: "success", message: "Indicator link copied." }),
+          () => setTradeToast({ id: Date.now(), type: "info", message: url })
+        );
+      } else {
+        setTradeToast({ id: Date.now(), type: "info", message: url });
+      }
+    },
+    onDecisionLedger: ({ indicator }) => {
+      setRouteState((prev) => ({ ...prev, type: "intelligence", indicatorContext: String(indicator).toUpperCase() }));
+      setActiveSection("Intelligence");
+    },
+    onExposure: ({ indicator }) => {
+      setRouteState((prev) => ({ ...prev, type: "portfolio", indicatorContext: String(indicator).toUpperCase() }));
+      setActiveSection("Portfolio");
+    },
+    onJournal: ({ symbol }) => {
+      setJournalThreadContext({ source: "indicator-modal", indicator: String(symbol).toUpperCase() });
+      setActiveSection("Journal");
+    },
+    onScenario: ({ symbol }) => {
+      // Scenario Lab lives within the Analytics / Macro workspace; route there
+      // with the indicator preselected (asset-aware).
+      setActiveSection("Analytics");
+      setTradeToast({ id: Date.now(), type: "info", message: `Scenario Lab opened for ${symbol}.` });
+    },
+    onMacroWorkspace: ({ symbol }) => {
+      const r = buildAssetRoute("research", "indicator", String(symbol).toUpperCase());
+      if (r) {
+        setRouteState({ type: r.routeType, symbol: r.symbol, state: indicatorNavState(symbol) });
+        window.history.pushState({ page: r.routeType, symbol: r.symbol, state: indicatorNavState(symbol) }, "", r.path);
+      }
+      setActiveSection("Analytics");
+    },
+    onSelectIndicator: (code) => {
+      // Reuse the same modal instance: replace the selected metric without
+      // closing context. IndicatorCountryModal listens via this callback.
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("zenin:selectIndicator", { detail: { code: String(code).toUpperCase() } }));
+    },
+  };
 
   const syncGuestSectionUrl = useCallback((section) => {
     if (!isGuestQueryRequested() || typeof window === "undefined") return;
@@ -2120,20 +2509,139 @@ useEffect(() => {
   }, []);
 
   const openWorkspaceSection = useCallback((section, payload = null) => {
-    const appSections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Decisions", "Journal", "Tax Estimator"];
+    const appSections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
     if (!appSections.includes(section)) return;
-    if (routeState.type === "company") navigateToAppRoute();
-    if (section === "Home") setHomeSubview(null);
-    if (section === "Journal" && payload) {
-      setJournalThreadContext(payload);
-    }
-    setActiveSection(section);
-    if (isGuestQueryRequested() && section !== "Home") {
-      setGuestInteraction(section);
-      setGuestActionFeedback(`${section} preview opened.`);
-    }
+    startTransition(() => {
+      if (routeState.type === "company") navigateToAppRoute();
+      if (section === "Home") setHomeSubview(null);
+      if (section === "Journal" && payload) {
+        setJournalThreadContext(payload);
+      }
+      setActiveSection(section);
+      if (isGuestQueryRequested() && section !== "Home") {
+        setGuestInteraction(section);
+        setGuestActionFeedback(`${section} preview opened.`);
+      }
+    });
     syncGuestSectionUrl(section);
-  }, [routeState.type, syncGuestSectionUrl]);
+  }, [navigateToAppRoute, routeState.type, syncGuestSectionUrl]);
+
+  const openAssetResearch = (asset) => {
+    const symbol = normalizeSymbolKey(asset?.symbol);
+    if (!symbol) return;
+    const r = buildAssetRoute("research", "stock", symbol);
+    if (!r) return;
+    startTransition(() => {
+      setSelectedAsset(null);
+      setCompanyRouteAsset(null);
+      setRouteState({ type: r.routeType, symbol: r.symbol });
+    });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: r.routeType, symbol: r.symbol }, "", r.path);
+    }
+  };
+
+  // Host-provided navigation for the Intelligence cockpit. Replaces the
+  // component's self-managed window.history.pushState so routing stays
+  // consistent with App conventions (activeSection + routeState + URL sync).
+  const navigateIntelligence = useCallback((payload = {}) => {
+    const target = payload?.target || payload?.workspace || payload?.context;
+    const event = payload?.event || null;
+    const firstAffected = Array.isArray(event?.affectedAssets) ? event.affectedAssets[0] : null;
+    const firstAffectedSymbol = typeof firstAffected === "string" ? firstAffected : firstAffected?.symbol;
+    const symbol = normalizeSymbolKey(payload?.symbol || payload?.entity || event?.assets?.[0] || firstAffectedSymbol || "");
+    const peerSymbol = normalizeSymbolKey(payload?.compareSymbol || payload?.peerSymbol || event?.assets?.[1] || "");
+    if (target === "macro") {
+      const label = payload?.country || payload?.symbol || "USA";
+      const r = buildAssetRoute("research", "macro", label);
+      if (r) startTransition(() => setRouteState({ type: r.routeType, symbol: r.symbol }));
+      return;
+    }
+    if (target === "research") {
+      openWorkspaceSection("Research", symbol ? { symbol } : null);
+      return;
+    }
+    if (target === "transmission") {
+      try { openTransmissionExplorer(String(symbol || "").toUpperCase()); } catch {}
+      return;
+    }
+    if (target === "asset" && symbol) {
+      openAssetResearch({ symbol });
+      return;
+    }
+    if (target === "scenario") {
+      startTransition(() => setTaxSubView("calculator"));
+      openWorkspaceSection("Tax Estimator", {
+        source: "intelligence",
+        symbol,
+        eventHeadline: event?.headline || event?.title || null,
+        context: payload?.context || null,
+      });
+      return;
+    }
+    if (target === "journal") {
+      openWorkspaceSection("Journal", {
+        source: "intelligence",
+        symbol,
+        preThesis: event?.headline || event?.title || "Intelligence signal review",
+        note: event?.summary || event?.detail || "",
+        catalyst: event?.source || null,
+        context: payload?.context || null,
+      });
+      return;
+    }
+    if (target === "alert") {
+      if (!symbol) {
+        setTradeToast({ id: Date.now(), type: "info", message: "Select an asset before creating an intelligence alert." });
+        return;
+      }
+      setAlertBuilder({
+        open: true,
+        asset: {
+          symbol,
+          kind: payload?.kind || payload?.context || "intelligence",
+          name: event?.headline || event?.title || symbol,
+          source: "intelligence",
+        },
+      });
+      return;
+    }
+    if (target === "watchlist-add") {
+      if (!symbol) {
+        openWorkspaceSection("Watchlist");
+        return;
+      }
+      startTransition(() => {
+        setWatchlistPrompt({
+          asset: {
+            symbol,
+            name: event?.headline || event?.title || symbol,
+            type: payload?.kind || payload?.context || "stock",
+            category: payload?.context === "commodity" ? "commodities" : "stocks",
+            marketType: payload?.context === "commodity" ? "commodity" : "stock",
+            theme: payload?.context || "intelligence",
+          },
+          category: payload?.context === "commodity" ? "commodities" : "stocks",
+          theme: "intelligence",
+          customTheme: "",
+          error: "",
+          submitting: false,
+        });
+      });
+      return;
+    }
+    if (target === "compare") {
+      if (!symbol) {
+        setCompareDrawer({ open: true, assets: [] });
+        return;
+      }
+      navigateToCompare({ symbol, kind: payload?.kind || "equity", compareSymbol: peerSymbol || null });
+      return;
+    }
+    if (target && openWorkspaceSection && ["Home","Briefing","Portfolio","Watchlist","Analytics","Intelligence","Options","Predictions","Journal","Tax Estimator"].includes(target)) {
+      openWorkspaceSection(target);
+    }
+  }, [buildAssetRoute, openWorkspaceSection, openTransmissionExplorer, openAssetResearch, navigateToCompare, setRouteState]);
 
   const retryLiveData = useCallback(() => {
     setGuestRetryingLiveData(true);
@@ -2168,22 +2676,97 @@ useEffect(() => {
     if (!asset || normalizeAssetType(asset) !== "stock") return;
     const symbol = normalizeSymbolKey(asset.symbol);
     if (!symbol) return;
+    const r = buildAssetRoute("profile", "stock", symbol);
+    if (!r) return;
     setCompanyRouteAsset(asset);
     setSelectedAsset(null);
-    setRouteState({ type: "company", symbol });
+    setRouteState({ type: r.routeType, symbol: r.symbol });
     if (typeof window !== "undefined") {
-      window.history.pushState({ page: "company", symbol }, "", `/app/company/${encodeURIComponent(symbol)}`);
+      window.history.pushState({ page: r.routeType, symbol: r.symbol }, "", r.path);
     }
   };
 
-  const openAssetResearch = (asset) => {
-    const symbol = normalizeSymbolKey(asset?.symbol);
+  const openCommodityResearch = (asset) => {
+    const symbol = normalizeSymbolKey(asset?.symbol || asset);
     if (!symbol) return;
+    const r = buildAssetRoute("research", "commodity", symbol);
+    if (!r) return;
     setSelectedAsset(null);
     setCompanyRouteAsset(null);
-    setRouteState({ type: "asset", symbol });
+    setRouteState({ type: r.routeType, symbol: r.symbol });
     if (typeof window !== "undefined") {
-      window.history.pushState({ page: "asset", symbol }, "", `/app/asset/${encodeURIComponent(symbol)}`);
+      window.history.pushState({ page: r.routeType, symbol: r.symbol }, "", r.path);
+    }
+  };
+
+  const openCommodityProfile = (asset) => {
+    const symbol = normalizeSymbolKey(asset?.symbol || asset);
+    if (!symbol) return;
+    const r = buildAssetRoute("profile", "commodity", symbol);
+    if (!r) return;
+    setSelectedAsset(null);
+    setCompanyRouteAsset(null);
+    setRouteState({ type: r.routeType, symbol: r.symbol });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: r.routeType, symbol: r.symbol }, "", r.path);
+    }
+  };
+
+  const openEtfResearch = (asset) => {
+    const symbol = normalizeSymbolKey(asset?.symbol || asset);
+    if (!symbol) return;
+    const r = buildAssetRoute("research", "etf", symbol);
+    if (!r) return;
+    setSelectedAsset(null);
+    setCompanyRouteAsset(null);
+    setRouteState({ type: r.routeType, symbol: r.symbol, state: asset?.view ? { view: asset.view } : undefined });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: r.routeType, symbol: r.symbol, state: asset?.view ? { view: asset.view } : undefined }, "", r.path);
+    }
+  };
+
+  const openEtfProfile = (asset) => {
+    const symbol = normalizeSymbolKey(asset?.symbol || asset);
+    if (!symbol) return;
+    const r = buildAssetRoute("profile", "etf", symbol);
+    if (!r) return;
+    setSelectedAsset(null);
+    setCompanyRouteAsset(null);
+    setRouteState({ type: r.routeType, symbol: r.symbol });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: r.routeType, symbol: r.symbol }, "", r.path);
+    }
+  };
+
+  // Currency / FX — route by registry result, never by manual route strings.
+  // FX pair => forex kind (Currency ARW, pair mode); currency code => currency kind.
+  const openCurrencyResearch = (asset) => {
+    const symbol = normalizeInstrumentSymbol(asset?.symbol || asset);
+    if (!symbol) return;
+    const inst = resolveCurrencyInstrument(symbol);
+    const kind = inst ? inst.kind : "currency"; // "forex" | "currency"
+    const r = buildAssetRoute("research", kind, symbol);
+    if (!r) return;
+    setSelectedAsset(null);
+    setCompanyRouteAsset(null);
+    setRouteState({ type: r.routeType, symbol: r.symbol, state: asset?.view ? { view: asset.view } : undefined });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: r.routeType, symbol: r.symbol, state: asset?.view ? { view: asset.view } : undefined }, "", r.path);
+    }
+  };
+
+  const openCurrencyProfile = (asset) => {
+    const symbol = normalizeInstrumentSymbol(asset?.symbol || asset);
+    if (!symbol) return;
+    const inst = resolveCurrencyInstrument(symbol);
+    const kind = inst ? inst.kind : "currency";
+    const r = buildAssetRoute("profile", kind, symbol);
+    if (!r) return;
+    setSelectedAsset(null);
+    setCompanyRouteAsset(null);
+    setRouteState({ type: r.routeType, symbol: r.symbol });
+    if (typeof window !== "undefined") {
+      window.history.pushState({ page: r.routeType, symbol: r.symbol }, "", r.path);
     }
   };
 
@@ -2230,13 +2813,15 @@ useEffect(() => {
     const defaultTheme = stockThemes.includes(activeTheme)
       ? activeTheme
       : (String(asset?.theme || "").trim() || stockThemes[0] || "");
-    setWatchlistPrompt({
-      asset,
-      category: defaultCategory,
-      theme: defaultTheme,
-      customTheme: "",
-      error: "",
-      submitting: false
+    startTransition(() => {
+      setWatchlistPrompt({
+        asset,
+        category: defaultCategory,
+        theme: defaultTheme,
+        customTheme: "",
+        error: "",
+        submitting: false
+      });
     });
   };
 
@@ -3420,7 +4005,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       return true;
     } catch (err) {
       console.error("removeFromWatchlist failed:", err);
-      return true;
+      return false;
     }
   };
 
@@ -3472,18 +4057,20 @@ const handleOptionTradeClosed = async (tradeId) => {
     }
   };
 
-  const submitWatchlistPrompt = async () => {
+  const submitWatchlistPrompt = async (opts = {}) => {
     if (!watchlistPrompt?.asset) return;
 
-    const selectedCategory = String(watchlistPrompt.category || "").trim().toLowerCase();
-    const selectedThemeFromList = String(watchlistPrompt.theme || "").trim();
-    const selectedCustomTheme = formatThemeLabel(watchlistPrompt.customTheme);
-    const selectedTheme = selectedCustomTheme || selectedThemeFromList;
+    // New modal passes { theme, category, mode }; fall back to prompt state for
+    // legacy callers. Category is optional (grouping only); theme is required.
+    const selectedTheme = formatThemeLabel(
+      opts.theme || watchlistPrompt.customTheme || watchlistPrompt.theme
+    );
+    const selectedCategory =
+      String(opts.category ?? watchlistPrompt.category ?? "").trim().toLowerCase() ||
+      String(watchlistPrompt.asset.category || "").trim().toLowerCase() ||
+      "stocks";
+    const mode = opts.mode || "add";
 
-    if (!selectedCategory) {
-      setWatchlistPrompt((prev) => ({ ...prev, error: "Choose a category before adding this asset." }));
-      return;
-    }
     if (!selectedTheme) {
       setWatchlistPrompt((prev) => ({ ...prev, error: "Choose a theme or type a new one." }));
       return;
@@ -3499,12 +4086,16 @@ const handleOptionTradeClosed = async (tradeId) => {
       if (!stockThemes.some((theme) => theme.toLowerCase() === selectedTheme.toLowerCase())) {
         setCustomStockThemes((prev) => [...prev, selectedTheme]);
       }
+      // Registry-driven, kind-aware: preserve the asset's real kind/market rather
+      // than forcing "stock" (keeps the commodity + future-kind paths honest).
+      const promptAsset = watchlistPrompt.asset;
+      const resolvedType = normalizeAssetType(promptAsset) || promptAsset.type || "stock";
       const assetForWatchlist = {
-        ...watchlistPrompt.asset,
+        ...promptAsset,
         category: selectedCategory,
         theme: selectedTheme,
-        type: "stock",
-        marketType: "equity"
+        type: resolvedType,
+        marketType: promptAsset.marketType || resolveMarketType(promptAsset),
       };
       const added = await addToWatchlist(assetForWatchlist);
       if (!added) {
@@ -3512,6 +4103,11 @@ const handleOptionTradeClosed = async (tradeId) => {
         return;
       }
       setWatchlistPrompt(null);
+      if (mode === "addOpen") {
+        setActiveSection("Watchlist");
+        setActiveCategory(selectedCategory);
+        setActiveTheme(selectedTheme);
+      }
     } catch {
       setWatchlistPrompt((prev) => ({ ...prev, submitting: false, error: "Could not add asset to watchlist. Please try again." }));
     }
@@ -3543,16 +4139,17 @@ const handleOptionTradeClosed = async (tradeId) => {
     })[0];
   }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
 
-  const sections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Options", "Predictions", "Decisions", "Journal", "Tax Estimator"];
+  const isCommodityRouteAsset = Boolean(
+    selectedAsset && (selectedAsset.type === "commodity" || selectedAsset.marketType === "commodity" || selectedAsset.category === "commodities")
+  );
+
+  const isEtfRouteAsset = Boolean(
+    selectedAsset && (selectedAsset.type === "etf" || selectedAsset.marketType === "etf" || selectedAsset.category === "etfs")
+  );
+
+  const sections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
   const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
   const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
-  const [taxSubView, setTaxSubView] = useState(() => {
-    if (typeof window === "undefined") return "tax";
-    return localStorage.getItem("zenin_tax_subview") || "tax";
-  });
-  useEffect(() => {
-    if (typeof window !== "undefined") localStorage.setItem("zenin_tax_subview", taxSubView);
-  }, [taxSubView]);
   const [activeSection, setActiveSection] = useState(() => {
     if (typeof window !== "undefined" && isGuestQueryRequested()) {
       const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
@@ -3561,6 +4158,18 @@ const handleOptionTradeClosed = async (tradeId) => {
     // New users land on Home; returning users keep their saved section.
     return sections.includes(savedSection) ? savedSection : "Home";
   });
+  // Transmission Explorer deep-link resolver (Phase 0/D3). Maps typed {type,label}
+  // intents to registry-correct SPA routes. Declared after setActiveSection exists.
+  const handleTransmissionNavigate = useCallback((target) => {
+    if (!target) return;
+    const label = String(target.label || "").trim().toUpperCase();
+    const type = String(target.type || "").toLowerCase();
+    if (type === "commodity" && label) openCommodityResearch({ symbol: label });
+    else if ((type === "company" || type === "equities" || type === "stock") && label) openCompanyProfile({ symbol: label });
+    else if (type === "portfolio" || type === "equities") setActiveSection("Portfolio");
+    else if (type === "macro") setActiveSection("Analytics");
+    else if (type === "watchlist") setActiveSection("Watchlist");
+  }, [openCommodityResearch, openCompanyProfile, setActiveSection]);
   const [guestInteraction, setGuestInteraction] = useState("");
   const [guestActionFeedback, setGuestActionFeedback] = useState("");
   const [guestRetryingLiveData, setGuestRetryingLiveData] = useState(false);
@@ -3591,11 +4200,16 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   useEffect(() => {
     if (isSidebarVisuallyCollapsed || viewportWidth > 960) return undefined;
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
     const handler = (event) => {
       if (event.key === "Escape") setIsSidebarCollapsed(true);
     };
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    return () => {
+      document.body.style.overflow = overflow;
+      window.removeEventListener("keydown", handler);
+    };
   }, [isSidebarVisuallyCollapsed, viewportWidth]);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
@@ -3813,7 +4427,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         console.warn("Could not seed journal entry from research promotion:", journalError?.message);
       }
     }
-    openWorkspaceSection("Decisions");
+    openWorkspaceSection("Intelligence");
     return res.thread;
   }, [isExplicitGuestMode, isGuestUser]);
 
@@ -3842,6 +4456,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const toggleTheme = () => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProviderHealthOpen, setIsProviderHealthOpen] = useState(false);
   const settingsPanelRef = useRef(null);
   useEffect(() => {
     if (!isSettingsOpen) return undefined;
@@ -3856,7 +4471,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [isSettingsOpen]);
-  const [activeSettingsCategory, setActiveSettingsCategory] = useState("General");
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState("Profile");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
     "profile-email": false,
     "profile-password": false,
@@ -4439,6 +5054,9 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [connectAccountFeedback, setConnectAccountFeedback] = useState("");
   const [connectAccountSuccess, setConnectAccountSuccess] = useState(null);
   const [connectedAccountsHydrated, setConnectedAccountsHydrated] = useState(false);
+  const [showBrokerageFlow, setShowBrokerageFlow] = useState(false);
+  const [brokerageAccounts, setBrokerageAccounts] = useState([]);
+  const [brokerageSummary, setBrokerageSummary] = useState(null);
   const [todayBriefing, setTodayBriefing] = useState(null);
   const [decisionThreads, setDecisionThreads] = useState([]);
   
@@ -4457,7 +5075,14 @@ const handleOptionTradeClosed = async (tradeId) => {
     apiSecret: ""
   });
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
-  const settingsCategories = ["Profile", "Subscription", "Workspace", "General", "Accounts", "Notification"];
+  const settingsCategories = ["Profile", "Workspace", "Notifications", "Security", "Connected accounts", "Billing"];
+  const settingsCategoryPanel = {
+    Notifications: "Notification",
+    Security: "Profile",
+    "Connected accounts": "Accounts",
+    Billing: "Subscription",
+  };
+  const activeSettingsPanel = settingsCategoryPanel[activeSettingsCategory] || activeSettingsCategory;
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
     const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
@@ -5137,6 +5762,26 @@ const handleOptionTradeClosed = async (tradeId) => {
   useEffect(() => {
     localStorage.setItem("zenin_connected_accounts", JSON.stringify(connectedAccounts));
   }, [connectedAccounts]);
+
+  // Load the brokerage (SnapTrade pilot) workspace summary when signed in.
+  // Failures are non-fatal: an unavailable pilot simply yields an empty summary,
+  // never a fabricated connection.
+  const loadBrokerageSummary = useCallback(async (opts = {}) => {
+    if (isGuestUser || !authUserId) return;
+    try {
+      const summary = await fetchBrokerageWorkspaceSummary();
+      if (!summary) return;
+      setBrokerageSummary(summary);
+      setBrokerageAccounts(Array.isArray(summary.accounts) ? summary.accounts : []);
+    } catch (err) {
+      if (opts.silent) return; // pilot off / not eligible — expected, not an error surface
+    }
+  }, [isGuestUser, authUserId]);
+
+  useEffect(() => {
+    if (isGuestUser || !authUserId || !connectedAccountsHydrated) return;
+    loadBrokerageSummary({ silent: true });
+  }, [isGuestUser, authUserId, connectedAccountsHydrated, loadBrokerageSummary]);
 
   useEffect(() => {
     localStorage.setItem("zenin_active_section", activeSection);
@@ -5847,8 +6492,8 @@ const handleOptionTradeClosed = async (tradeId) => {
         if (newPassword.length < 10) {
           throw new Error("New password must be at least 10 characters.");
         }
-        if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
-          throw new Error("Use letters, numbers, and a symbol in your new password.");
+        if (!/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/\d/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
+          throw new Error("Use lowercase, uppercase, number, and symbol in your new password.");
         }
         const client = getSupabaseClient();
         const { error: authError } = await client.auth.updateUser({
@@ -5888,8 +6533,8 @@ const handleOptionTradeClosed = async (tradeId) => {
       setProfileMessage("password", "error", "New password and confirmation do not match.");
       return;
     }
-    if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-      setProfileMessage("password", "error", "Use at least one letter and one number in your new password.");
+    if (!/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/\d/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
+      setProfileMessage("password", "error", "Use lowercase, uppercase, number, and symbol in your new password.");
       return;
     }
     if (hashSecret(newPassword) === (profileSecurity.passwordHash || passwordCheck.bootstrapHash || hashSecret(currentPassword))) {
@@ -6249,7 +6894,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     Metrics: MetricsIcon,
     Options: OptionsIcon,
     Predictions: PredictionsIcon,
-    Decisions: DecisionsIcon,
+    Intelligence: IntelligenceIcon,
     Journal: JournalIcon,
     "Tax Estimator": TaxIcon
   };
@@ -6398,11 +7043,13 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   return (
     <ToastProvider>
+    <IndicatorActionsProvider value={indicatorActions}>
     <WorkspaceScopeProvider accounts={connectedAccounts}>
+    <TransmissionExplorerProvider onNavigate={handleTransmissionNavigate}>
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""} ${booted ? "ob-booted" : "ob-boot"}`}>
       {isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <button
-          className="fixed top-[calc(env(safe-area-inset-top,0px)+12px)] left-[max(12px,env(safe-area-inset-left))] z-[1000] flex items-center justify-center p-2 rounded-md bg-slate-400/10 border border-slate-400/20 backdrop-blur-md text-[var(--color-text-secondary)] cursor-pointer hover:bg-slate-400/20 transition-colors"
+          className="fixed top-[calc(env(safe-area-inset-top,0px)+12px)] left-[max(12px,env(safe-area-inset-left))] z-[1000] flex items-center justify-center p-2 rounded-md bg-[var(--color-surface-hover)] border border-[var(--color-border-medium)] backdrop-blur-md text-[var(--color-text-secondary)] cursor-pointer hover:bg-[var(--color-surface-selected)] transition-colors"
           onClick={() => setIsSidebarCollapsed(false)}
           aria-label="Open Menu"
           aria-expanded={!isSidebarVisuallyCollapsed}
@@ -6413,13 +7060,13 @@ const handleOptionTradeClosed = async (tradeId) => {
       )}
       {!isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <div
-          className="fixed inset-0 z-[1090] bg-black/55 backdrop-blur-[2px] animate-in fade-in duration-200"
+          className="mobile-sidebar-scrim fixed inset-0 z-[1090] bg-black/55 backdrop-blur-[2px]"
           role="presentation"
           aria-hidden="true"
           onClick={() => setIsSidebarCollapsed(true)}
         />
       )}
-      <aside id="zenin-primary-sidebar" className={`sidebar premium-operator-console sidebar-overhaul-v2 ${isSidebarVisuallyCollapsed ? "collapsed" : ""}`}>
+      <aside id="zenin-primary-sidebar" className={`sidebar premium-operator-console sidebar-overhaul-v2 mobile-sidebar-panel ${isSidebarVisuallyCollapsed ? "collapsed" : "open"}`}>
         <TooltipProvider delayDuration={150}>
         <header className="sidebar-header sidebar-brand-row">
           {!isSidebarVisuallyCollapsed ? (
@@ -6595,6 +7242,26 @@ const handleOptionTradeClosed = async (tradeId) => {
           <Tooltip side="right">
             <TooltipTrigger asChild>
               <button
+                className="sidebar-theme-row sidebar-utility-row"
+                onClick={() => setIsProviderHealthOpen(true)}
+                title="Provider Status"
+                aria-label="Open provider status"
+              >
+                <span className="sidebar-utility-left">
+                  <span className="sidebar-theme-icon" aria-hidden="true">⚙</span>
+                  <span className="sidebar-utility-copy">
+                    <span className="sidebar-theme-label">Provider Status</span>
+                  </span>
+                </span>
+                {!isSidebarVisuallyCollapsed ? <span className="sidebar-theme-arrow">›</span> : null}
+              </button>
+            </TooltipTrigger>
+            {isSidebarVisuallyCollapsed ? <TooltipContent>Provider Status</TooltipContent> : null}
+          </Tooltip>
+
+          <Tooltip side="right">
+            <TooltipTrigger asChild>
+              <button
                 className="sidebar-theme-row sidebar-utility-row sidebar-logout-row"
                 onClick={handleLogout}
                 title="Sign out"
@@ -6616,6 +7283,12 @@ const handleOptionTradeClosed = async (tradeId) => {
       </aside>
 
 <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
+        {routeState.indicatorContext && routeState.type !== "decisions" && routeState.type !== "portfolio" ? (
+          <div className="indicator-context-banner route-context-banner">
+            <span>Viewing from <b>{String(routeState.indicatorContext).toUpperCase()}</b> · source: {routeState.source || "indicator-modal"}</span>
+            <button type="button" className="link-btn" onClick={() => setActiveSection("Home")}>Clear</button>
+          </div>
+        ) : null}
         {routeState.type === "compare" ? (
           <div className="view-container cmp-view-container">
             <ComparisonWorkspace
@@ -6634,6 +7307,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 asset={routedCompanyAsset}
                 onBack={navigateToAppRoute}
                 onOpenResearch={openAssetResearch}
+                onOpenCommodity={openCommodityResearch}
               />
             </Suspense>
           </div>
@@ -6650,9 +7324,114 @@ const handleOptionTradeClosed = async (tradeId) => {
                 symbol={routeState.symbol}
                 asset={routedCompanyAsset}
                 isInWatchlist={routedCompanyAsset?.isInWatchlist}
+                view={routeState.state?.view}
                 onOpenCompanyProfile={(a) => openCompanyProfile(a || { symbol: routeState.symbol })}
                 onClose={navigateToAppRoute}
-                onCompare={(sym) => navigateToCompare(sym)}
+                onCompare={(target) => navigateToCompare(target || { symbol: routeState.symbol, kind: routeState.state?.kind || "stock" })}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "commodity" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <AssetResearchWorkspace
+                kind="commodity"
+                symbol={routeState.symbol}
+                onOpenProfile={openCommodityProfile}
+                onOpenCompanyProfile={openCompanyProfile}
+                onClose={navigateToAppRoute}
+                onCompare={(target) => navigateToCompare(target || { symbol: routeState.symbol, kind: "commodity" })}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "macro" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <MacroAssetWorkspace symbol={routeState.symbol || "USA"} onClose={navigateToAppRoute} onOpenEtf={openEtfResearch} />
+            </Suspense>
+          </div>
+        ) : routeState.type === "macro-profile" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <MacroProfilePage symbol={routeState.symbol || "USA"} onClose={navigateToAppRoute} />
+            </Suspense>
+          </div>
+        ) : routeState.type === "commodity-profile" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <CompanyProfilePage
+                kind="commodity"
+                symbol={routeState.symbol}
+                onBack={navigateToAppRoute}
+                onOpenResearch={openCommodityResearch}
+                onOpenCommodity={openCompanyProfile}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "etf" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <AssetResearchWorkspace
+                kind="etf"
+                symbol={routeState.symbol}
+                view={routeState.state?.view}
+                compareSymbol={routeState.state?.compareSymbol}
+                onOpenProfile={openEtfProfile}
+                onOpenCompanyProfile={openEtfResearch}
+                onClose={navigateToAppRoute}
+                onCompare={(target) => navigateToCompare(target || { symbol: routeState.symbol, kind: "etf" })}
+                onOpenMacro={() => {
+                  const r = buildAssetRoute("research", "macro", "USA");
+                  if (r) setRouteState({ type: r.routeType, symbol: r.symbol });
+                }}
+                onOpenCountry={(label) => {
+                  const r = buildAssetRoute("research", "macro", label);
+                  if (r) setRouteState({ type: r.routeType, symbol: r.symbol });
+                }}
+                onOpenSector={(label) => {
+                  const r = buildAssetRoute("research", "macro", "USA");
+                  if (r) setRouteState({ type: r.routeType, symbol: r.symbol });
+                }}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "etf-profile" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <CompanyProfilePage
+                kind="etf"
+                symbol={routeState.symbol}
+                onBack={navigateToAppRoute}
+                onOpenResearch={openEtfResearch}
+                onOpenCommodity={openEtfProfile}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "currency" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <CurrencyResearchWorkspace
+                symbol={routeState.symbol}
+                mode={resolveCurrencyInstrument(routeState.symbol)?.kind === "forex" ? "pair" : "currency"}
+                view={routeState.state?.view}
+                compareSymbol={routeState.state?.compareSymbol}
+                onClose={navigateToAppRoute}
+                onOpenProfile={openCurrencyProfile}
+                onCompare={(target) => navigateToCompare(target || { symbol: routeState.symbol, kind: resolveCurrencyInstrument(routeState.symbol)?.kind || "currency" })}
+              />
+            </Suspense>
+          </div>
+        ) : routeState.type === "currency-profile" ? (
+          <div className="view-container">
+            <Suspense fallback={moduleLoadingFallback}>
+              <CurrencyResearchWorkspace
+                symbol={routeState.symbol}
+                mode={resolveCurrencyInstrument(routeState.symbol)?.kind === "forex" ? "pair" : "currency"}
+                view={routeState.state?.view}
+                compareSymbol={routeState.state?.compareSymbol}
+                onClose={navigateToAppRoute}
+                onOpenProfile={openCurrencyProfile}
+                onCompare={(target) => navigateToCompare(target || { symbol: routeState.symbol, kind: resolveCurrencyInstrument(routeState.symbol)?.kind || "currency" })}
               />
             </Suspense>
           </div>
@@ -6718,7 +7497,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                 }}
                 onOpenWatchlist={() => openWorkspaceSection("Watchlist")}
                 onOpenAnalytics={() => openWorkspaceSection("Analytics")}
+                onOpenIntelligence={() => openWorkspaceSection("Intelligence")}
                 onOpenResearch={() => openWorkspaceSection("Research")}
+                brokerageSummary={brokerageSummary}
+                onConnectBrokerage={() => setShowBrokerageFlow(true)}
               />
             )}
           </>
@@ -6779,7 +7561,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       className="settings-primary-btn"
                       onClick={() => {
                         setIsSettingsOpen(true);
-                        setActiveSettingsCategory("Subscription");
+                        setActiveSettingsCategory("Billing");
                       }}
                     >
                       View Upgrade Path
@@ -6822,6 +7604,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                     setWatchlistNotice(`Upgrade to ${lockedWatchlistPlanLabel} to manage this shared watchlist.`);
                     return "locked";
                   }}
+                  onAddAsset={() => {
+                    setWatchlistNotice(`Upgrade to ${lockedWatchlistPlanLabel} to manage this shared watchlist.`);
+                  }}
                   onImportAssets={() => {
                     const message = `Upgrade to ${lockedWatchlistPlanLabel} to import into this shared watchlist.`;
                     setWatchlistNotice(message);
@@ -6857,9 +7642,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                           ? "stocks"
                           : searchType === "commodity"
                             ? "commodities"
-                          : searchType === "indicator"
+                            : searchType === "indicator"
                             ? "for Country"
-                            : "crypto"
+                              : searchType === "etf"
+                                ? "ETFs"
+                                : searchType === "currency"
+                                  ? "currencies or FX pairs"
+                                  : "crypto"
                       }${searchType === "indicator" ? "" : " by symbol or name..."}`
                       : "Select class and search assets..."
                   }
@@ -6881,6 +7670,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <option value="crypto">Crypto</option>
                       <option value="indicator">Indicator</option>
                       <option value="commodity">Commodities</option>
+                      <option value="etf">ETFs</option>
+                      <option value="currency">Currencies</option>
                     </select>
                     <span className="search-type-select-caret" aria-hidden="true">▾</span>
                   </div>
@@ -6898,7 +7689,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                           <div
                             key={getSearchResultKey(asset)}
                             className="search-result-item clickable"
-                            onClick={() => setSelectedAsset(asset)}
+                            onClick={() => selectSearchResult(asset)}
                           >
                             <div className="search-result-info">
                               <div className="search-result-symbol">{asset.symbol}</div>
@@ -6947,6 +7738,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               stockThemes={stockThemes}
               isInWatchlist={isInWatchlist}
               onToggleStar={toggleWatchlistStar}
+              onAddAsset={toggleWatchlistStar}
               onImportAssets={importWatchlistAssets}
               onPageChange={handlePageChange}
               liveStatus={liveStreamStatus}
@@ -6970,7 +7762,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
         {activeSection === "Portfolio" && !shouldRenderGuestPreview && (
-          <div className="view-container portfolio-shell-view">
+          <div className="view-container portfolio-shell-view workspace-page">
             {renderConnectNudge("portfolio")}
             <PortfolioModule
                 portfolio={portfolioWithEntry}
@@ -7007,20 +7799,44 @@ const handleOptionTradeClosed = async (tradeId) => {
                   setHomeSubview("market-context");
                 }}
                 onOpenConnections={() => openConnectWindow("manual")}
+                onConnectBrokerage={() => setShowBrokerageFlow(true)}
                 connectedAccounts={connectedAccounts}
+                brokerageAccounts={brokerageAccounts}
+                brokerageSummary={brokerageSummary}
                 hasDeskFeatureAccess={hasDeskFeatureAccess}
                 onOpenPlans={() => {
                   setIsSettingsOpen(true);
-                  setActiveSettingsCategory("Subscription");
+                  setActiveSettingsCategory("Billing");
                 }}
+                indicatorContext={routeState.indicatorContext}
               />
+              <Suspense fallback={null}>
+                <SnapTradeConnectionFlow
+                  open={showBrokerageFlow}
+                  onClose={() => setShowBrokerageFlow(false)}
+                  onConnected={() => loadBrokerageSummary({ silent: true })}
+                />
+              </Suspense>
 
           </div>
         )}
 
        {activeSection === "Analytics" && !shouldRenderGuestPreview && (
         <div className="view-container">
-          <AnalyticsModule backendUrl={BACKEND_URL} hasDeskFeatureAccess={hasDeskFeatureAccess} />
+          <AnalyticsModule
+          backendUrl={BACKEND_URL}
+          hasDeskFeatureAccess={hasDeskFeatureAccess}
+          onCommoditySelect={(symbol) => {
+            const sym = String(symbol || "").trim().toUpperCase();
+            if (!sym) return;
+            setSelectedAsset({ symbol: sym, type: "commodity", marketType: "commodity", category: "commodities" });
+          }}
+          onOpenCommodityResearch={openCommodityResearch}
+          onOpenCommodityProfile={openCommodityProfile}
+          onOpenCommodityTransmission={(symbol) => { try { openTransmissionExplorer(String(symbol || "").toUpperCase()); } catch {} }}
+          onAddCommodityToWatchlist={(symbol) => openWatchlistPrompt({ symbol, type: "commodity", marketType: "commodity", category: "commodities" })}
+          onOpenResearch={() => openWorkspaceSection("Research", { geo: selectedGeoCode })}
+        />
         </div>
       )}
 
@@ -7052,13 +7868,14 @@ const handleOptionTradeClosed = async (tradeId) => {
           <PredictionMarketModule />
         )}
 
-        {activeSection === "Decisions" && !shouldRenderGuestPreview && (
+        {activeSection === "Intelligence" && !shouldRenderGuestPreview && (
           <div className="view-container">
-            <DecisionThreadModule
-              decisionThreads={decisionThreads}
-              isGuestUser={isGuestUser}
-              onThreadsChanged={(next) => setDecisionThreads(next || [])}
-              onOpenSection={openWorkspaceSection}
+            <IntelligenceWorkspace
+              context={routeState.type === "intelligence" ? undefined : routeState.type}
+              symbol={routeState.symbol}
+              indicatorContext={routeState.indicatorContext}
+              portfolio={portfolioWithEntry}
+              onNavigate={navigateIntelligence}
             />
           </div>
         )}
@@ -7081,13 +7898,13 @@ const handleOptionTradeClosed = async (tradeId) => {
             <div className="tax-subview-tabs">
               <button
                 className={`tax-subview-tab ${taxSubView === "tax" ? "active" : ""}`}
-                onClick={() => setTaxSubView("tax")}
+                onClick={() => startTransition(() => setTaxSubView("tax"))}
               >
                 Tax Estimator
               </button>
               <button
                 className={`tax-subview-tab ${taxSubView === "calculator" ? "active" : ""}`}
-                onClick={() => setTaxSubView("calculator")}
+                onClick={() => startTransition(() => setTaxSubView("calculator"))}
               >
                 Calculator
               </button>
@@ -7122,11 +7939,19 @@ const handleOptionTradeClosed = async (tradeId) => {
               asset={selectedAsset}
               onClose={() => setSelectedAsset(null)}
               onConfirm={null}
-              onCompare={(sym) => { setSelectedAsset(null); navigateToCompare(sym); }}
+              onCompare={({ kind, symbol }) => {
+                setSelectedAsset(null);
+                const k = String(kind || "equity").toLowerCase();
+                if (k === "etf") { openEtfResearch({ symbol, view: "compare" }); return; }
+                if (k === "forex" || k === "currency") { openCurrencyResearch({ symbol, view: "compare" }); return; }
+                navigateToCompare(symbol);
+              }}
               researchOnly
               isInWatchlist={isInWatchlist}
               onToggleStar={toggleWatchlistStar}
-              onViewCompanyProfile={openCompanyProfile}
+              onViewCompanyProfile={isEtfRouteAsset ? openEtfProfile : isCommodityRouteAsset ? openCommodityProfile : openCompanyProfile}
+              onOpenResearch={isEtfRouteAsset ? openEtfResearch : isCommodityRouteAsset ? openCommodityResearch : openAssetResearch}
+              onOpenDesk={() => setActiveSection("Analytics")}
               portfolio={portfolioWithEntry}
               balance={balance}
               cashBalances={cashBalances}
@@ -7137,89 +7962,47 @@ const handleOptionTradeClosed = async (tradeId) => {
         </Suspense>
       )}
 
-      {tradeToast && (
-        <div 
-          className={`trade-toast ${tradeToast.type}`}
-          onClick={() => setTradeToast(null)}
-          style={{ cursor: "pointer" }}
-        >
-          {tradeToast.message}
-        </div>
+      <AnimatedTradeToast toast={tradeToast} onDismiss={() => setTradeToast(null)} />
+
+      {alertBuilder?.open && (
+        <AssetAlertBuilder
+          open={alertBuilder.open}
+          asset={alertBuilder.asset}
+          onClose={() => setAlertBuilder({ open: false, asset: null })}
+          onToast={(msg) => setTradeToast({ id: Date.now(), type: "success", message: msg })}
+        />
+      )}
+
+      {compareDrawer?.open && (
+        <AssetCompareDrawer
+          open={compareDrawer.open}
+          assets={compareDrawer.assets}
+          onClose={() => setCompareDrawer({ open: false, assets: [] })}
+          onToast={(msg) => setTradeToast({ id: Date.now(), type: "info", message: msg })}
+        />
       )}
 
       {watchlistPrompt?.asset && (
-        <div className="watchlist-add-overlay" onClick={() => setWatchlistPrompt(null)}>
-          <div className="watchlist-add-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="watchlist-add-header">
-              <h3>Add {watchlistPrompt.asset.symbol} to Watchlist</h3>
-              <button className="close-btn" onClick={() => setWatchlistPrompt(null)}>&times;</button>
-            </div>
-            <div className="watchlist-add-body">
-              <div className="watchlist-add-field-row">
-                <label className="settings-field">
-                  <span>Category</span>
-                  <select
-                    value={watchlistPrompt.category}
-                    onChange={(e) =>
-                      setWatchlistPrompt((prev) => ({ ...prev, category: e.target.value, error: "" }))
-                    }
-                  >
-                    {tradfiCategoryOptions.map((category) => (
-                      <option key={category} value={category}>
-                        {category.charAt(0).toUpperCase() + category.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="settings-field">
-                  <span>Theme</span>
-                  <select
-                    value={watchlistPrompt.theme}
-                    onChange={(e) =>
-                      setWatchlistPrompt((prev) => ({ ...prev, theme: e.target.value, customTheme: "", error: "" }))
-                    }
-                  >
-                    <option value="">Select a theme</option>
-                    {stockThemes.map((theme) => (
-                      <option key={theme} value={theme}>{theme}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <label className="settings-field">
-                <span>Or create a new theme</span>
-                <input
-                  type="text"
-                  placeholder="Type a new theme name"
-                  value={watchlistPrompt.customTheme}
-                  onChange={(e) =>
-                    setWatchlistPrompt((prev) => ({ ...prev, customTheme: e.target.value, error: "" }))
-                  }
-                />
-              </label>
-
-              {watchlistPrompt.error ? (
-                <p className="watchlist-add-error">{watchlistPrompt.error}</p>
-              ) : (
-                <p className="watchlist-add-help">
-                  Pick an existing theme or create a new one. New themes will appear in the Stocks filters.
-                </p>
-              )}
-            </div>
-            <div className="watchlist-add-actions">
-              <button className="settings-secondary-btn" onClick={() => setWatchlistPrompt(null)}>Cancel</button>
-              <button
-                className="settings-primary-btn"
-                onClick={submitWatchlistPrompt}
-                disabled={watchlistPrompt.submitting}
-              >
-                {watchlistPrompt.submitting ? "Adding..." : "Add to Watchlist"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <WatchlistCollectModal
+          asset={watchlistPrompt.asset}
+          themes={stockThemes}
+          categories={tradfiCategoryOptions}
+          watchlistAssets={watchlistAssets}
+          initialTheme={watchlistPrompt.theme || watchlistPrompt.customTheme || ""}
+          initialCategory={watchlistPrompt.category || ""}
+          submitting={watchlistPrompt.submitting}
+          error={watchlistPrompt.error}
+          onCancel={() => setWatchlistPrompt(null)}
+          onConfirm={submitWatchlistPrompt}
+          onOpenTheme={(category, theme) => {
+            startTransition(() => {
+              setWatchlistPrompt(null);
+              setActiveSection("Watchlist");
+              setActiveCategory(category || "stocks");
+              setActiveTheme(theme);
+            });
+          }}
+        />
       )}
 
       {isSettingsOpen && (
@@ -7239,7 +8022,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           <div className="flex flex-col w-full max-w-4xl max-h-[90vh] bg-[var(--color-surface-card)] border border-[var(--color-border)] rounded-lg shadow-2xl overflow-hidden" ref={settingsPanelRef} onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-start px-8 py-6 border-b border-[var(--color-border)]">
               <div className="flex flex-col gap-1">
-                <span className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">CONTROL BAY</span>
+                <span className="settings-meta-label">Workspace control</span>
                 <h2 className="text-[var(--fs-xl)] font-medium text-[var(--color-text-primary)] m-0">Workspace Settings</h2>
                 <p className="text-[var(--fs-body)] text-[var(--color-text-secondary)] m-0">Profile, security, billing, data, and workstation controls.</p>
               </div>
@@ -7253,7 +8036,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
             <div className="flex flex-1 min-h-0">
               <aside className="flex flex-col gap-1 w-[220px] p-6 pr-4 border-r border-[var(--color-border)] bg-[var(--color-bg-base)] overflow-y-auto" role="tablist" aria-label="Settings categories">
-                <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold px-3 pb-3">Settings Index</div>
+                <div className="settings-index-label">Settings</div>
                 {settingsCategories.map((category) => (
                   <button
                     key={category}
@@ -7261,7 +8044,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                     id={`settings-tab-${category.replace(/\s+/g, "-").toLowerCase()}`}
                     aria-selected={activeSettingsCategory === category}
                     aria-controls="settings-content-panel"
-                    className={`text-left px-3 py-2 rounded-md text-[var(--fs-body)] transition-colors ${ activeSettingsCategory === category ? "active" : "" ? "bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-white bg-transparent border-none"}`}
+                    className={`settings-category-tab ${activeSettingsCategory === category ? "active" : ""}`.trim()}
                     onClick={() => handleSettingsCategorySelect(category)}
                   >
                     {category}
@@ -7275,7 +8058,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 aria-labelledby={`settings-tab-${activeSettingsCategory.replace(/\s+/g, "-").toLowerCase()}`}
                 className="flex-1 p-8 overflow-y-auto bg-[var(--color-surface-card)]"
               >
-                {activeSettingsCategory === "Profile" && (
+                {activeSettingsPanel === "Profile" && (
                   <>
                     <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
@@ -7405,6 +8188,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                                   placeholder="Re-enter new password"
                                 />
                               </label>
+                              <PasswordRequirementsList
+                                value={profileForms.newPassword}
+                                confirmValue={profileForms.confirmPassword}
+                                includeMatch
+                              />
                             </>
                           ) : null}
                           <div className="flex gap-3 mt-2">
@@ -7772,6 +8560,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                       )}
                     </div>
 
+                    <SecurityRecovery twoFactorEnabled={!!profileSecurity?.twoFactorEnabled} />
+
                     <div className="settings-panel settings-danger-panel">
                       <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-delete")}>
                         <span>Delete Account</span>
@@ -7832,7 +8622,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
-                {activeSettingsCategory === "Subscription" && (
+                {activeSettingsPanel === "Subscription" && (
                   <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
                     <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("subscription-plan")}>
                       <span>My Plan</span>
@@ -8033,7 +8823,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </div>
                 )}
 
-                {activeSettingsCategory === "General" && (
+                {activeSettingsPanel === "General" && (
                   <>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
                       <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("general-display")}>
@@ -8132,7 +8922,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
-                {activeSettingsCategory === "Workspace" && (
+                {activeSettingsPanel === "Workspace" && (
                   <>
                     <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">
                       Desk workspaces turn Zenin into a shared operating surface: members, seats, shared account ingestion, and recent desk activity all live here.
@@ -8363,7 +9153,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
-                {activeSettingsCategory === "Accounts" && (
+                {activeSettingsPanel === "Accounts" && (
                   <>
                     <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
@@ -8373,6 +9163,16 @@ const handleOptionTradeClosed = async (tradeId) => {
                       </button>
                       {expandedSettingsPanels["accounts-connected"] && (
                         <div className="flex flex-col gap-4 p-5 border-t border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              className={cn(buttonVariants({ variant: "default", size: "sm" }))}
+                              onClick={() => setShowBrokerageFlow(true)}
+                            >
+                              Connect brokerage
+                            </button>
+                            <span className="text-[12px] text-[var(--color-text-secondary)]">Read-only SnapTrade link. Zenin cannot trade or withdraw.</span>
+                          </div>
                           {connectedAccounts.length === 0 ? (
                             <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No saved CEX, DEX, brokerage, or prediction market sources yet. Add one read-only source to preserve portfolio context; only supported providers can live sync today.</p>
                           ) : (
@@ -8466,7 +9266,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   </>
                 )}
 
-                {activeSettingsCategory === "Notification" && (
+                {activeSettingsPanel === "Notification" && (
                   <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
                     <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("notifications-channels")}>
                       <span>Notification Channels</span>
@@ -8851,6 +9651,15 @@ const handleOptionTradeClosed = async (tradeId) => {
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
         commands={paletteCommands}
+        assetSearch={searchAssets}
+        onSelectAsset={(asset) => {
+          if (!asset) return;
+          const kind = String(asset.kind || "").toLowerCase();
+          const sym = String(asset.symbol || "").toUpperCase();
+          if (kind === "commodity") openCommodityResearch({ symbol: sym });
+          else if (kind === "company") openCompanyProfile({ symbol: sym });
+          else setSelectedAsset({ symbol: sym, type: kind, marketType: kind, category: asset.category });
+        }}
       />
       <Suspense fallback={null}>
         <SpeedInsights />
@@ -8859,7 +9668,9 @@ const handleOptionTradeClosed = async (tradeId) => {
       <Toaster />
       <FirstSessionWelcome />
       </div>
+    </TransmissionExplorerProvider>
     </WorkspaceScopeProvider>
+    </IndicatorActionsProvider>
     </ToastProvider>
   );
 }

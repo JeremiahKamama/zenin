@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CompactPageHeader, DensePanelHeader, MetricStrip } from "./CompactWorkspaceUI";
 import { zeninFetch } from "../utils/zeninFetch";
-
 function formatRelativeTime(iso) {
   if (!iso) return null;
   const then = new Date(iso).getTime();
@@ -83,6 +82,43 @@ export function BriefingModule({
       setFeedback(error.message || "Failed to mark briefing read.");
     }
   }, [localBriefing, onMarkRead]);
+
+  // Normalize the briefing's status into one object the UI can render
+  // consistently (generated time, data age, read state, staleness, next action).
+  // Declared after the handlers it references (handleGenerate/handleMarkRead)
+  // so the useMemo factory doesn't hit them in the temporal dead zone.
+  const briefingStatus = useMemo(() => {
+    const generatedAt = localBriefing?.generatedAt || null;
+    const ageMs = generatedAt ? Date.now() - new Date(generatedAt).getTime() : null;
+    const ageMins = ageMs != null ? Math.round(ageMs / 60000) : null;
+    const ageHours = ageMins != null ? ageMins / 60 : null;
+    const ageTone =
+      ageHours == null ? "unknown"
+      : ageHours <= 1 ? "fresh"
+      : ageHours <= 6 ? "recent"
+      : ageHours <= 24 ? "aging"
+      : "stale";
+    const isUnread = Boolean(localBriefing && !localBriefing.readAt);
+    const isStale = ageTone === "stale";
+    const openDecisions = Array.isArray(decisionThreads)
+      ? decisionThreads.filter((t) => t?.status === "open" || !t?.completed).length
+      : 0;
+    let nextAction = null;
+    if (!localBriefing) nextAction = { label: "Generate", action: handleGenerate };
+    else if (isUnread) nextAction = { label: "Mark read", action: handleMarkRead };
+    else if (isStale) nextAction = { label: "Refresh", action: handleGenerate };
+    else if (openDecisions > 0) nextAction = { label: "Review decisions", action: () => onOpenSection?.("Decisions") };
+    return {
+      generatedAt,
+      ageLabel: formatRelativeTime(generatedAt),
+      ageTone,
+      isUnread,
+      isStale,
+      isGenerating: generating,
+      hasOpenDecisions: openDecisions > 0,
+      nextAction
+    };
+  }, [localBriefing, generating, decisionThreads, now, handleGenerate, handleMarkRead, onOpenSection]);
 
   const handleComplete = useCallback(async () => {
     if (!localBriefing?.id) return;
@@ -307,6 +343,28 @@ export function BriefingModule({
         </div>
       ) : (
         <div className="briefing-content">
+          <div className="briefing-status-strip" role="status" aria-live="polite">
+            {briefingStatus.generatedAt ? (
+              <span className="briefing-tag briefing-tag-meta">Generated {briefingStatus.ageLabel}</span>
+            ) : null}
+            {briefingStatus.generatedAt ? (
+              <span className={`briefing-tag briefing-tag-age briefing-tag-age-${briefingStatus.ageTone}`}>
+                {briefingStatus.ageTone === "fresh" ? "Fresh" : briefingStatus.ageTone === "recent" ? "Recent" : briefingStatus.ageTone === "aging" ? "Aging" : "Stale data"}
+              </span>
+            ) : null}
+            <span className={`briefing-tag ${briefingStatus.isUnread ? "briefing-tag-unread" : "briefing-tag-read"}`}>
+              {briefingStatus.isUnread ? "Unread" : "Read"}
+            </span>
+            {briefingStatus.nextAction ? (
+              <button
+                type="button"
+                className="briefing-status-action tertiary"
+                onClick={briefingStatus.nextAction.action}
+              >
+                {briefingStatus.nextAction.label}
+              </button>
+            ) : null}
+          </div>
           {localBriefing.summary ? (
             <p className="briefing-summary">{localBriefing.summary}</p>
           ) : null}
@@ -317,16 +375,6 @@ export function BriefingModule({
             {localBriefing.riskLevel ? (
               <span className={`briefing-tag briefing-tag-risk briefing-tag-risk-${localBriefing.riskLevel}`}>{localBriefing.riskLevel}</span>
             ) : null}
-            {localBriefing.generatedAt ? (
-              <span className="briefing-tag briefing-tag-meta">Generated {formatRelativeTime(localBriefing.generatedAt)}</span>
-            ) : null}
-            {localBriefing.readAt ? (
-              <span className="briefing-read-tag" title={`Read ${new Date(localBriefing.readAt).toLocaleString()}`}>
-                Read · {formatRelativeTime(localBriefing.readAt)}
-              </span>
-            ) : (
-              <button type="button" className="briefing-mark-read-link" onClick={handleMarkRead}>Mark as read</button>
-            )}
           </div>
 
           <div className="briefing-sort-row">
@@ -431,6 +479,7 @@ export function BriefingModule({
           </div>
         </div>
       )}
+
     </div>
   );
 }

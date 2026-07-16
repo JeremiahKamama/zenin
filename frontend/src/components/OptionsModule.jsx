@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { DataHealthBadge } from "@/components/ui/async-state";
 import { DataTable } from "./data-table/DataTable";
 import { OptionsCalculator } from "./OptionsCalculator";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
@@ -1680,7 +1681,7 @@ useEffect(() => {
                 },
                 { key: "asset", header: "Asset", sortable: false, cell: (t) => <span className="active-trades-symbol">{t.asset}</span> },
                 { key: "qty", header: "Qty", sortable: false, cell: (t) => t.qty || t.quantity || 1 },
-                { key: "expiry", header: "Expiry", sortable: false, cell: (t) => <span style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>{t.legs?.[0]?.expiry || "—"}</span> },
+                { key: "expiry", header: "Expiry", sortable: false, cell: (t) => <span style={{ fontSize: "var(--fs-sm)", color: "var(--color-text-secondary)" }}>{t.legs?.[0]?.expiry || "—"}</span> },
                 {
                   key: "prem",
                   header: "Scenario Prem",
@@ -1900,7 +1901,7 @@ useEffect(() => {
                 {marketStructureLabel}
               </span>
               <span className={`data-health-badge ${loading ? "loading" : optionsStale ? "hazard" : "ok"}`} title={loading ? "Refreshing options chain" : optionsStale ? "Showing previous options snapshot" : "Options chain is up to date"}>
-                <span className={`status-icon ${loading ? "spinner" : ""}`}>{loading ? "⟳" : optionsStale ? "⚠" : "✓"}</span>
+                <DataHealthBadge status={loading ? "loading" : optionsStale ? "stale" : "ok"} />
                 Chain
               </span>
             </div>
@@ -1994,7 +1995,7 @@ useEffect(() => {
                       <td className="bid-ask positive">{formatOptionPx(row.call?.ask)}</td>
                       <td className="strike-col" style={{ position: "relative" }}>
                         {isAtm ? (
-                          <div style={{ position: "absolute", top: "-10px", left: "50%", transform: "translateX(-50%)", background: "var(--color-data-primary)", color: "var(--color-text-inverse)", padding: "1px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: "bold", zIndex: 10, whiteSpace: "nowrap" }}>
+                          <div style={{ position: "absolute", top: "-10px", left: "50%", transform: "translateX(-50%)", background: "var(--color-data-primary)", color: "var(--color-text-inverse)", padding: "1px 6px", borderRadius: "4px", fontSize: "var(--fs-xs)", fontWeight: "bold", zIndex: 10, whiteSpace: "nowrap" }}>
                             {activeAsset} {activeSpot.toFixed(2)}
                           </div>
                         ) : null}

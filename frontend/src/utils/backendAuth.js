@@ -203,3 +203,29 @@ export async function signOutEverywhere() {
   setSupabaseSessionHint(false);
   persistZeninAuth(null);
 }
+
+// ── Phase 5: security settings (backend-owned endpoints) ───────────────────
+// Load OAuth providers the backend is configured to offer. Returns the raw
+// provider list; the caller renders only enabled providers and handles the
+// archived (e.g. apple) ones gracefully.
+export async function fetchOAuthProviders() {
+  const data = await zeninFetchJson("/api/auth/oauth/providers");
+  const providers = Array.isArray(data?.providers) ? data.providers : [];
+  return providers;
+}
+
+// Regenerate 2FA backup codes via the Zenin backend. The backend returns
+// plaintext codes ONCE; the caller must display them immediately and must NOT
+// persist them in app state or localStorage beyond the active view (they are
+// one-time secrets). Named distinctly from the Supabase backup flow in App.jsx.
+export async function regenerateZeninBackupCodes() {
+  const data = await zeninFetchJson("/api/auth/2fa/backup-codes/regenerate", { method: "POST" });
+  if (!data?.success) {
+    throw new Error(data?.error || "Backup code regeneration failed.");
+  }
+  return {
+    success: true,
+    user: data?.user || null,
+    backupCodes: Array.isArray(data?.backupCodes) ? data.backupCodes : [],
+  };
+}

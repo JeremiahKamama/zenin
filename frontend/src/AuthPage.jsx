@@ -6,6 +6,7 @@ import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect,
 import { zeninFetchJson } from "./utils/zeninFetch";
 import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/backendAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
+import { PasswordRequirementsList } from "@/components/ui/async-state";
 
 function getModeFromLocation() {
   if (typeof window === "undefined") return "signup";
@@ -34,7 +35,7 @@ function isValidEmail(value) {
 
 function isStrongPassword(password) {
   const value = String(password || "");
-  return value.length >= 10 && /[a-z]/i.test(value) && /\d/.test(value) && /[^a-z0-9]/i.test(value);
+  return value.length >= 10 && /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^a-z0-9]/i.test(value);
 }
 
 function isRecoveryLinkActive() {
@@ -265,7 +266,7 @@ export default function AuthPage() {
     if (!signupForm.displayName.trim()) throw new Error("Enter your display name.");
     if (!isValidEmail(signupForm.email)) throw new Error("Enter a valid email address.");
     if (!isStrongPassword(signupForm.password)) {
-      throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
+      throw new Error("Password must be 10+ characters with lowercase, uppercase, number, and symbol.");
     }
     const data = await zeninFetchJson("/api/auth/signup", {
       method: "POST",
@@ -333,7 +334,7 @@ export default function AuthPage() {
   const onResetPassword = () => runAction(async () => {
     if (!recoveryReady) throw new Error("Open the recovery link from your email first.");
     if (!isStrongPassword(forgotForm.newPassword)) {
-      throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
+      throw new Error("Password must be 10+ characters with lowercase, uppercase, number, and symbol.");
     }
     // Try to read a reset token from the URL (query or fragment)
     const url = typeof window !== "undefined" ? new URL(window.location.href) : null;
@@ -367,12 +368,6 @@ export default function AuthPage() {
     }
     await finishSignedInSession();
   });
-
-  const signupPasswordRules = [
-    { label: "At least 10 characters", ok: signupForm.password.length >= 10 },
-    { label: "Includes a number", ok: /\d/.test(signupForm.password) },
-    { label: "Includes a symbol", ok: /[^a-z0-9]/i.test(signupForm.password) },
-  ];
 
   const togglePasswordVisibility = (field) => {
     setVisiblePasswords((prev) => ({ ...prev, [field]: !prev[field] }));
@@ -440,11 +435,7 @@ export default function AuthPage() {
                 </button>
               </div>
 
-              <ul className="auth-v2-rule-list auth-v2-signup-rules" aria-label="Password requirements">
-                {signupPasswordRules.map((rule) => (
-                  <li key={rule.label} className={rule.ok ? "ok" : ""}>{rule.label}</li>
-                ))}
-              </ul>
+              <PasswordRequirementsList value={signupForm.password} className="auth-v2-signup-rules" />
 
               <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" type="submit" disabled={loading}>
                 {loading ? "Creating account..." : "Create account"}
@@ -624,6 +615,8 @@ export default function AuthPage() {
                       {visiblePasswords.reset ? <EyeOffIcon /> : <EyeIcon />}
                     </button>
                   </div>
+
+                  <PasswordRequirementsList value={forgotForm.newPassword} className="auth-v2-signup-rules" />
 
                   <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" type="submit" disabled={loading}>
                     {loading ? "Updating..." : "Update password"}

@@ -796,7 +796,21 @@ export default function TaxWorkspace({ trades = [], portfolio = [], spotPrices =
           />
         </div>
 
-        <ResultsWorkspace results={results} accountantCopy={accountantCopy} currency={advanced.currency || "USD"} />
+        <ResultsWorkspace
+          results={results}
+          accountantCopy={accountantCopy}
+          currency={advanced.currency || "USD"}
+          assumptions={{
+            taxYear,
+            costBasisMethod: advanced.costBasisMethod,
+            realizationMode: advanced.realizationMode,
+            residencyStatus: advanced.residencyStatus,
+            currency: advanced.currency || "USD",
+            notes: advanced.notes,
+          }}
+          sources={taxSources}
+          rulesLastUpdated={taxRulesLastUpdated}
+        />
 
         <section className="tax-workbench-panel tax-workbench-scenarios">
           <DensePanelHeaderInline title="Scenario Comparison" subtitle="" actions={

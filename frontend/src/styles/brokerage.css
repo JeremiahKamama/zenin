@@ -1,0 +1,120 @@
+/* Brokerage (SnapTrade pilot) — read-only connection UI
+   Brand v2: monochrome, border-weight + label carry state (no hue alone). */
+
+/* ── Connected Accounts drawer additions ─────────────────────────────────── */
+.saved-items-section-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary, #9ca3af);
+  margin: 4px 0 10px;
+}
+.connection-source-kind {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-medium, #2a2a2a);
+  border-radius: 4px;
+  color: var(--color-text-secondary, #9ca3af);
+}
+.connection-row--brokerage .saved-items-row-copy strong { color: var(--color-text-primary, #f5f5f5); }
+
+/* ── Portfolio brokerage banner (above the fold) ─────────────────────────── */
+.portfolio-brokerage-banner {
+  margin: 0 0 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--color-border-medium, #2a2a2a);
+  border-radius: 12px;
+  background: var(--color-surface-alt, rgba(255, 255, 255, 0.02));
+}
+.portfolio-brokerage-banner-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.portfolio-brokerage-banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.portfolio-brokerage-banner-value { font-size: 16px; font-weight: 700; }
+.portfolio-brokerage-banner-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #9ca3af);
+}
+.portfolio-brokerage-duplicate {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--color-text-secondary, #9ca3af);
+  font-size: 12px;
+  color: var(--color-text-secondary, #9ca3af);
+}
+
+/* ── SnapTrade connection flow drawer ────────────────────────────────────── */
+.snaptrade-flow-tag {
+  display: inline-block;
+  margin-left: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-medium, #2a2a2a);
+  border-radius: 999px;
+  color: var(--color-text-secondary, #9ca3af);
+}
+.snaptrade-flow-content { display: block; }
+.snaptrade-flow-state { padding: 4px 0 8px; }
+.snaptrade-flow-title { font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+.snaptrade-flow-copy { font-size: 13px; line-height: 1.5; color: var(--color-text-secondary, #9ca3af); margin: 0 0 14px; }
+.snaptrade-flow-readonly { font-style: italic; }
+.snaptrade-flow-error { color: var(--color-text-primary, #f5f5f5); font-size: 12px; margin: 8px 0 0; }
+.snaptrade-flow-providers { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 8px; }
+.snaptrade-flow-providers li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 12px; border: 1px solid var(--color-border-medium, #2a2a2a); border-radius: 8px;
+}
+.snaptrade-flow-provider-count { font-size: 12px; color: var(--color-text-secondary, #9ca3af); }
+.snaptrade-flow-loading { color: var(--color-text-secondary, #9ca3af); }
+.snaptrade-flow-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.snaptrade-flow-connection { padding: 12px 0; border-top: 1px solid var(--color-border-medium, #2a2a2a); border-bottom: 1px solid var(--color-border-medium, #2a2a2a); margin-bottom: 12px; }
+.snaptrade-flow-connection-row { display: flex; align-items: center; gap: 10px; }
+.snaptrade-flow-source-kind { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 6px; border: 1px solid var(--color-border-medium, #2a2a2a); border-radius: 4px; }
+.snaptrade-flow-connection-meta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--color-text-secondary, #9ca3af); }
+.snaptrade-flow-confirm { margin-top: 14px; padding: 12px; border: 1px solid var(--color-border-medium, #2a2a2a); border-radius: 8px; }
+
+/* status pills reused from provider-trust-pill palette; add warn/danger tones */
+.provider-trust-pill-warn { background: transparent; border: 1px solid var(--color-text-secondary, #9ca3af); color: var(--color-text-secondary, #9ca3af); }
+.provider-trust-pill-danger { background: transparent; border: 1px solid var(--color-text-primary, #f5f5f5); color: var(--color-text-primary, #f5f5f5); }
+
+.btn { font: inherit; cursor: pointer; border-radius: 8px; padding: 9px 16px; border: 1px solid var(--color-border-medium, #2a2a2a); background: transparent; color: var(--color-text-primary, #f5f5f5); }
+.btn--primary { background: var(--color-surface-inverse, #f5f5f5); color: var(--color-surface, #0a0a0a); border-color: transparent; font-weight: 600; }
+.btn--ghost { background: transparent; }
+.btn--danger { border-color: var(--color-text-primary, #f5f5f5); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+@media (max-width: 480px) {
+  .snaptrade-flow-actions { flex-direction: column; align-items: stretch; }
+  .portfolio-brokerage-banner-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+}
+
+/* ── Home connected-brokerage tile ───────────────────────────────────────── */
+.home-exec-brokerage-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-medium, #2a2a2a);
+}
+.home-exec-brokerage-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-secondary, #9ca3af); }
+.home-exec-brokerage-value { font-size: 18px; font-weight: 700; }
+.home-exec-brokerage-meta { font-size: 12px; color: var(--color-text-secondary, #9ca3af); }
+.home-exec-brokerage-link { align-self: flex-start; margin-top: 4px; font: inherit; cursor: pointer; background: none; border: none; padding: 0; color: var(--color-text-primary, #f5f5f5); text-decoration: underline; font-size: 12px; }

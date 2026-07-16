@@ -363,6 +363,11 @@ export function OptionsCalculator({   spotPrice = 0,
     if (!closest) return point;
     return Math.abs(point.price - S) < Math.abs(closest.price - S) ? point : closest;
   }, null);
+  const spotPayoffPnl = Number(spotPayoffPoint?.value || 0);
+  const payoffPriceRange = {
+    min: payoffSeriesData[0]?.price ?? S,
+    max: payoffSeriesData[payoffSeriesData.length - 1]?.price ?? S,
+  };
   const payoffMarkers = [
     spotPayoffPoint ? {
       time: spotPayoffPoint.time,
@@ -804,21 +809,21 @@ export function OptionsCalculator({   spotPrice = 0,
             <p className="options-calc-label">P&L Diagram</p>
             <p className="options-calc-aux">At expiration - underlying price vs profit/loss</p>
           </div>
-          <div className="options-calculator-pnl-stats">
+          <div className="options-calculator-pnl-stats" aria-label="P&L diagram summary">
             <div className="options-calc-stat">
-              <p className="options-calc-stat-label">MAX PROFIT</p>
+              <p className="options-calc-stat-label">Max profit</p>
               <p className="options-calc-stat-value" style={{ color: maxProfit === Infinity ? "var(--color-success)" : isProfitColor(maxProfit) }}>
                 {maxProfit > 9999 ? "Unlimited" : `$${maxProfit.toFixed(2)}`}
               </p>
             </div>
             <div className="options-calc-stat">
-              <p className="options-calc-stat-label">MAX LOSS</p>
+              <p className="options-calc-stat-label">Max loss</p>
               <p className="options-calc-stat-value" style={{ color: "var(--color-danger)" }}>
                 {maxLoss < -9999 ? "Unlimited" : `$${maxLoss.toFixed(2)}`}
               </p>
             </div>
             <div className="options-calc-stat">
-              <p className="options-calc-stat-label">BREAKEVEN</p>
+              <p className="options-calc-stat-label">Breakeven</p>
               <p className="options-calc-stat-value" style={{ color: "var(--color-warning)" }}>
                 {breakevenPoints.length > 0 ? `$${breakevenPoints.map((point) => point.toLocaleString()).join(" / $")}` : "—"}
               </p>
@@ -826,16 +831,32 @@ export function OptionsCalculator({   spotPrice = 0,
           </div>
         </div>
         {hasCalculatorMarketData ? (
-          <TradingViewChart
-            options={payoffChartOptions}
-            series={payoffChartSeries}
-            priceLines={payoffPriceLines}
-            tradeMarkers={payoffMarkers}
-            valueFormatter={(value) => `$${Number(value).toFixed(2)}`}
-            timeFormatter={(time) => `Price $${(Number(time) / payoffTimeScale).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-            height={280}
-            width="100%"
-          />
+          <div className="options-pnl-diagram-frame">
+            <div className="options-pnl-chart-shell">
+              <TradingViewChart
+                options={payoffChartOptions}
+                series={payoffChartSeries}
+                priceLines={payoffPriceLines}
+                tradeMarkers={payoffMarkers}
+                valueFormatter={(value) => `$${Number(value).toFixed(2)}`}
+                timeFormatter={(time) => `Price $${(Number(time) / payoffTimeScale).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                height={300}
+                width="100%"
+              />
+            </div>
+            <div className="options-pnl-diagram-footer" aria-label="P&L diagram context">
+              <span>
+                <i className="options-pnl-legend-dot profit" aria-hidden="true" />
+                Profit zone
+              </span>
+              <span>
+                <i className="options-pnl-legend-dot loss" aria-hidden="true" />
+                Loss zone
+              </span>
+              <span>Spot payoff <strong className={spotPayoffPnl >= 0 ? "positive" : "negative"}>{spotPayoffPnl >= 0 ? "+" : ""}${spotPayoffPnl.toFixed(2)}</strong></span>
+              <span>Range ${payoffPriceRange.min.toFixed(2)} – ${payoffPriceRange.max.toFixed(2)}</span>
+            </div>
+          </div>
         ) : (
           <div className="chart-no-data options-calc-chart-empty">
             Search another asset with available options market data to plot the calculator.

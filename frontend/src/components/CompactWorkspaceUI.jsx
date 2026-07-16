@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 export function CompactPageHeader({
   eyebrow,
@@ -160,30 +160,43 @@ export function RightRailDrawer({
   children,
   className = "",
 }) {
+  const [isMounted, setIsMounted] = useState(open);
+  const [isClosing, setIsClosing] = useState(false);
   const titleId = useId();
   const descriptionId = useId();
   const closeButtonRef = useRef(null);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (open) {
+      setIsMounted(true);
+      setIsClosing(false);
+    } else if (isMounted) {
+      setIsClosing(true);
+      const timer = window.setTimeout(() => {
+        setIsMounted(false);
+        setIsClosing(false);
+      }, 180);
+      return () => window.clearTimeout(timer);
+    }
+    if (!open && !isMounted) return undefined;
     const handleEscape = (event) => {
       if (event.key === "Escape") onClose();
     };
     const { overflow } = document.body.style;
     document.body.style.overflow = "hidden";
     document.addEventListener("keydown", handleEscape);
-    closeButtonRef.current?.focus();
+    if (open) closeButtonRef.current?.focus();
     return () => {
       document.body.style.overflow = overflow;
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [onClose, open]);
+  }, [isMounted, onClose, open]);
 
-  if (!open) return null;
+  if (!isMounted) return null;
   return (
-    <div className="right-rail-drawer-overlay" onMouseDown={onClose}>
+    <div className={`right-rail-drawer-overlay ${isClosing ? "is-closing" : ""}`.trim()} onMouseDown={onClose}>
       <aside
-        className={`right-rail-drawer ${className}`.trim()}
+        className={`right-rail-drawer ${isClosing ? "is-closing" : ""} ${className}`.trim()}
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -201,7 +214,7 @@ export function RightRailDrawer({
             <button
               ref={closeButtonRef}
               type="button"
-              className="compact-close-btn"
+              className="compact-close-btn icon-button"
               onClick={onClose}
               aria-label="Close drawer"
             >

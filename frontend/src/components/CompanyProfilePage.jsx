@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "./data-table/DataTable";
+import { AsyncState } from "@/components/ui/async-state";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { CompanyMacroDependencies } from "../transmission/TransmissionSurfaces";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { getCurrencySymbol } from "../utils/currencyUtils";
 import { zeninFetch } from "../utils/zeninFetch";
+import { getCompanyCommodities } from "../utils/assetGraph";
+import { CommodityProfilePage } from "./CommodityProfilePage";
+import { EtfProfilePage } from "./EtfProfilePage";
+import { CompactPageHeader } from "./CompactWorkspaceUI";
 const COMPANY_PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_DATE_KEY = "zenin_profile_session_date";
 
@@ -881,7 +887,31 @@ function buildFrameworkSections(profile, displayMeta) {
   return frameworks[frameworkKey] || genericFramework;
 }
 
-export function CompanyProfilePage({ symbol, asset, onBack, onOpenResearch }) {
+// P2.6 — single tier-driven profile. Stock (default) and commodity kinds share
+// this one entry point; commodity kind dispatches to the commodity profile
+// renderer (no duplicated routing/mount logic).
+
+export function CompanyProfilePage({ symbol, asset, kind = "stock", onBack, onOpenResearch, onOpenCommodity }) {
+  if (kind === "commodity") {
+    return (
+      <CommodityProfilePage
+        symbol={symbol}
+        onOpenResearch={onOpenResearch}
+        onOpenCompanyProfile={onOpenCommodity}
+        onClose={onBack}
+      />
+    );
+  }
+  if (kind === "etf") {
+    return (
+      <EtfProfilePage
+        symbol={symbol}
+        onOpenResearch={onOpenResearch}
+        onOpenCommodity={onOpenCommodity}
+        onClose={onBack}
+      />
+    );
+  }
   const normalizedSymbol = String(symbol || asset?.symbol || "").trim().toUpperCase();
   const preferredTheme = String(asset?.theme || "").trim();
   const preferredCategory = String(asset?.category || "").trim();
@@ -1263,6 +1293,14 @@ export function CompanyProfilePage({ symbol, asset, onBack, onOpenResearch }) {
             </div>
           )}
 
+          <CompanyMacroDependencies
+            dependencies={[
+              { factor: "Rates", tone: "negative" },
+              { factor: "Oil", tone: "positive" },
+              { factor: "USD", tone: "neutral" },
+            ]}
+          />
+
           {latestFilings.length > 0 && (
             <div className="company-page-briefing-card">
               <div className="company-page-briefing-head">
@@ -1336,17 +1374,17 @@ export function CompanyProfilePage({ symbol, asset, onBack, onOpenResearch }) {
         </div>
 
         {loading && !profile ? (
-          <div className="company-page-empty">Loading company profile...</div>
+          <AsyncState status="loading" loading={<span>Loading company profile…</span>} />
         ) : error ? (
-          <div className="company-page-empty">{error}</div>
+          <AsyncState status="error" error={error} retryLabel="Retry" />
         ) : activeTab === "intel" ? (
           <div className="company-page-intel">
             {finvizLoading ? (
-              <div className="company-page-empty">Fetching market intelligence...</div>
+              <AsyncState status="loading" loading={<span>Fetching market intelligence…</span>} />
             ) : finvizError ? (
-              <div className="company-page-empty">Market intelligence unavailable ({finvizError})</div>
+              <AsyncState status="error" error={`Market intelligence unavailable (${finvizError})`} retryLabel="Retry" />
             ) : !finvizData ? (
-              <div className="company-page-empty">No intelligence data found for this symbol.</div>
+              <AsyncState status="empty" emptyTitle="No intelligence data" emptyDescription="No market intelligence found for this symbol." />
             ) : (
               <div className="intel-content">
                 <div className="intel-header-bar">
@@ -1543,6 +1581,29 @@ export function CompanyProfilePage({ symbol, asset, onBack, onOpenResearch }) {
           </div>
         </div>
       )}
+
+      {(() => {
+        const related = getCompanyCommodities(normalizedSymbol);
+        if (!related || !related.length) return null;
+        return (
+          <div className="company-related-commodities">
+            <h4>Related Commodities</h4>
+            <div className="company-related-chips">
+              {related.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className="company-related-chip"
+                  onClick={() => onOpenCommodity?.({ symbol: c })}
+                >
+                  {c} <span className="cw-rel-go">→</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }

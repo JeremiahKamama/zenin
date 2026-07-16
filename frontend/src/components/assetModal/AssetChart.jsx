@@ -1,4 +1,5 @@
 import { TradingViewChart } from "../TradingViewChart";
+import { DataHealthBadge } from "@/components/ui/async-state";
 
 export function AssetChart({
   chartData,
@@ -40,7 +41,7 @@ export function AssetChart({
             </span>
           ) : null}
           <span className={`am-health-badge ${loading ? "loading" : historyStale ? "hazard" : "ok"}`} title={loading ? "Refreshing" : historyStale ? "Delayed" : "Up to date"}>
-            <span className={`am-spinner ${loading ? "spin" : ""}`}>{loading ? "⟳" : historyStale ? "⚠" : "✓"}</span>
+            <DataHealthBadge status={loading ? "loading" : historyStale ? "stale" : "ok"} />
             <span className="am-health-label">{loading ? "Syncing" : historyStale ? "Stale" : "Live"}</span>
           </span>
         </div>

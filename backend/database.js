@@ -2130,6 +2130,95 @@ async function initializeDatabase() {
       ON daily_briefings (workspace_id, user_id, briefing_date DESC);
     `);
 
+    // ── Trade journaling: normalized events + reminder tasks ──────────────
+    // Each meaningful trade/position change becomes ONE deduplicated event
+    // keyed by (workspace_id, event_key). Reminder tasks are one-per-phase
+    // (initial / follow_up) and idempotent via dedupe_key.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS journal_events (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        event_key TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        source TEXT NOT NULL,
+        symbol TEXT,
+        asset_type TEXT,
+        market_type TEXT,
+        platform TEXT,
+        account_id TEXT,
+        side TEXT,
+        quantity DOUBLE PRECISION,
+        price DOUBLE PRECISION,
+        notional DOUBLE PRECISION,
+        fee DOUBLE PRECISION,
+        currency TEXT,
+        occurred_at TIMESTAMPTZ,
+        position_before DOUBLE PRECISION,
+        position_after DOUBLE PRECISION,
+        position_delta DOUBLE PRECISION,
+        classification TEXT NOT NULL DEFAULT 'unknown',
+        status TEXT NOT NULL DEFAULT 'open',
+        journal_entry_id TEXT,
+        decision_thread_id TEXT,
+        metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (workspace_id, event_key)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_journal_events_workspace_status
+      ON journal_events (workspace_id, status, occurred_at DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS journal_reminder_tasks (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id UUID NOT NULL REFERENCES journal_events(id) ON DELETE CASCADE,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        reminder_type TEXT NOT NULL,
+        due_at TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        sent_at TIMESTAMPTZ,
+        channel_results_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        dedupe_key TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (workspace_id, dedupe_key)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_journal_reminder_tasks_due
+      ON journal_reminder_tasks (workspace_id, status, due_at ASC);
+    `);
+
+    // Phase 4: periodic trade-journaling reports (daily/weekly/quarterly/
+    // half-year/yearly). One row per (workspace, cadence, period_key) keeps
+    // generation idempotent — re-running the same period upserts, never dupes.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS journal_reports (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        cadence TEXT NOT NULL,
+        period_key TEXT NOT NULL,
+        period_start TIMESTAMPTZ NOT NULL,
+        period_end TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ready',
+        summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (workspace_id, cadence, period_key)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_journal_reports_cadence
+      ON journal_reports (workspace_id, cadence, period_start DESC);
+    `);
+
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_active
       ON auth_sessions (user_id, revoked_at, expires_at);
@@ -5041,6 +5130,62 @@ const userAuth = {
 
 };
 
+// ── Trade journaling: detection helper (Phase 1) ───────────────────────────
+// Maps a normalized trade/fill record into a journal_event and persists it via
+// journalEvents.detectOrRefresh (deduped by event_key). Fire-and-forget: any
+// failure is swallowed so trade sync / execution is never blocked (spec §2).
+async function recordTradeJournalEvent(userId, rawTrade, workspaceId = null) {
+  try {
+    if (!rawTrade) return null;
+    const derivedType = String(rawTrade.type || rawTrade.assetType || "").toUpperCase();
+    const sideLower = String(rawTrade.side || "").toLowerCase();
+    const eventType = rawTrade.eventType
+      || (derivedType === "TRANSFER" || sideLower === "transfer"
+        ? "transfer"
+        : derivedType === "ASSIGNMENT"
+          ? "assignment"
+          : derivedType === "EXPIRY"
+            ? "expiry"
+            : "execution");
+    const raw = {
+      source: rawTrade.source || (rawTrade.platform && rawTrade.platform !== "zenin" ? "broker_sync" : "zenin_execution"),
+      eventType,
+      clientId: rawTrade.clientId || rawTrade.client_id || null,
+      platform: rawTrade.platform || "zenin",
+      platformTradeId: rawTrade.platformTradeId || rawTrade.platform_trade_id || null,
+      platformFillId: rawTrade.platformFillId || rawTrade.platform_fill_id || null,
+      symbol: rawTrade.symbol || rawTrade.asset || null,
+      assetType: rawTrade.assetType || rawTrade.type || rawTrade.asset_type || null,
+      marketType: rawTrade.marketType || rawTrade.market_type || null,
+      side: rawTrade.side || null,
+      quantity: rawTrade.quantity,
+      price: rawTrade.price,
+      notional: rawTrade.notional,
+      fee: rawTrade.fee,
+      currency: rawTrade.currency || rawTrade.feeCurrency,
+      executedAt: rawTrade.executedAt || rawTrade.executed_at || rawTrade.occurredAt,
+      occurredAt: rawTrade.occurredAt || rawTrade.executedAt || rawTrade.executed_at,
+      positionBefore: rawTrade.positionBefore,
+      positionAfter: rawTrade.positionAfter,
+      positionDelta: rawTrade.positionDelta,
+      metadata: rawTrade.metadata || {},
+    };
+    const event = await userWorkspace.journalEvents.detectOrRefresh(userId, raw, workspaceId);
+    // Phase 2: schedule the reminder pair for journalable events. createForEvent
+    // itself gates to decision_relevant + open, so operational events are skipped.
+    if (event) {
+      await userWorkspace.journalReminders.createForEvent(event, workspaceId).catch(() => {});
+    }
+    return event;
+  } catch (err) {
+    // Detection must never break the trade pipeline.
+    if (typeof console !== "undefined" && console.error) {
+      console.error("[journalEvents] detection skipped:", err && err.message);
+    }
+    return null;
+  }
+}
+
 const userWorkspace = {
   // Historical Portfolio Snapshot Engine — single source of truth for all
   // time-series features. See backend/portfolioSnapshots.js.
@@ -6040,6 +6185,22 @@ const userWorkspace = {
           t.strategyName,
           JSON.stringify(t.legsJson || {})
         ]);
+        await recordTradeJournalEvent(resolvedUserId, {
+          source: normalizePlatformValue(t.platform, "zenin") === "zenin" ? "zenin_execution" : "broker_sync",
+          clientId: t.clientId,
+          platform: normalizePlatformValue(t.platform, "zenin"),
+          symbol: t.asset,
+          assetType: t.type,
+          marketType: t.marketType,
+          side: t.side,
+          quantity: t.quantity,
+          price: t.price,
+          notional: t.notional,
+          fee: t.fee,
+          currency: t.feeCurrency,
+          executedAt: t.executedAt,
+          occurredAt: t.executedAt,
+        }, resolvedWorkspaceId);
       }
     },
 
@@ -6144,6 +6305,23 @@ const userWorkspace = {
           JSON.stringify(normalized.legs_json)
         ]);
         const savedTrade = mapTradeRow(result.rows[0]);
+        await recordTradeJournalEvent(resolvedUserId, {
+          source: "zenin_execution",
+          clientId: savedTrade.clientId,
+          platform: savedTrade.platform,
+          symbol: savedTrade.asset,
+          assetType: savedTrade.type,
+          marketType: savedTrade.marketType,
+          side: savedTrade.side,
+          quantity: savedTrade.quantity,
+          price: savedTrade.price,
+          notional: savedTrade.notional,
+          fee: savedTrade.fee,
+          currency: savedTrade.feeCurrency,
+          executedAt: savedTrade.executedAt,
+          occurredAt: savedTrade.executedAt,
+          positionAfter: savedTrade.positionAfter,
+        }, resolvedWorkspaceId);
         if (Math.abs(normalized.fee) > 0) {
           await userWorkspace.tradeFills.sync(resolvedUserId, [{
             tradeClientId: normalized.client_id || savedTrade.clientId || null,
@@ -7034,6 +7212,24 @@ const userWorkspace = {
         ]);
 
         await client.query("COMMIT");
+        const executedTrade = mapTradeRow(tradeResult.rows[0]);
+        await recordTradeJournalEvent(resolvedUserId, {
+          source: platform === "zenin" ? "zenin_execution" : "broker_sync",
+          clientId,
+          platform,
+          symbol,
+          assetType: orderType === "sell" ? "SELL" : "BUY",
+          marketType,
+          side: orderType,
+          quantity,
+          price: executedPrice,
+          notional: Math.abs(notional),
+          fee,
+          currency: feeCurrency,
+          executedAt: executionTimestamp,
+          occurredAt: executionTimestamp,
+          positionAfter,
+        }, resolvedWorkspaceId);
         return {
           balance: nextCashBalance,
           holdings,
@@ -7337,6 +7533,330 @@ const userWorkspace = {
     }
   },
 
+  // ── Trade journaling: normalized events ─────────────────────────────────
+  journalEvents: {
+    // Build a stable, dedupe-safe event key from a source record.
+    buildEventKey({ source, clientId, platform, platformTradeId, platformFillId, symbol, occurredAt }) {
+      const norm = (v) => String(v == null ? "" : v).trim().toUpperCase();
+      const parts = [source, clientId || "", platform || "", platformTradeId || "", platformFillId || "", norm(symbol), occurredAt ? String(occurredAt).replace(/\.\d+Z$/, "Z") : ""];
+      return parts.filter((p) => p !== "").join(":");
+    },
+
+    // Pure classification rules (spec §1).
+    classify(raw) {
+      const type = String(raw.eventType || raw.type || "").toLowerCase();
+      const platform = String(raw.platform || "").toLowerCase();
+      const status = String(raw.status || "").toLowerCase();
+      if (type === "assignment" || type === "expiry" || type === "forced_liquidation" || type === "corporate_action") {
+        return "decision_relevant";
+      }
+      if (type === "position_change" && Math.abs(Number(raw.positionDelta || 0)) > 0) {
+        return "decision_relevant";
+      }
+      if (type === "transfer" || platform.includes("recon") || status.includes("reconcil") || type === "sync_correction") {
+        return "operational";
+      }
+      if (type === "execution" || type === "fill" || raw.source === "zenin_execution" || raw.source === "broker_sync") {
+        return "decision_relevant";
+      }
+      return "unknown";
+    },
+
+    async detectOrRefresh(userId, raw, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const eventKey = raw.eventKey || this.buildEventKey(raw);
+      const classification = raw.classification || this.classify(raw);
+      const occurredAt = raw.occurredAt ? new Date(raw.occurredAt) : (raw.executedAt ? new Date(raw.executedAt) : new Date());
+      const row = {
+        eventKey,
+        eventType: raw.eventType || raw.type || "execution",
+        source: raw.source || "zenin_execution",
+        symbol: raw.symbol || null,
+        assetType: raw.assetType || raw.asset_type || raw.type || null,
+        marketType: raw.marketType || raw.market_type || "spot",
+        platform: raw.platform || "zenin",
+        accountId: raw.accountId || raw.account_id || null,
+        side: raw.side || null,
+        quantity: raw.quantity != null ? Number(raw.quantity) : null,
+        price: raw.price != null ? Number(raw.price) : null,
+        notional: raw.notional != null ? Number(raw.notional) : null,
+        fee: raw.fee != null ? Number(raw.fee) : null,
+        currency: raw.currency || raw.feeCurrency || "USD",
+        occurredAt: occurredAt.toISOString(),
+        positionBefore: raw.positionBefore != null ? Number(raw.positionBefore) : null,
+        positionAfter: raw.positionAfter != null ? Number(raw.positionAfter) : null,
+        positionDelta: raw.positionDelta != null ? Number(raw.positionDelta) : null,
+        classification,
+        metadataJson: raw.metadata || raw.metadataJson || {},
+      };
+      const result = await pool.query(`
+        INSERT INTO journal_events (
+          workspace_id, user_id, event_key, event_type, source, symbol, asset_type, market_type,
+          platform, account_id, side, quantity, price, notional, fee, currency, occurred_at,
+          position_before, position_after, position_delta, classification, metadata_json, updated_at
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, NOW())
+        ON CONFLICT (workspace_id, event_key) DO UPDATE SET
+          event_type = EXCLUDED.event_type,
+          source = EXCLUDED.source,
+          symbol = EXCLUDED.symbol,
+          side = EXCLUDED.side,
+          quantity = EXCLUDED.quantity,
+          price = EXCLUDED.price,
+          notional = EXCLUDED.notional,
+          fee = EXCLUDED.fee,
+          position_before = COALESCE(EXCLUDED.position_before, journal_events.position_before),
+          position_after = EXCLUDED.position_after,
+          position_delta = EXCLUDED.position_delta,
+          classification = CASE WHEN journal_events.classification = 'unknown' THEN EXCLUDED.classification ELSE journal_events.classification END,
+          metadata_json = EXCLUDED.metadata_json,
+          updated_at = NOW()
+        RETURNING *;
+      `, [
+        resolvedWorkspaceId, resolvedUserId, row.eventKey, row.eventType, row.source, row.symbol, row.assetType,
+        row.marketType, row.platform, row.accountId, row.side, row.quantity, row.price, row.notional, row.fee,
+        row.currency, row.occurredAt, row.positionBefore, row.positionAfter, row.positionDelta, row.classification,
+        JSON.stringify(row.metadataJson),
+      ]);
+      const e = result.rows[0];
+      return this._map(e);
+    },
+
+    async getById(userId, id, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `SELECT * FROM journal_events WHERE id = $1 AND workspace_id = $2 AND user_id = $3`,
+        [id, resolvedWorkspaceId, resolvedUserId]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async list(userId, filters = {}, workspaceId = null) {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const where = ["workspace_id = $1"];
+      const params = [resolvedWorkspaceId];
+      let i = 2;
+      if (filters.status) { where.push(`status = $${i++}`); params.push(filters.status); }
+      if (filters.eventType) { where.push(`event_type = $${i++}`); params.push(filters.eventType); }
+      if (filters.classification) { where.push(`classification = $${i++}`); params.push(filters.classification); }
+      if (filters.symbol) { where.push(`symbol = $${i++}`); params.push(String(filters.symbol).toUpperCase()); }
+      if (filters.from) { where.push(`occurred_at >= $${i++}`); params.push(filters.from); }
+      if (filters.to) { where.push(`occurred_at <= $${i++}`); params.push(filters.to); }
+      const page = Math.max(1, Number(filters.page) || 1);
+      const pageSize = Math.min(200, Math.max(1, Number(filters.pageSize) || 50));
+      const result = await pool.query(
+        `SELECT * FROM journal_events WHERE ${where.join(" AND ")} ORDER BY occurred_at DESC LIMIT $${i} OFFSET $${i + 1}`,
+        [...params, pageSize, (page - 1) * pageSize]
+      );
+      return result.rows.map((r) => this._map(r));
+    },
+
+    async classifyEvent(userId, id, classification, reason, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `UPDATE journal_events SET classification = $1, metadata_json = jsonb_set(metadata_json, '{classificationReason}', $2::jsonb), updated_at = NOW()
+         WHERE id = $3 AND workspace_id = $4 AND user_id = $5 RETURNING *`,
+        [classification, JSON.stringify(reason || ""), id, resolvedWorkspaceId, resolvedUserId]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async snooze(userId, id, until, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `UPDATE journal_events SET status = 'snoozed', metadata_json = jsonb_set(metadata_json, '{snoozedUntil}', $1::jsonb), updated_at = NOW()
+         WHERE id = $2 AND workspace_id = $3 AND user_id = $4 RETURNING *`,
+        [JSON.stringify(until), id, resolvedWorkspaceId, resolvedUserId]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async dismiss(userId, id, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `UPDATE journal_events SET status = 'dismissed', updated_at = NOW() WHERE id = $1 AND workspace_id = $2 AND user_id = $3 RETURNING *`,
+        [id, resolvedWorkspaceId, resolvedUserId]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async link(userId, id, { journalEntryId, decisionThreadId } = {}, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `UPDATE journal_events SET journal_entry_id = COALESCE($1, journal_entry_id), decision_thread_id = COALESCE($2, decision_thread_id), status = CASE WHEN $1 IS NOT NULL OR $2 IS NOT NULL THEN 'journaled' ELSE status END, updated_at = NOW()
+         WHERE id = $3 AND workspace_id = $4 AND user_id = $5 RETURNING *`,
+        [journalEntryId || null, decisionThreadId || null, id, resolvedWorkspaceId, resolvedUserId]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    _map(r) {
+      if (!r) return null;
+      return {
+        id: r.id,
+        workspaceId: r.workspace_id,
+        userId: r.user_id,
+        eventKey: r.event_key,
+        eventType: r.event_type,
+        source: r.source,
+        symbol: r.symbol,
+        assetType: r.asset_type,
+        marketType: r.market_type,
+        platform: r.platform,
+        accountId: r.account_id,
+        side: r.side,
+        quantity: r.quantity,
+        price: r.price,
+        notional: r.notional,
+        fee: r.fee,
+        currency: r.currency,
+        occurredAt: r.occurred_at,
+        positionBefore: r.position_before,
+        positionAfter: r.position_after,
+        positionDelta: r.position_delta,
+        classification: r.classification,
+        status: r.status,
+        journalEntryId: r.journal_entry_id,
+        decisionThreadId: r.decision_thread_id,
+        metadata: r.metadata_json,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      };
+    },
+  },
+
+  // ── Trade journaling: reminder tasks ────────────────────────────────────
+  journalReminders: {
+    async create(userId, { eventId, reminderType, dueAt, dedupeKey }, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        INSERT INTO journal_reminder_tasks (event_id, workspace_id, user_id, reminder_type, due_at, dedupe_key)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (workspace_id, dedupe_key) DO NOTHING
+        RETURNING *;
+      `, [eventId, resolvedWorkspaceId, resolvedUserId, reminderType, new Date(dueAt).toISOString(), dedupeKey]);
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    // Create the reminder pair for a freshly detected event:
+    // an immediate prompt + a single 24h follow-up. Idempotent via dedupe_key.
+    // Operational events get no reminders (spec §2).
+    async createForEvent(event, workspaceId = null) {
+      if (!event || !event.id) return [];
+      if (event.classification === "operational" || event.classification === "unknown") return [];
+      if (event.status && event.status !== "open") return [];
+      const now = new Date();
+      const followUp = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const created = [];
+      const initial = await this.create(event.userId, {
+        eventId: event.id,
+        reminderType: "initial",
+        dueAt: now,
+        dedupeKey: `${event.id}:initial`,
+      }, workspaceId);
+      if (initial) created.push(initial);
+      const follow = await this.create(event.userId, {
+        eventId: event.id,
+        reminderType: "follow_up",
+        dueAt: followUp,
+        dedupeKey: `${event.id}:follow_up`,
+      }, workspaceId);
+      if (follow) created.push(follow);
+      return created;
+    },
+
+    // Resolve the recipient email for a workspace member (best-effort).
+    async getUserEmail(userId) {
+      const result = await pool.query(`SELECT email FROM app_users WHERE id = $1`, [userId]);
+      return result.rows[0] ? result.rows[0].email : null;
+    },
+
+    // Journal reminder preferences (collection-backed, consistent with journal:entries).
+    async getPrefs(userId, workspaceId = null) {
+      const defaults = { email: true, includeOperational: false, cadence: "weekly" };
+      try {
+        const collection = await userWorkspace.collections.get(userId, "journal:prefs", defaults, workspaceId);
+        const items = Array.isArray(collection.items) ? collection.items : [];
+        const stored = items[0] && typeof items[0] === "object" ? items[0] : {};
+        return { ...defaults, ...stored };
+      } catch {
+        return defaults;
+      }
+    },
+
+    // Persist journal reminder/report preferences (Phase 6).
+    async setPrefs(userId, patch = {}, workspaceId = null) {
+      const current = await this.getPrefs(userId, workspaceId);
+      const next = {
+        email: typeof patch.email === "boolean" ? patch.email : current.email,
+        includeOperational: typeof patch.includeOperational === "boolean" ? patch.includeOperational : current.includeOperational,
+        cadence: ["daily", "weekly", "quarterly", "half_year", "yearly"].includes(patch.cadence) ? patch.cadence : current.cadence,
+      };
+      await userWorkspace.collections.set(userId, "journal:prefs", [next], 1, workspaceId);
+      return next;
+    },
+
+    async claimDue(before = new Date(), limit = 50) {
+      const result = await pool.query(`
+        UPDATE journal_reminder_tasks
+        SET status = 'sent'
+        WHERE id IN (
+          SELECT id FROM journal_reminder_tasks
+          WHERE status = 'pending' AND due_at <= $1
+          ORDER BY due_at ASC
+          LIMIT $2
+          FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *;
+      `, [before.toISOString(), limit]);
+      return result.rows.map((r) => this._map(r));
+    },
+
+    async complete(userId, id, channelResults = null, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `UPDATE journal_reminder_tasks SET status = 'completed', sent_at = COALESCE(sent_at, NOW()), channel_results_json = COALESCE($4::jsonb, channel_results_json) WHERE id = $1 AND workspace_id = $2 AND user_id = $3 RETURNING *`,
+        [id, resolvedWorkspaceId, resolvedUserId, channelResults ? JSON.stringify(channelResults) : null]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async snooze(userId, id, until, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `UPDATE journal_reminder_tasks SET status = 'snoozed', due_at = $1 WHERE id = $2 AND workspace_id = $3 AND user_id = $4 RETURNING *`,
+        [new Date(until).toISOString(), id, resolvedWorkspaceId, resolvedUserId]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async list(userId, workspaceId = null) {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `SELECT * FROM journal_reminder_tasks WHERE workspace_id = $1 ORDER BY due_at DESC LIMIT 200`,
+        [resolvedWorkspaceId]
+      );
+      return result.rows.map((r) => this._map(r));
+    },
+
+    _map(r) {
+      if (!r) return null;
+      return {
+        id: r.id,
+        eventId: r.event_id,
+        workspaceId: r.workspace_id,
+        userId: r.user_id,
+        reminderType: r.reminder_type,
+        dueAt: r.due_at,
+        status: r.status,
+        sentAt: r.sent_at,
+        channelResults: r.channel_results_json,
+        dedupeKey: r.dedupe_key,
+        createdAt: r.created_at,
+      };
+    },
+  },
+
   dailyBriefings: {
     getByDate: async (userId, date, workspaceId = null) => {
       const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
@@ -7451,8 +7971,199 @@ const userWorkspace = {
       `, [String(id), resolvedWorkspaceId, resolvedUserId]);
       return mapDailyBriefingRow(result.rows[0]);
     }
-  }
+  },
+
+  // ── Trade journaling: periodic reports (Phase 4) ────────────────────────
+  // Calendar-based daily/weekly/quarterly/half-year/yearly digests aggregated
+  // from journal_events. One row per (workspace, cadence, period_key) => the
+  // generate path is idempotent (upsert, never duplicates).
+  journalReports: {
+    CADENCES: ["daily", "weekly", "quarterly", "half_year", "yearly"],
+
+    async generate(userId, { cadence, periodKey, periodStart, periodEnd, timeZone } = {}, workspaceId = null) {
+      if (!this.CADENCES.includes(cadence)) throw new Error(`Unknown cadence: ${cadence}`);
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      let key = periodKey;
+      let start = periodStart ? new Date(periodStart) : null;
+      let end = periodEnd ? new Date(periodEnd) : null;
+      if (!key || !start || !end) {
+        const win = getPeriodWindow(cadence, new Date(), timeZone);
+        key = key || win.periodKey;
+        start = start || win.periodStart;
+        end = end || win.periodEnd;
+      }
+      const events = await userWorkspace.journalEvents.list(
+        resolvedUserId,
+        { from: start.toISOString(), to: end.toISOString(), pageSize: 1000 },
+        resolvedWorkspaceId
+      );
+      const summary = buildJournalReportSummary(events || []);
+      const result = await pool.query(`
+        INSERT INTO journal_reports (workspace_id, user_id, cadence, period_key, period_start, period_end, status, summary_json, generated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 'ready', $7::jsonb, NOW())
+        ON CONFLICT (workspace_id, cadence, period_key) DO UPDATE SET
+          period_start = EXCLUDED.period_start,
+          period_end = EXCLUDED.period_end,
+          status = EXCLUDED.status,
+          summary_json = EXCLUDED.summary_json,
+          generated_at = NOW()
+        RETURNING *;
+      `, [
+        resolvedWorkspaceId, resolvedUserId, cadence, key,
+        start.toISOString(), end.toISOString(), JSON.stringify(summary),
+      ]);
+      return this._map(result.rows[0]);
+    },
+
+    async getLatest(userId, cadence, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `SELECT * FROM journal_reports WHERE workspace_id = $1 AND user_id = $2 AND cadence = $3 ORDER BY period_start DESC LIMIT 1`,
+        [resolvedWorkspaceId, resolvedUserId, cadence]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async getByPeriod(userId, cadence, periodKey, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `SELECT * FROM journal_reports WHERE workspace_id = $1 AND user_id = $2 AND cadence = $3 AND period_key = $4 LIMIT 1`,
+        [resolvedWorkspaceId, resolvedUserId, cadence, periodKey]
+      );
+      return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    async list(userId, { cadence } = {}, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const params = [resolvedWorkspaceId, resolvedUserId];
+      let sql = `SELECT * FROM journal_reports WHERE workspace_id = $1 AND user_id = $2`;
+      if (cadence) { sql += ` AND cadence = $3`; params.push(cadence); }
+      sql += ` ORDER BY period_start DESC LIMIT 100`;
+      const result = await pool.query(sql, params);
+      return result.rows.map((r) => this._map(r));
+    },
+
+    _map(r) {
+      if (!r) return null;
+      return {
+        id: r.id,
+        workspaceId: r.workspace_id,
+        userId: r.user_id,
+        cadence: r.cadence,
+        periodKey: r.period_key,
+        periodStart: r.period_start,
+        periodEnd: r.period_end,
+        status: r.status,
+        summary: r.summary_json,
+        generatedAt: r.generated_at,
+      };
+    },
+  },
 };
+
+// Period window helpers for journal reports (workspace timezone aware).
+// Boundaries are computed from the local calendar date in `timeZone`; events
+// are bucketed by their UTC timestamp against these windows.
+function pad2(n) { return String(n).padStart(2, "0"); }
+
+function localDateParts(when, timeZone) {
+  const dtf = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timeZone || "UTC", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
+  });
+  const parts = dtf.formatToParts(when);
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return { y: Number(get("year")), m: Number(get("month")), d: Number(get("day")), weekday: get("weekday") };
+}
+
+function getPeriodWindow(cadence, when, timeZone) {
+  const { y, m, d } = localDateParts(when, timeZone);
+  const dayStart = new Date(Date.UTC(y, m - 1, d));
+  const nextDay = new Date(Date.UTC(y, m - 1, d + 1));
+  switch (cadence) {
+    case "daily":
+      return { periodKey: `${y}-${pad2(m)}-${pad2(d)}`, periodStart: dayStart, periodEnd: nextDay };
+    case "weekly": {
+      const idx = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(localDateParts(when, timeZone).weekday);
+      const offset = (idx + 6) % 7; // days since Monday
+      const mon = new Date(Date.UTC(y, m - 1, d - offset));
+      const monNext = new Date(Date.UTC(y, m - 1, d - offset + 7));
+      return { periodKey: `W${mon.toISOString().slice(0, 10)}`, periodStart: mon, periodEnd: monNext };
+    }
+    case "quarterly": {
+      const q = Math.floor((m - 1) / 3) + 1;
+      return {
+        periodKey: `${y}-Q${q}`,
+        periodStart: new Date(Date.UTC(y, (q - 1) * 3, 1)),
+        periodEnd: new Date(Date.UTC(y, q * 3, 1)),
+      };
+    }
+    case "half_year": {
+      const h = m <= 6 ? 1 : 2;
+      return {
+        periodKey: `${y}-H${h}`,
+        periodStart: new Date(Date.UTC(y, (h - 1) * 6, 1)),
+        periodEnd: new Date(Date.UTC(y, h * 6, 1)),
+      };
+    }
+    case "yearly":
+      return { periodKey: `${y}`, periodStart: new Date(Date.UTC(y, 0, 1)), periodEnd: new Date(Date.UTC(y + 1, 0, 1)) };
+    default:
+      throw new Error(`Unknown cadence: ${cadence}`);
+  }
+}
+
+function buildJournalReportSummary(events) {
+  const byClassification = { decision_relevant: 0, operational: 0, unknown: 0 };
+  const byStatus = { open: 0, journaled: 0, dismissed: 0, snoozed: 0 };
+  const byEventType = {};
+  const symbolCounts = {};
+  let totalNotional = 0;
+  let needsJournaling = 0;
+  for (const e of events) {
+    if (byClassification[e.classification] != null) byClassification[e.classification] += 1; else byClassification[e.classification] = 1;
+    if (byStatus[e.status] != null) byStatus[e.status] += 1; else byStatus[e.status] = 1;
+    byEventType[e.eventType] = (byEventType[e.eventType] || 0) + 1;
+    if (e.symbol) symbolCounts[e.symbol] = (symbolCounts[e.symbol] || 0) + 1;
+    if (e.classification === "decision_relevant" && typeof e.notional === "number") totalNotional += e.notional;
+    if (e.status === "open" && e.classification === "decision_relevant") needsJournaling += 1;
+  }
+  const topSymbols = Object.entries(symbolCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([symbol, count]) => ({ symbol, count }));
+  return {
+    total: events.length,
+    byClassification,
+    byStatus,
+    byEventType,
+    totalNotional: Math.round(totalNotional * 100) / 100,
+    needsJournaling,
+    topSymbols,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+// Server-side sweep: (re)generate the current period for every cadence across
+// all workspaces that have journal events. Idempotent (upsert) + per-workspace
+// isolation so one bad workspace can't abort the sweep.
+async function generateAllDueReports({ timeZone } = {}) {
+  const ws = await pool.query(`SELECT DISTINCT workspace_id FROM journal_events`);
+  let generated = 0;
+  for (const { workspace_id } of ws.rows) {
+    const owner = await pool.query(`SELECT owner_user_id FROM workspaces WHERE id = $1`, [workspace_id]);
+    const userId = owner.rows[0]?.owner_user_id;
+    if (!userId) continue;
+    for (const cadence of ["daily", "weekly", "quarterly", "half_year", "yearly"]) {
+      try {
+        await userWorkspace.journalReports.generate(userId, { cadence, timeZone }, workspace_id);
+        generated += 1;
+      } catch (err) {
+        console.error("[JournalReports] generate failed", workspace_id, cadence, err && err.message);
+      }
+    }
+  }
+  return { generated };
+}
 
 function mapDecisionThreadRow(row) {
   if (!row) return null;
@@ -9338,5 +10049,6 @@ module.exports = {
   portfolioSnapshots,
   clearAllData,
   closeDatabase,
-  describeDatabaseConfig
+  describeDatabaseConfig,
+  generateAllDueReports
 };

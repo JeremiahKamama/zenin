@@ -91,7 +91,7 @@ export function IndicatorMetricsTable({ snapshot, onSelectMetric }) {
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: "11px", color: "var(--color-data-slate-dim)" }}>
+      <div style={{ fontSize: "var(--fs-sm)", color: "var(--color-data-slate-dim)" }}>
         Source: {snapshot?.source || "EODHD"}
         {snapshot?.updatedAt ? ` · Updated ${new Date(snapshot.updatedAt).toLocaleString()}` : ""}
       </div>

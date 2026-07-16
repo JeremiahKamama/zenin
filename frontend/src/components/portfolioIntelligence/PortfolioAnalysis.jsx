@@ -36,7 +36,8 @@ export function PortfolioAnalysis({
   feeDashboard = null,
   notifications = [],
   onManageConnections,
-  // right rail (independently refreshable). Expected: <PortfolioIntelligenceRail />
+  // right rail (independently refreshable). Intelligence now lives in the
+  // dedicated Intelligence workspace — pass `rail={null}` to omit it here.
   rail = null,
 }) {
   const tabDef = PORTFOLIO_ANALYSIS_TABS.find((t) => t.id === activeTab) || PORTFOLIO_ANALYSIS_TABS[0];

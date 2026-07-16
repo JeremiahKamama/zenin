@@ -21,6 +21,38 @@ function isStrongPassword(password) {
   return value.length >= 10 && /[a-z]/i.test(value) && /\d/.test(value) && /[^a-z0-9]/i.test(value);
 }
 
+// Normalized, accessible password requirement model. Server-side validation
+// remains the final authority; this list updates live as the user types.
+const PASSWORD_REQUIREMENTS = [
+  { id: "length", label: "At least 10 characters", test: (p) => p.length >= 10 },
+  { id: "uppercase", label: "An uppercase letter", test: (p) => /[A-Z]/.test(p) },
+  { id: "lowercase", label: "A lowercase letter", test: (p) => /[a-z]/.test(p) },
+  { id: "number", label: "A number", test: (p) => /\d/.test(p) },
+  { id: "special", label: "A symbol (!@#$…)", test: (p) => /[^A-Za-z0-9]/.test(p) },
+];
+
+function PasswordRequirements({ password }) {
+  const value = String(password || "");
+  const results = PASSWORD_REQUIREMENTS.map((r) => ({ ...r, met: r.test(value) }));
+  const metCount = results.filter((r) => r.met).length;
+  const allMet = metCount === results.length;
+  return (
+    <div className="auth-v2-password-reqs" aria-live="polite">
+      <ul className="auth-v2-req-list">
+        {results.map((r) => (
+          <li key={r.id} className={`auth-v2-req ${r.met ? "met" : "unmet"}`}>
+            <span className="auth-v2-req-icon" aria-hidden="true">{r.met ? "✓" : "○"}</span>
+            <span>{r.label}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="auth-v2-req-summary">
+        {allMet ? "Password meets all requirements." : `${metCount} of ${results.length} requirements met.`}
+      </p>
+    </div>
+  );
+}
+
 function getAuthErrorMessage(error, fallback) {
   if (error?.code === "AUTH_SERVICE_TIMEOUT" || error?.code === "REQUEST_TIMEOUT") {
     return "Zenin's auth service is still waking up. Please try again in a moment, or wait for the backend health check to recover.";
@@ -230,6 +262,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
               onChange={e => setSignupForm({...signupForm, password: e.target.value})}
               required
             />
+            <PasswordRequirements password={signupForm.password} />
 
             <button className="auth-v2-btn auth-v2-btn-primary auth-v2-btn-full" disabled={loading} type="submit">
               {loading ? "Creating account..." : "Create account"}

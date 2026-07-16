@@ -1,8 +1,23 @@
 import React from "react";
 import { DensePanelHeader, GuidedEmptyState } from "../CompactWorkspaceUI";
 import { countryFlag, formatMoney } from "./lib/taxConfig";
+import { DataFreshnessSummary, normalizeFreshnessStatus } from "@/components/ui/async-state";
 
-export default function ResultsWorkspace({ results, accountantCopy, currency }) {
+export default function ResultsWorkspace({ results, accountantCopy, currency, assumptions = {}, sources = [], rulesLastUpdated = "" }) {
+  const sourceLabel = Array.isArray(sources) && sources.length ? sources.map((source) => source.label).join(", ") : "Runtime tax configuration";
+  const freshness = normalizeFreshnessStatus({
+    updatedAt: rulesLastUpdated,
+    sourceLabel,
+    nextAction: results.length ? "Review assumptions before export." : "Run calculation after validating inputs.",
+    maxFreshMinutes: 60 * 24 * 180,
+  });
+  const assumptionRows = [
+    ["Tax year", assumptions.taxYear || "Not set"],
+    ["Cost basis", assumptions.costBasisMethod || "Default"],
+    ["Realization", assumptions.realizationMode || "Realized"],
+    ["Residency", assumptions.residencyStatus || "Default"],
+    ["Currency", assumptions.currency || currency || "USD"],
+  ];
   return (
     <section className="tax-workbench-panel tax-workbench-results-workspace">
       <DensePanelHeader
@@ -13,6 +28,15 @@ export default function ResultsWorkspace({ results, accountantCopy, currency }) 
             : "Run the scenario to calculate estimated liabilities across each selected jurisdiction."
         }
       />
+      <div className="tax-result-context-summary" aria-label="Tax assumptions and data sources">
+        <DataFreshnessSummary {...freshness} className="tax-result-freshness" />
+        <div className="tax-result-assumptions">
+          {assumptionRows.map(([label, value]) => (
+            <span key={label}><em>{label}</em><strong>{value}</strong></span>
+          ))}
+        </div>
+        {assumptions.notes ? <p>{assumptions.notes}</p> : <p>Add filing notes before exporting accountant-facing output.</p>}
+      </div>
 
       {results.length ? (
         <>
@@ -32,6 +56,10 @@ export default function ResultsWorkspace({ results, accountantCopy, currency }) 
                     </strong>
                     <span>≈ {formatMoney(row.liabilityUSD, "USD")}</span>
                   </div>
+                </div>
+                <div className="tax-result-card-context">
+                  <span>Assumptions: {assumptions.taxYear || "tax year"} · {assumptions.costBasisMethod || "default cost basis"} · {assumptions.residencyStatus || "default residency"}</span>
+                  <span>Data source: {sourceLabel}</span>
                 </div>
                 <div className="tax-workbench-result-lines">
                   {Object.entries(row.details).map(([label, value]) => (

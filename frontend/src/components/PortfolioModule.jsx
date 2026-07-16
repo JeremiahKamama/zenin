@@ -48,6 +48,15 @@ function formatRiskLabel(value, fallback = "Watch") {
   return (normalized || fallback).replace(/-/g, " ");
 }
 
+// Weight → risk tier (single source of truth; mirrors exposureFlowData.classify).
+function riskForWeight(weight) {
+  const w = Number(weight || 0);
+  if (w >= 50) return "very-high";
+  if (w >= 25) return "high";
+  if (w >= 10) return "moderate";
+  return "low";
+}
+
 function normalizeFeeSourceValue(value, fallback = FEE_SOURCE_EXCHANGE_REPORTED) {
   const normalized = String(value || "")
     .trim()
@@ -198,7 +207,9 @@ export function PortfolioModule({
   const [selectedExecution, setSelectedExecution] = useState(null);
   const [showPredictionGuide, setShowPredictionGuide] = useState(false);
   const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
+  const [showAttentionDrawer, setShowAttentionDrawer] = useState(false);
   const [showConnectionsModal, setShowConnectionsModal] = useState(false);
+  const [analysisFocusPulse, setAnalysisFocusPulse] = useState(false);
   const isSyncing = false;
   const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
   const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
@@ -208,14 +219,23 @@ export function PortfolioModule({
   const [savedPortfolioHistory, setSavedPortfolioHistory] = useState(() => readStoredJson(PORTFOLIO_REBALANCE_HISTORY_KEY, []));
   const [savedPortfolioExports, setSavedPortfolioExports] = useState(() => readStoredJson(PORTFOLIO_EXPORTS_KEY, []));
   const prefsHydratedRef = useRef(false);
+  const analysisPulseTimerRef = useRef(null);
   const analysisSectionRef = useRef(null);
   const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
   const openPortfolioTab = (tabId) => {
     setActivePortfolioTab(tabId);
+    setAnalysisFocusPulse(true);
+    if (analysisPulseTimerRef.current) {
+      clearTimeout(analysisPulseTimerRef.current);
+    }
+    analysisPulseTimerRef.current = setTimeout(() => setAnalysisFocusPulse(false), 1400);
     requestAnimationFrame(() => {
       analysisSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
+  useEffect(() => () => {
+    if (analysisPulseTimerRef.current) clearTimeout(analysisPulseTimerRef.current);
+  }, []);
   const handleOpenConnections = () => {
     if (Array.isArray(connectedAccounts) && connectedAccounts.length) {
       setShowConnectionsModal(true);
@@ -1777,6 +1797,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
     savedPortfolioQueue.length +
     savedPortfolioHistory.length +
     savedPortfolioExports.length;
+  const hasConnectedPortfolioAccounts =
+    (Array.isArray(connectedAccounts) && connectedAccounts.length > 0) ||
+    (Array.isArray(brokerageAccounts) && brokerageAccounts.length > 0) ||
+    brokerageReadModel.brokerageHoldings.length > 0 ||
+    brokerageReadModel.brokerageValue > 0;
 
   const formatSignedPercent = (value, digits = 1) => {
     const numeric = Number(value || 0);
@@ -1991,10 +2016,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
         action: "Review Concentration",
         tone: Number(topExposure?.weight || 0) >= 25 ? "warning" : "neutral",
         onClick: () => {
-          setActivePortfolioTab("exposure");
-          if (topExposure) {
-            setFlowSelection(topExposure);
-          }
+          if (topExposure) openInsightFlow("exposure", topExposure);
+          else openPortfolioTab("exposure");
         },
       },
       {
@@ -2035,7 +2058,29 @@ const isProfitable = currentAccountEquity >= initialBalance;
         },
       },
     ];
-  }, [exposureSummary, formatMoney, lossHarvestSnapshot, topDriftRow]);
+  }, [exposureSummary, formatMoney, lossHarvestSnapshot, openInsightFlow, openPortfolioTab, topDriftRow]);
+
+  const handleOpenAttentionDrawer = useCallback(() => {
+    if (attentionCards.length) {
+      setShowAttentionDrawer(true);
+      return;
+    }
+    openPortfolioTab("exposure");
+    setFlowOutcome({
+      title: "Showing exposure risks",
+      message: "No separate attention queue is available, so Zenin opened the Exposure tab.",
+      tone: "success",
+    });
+  }, [attentionCards.length, openPortfolioTab]);
+
+  const handleOpenAttentionItem = useCallback((card) => {
+    setShowAttentionDrawer(false);
+    if (typeof card?.onClick === "function") {
+      card.onClick();
+      return;
+    }
+    openPortfolioTab("exposure");
+  }, [openPortfolioTab]);
 
   const benchmarkRiskRows = useMemo(() => ([
     { label: "Benchmark", value: benchmarkSymbol },
@@ -2585,7 +2630,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <h3>Performance Attribution</h3>
               <span>{contributionRows.length || 0} contributors</span>
             </div>
-            <p>Entry point from dashboard with top attribution snapshots.</p>
+            <p>Which positions drove your return. Larger bars contributed more — tap one to see its detail.</p>
             <div className="portfolio-v2-flow-mini-grid">
               {[{ key: "sector", label: "Sector" }, { key: "region", label: "Region" }, { key: "factor", label: "Factor" }].map((item) => {
                 const row = attributionRows?.[item.key]?.[0];
@@ -2778,29 +2823,45 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const activeSector = flowSelection || bucketRows[0];
       const concentrationScore = Math.min(100, Math.max(0, Number(activeSector?.weight || 0) * 1.8));
       if (insightFlowStep === 1) {
+        const buckets = ["Sector", "Country", "Currency"];
+        const switchBucket = (b) => { setFlowSelection({ bucket: b, name: "", weight: 0 }); setInsightFlowStep(1); };
         body = (
           <div className="portfolio-v2-flow-card">
             <div className="portfolio-v2-flow-headline">
               <h3>Exposure Heatmap</h3>
               <span>{bucketRows.length} {activeBucket.toLowerCase()}s</span>
             </div>
-            <p>Entry point from dashboard with top {activeBucket.toLowerCase()} exposure snapshots.</p>
-            <div className="portfolio-v2-flow-mini-grid">
-              {bucketRows.slice(0, 3).map((row) => (
+            <p>Where your book is concentrated. Darker cells carry more weight — tap one to inspect holdings and risk.</p>
+            <div className="portfolio-v2-flow-buckets" role="tablist" aria-label="Exposure dimension">
+              {buckets.map((b) => (
                 <button
-                  key={`exp-top-${row.name}`}
+                  key={b}
                   type="button"
-                  className={`portfolio-v2-flow-chip risk-${row.risk}`}
-                  onClick={() => {
-                    setFlowSelection(row);
-                    setInsightFlowStep(2);
-                  }}
-                >
-                  <small>{row.bucket}</small>
-                  <strong>{row.name}</strong>
-                  <em>{row.weight.toFixed(1)}%</em>
-                </button>
+                  role="tab"
+                  aria-selected={activeBucket === b}
+                  className={`portfolio-v2-flow-bucket ${activeBucket === b ? "is-active" : ""}`}
+                  onClick={() => switchBucket(b)}
+                >{b}</button>
               ))}
+            </div>
+            <div className="portfolio-v2-flow-heatmap" role="list">
+              {bucketRows.map((row) => {
+                const risk = riskForWeight(row.weight);
+                return (
+                  <button
+                    key={`heat-${row.name}`}
+                    type="button"
+                    role="listitem"
+                    className={`portfolio-v2-flow-heat-cell risk-${risk}`}
+                    style={{ "--heat": Math.max(8, Math.min(100, Number(row.weight || 0))) }}
+                    aria-label={`${row.name}, ${row.weight.toFixed(1)} percent, ${risk} risk`}
+                    onClick={() => { setFlowSelection(row); setInsightFlowStep(2); }}
+                  >
+                    <span className="portfolio-v2-flow-heat-name">{row.name}</span>
+                    <strong className="portfolio-v2-flow-heat-weight">{row.weight.toFixed(1)}%</strong>
+                  </button>
+                );
+              })}
             </div>
           </div>
         );
@@ -2816,7 +2877,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <button
                   key={`heat-${row.name}`}
                   type="button"
-                  className={`portfolio-v2-flow-table-row risk-${row.risk}`}
+                  className={`portfolio-v2-flow-table-row risk-${riskForWeight(row.weight)}`}
                   onClick={() => {
                     setFlowSelection(row);
                     setInsightFlowStep(3);
@@ -3273,21 +3334,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
   // concentration → drift → tax → healthy. Routes into existing insight flows
   // with relevant context preselected. Uses Brandv2 surfaces (no colored hero).
   const nextBestAction = useMemo(() => {
-    const topExposure = exposureSummary?.sector || exposureSummary?.country || exposureSummary?.currency || null;
-    const concentrationPct = topExposure ? Number(topExposure.weight || 0) : 0;
-    const highRiskConcentration = concentrationPct >= 35;
-
-    if (highRiskConcentration && topExposure) {
-      return {
-        tone: "risk",
-        label: "Priority risk",
-        title: "Review concentration risk",
-        desc: `${topExposure.name} is ${concentrationPct.toFixed(1)}% of the book — the single largest concentration. A move against it outweighs diversification elsewhere.`,
-        cta: "Inspect exposure",
-        onAction: () => openInsightFlow("exposure", topExposure),
-      };
-    }
-
     if (topDriftRow) {
       const drift = Number(topDriftRow.drift || 0);
       const align = projectedAlignment?.after != null
@@ -3398,7 +3444,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
           {typeof onOpenMarketContext === "function" ? (
             <button type="button" className="portfolio-v2-link" onClick={onOpenMarketContext}>Market Context</button>
           ) : null}
-          <button type="button" className="portfolio-v2-link" onClick={handleOpenConnections}>Connections</button>
           <button
             type="button"
             className="portfolio-v2-link"
@@ -3425,7 +3470,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
       {/* Connected brokerage (SnapTrade pilot) status — above the fold, distinct
           from manual holdings. Never implies trading; read-only only. */}
-      {brokerageReadModel.brokerageHoldings.length > 0 || brokerageReadModel.brokerageValue > 0 ? (
+      {hasConnectedPortfolioAccounts ? (
         <section className="portfolio-brokerage-banner" aria-label="Connected brokerage accounts">
           <div className="portfolio-brokerage-banner-head">
             <span className="portfolio-brokerage-banner-title">Brokerage accounts · Read-only</span>
@@ -3448,14 +3493,24 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
           ) : null}
         </section>
-      ) : null}
+      ) : (
+        <section className="portfolio-connection-strip" aria-label="Portfolio data connections">
+          <div>
+            <strong>Data connections</strong>
+            <span>Connect brokerages or exchanges to unlock live holdings, executions, fees, orders, and sync health.</span>
+          </div>
+          <button type="button" className="portfolio-v2-link" onClick={handleOpenConnections}>
+            Connect accounts
+          </button>
+        </section>
+      )}
 
-      <PortfolioOverview
+        <PortfolioOverview
         summary={{
           eyebrow: isSyncing ? "Syncing venues..." : `As of ${formatSavedTimestamp(feeDashboard.updatedAt || Date.now())}`,
           cards: portfolioSummaryCards,
         }}
-        attention={{ onViewAll: () => openPortfolioTab("exposure"), cards: attentionCards }}
+        attention={{ onViewAll: handleOpenAttentionDrawer, cards: attentionCards }}
         recommendedChanges={
           <div className="portfolio-command-rebalance-inner">
             <div className="portfolio-command-section-head">
@@ -3610,24 +3665,29 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
       {renderNextBestAction()}
 
-      <PortfolioAnalysis
-        activeTab={activePortfolioTab}
-        onTabChange={(id) => openPortfolioTab(id)}
-        assetClassFilter={assetClassFilter}
-        orders={orderLedger.orders}
-        rawExecutions={apiTradeExecutions}
-        feeDashboard={feeDashboard}
-        notifications={workspaceNotifications}
-        onManageConnections={handleOpenConnections}
-        renderLegacyTab={(id) => {
-          // Render the existing Holdings / Performance(Attribution) / Exposure
-          // panels exactly as before. History/Fees/Prediction are superseded by
-          // the new Execution/Orders/Costs/Events intelligence tabs. `id` already
-          // equals activePortfolioTab (set by onTabChange); no state write here.
-          return renderPortfolioTabContent();
-        }}
-        rail={null}
-      />
+      <div
+        ref={analysisSectionRef}
+        className={`portfolio-analysis-anchor ${analysisFocusPulse ? "is-attention-focus" : ""}`}
+      >
+        <PortfolioAnalysis
+          activeTab={activePortfolioTab}
+          onTabChange={(id) => openPortfolioTab(id)}
+          assetClassFilter={assetClassFilter}
+          orders={orderLedger.orders}
+          rawExecutions={apiTradeExecutions}
+          feeDashboard={feeDashboard}
+          notifications={workspaceNotifications}
+          onManageConnections={handleOpenConnections}
+          renderLegacyTab={(id) => {
+            // Render the existing Holdings / Performance(Attribution) / Exposure
+            // panels exactly as before. History/Fees/Prediction are superseded by
+            // the new Execution/Orders/Costs/Events intelligence tabs. `id` already
+            // equals activePortfolioTab (set by onTabChange); no state write here.
+            return renderPortfolioTabContent();
+          }}
+          rail={null}
+        />
+      </div>
 
       {activePortfolioTab !== "prediction" ? (
         <section className="portfolio-command-prediction-strip">
@@ -3659,7 +3719,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
           )}
         </section>
       ) : null}
-      {renderNextBestAction()}
       <InsightFlowOverlay />
 
       {showPredictionGuide ? (
@@ -3810,6 +3869,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
         onApplyView={applySavedPortfolioView}
         onReviewItem={reviewSavedPortfolioItem}
       />
+      <PortfolioAttentionDrawer
+        open={showAttentionDrawer}
+        onClose={() => setShowAttentionDrawer(false)}
+        cards={attentionCards}
+        onSelectItem={handleOpenAttentionItem}
+        onOpenExposure={() => {
+          setShowAttentionDrawer(false);
+          openPortfolioTab("exposure");
+        }}
+      />
       <PortfolioConnectionsModal
         open={showConnectionsModal}
         onClose={() => setShowConnectionsModal(false)}
@@ -3955,6 +4024,81 @@ function SavedWorkspaceRow({ title, subtitle, actionLabel, onAction }) {
           {actionLabel}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function PortfolioAttentionDrawer({ open, onClose, cards = [], onSelectItem, onOpenExposure }) {
+  if (!open) return null;
+
+  const dialogRef = useFocusTrap({ open, onClose });
+  const groups = [
+    { title: "Concentration / exposure", ids: ["concentration"], empty: "No concentration issue is active." },
+    { title: "Rebalance drift", ids: ["drift"], empty: "No rebalance drift is active." },
+    { title: "Tax impact", ids: ["tax"], empty: "No tax-impact opportunity is active." },
+  ].map((group) => ({
+    ...group,
+    rows: cards.filter((card) => group.ids.includes(card.id)),
+  }));
+
+  return (
+    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+      <aside
+        ref={dialogRef}
+        className="home-v3-detail-drawer saved-items-drawer portfolio-attention-drawer"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="All portfolio attention items"
+        style={{ maxWidth: 760 }}
+      >
+        <div className="home-v3-drawer-head">
+          <div>
+            <h2>All Attention Items</h2>
+            <p className="portfolio-attention-drawer-subtitle">
+              Triage concentration, drift, and tax-impact signals from one place.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close drawer">×</button>
+        </div>
+        <div className="saved-items-drawer-content portfolio-attention-drawer-content">
+          {groups.map((group) => (
+            <section key={group.title} className="saved-items-section portfolio-attention-section">
+              <div className="saved-items-section-head">
+                <strong>{group.title}</strong>
+                <span>
+                  {group.rows.length ? `${group.rows.length} item${group.rows.length === 1 ? "" : "s"} to review` : group.empty}
+                </span>
+              </div>
+              {group.rows.map((card) => (
+                <button
+                  key={card.id}
+                  type="button"
+                  className={`saved-items-row portfolio-attention-row portfolio-attention-row--${card.tone || "neutral"}`}
+                  onClick={() => onSelectItem?.(card)}
+                >
+                  <span className="portfolio-attention-row-copy">
+                    <span className="portfolio-attention-row-title">
+                      <strong>{card.title}</strong>
+                      <em>{card.metric}</em>
+                    </span>
+                    <span>{card.detail}</span>
+                  </span>
+                  <b>{card.action || "Inspect"}</b>
+                </button>
+              ))}
+            </section>
+          ))}
+          <div className="saved-items-drawer-actions portfolio-attention-drawer-actions">
+            <button type="button" className="portfolio-v2-link" onClick={onOpenExposure}>
+              Open Exposure tab
+            </button>
+            <button type="button" className="portfolio-command-primary-cta subtle" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DataHealthBadge } from "@/components/ui/async-state";
 import { DataTable } from "./data-table/DataTable";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { WatchlistTransmission } from "../transmission/TransmissionSurfaces";
@@ -1087,7 +1088,7 @@ useEffect(() => {
                 </button>
               ) : null}
               <span className={`data-health-badge ${macroLoading ? "loading" : macroStale ? "hazard" : "ok"}`} role="status" aria-label={macroLoading ? "Indicators: refreshing" : macroStale ? "Indicators: stale" : "Indicators: up to date"} title={macroLoading ? "Refreshing indicators" : macroStale ? "Showing previous indicator snapshot" : "Indicators are up to date"}>
-                <span className={`status-icon ${macroLoading ? "spinner" : ""}`}>{macroLoading ? "⟳" : macroStale ? "⚠" : "✓"}</span>
+                <DataHealthBadge status={macroLoading ? "loading" : macroStale ? "stale" : "ok"} />
                 Indicators
               </span>
             </div>
@@ -1264,7 +1265,7 @@ useEffect(() => {
                   actions={
                     <InlineControlGroup>
                       <span className={`data-health-badge ${earningsLoading ? "loading" : earningsStale ? "hazard" : "ok"}`} role="status" aria-label={earningsLoading ? "Earnings: refreshing" : earningsStale ? "Earnings: stale" : "Earnings: up to date"} title={earningsLoading ? "Refreshing earnings calendar" : earningsStale ? "Showing previous earnings snapshot" : "Earnings are up to date"}>
-                        <span className={`status-icon ${earningsLoading ? "spinner" : ""}`}>{earningsLoading ? "⟳" : earningsStale ? "⚠" : "✓"}</span>
+                        <DataHealthBadge status={earningsLoading ? "loading" : earningsStale ? "stale" : "ok"} />
                         Earnings
                       </span>
                       <button type="button" className="pagination-button watchlist-collapse-btn" onClick={() => setIsEarningsOpen((value) => !value)}>
