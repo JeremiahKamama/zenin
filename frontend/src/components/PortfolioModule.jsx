@@ -6,6 +6,8 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { chartColors } from "../utils/chartTheme";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
+import { PortfolioDrillDown } from "./PortfolioDrillDown";
+import { PortfolioActivity } from "./PortfolioActivity";
 import { deriveBrokerageBadge, formatLastSync, maskAccountNumber, findDuplicateSymbols } from "../utils/brokerageStatus.js";
 import { classifyPortfolioInstrument, PORTFOLIO_BUCKETS } from "../utils/portfolioInstrumentClassifier.js";
 import { formatPercent } from "../utils/format";
@@ -175,6 +177,7 @@ export function PortfolioModule({
   onConnectBrokerage,
   onOpenPlans,
   indicatorContext,
+  unifiedPortfolio = null
 }){
   const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
     ? getAppRuntimeConfig().ui.g7Currencies
@@ -209,7 +212,6 @@ export function PortfolioModule({
   const [showSavedWorkspaceDrawer, setShowSavedWorkspaceDrawer] = useState(false);
   const [showAttentionDrawer, setShowAttentionDrawer] = useState(false);
   const [showConnectionsModal, setShowConnectionsModal] = useState(false);
-  const [analysisFocusPulse, setAnalysisFocusPulse] = useState(false);
   const isSyncing = false;
   const [rebalanceEstimate, setRebalanceEstimate] = useState(null);
   const [rebalanceEstimateStatus, setRebalanceEstimateStatus] = useState("idle");
@@ -219,23 +221,15 @@ export function PortfolioModule({
   const [savedPortfolioHistory, setSavedPortfolioHistory] = useState(() => readStoredJson(PORTFOLIO_REBALANCE_HISTORY_KEY, []));
   const [savedPortfolioExports, setSavedPortfolioExports] = useState(() => readStoredJson(PORTFOLIO_EXPORTS_KEY, []));
   const prefsHydratedRef = useRef(false);
-  const analysisPulseTimerRef = useRef(null);
   const analysisSectionRef = useRef(null);
   const getSaveTargetLabel = () => hasWorkspaceSession() ? "your Zenin workspace" : "this browser";
-  const openPortfolioTab = (tabId) => {
+  const openPortfolioTab = (tabId, { scroll = true } = {}) => {
     setActivePortfolioTab(tabId);
-    setAnalysisFocusPulse(true);
-    if (analysisPulseTimerRef.current) {
-      clearTimeout(analysisPulseTimerRef.current);
-    }
-    analysisPulseTimerRef.current = setTimeout(() => setAnalysisFocusPulse(false), 1400);
+    if (!scroll) return;
     requestAnimationFrame(() => {
       analysisSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
-  useEffect(() => () => {
-    if (analysisPulseTimerRef.current) clearTimeout(analysisPulseTimerRef.current);
-  }, []);
   const handleOpenConnections = () => {
     if (Array.isArray(connectedAccounts) && connectedAccounts.length) {
       setShowConnectionsModal(true);
@@ -296,11 +290,19 @@ export function PortfolioModule({
 
   const recentExecutionNotifications = useMemo(() => {
     return (Array.isArray(workspaceNotifications) ? workspaceNotifications : [])
-      .filter((item) => String(item?.type || "").startsWith("trade_execution."))
+      .filter((item) => {
+        const type = String(item?.type || "");
+        return type.startsWith("portfolio_transaction.");
+      })
       .slice(0, 5);
   }, [workspaceNotifications]);
 
   const filteredPortfolio = useMemo(() => {
+    // When the unified read model is active and connected sources have data,
+    // the legacy manual holdings are stale — exclude them from display.
+    if (unifiedPortfolio?.isUnified && (unifiedPortfolio.sources || []).some((s) => s.sourceType !== "manual" && s.positionCount > 0)) {
+      return [];
+    }
     if (assetClassFilter === "all") return portfolio;
     return (portfolio || []).filter(p => {
       const type = String(p.type || p.marketType || "").toLowerCase();
@@ -309,7 +311,7 @@ export function PortfolioModule({
       if (assetClassFilter === "crypto") return type === "crypto";
       return false;
     });
-  }, [portfolio, assetClassFilter]);
+  }, [portfolio, assetClassFilter, unifiedPortfolio]);
 
   const filteredOptionsTrades = useMemo(() => {
     if (assetClassFilter === "all" || assetClassFilter === "options") return activeOptionsTrades;
@@ -345,15 +347,18 @@ export function PortfolioModule({
     };
   }, [filteredPortfolio, portfolioValue, brokerageSummary]);
 
-// ✅ 2) compute metrics next
+// ✅ 2) compute metrics next — when unified is active, suppress stale legacy balance
+const effectiveBalance = unifiedPortfolio?.isUnified && (unifiedPortfolio.sources || []).some((s) => s.sourceType !== "manual" && s.positionCount > 0)
+  ? 0
+  : balance;
 const derivedAccountMetrics = useMemo(
   () =>
     calculateAccountSnapshot({
       trades: filteredTrades,
       portfolioValue,
-      balance: assetClassFilter === "all" ? balance : 0, // Only use cash balance for 'all' view
+      balance: assetClassFilter === "all" ? effectiveBalance : 0,
     }),
-  [filteredTrades, portfolioValue, balance, assetClassFilter]
+  [filteredTrades, portfolioValue, effectiveBalance, assetClassFilter]
 );
 
 const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
@@ -404,15 +409,46 @@ const optionTimelineAdjustments = useMemo(() => {
 const totalAccountEquity =
   liveAvailableBalance + portfolioValue + totalOptionsValue;
 
-// keep your existing name
-const currentAccountEquity = totalAccountEquity;
+// Prefer the unified multi-source total when available (Hyperliquid perps +
+// cash). Falls back to the legacy snapshot only when unified is absent.
+const currentAccountEquity =
+  unifiedPortfolio?.isUnified && Number.isFinite(Number(unifiedPortfolio.totalValue))
+    ? Number(unifiedPortfolio.totalValue)
+    : totalAccountEquity;
 
 const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "var(--color-success)" : "var(--color-danger)") : "var(--color-data-primary)";
 
-  // Fetch immutable daily snapshots for the selected interval. This is the ONLY
-  // source for the Performance Curve — no trade reconstruction, no interpolation.
+  // Fetch immutable daily snapshots for the selected interval. Prefer unified
+  // snapshots (connected sources) over the legacy portfolio_daily_snapshots.
   useEffect(() => {
+    // When the unified read model has daily snapshots from connected sources,
+    // use them directly — they reflect the real account history.
+    if (unifiedPortfolio?.isUnified && (unifiedPortfolio.snapshots || []).length > 0) {
+      const rows = (unifiedPortfolio.snapshots || [])
+        .filter((s) => s.snapshotDate && Number.isFinite(s.portfolioValue))
+        .map((s) => ({
+          date: s.snapshotDate,
+          ts: new Date(`${s.snapshotDate}T00:00:00Z`).getTime(),
+          portfolioValue: Number(s.portfolioValue),
+          cash: 0,
+          investedCapital: 0,
+          dailyPnl: 0,
+          dailyReturn: 0,
+          benchmarkValue: null,
+          benchmarkReturn: null,
+          deposits: 0,
+          withdrawals: 0,
+          estimated: false,
+          source: "unified"
+        }))
+        .filter((r) => Number.isFinite(r.ts))
+        .sort((a, b) => a.ts - b.ts);
+      setSnapshotHistory(rows);
+      setHistoryStatus(rows.length ? "ready" : "empty");
+      return;
+    }
+
     let cancelled = false;
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     setHistoryStatus("loading");
@@ -431,7 +467,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       cancelled = true;
       controller?.abort();
     };
-  }, [chartInterval]);
+  }, [chartInterval, unifiedPortfolio?.isUnified, unifiedPortfolio?.snapshots]);
 
   // Base value = first snapshot's portfolio value (for %/PnL rebasing). Falls
   // back to initialBalance when history is empty.
@@ -1359,22 +1395,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
   }, [chartData, chartMode, metrics.maxDrawdown]);
 
-  const optionsGreekSummary = useMemo(() => {
-    return (Array.isArray(activeOptionsTrades) ? activeOptionsTrades : []).reduce((summary, trade) => {
-      const chain = multiChainCache?.[trade.asset];
-      const spot = spotPrices?.[trade.asset];
-      const pnl = calculateOptionPnL(trade, chain, spot);
-      const qty = Math.max(1, Math.abs(Number(trade?.qty || trade?.quantity || 1)));
-      const theta = Number(trade?.theta ?? trade?.greeks?.theta ?? pnl?.theta);
-      const iv = Number(trade?.iv ?? trade?.impliedVolatility ?? trade?.greeks?.iv ?? pnl?.iv);
-      return {
-        theta: summary.theta + (Number.isFinite(theta) ? theta * qty : 0),
-        ivTotal: summary.ivTotal + (Number.isFinite(iv) ? iv : 0),
-        ivCount: summary.ivCount + (Number.isFinite(iv) ? 1 : 0)
-      };
-    }, { theta: 0, ivTotal: 0, ivCount: 0 });
-  }, [activeOptionsTrades, multiChainCache, spotPrices]);
-
   const healthStatus = useMemo(() => {
     const topExposure = Math.max(
       Number(exposureSummary.sector?.weight || 0),
@@ -1387,17 +1407,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
     if (topExposure >= 30 || drift >= 10 || drawdown >= 10) return { label: "BALANCED", tone: "neutral" };
     return { label: "OPTIMAL", tone: "positive" };
   }, [exposureSummary, metrics.maxDrawdown, rebalanceMetrics.totalDrift]);
-
-  const executiveStatRail = useMemo(() => {
-    const averageIv = optionsGreekSummary.ivCount > 0 ? optionsGreekSummary.ivTotal / optionsGreekSummary.ivCount : null;
-    return [
-      { label: "Beta Weight", value: metrics.beta && metrics.beta !== "N/A" ? metrics.beta : "N/A", tone: "neutral" },
-      { label: "Theta", value: optionsGreekSummary.theta ? formatSignedMoney(optionsGreekSummary.theta) : "N/A", tone: optionsGreekSummary.theta >= 0 ? "positive" : "negative" },
-      { label: "B/P %", value: `${cashWeight.toFixed(1)}%`, tone: cashWeight >= 12 ? "positive" : "neutral" },
-      { label: "Imp Vol", value: averageIv == null ? "N/A" : `${(averageIv * (averageIv > 1 ? 1 : 100)).toFixed(1)}%`, tone: "neutral" },
-      { label: "Health", value: healthStatus.label, tone: healthStatus.tone }
-    ];
-  }, [cashWeight, healthStatus, metrics.beta, optionsGreekSummary, formatSignedMoney]);
 
   const operationalTriageRows = useMemo(() => {
     const topExposure = exposureSummary.sector || exposureSummary.country || exposureSummary.currency;
@@ -2176,7 +2185,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
             <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>Open Attribution Flow</button>
           </div>
-          <div className="portfolio-command-card-grid three">
+          <div className="portfolio-command-card-grid three portfolio-command-attribution-grid">
             {groups.map((group) => {
               const row = attributionRows?.[group.key]?.[0] || null;
               return (
@@ -2237,7 +2246,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
             <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("exposure")}>Open Exposure Flow</button>
           </div>
-          <div className="portfolio-command-card-grid three">
+          <div className="portfolio-command-card-grid three portfolio-command-exposure-grid">
             {(exposureRows || []).slice(0, 6).map((row) => (
               <button
                 key={`${row.bucket}-${row.name}`}
@@ -2290,7 +2299,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
           </div>
 
-          <div className="portfolio-command-card-grid three">
+          <div className="portfolio-command-card-grid three portfolio-command-fees-grid">
             <div className="portfolio-command-mini-card static">
               <span>API Executions</span>
               <strong>{apiExecutionRows.length}</strong>
@@ -2368,7 +2377,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 { key: "feeAmount", header: "Fee", sortable: false, cell: (e) => e.feeAmount ? `${formatExecutionQuantity(e.feeAmount)} ${e.feeCurrency}` : "N/A" },
                 { key: "source", header: "Source", sortable: false, cell: () => <span>API connection</span> },
               ]}
-              data={apiExecutionRows.slice(0, 100)}
+              data={apiExecutionRows.slice(0, 5)}
               getRowId={(e) => `${e.platform}-${e.platformFillId || e.id}`}
               onRowClick={(e) => setSelectedExecution(e)}
               emptyState={
@@ -2521,7 +2530,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 <option value="risk">Risk</option>
               </select>
             </label>
-            <button type="button" className="portfolio-v2-link" onClick={() => exportExposureReport()}>Export Exposure</button>
           </div>
         </div>
         <div className="portfolio-command-table-wrap">
@@ -3444,27 +3452,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
           {typeof onOpenMarketContext === "function" ? (
             <button type="button" className="portfolio-v2-link" onClick={onOpenMarketContext}>Market Context</button>
           ) : null}
-          <button
-            type="button"
-            className="portfolio-v2-link"
-            onClick={async () => {
-              await savePortfolioView("portfolio-command-center");
-              setFlowOutcome({
-                title: "View saved",
-                message: `The current command-center filters were saved in ${getSaveTargetLabel()}.`,
-                tone: "success",
-              });
-            }}
-          >
-            Save View
-          </button>
-          <button
-            type="button"
-            className="portfolio-v2-link secondary"
-            onClick={() => setShowSavedWorkspaceDrawer(true)}
-          >
-            Saved Items{savedWorkspaceCount ? ` (${savedWorkspaceCount})` : ""}
-          </button>
         </div>
       </header>
 
@@ -3511,6 +3498,52 @@ const isProfitable = currentAccountEquity >= initialBalance;
           cards: portfolioSummaryCards,
         }}
         attention={{ onViewAll: handleOpenAttentionDrawer, cards: attentionCards }}
+        analysis={
+          <div
+            ref={analysisSectionRef}
+            className="portfolio-analysis-anchor"
+          >
+            <PortfolioAnalysis
+              activeTab={activePortfolioTab}
+              onTabChange={(id) => openPortfolioTab(id, { scroll: false })}
+              assetClassFilter={assetClassFilter}
+              orders={orderLedger.orders}
+              rawExecutions={apiTradeExecutions}
+              feeDashboard={feeDashboard}
+              notifications={workspaceNotifications}
+              onManageConnections={handleOpenConnections}
+              transactions={unifiedPortfolio?.transactions || []}
+              reconciliation={unifiedPortfolio?.reconciliation || null}
+              syncStatus={unifiedPortfolio?.syncStatus || null}
+              baseCurrency={unifiedPortfolio?.summary?.baseCurrency || "USD"}
+              renderLegacyTab={(id) => {
+                // Render the existing Holdings / Performance(Attribution) / Exposure
+                // panels exactly as before. History/Fees/Prediction are superseded by
+                // the new Execution/Orders/Costs/Events intelligence tabs. `id` already
+                // equals activePortfolioTab (set by onTabChange); no state write here.
+                return renderPortfolioTabContent();
+              }}
+              rail={null}
+            />
+            {unifiedPortfolio?.isUnified && (
+              <PortfolioDrillDown
+                sources={unifiedPortfolio.sources}
+                positions={unifiedPortfolio.positions}
+                summary={unifiedPortfolio.summary}
+                syncStatus={unifiedPortfolio.syncStatus}
+                duplicateInstruments={unifiedPortfolio.duplicateInstruments}
+                warnings={unifiedPortfolio.warnings}
+                unvaluedTotal={unifiedPortfolio.unvaluedTotal}
+                fxRates={unifiedPortfolio.fxRates}
+                snapshots={unifiedPortfolio.snapshots}
+                shadow={unifiedPortfolio.shadow}
+                baseCurrency={unifiedPortfolio.summary?.baseCurrency || "USD"}
+                onSync={unifiedPortfolio.triggerSync}
+                syncing={unifiedPortfolio.syncing}
+              />
+            )}
+          </div>
+        }
         recommendedChanges={
           <div className="portfolio-command-rebalance-inner">
             <div className="portfolio-command-section-head">
@@ -3530,21 +3563,19 @@ const isProfitable = currentAccountEquity >= initialBalance;
                     ))}
                   </select>
                 </div>
-                <div className="portfolio-v2-range" role="group" aria-label="Chart mode">
-                  {[
-                    { value: "equity", label: "Equity" },
-                    { value: "percentage", label: "% Gain" },
-                    { value: "pnl", label: "Cash PnL" }
-                  ].map((mode) => (
-                    <button
-                      key={mode.value}
-                      type="button"
-                      className={`portfolio-v2-range-btn ${chartMode === mode.value ? "active" : ""}`}
-                      onClick={() => setChartMode(mode.value)}
-                    >
-                      {mode.label}
-                    </button>
-                  ))}
+                <div className="portfolio-v2-range">
+                  <label className="portfolio-v2-range-label" htmlFor="recommended-changes-chart-mode">View</label>
+                  <select
+                    id="recommended-changes-chart-mode"
+                    className="portfolio-v2-select"
+                    value={chartMode}
+                    onChange={(event) => setChartMode(event.target.value)}
+                    aria-label="Select chart view mode for Recommended Changes"
+                  >
+                    <option value="equity">Equity</option>
+                    <option value="percentage">% Gain</option>
+                    <option value="pnl">Cash PnL</option>
+                  </select>
                 </div>
                 <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("rebalancing", topDriftRow || null)}>Open Rebalance Flow</button>
               </div>
@@ -3567,48 +3598,43 @@ const isProfitable = currentAccountEquity >= initialBalance;
                     <span><i className="neutral" />In Range</span>
                   </div>
                 </div>
-                <div className="portfolio-command-stat-rail">
-                  {executiveStatRail.map((item) => (
-                    <div key={item.label}>
-                      <span>{item.label}</span>
-                      <strong className={item.tone || "neutral"}>{item.value}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="portfolio-command-change-card">
-                <div className="portfolio-command-panel-head">
-                  <div>
-                    <h3>Trim / Add Summary</h3>
-                    <p>Highest-impact allocation changes from the current drift model.</p>
-                  </div>
-                </div>
-                <div className="portfolio-command-change-grid">
-                  <div>
-                    <span className="portfolio-command-column-label risk">Trim</span>
-                    <div className="portfolio-command-change-list">
-                      {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row) => (
-                        <button key={`trim-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
-                          <strong>{row.symbol}</strong>
-                          <em>{formatMoney(-Math.abs(row.tradeValue || 0))}</em>
-                          <b>{formatSignedPercent(row.drift, 1)}</b>
-                        </button>
-                      ))}
+                <div className="portfolio-command-change-summary">
+                  <div className="portfolio-command-panel-head">
+                    <div>
+                      <h3>Trim / Add Summary</h3>
+                      <p>Highest-impact allocation changes from the current drift model.</p>
                     </div>
                   </div>
-                  <div>
-                    <span className="portfolio-command-column-label positive">Add</span>
-                    <div className="portfolio-command-change-list">
-                      {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row) => (
-                        <button key={`add-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
-                          <strong>{row.symbol}</strong>
-                          <em>{formatMoney(Math.abs(row.tradeValue || 0))}</em>
-                          <b>{formatSignedPercent(Math.abs(row.drift || 0), 1)}</b>
-                        </button>
-                      ))}
+                  {actionableRebalanceRows.some((row) => row.action === "Trim" || row.action === "Add") ? (
+                    <div className="portfolio-command-change-grid">
+                      <div>
+                        <span className="portfolio-command-column-label risk">Trim</span>
+                        <div className="portfolio-command-change-list">
+                          {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row) => (
+                            <button key={`trim-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                              <strong>{row.symbol}</strong>
+                              <em>{formatMoney(-Math.abs(row.tradeValue || 0))}</em>
+                              <b>{formatSignedPercent(row.drift, 1)}</b>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="portfolio-command-column-label positive">Add</span>
+                        <div className="portfolio-command-change-list">
+                          {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row) => (
+                            <button key={`add-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                              <strong>{row.symbol}</strong>
+                              <em>{formatMoney(Math.abs(row.tradeValue || 0))}</em>
+                              <b>{formatSignedPercent(Math.abs(row.drift || 0), 1)}</b>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <p className="portfolio-command-change-empty" role="status">No allocation changes required.</p>
+                  )}
                 </div>
               </div>
 
@@ -3664,30 +3690,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
       />
 
       {renderNextBestAction()}
-
-      <div
-        ref={analysisSectionRef}
-        className={`portfolio-analysis-anchor ${analysisFocusPulse ? "is-attention-focus" : ""}`}
-      >
-        <PortfolioAnalysis
-          activeTab={activePortfolioTab}
-          onTabChange={(id) => openPortfolioTab(id)}
-          assetClassFilter={assetClassFilter}
-          orders={orderLedger.orders}
-          rawExecutions={apiTradeExecutions}
-          feeDashboard={feeDashboard}
-          notifications={workspaceNotifications}
-          onManageConnections={handleOpenConnections}
-          renderLegacyTab={(id) => {
-            // Render the existing Holdings / Performance(Attribution) / Exposure
-            // panels exactly as before. History/Fees/Prediction are superseded by
-            // the new Execution/Orders/Costs/Events intelligence tabs. `id` already
-            // equals activePortfolioTab (set by onTabChange); no state write here.
-            return renderPortfolioTabContent();
-          }}
-          rail={null}
-        />
-      </div>
 
       {activePortfolioTab !== "prediction" ? (
         <section className="portfolio-command-prediction-strip">
@@ -3884,6 +3886,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         onClose={() => setShowConnectionsModal(false)}
         accounts={connectedAccounts}
         brokerageAccounts={brokerageAccounts}
+        unifiedPortfolio={unifiedPortfolio}
         onAddConnection={onOpenConnections}
         onConnectBrokerage={onConnectBrokerage}
       />
@@ -3980,7 +3983,7 @@ function PortfolioSavedWorkspaceDrawer({
   ];
 
   return (
-    <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
+    <div className="home-v3-drawer-overlay portfolio-attention-modal-overlay" onMouseDown={onClose}>
       <aside
         ref={dialogRef}
         className="home-v3-detail-drawer saved-items-drawer"
@@ -4103,7 +4106,7 @@ function PortfolioAttentionDrawer({ open, onClose, cards = [], onSelectItem, onO
   );
 }
 
-function PortfolioConnectionsModal({ open, onClose, accounts = [], brokerageAccounts = [], onAddConnection, onConnectBrokerage }) {
+function PortfolioConnectionsModal({ open, onClose, accounts = [], brokerageAccounts = [], unifiedPortfolio = null, onAddConnection, onConnectBrokerage }) {
   const dialogRef = useFocusTrap({ open, onClose });
   if (!open) return null;
 
@@ -4120,6 +4123,21 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], brokerageAcco
   };
 
   const totalCount = accounts.length + brokerageAccounts.length;
+
+  // Map a unified sync-status source to a compact per-account health summary.
+  const syncSources = unifiedPortfolio?.syncStatus?.sources || [];
+  const unifiedTransactions = unifiedPortfolio?.transactions || [];
+  const schedulerOn = true; // 15-min scheduler is on by default server-side
+  const nextSyncLabel = "next sync ~15m";
+  const accountSyncState = (provider, accountId) => {
+    const src = syncSources.find((s) => String(s.provider || "").toLowerCase() === String(provider || "").toLowerCase());
+    if (!src) return { state: "unknown", note: "Not yet synced" };
+    if (src.status === "error") return { state: "error", note: src.lastError || "Sync failed" };
+    if (src.stale) return { state: "stale", note: "Data is stale" };
+    if (src.status === "synced" || src.status === "partial") return { state: "ok", note: `${src.positionCount || 0} positions` };
+    return { state: "unknown", note: "Not yet synced" };
+  };
+  const historyCountFor = (provider) => unifiedTransactions.filter((t) => String(t.provider || "").toLowerCase() === String(provider || "").toLowerCase()).length;
 
   return (
     <div className="home-v3-drawer-overlay" onMouseDown={onClose}>
@@ -4160,6 +4178,15 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], brokerageAcco
                     <div className="saved-items-row-meta">
                       {renderScopeBadge(account)}
                       <span>{account.lastSyncAt ? `Synced ${formatSavedTimestamp(account.lastSyncAt)}` : "Sync pending"}</span>
+                      {(() => {
+                        const st = accountSyncState(account.provider || account.exchange, account.id);
+                        return (
+                          <span className={`connection-sync-state connection-sync-${st.state}`}>
+                            {st.state === "ok" ? nextSyncLabel : st.note}
+                            {historyCountFor(account.provider || account.exchange) > 0 ? ` · ${historyCountFor(account.provider || account.exchange)} txns` : ""}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
@@ -4195,6 +4222,42 @@ function PortfolioConnectionsModal({ open, onClose, accounts = [], brokerageAcco
               })}
             </section>
           ) : null}
+
+          {/* First-sync / latest import result — coverage summary from the unified read model */}
+          {unifiedPortfolio?.isUnified ? (() => {
+            const s = unifiedPortfolio.summary || {};
+            const srcs = unifiedPortfolio.sources || [];
+            const connected = srcs.filter((x) => x.sourceType !== "manual");
+            const manual = srcs.filter((x) => x.sourceType === "manual");
+            const excludedManual = manual.filter((x) => x.excluded);
+            const unvalued = Number(s.unvaluedTotal || 0);
+            const base = s.baseCurrency || "USD";
+            return (
+              <section className="saved-items-section connection-import-result">
+                <div className="saved-items-section-eyebrow">Latest import result</div>
+                <div className="connection-import-grid">
+                  <div><span className="connection-import-k">Accounts</span><span className="connection-import-v">{connected.length + manual.length}</span></div>
+                  <div><span className="connection-import-k">Holdings</span><span className="connection-import-v">{Number(s.positionCount || 0)}</span></div>
+                  <div><span className="connection-import-k">Transactions</span><span className="connection-import-v">{unifiedPortfolio.transactions?.length || 0}</span></div>
+                  <div><span className="connection-import-k">Valuation</span><span className="connection-import-v">{base}</span></div>
+                </div>
+                <div className="connection-import-notes">
+                  {connected.length > 0 ? (
+                    <span className="connection-import-note">Manual holdings excluded from headline — {connected.length} connected source{connected.length === 1 ? "" : "s"} valued.</span>
+                  ) : null}
+                  {excludedManual.length > 0 ? (
+                    <span className="connection-import-note">Excluded manual: {excludedManual.length} (no connected source yet).</span>
+                  ) : null}
+                  {unvalued > 0 ? (
+                    <span className="connection-import-note connection-import-warn">Unvalued: {unvalued.toLocaleString()} {base} (missing price/FX).</span>
+                  ) : null}
+                  {s.isPartial ? (
+                    <span className="connection-import-note connection-import-warn">Partial coverage — some sources could not be valued.</span>
+                  ) : null}
+                </div>
+              </section>
+            );
+          })() : null}
 
           {totalCount === 0 ? (
             <section className="saved-items-section">

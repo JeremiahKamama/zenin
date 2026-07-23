@@ -17,10 +17,10 @@ const { Webhook } = require("svix");
 const {
   getEmailDeliveryConfig,
   isEmailDeliveryProductionReady,
-  sendAlertEmail,
   sendPasswordResetEmail,
   sendVerificationEmail
 } = require("./email");
+const { dispatchWorkspaceNotification } = require("./workspaceNotificationDispatcher");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -154,6 +154,11 @@ function resolvePythonBinary() {
 }
 const pythonBinary = resolvePythonBinary();
 const { syncBinance, syncHyperliquid, syncBybit, verifyExchangeCredentialScope } = require("./exchangeSync");
+const unifiedPortfolio = require("./unifiedPortfolio");
+const orchestrator = require("./portfolioSyncOrchestrator");
+const unifiedNotifications = require("./unifiedNotifications");
+const portfolioTransactions = require("./portfolioTransactions");
+const notificationPublisher = require("./notificationPublisher");
 
 const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid"]);
 
@@ -1293,7 +1298,8 @@ function accountAwareKey(req, limitName) {
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 40, // raised from 10: a multi-tab local dev session polling auth/me
+        // shares the per-email bucket and was self-locking sign-in out
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => accountAwareKey(req, "auth"),
@@ -1625,8 +1631,69 @@ const workspaceSecretProvider = {
   }
 };
 
+// Normalize an exchange key's extra_data value into a plain object.
+// Handles three historical shapes the column/ORM can hand us:
+//   1. A plain object (current canonical form — stored as plain JSONB).
+//   2. An encrypted `wenc:...` string (legacy rows from when extra_data was
+//      encrypted) — decrypt + JSON.parse.
+//   3. A JSON string — JSON.parse directly.
+function parseExchangeExtraData(value) {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const decoded = value.startsWith("wenc:") ? workspaceSecretProvider.decryptSecret(value) : value;
+    if (!decoded) return {};
+    return typeof decoded === "object" ? decoded : (JSON.parse(decoded) || {});
+  } catch {
+    return {};
+  }
+}
+
 const brokerageRegistry = getBrokerageRegistry();
-const brokerageSyncEngine = createSyncEngine({ repository: brokerage });
+const brokerageSyncEngine = createSyncEngine({
+  repository: brokerage,
+  onSourceSync: async (source) => {
+    if (!source.workspaceId) return;
+    // Dual-write into the unified canonical layer (flag-gated, non-fatal).
+    if (unifiedPortfolio.isEnabled()) {
+      await unifiedPortfolio.recordSourceSync(pool, source.workspaceId, unifiedPortfolio.mapSnapTradeToSource(source))
+        .catch((err) => {
+          console.warn("[unified-portfolio] SnapTrade dual-write skipped:", err.message);
+        });
+    }
+    // Provider-neutral transaction notifications for newly-inserted transactions.
+    if (Array.isArray(source.transactions) && source.transactions.length) {
+      portfolioTransactions.createPortfolioTransactionNotifications(
+        {
+          userId: null, // resolved per workspace member below
+          workspaceId: source.workspaceId,
+          source: { provider: source.provider, connectionId: source.provider, sourceAccountId: source.provider },
+          transactions: source.transactions,
+          opts: { buildActivityUrl: getFrontendAppUrl }
+        },
+        // Custom dispatch that fans out to every workspace member (deduped by key).
+        async (nArgs) => {
+          const members = await pool.query(
+            "SELECT user_id FROM workspace_members WHERE workspace_id=$1",
+            [source.workspaceId]
+          );
+          const userIds = members.rows.map((m) => m.user_id);
+          if (!userIds.length) return [];
+          const out = [];
+          for (const uid of userIds) {
+            const evt = await dispatchWorkspaceNotification({
+              userId: uid,
+              workspaceId: source.workspaceId,
+              event: nArgs.event
+            });
+            out.push(evt);
+          }
+          return out;
+        }
+      ).catch((err) => console.warn("[portfolio-transactions] SnapTrade notify skipped:", err.message));
+    }
+  }
+});
 let brokerageService = null;
 
 function getBrokerageService() {
@@ -1785,67 +1852,10 @@ function normalizeAlertDeliveryType(type) {
   return "market_alert";
 }
 
-async function getAlertEmailRecipient(userId, { requirePriceAlerts = false } = {}) {
-  const result = await pool.query(`
-    SELECT id, email, email_verified AS "emailVerified"
-    FROM app_users
-    WHERE id = $1
-    LIMIT 1;
-  `, [Number(userId)]);
-  const user = result.rows[0];
-  if (!user?.email || !user.emailVerified) {
-    return {
-      allowed: false,
-      reason: user?.email ? "email_not_verified" : "email_missing",
-      email: user?.email || null
-    };
-  }
-
-  const preferencesResult = await userWorkspace.docs.get(user.id, "settings:preferences", {});
-  const preferences = preferencesResult?.document && typeof preferencesResult.document === "object"
-    ? preferencesResult.document
-    : {};
-
-  if (preferences.notifyEmail === false) {
-    return { allowed: false, reason: "email_notifications_disabled", email: user.email };
-  }
-
-  if (requirePriceAlerts && preferences.notifyPriceAlerts === false) {
-    return { allowed: false, reason: "price_alerts_disabled", email: user.email };
-  }
-
-  return {
-    allowed: true,
-    email: user.email,
-    preferences
-  };
-}
-
 function getFrontendAppUrl(pathname = "/app") {
   const frontendUrl = String(process.env.FRONTEND_URL || "https://www.zenin.capital").replace(/\/+$/, "");
   const pathValue = String(pathname || "/app");
   return `${frontendUrl}${pathValue.startsWith("/") ? pathValue : `/${pathValue}`}`;
-}
-
-async function dispatchAlertEmailToUser(userId, alert, options = {}) {
-  const recipient = await getAlertEmailRecipient(userId, options);
-  if (!recipient.allowed) {
-    return {
-      attempted: false,
-      sent: false,
-      skipped: true,
-      reason: recipient.reason,
-      email: recipient.email || null
-    };
-  }
-
-  const delivery = await sendAlertEmail(recipient.email, alert);
-  return {
-    attempted: true,
-    skipped: false,
-    email: recipient.email,
-    ...delivery
-  };
 }
 
 function normalizePlanInput(plan) {
@@ -2454,7 +2464,7 @@ async function logSecurityEvent(req, {
   context = {}
 } = {}) {
   if (!message && !eventType) return null;
-  return admin.recordSystemLog({
+  const record = await admin.recordSystemLog({
     level,
     message: String(message || eventType || "security_event").slice(0, 600),
     context: {
@@ -2472,6 +2482,30 @@ async function logSecurityEvent(req, {
     sessionId: req?.auth?.user?.sessionId || null,
     actorType: req?.auth?.isGuest ? "guest" : (req?.auth?.user?.isAdmin ? "admin" : "user")
   });
+  const recipientUserId = targetUserId || req?.auth?.userId || null;
+  const recipientWorkspaceId = workspaceId || req?.workspace?.workspace?.id || null;
+  if (recipientUserId && recipientWorkspaceId) {
+    const severity = level === "error" || level === "critical" ? "critical" : level === "warning" ? "warning" : "info";
+    await dispatchWorkspaceNotification({
+      userId: recipientUserId,
+      workspaceId: recipientWorkspaceId,
+      event: {
+        type: `security.${eventType || "event"}`,
+        category: "security",
+        severity,
+        title: "Security update",
+        body: String(message || eventType || "Security event").slice(0, 600),
+        entityType: "security_event",
+        entityId: eventType || null,
+        metadata: context,
+        actionable: severity === "critical",
+        dedupeKey: `security:${eventType || "event"}:${recipientWorkspaceId}`
+      }
+    }).catch((notificationError) => {
+      console.warn("[Security] Notification dispatch failed:", notificationError?.message || notificationError);
+    });
+  }
+  return record;
 }
 
 function getEmailDeliverySent(delivery) {
@@ -3877,25 +3911,85 @@ async function fetchAnalyticsRiskIndicators() {
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
-const FALLBACK_STOCKS = {
-  'AAPL': 'Apple Inc', 'MSFT': 'Microsoft Corporation', 'GOOGL': 'Alphabet Inc',
-  'AMZN': 'Amazon.com Inc', 'TSLA': 'Tesla Inc', 'NVDA': 'NVIDIA Corporation',
-  'META': 'Meta Platforms Inc', 'NFLX': 'Netflix Inc', 'JPM': 'JPMorgan Chase',
-  'V': 'Visa Inc', 'WMT': 'Walmart Inc', 'JNJ': 'Johnson & Johnson'
-};
+function normalizeSearchType(type) {
+  const normalized = String(type || "tradfi").trim().toLowerCase();
+  if (["stocks", "stock", "tradfi"].includes(normalized)) return "stock";
+  if (["bonds", "bond"].includes(normalized)) return "bond";
+  if (["etfs", "etf", "fund", "funds"].includes(normalized)) return "etf";
+  if (["currencies", "currency", "forex"].includes(normalized)) return "currency";
+  if (["commodities", "commodity"].includes(normalized)) return "commodity";
+  if (["indicators", "indicator"].includes(normalized)) return "indicator";
+  return normalized;
+}
 
-async function searchYahooFinance(query, type = "tradfi") {
+function inferSearchInstrumentType(row = {}) {
+  const rawType = String(row.type || row.quoteType || row.instrumentType || "").toLowerCase();
+  const symbol = String(row.symbol || row.ticker || "").toUpperCase();
+  const name = String(row.name || row.shortname || row.longname || "").toLowerCase();
+  const descriptor = `${rawType} ${name}`;
+
+  if (/(crypto|digital currency)/.test(descriptor)) return "crypto";
+  if (/(bond|treasury|fixed income|municipal|muni|corporate note|government note|government bill)/.test(descriptor)) return "bond";
+  if (/(etf|exchange traded fund|mutual fund|closed-end fund|\betp\b)/.test(descriptor)) return "etf";
+  if (/(currency|forex|\bfx\b)/.test(descriptor) || /^[A-Z]{3}\/?[A-Z]{3}(=X)?$/.test(symbol)) return "currency";
+  if (/(future|futures|commodity)/.test(descriptor) || COMMODITY_UNIVERSE.some((item) => item.symbol === symbol || String(item.name || "").toLowerCase() === name)) return "commodity";
+  if (/(index|indicator)/.test(descriptor)) return "indicator";
+  return "stock";
+}
+
+function matchesRequestedSearchType(row, requestedType) {
+  const requested = normalizeSearchType(requestedType);
+  return requested === "all" || inferSearchInstrumentType(row) === requested;
+}
+
+function toSearchResult(row = {}, provider, options = {}) {
+  const symbol = String(row.symbol || row.ticker || "").trim().toUpperCase();
+  if (!symbol) return null;
+  const type = options.type || inferSearchInstrumentType(row);
+  return {
+    symbol,
+    name: String(row.name || row.shortname || row.longname || symbol).trim(),
+    type,
+    category: type === "currency" ? "currencies" : type === "commodity" ? "commodities" : type === "indicator" ? "indicators" : type === "etf" ? "etfs" : type === "bond" ? "bonds" : type === "crypto" ? "crypto" : "stocks",
+    marketType: type === "currency" ? "forex" : type === "commodity" ? "commodity" : type === "indicator" ? "macro" : type === "crypto" ? "spot" : "equity",
+    instrumentType: type,
+    exchange: row.exchange || row.exchDisp || row.primary_exchange || row.market || (type === "currency" ? "FX" : undefined),
+    currency: row.currency || row.currency_name || undefined,
+    provider,
+    providers: Array.isArray(row.providers) ? row.providers : [provider],
+    live: options.live !== false,
+    fallback: Boolean(options.fallback),
+    asOf: row.asOf || row.updatedAt || new Date().toISOString(),
+    source: options.source || provider,
+  };
+}
+
+function mergeSearchResults(rows = [], limit = 24) {
+  const merged = new Map();
+  for (const candidate of rows.filter(Boolean)) {
+    const key = `${candidate.type}:${candidate.symbol}:${candidate.exchange || ""}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...candidate, providers: [...new Set(candidate.providers || [candidate.provider])] });
+      continue;
+    }
+    const providers = [...new Set([...(existing.providers || []), ...(candidate.providers || [candidate.provider])])];
+    if (candidate.live && !existing.live) Object.assign(existing, candidate);
+    existing.providers = providers;
+    existing.live = Boolean(existing.live || candidate.live);
+    existing.fallback = Boolean(existing.fallback && candidate.fallback);
+    existing.provider = existing.providers.join(" + ");
+    existing.source = existing.providers.join(" + ");
+  }
+  return [...merged.values()]
+    .sort((a, b) => Number(b.live) - Number(a.live) || Number(a.fallback) - Number(b.fallback) || String(a.symbol).localeCompare(String(b.symbol)))
+    .slice(0, limit);
+}
+
+async function searchYahooFinance(query, type = "all") {
   if (!query || query.trim().length === 0) return [];
 
   const results = [];
-  const queryLower = query.toLowerCase();
-
-  // Fast Fallback Dictionary Match
-  for (const [symbol, name] of Object.entries(FALLBACK_STOCKS)) {
-    if (symbol.toLowerCase().includes(queryLower) || name.toLowerCase().includes(queryLower)) {
-      results.push({ symbol, name, type: 'stock', exchange: 'NASDAQ/NYSE' });
-    }
-  }
 
   try {
     const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`;
@@ -3928,14 +4022,15 @@ async function searchYahooFinance(query, type = "tradfi") {
 
       for (const q of quotes) {
         if (!q.symbol) continue;
-        if (!results.some(r => r.symbol === q.symbol)) {
-          results.push({
+        const raw = {
             symbol: q.symbol,
             name: q.shortname || q.longname || q.symbol,
-            type: "stock",
+            quoteType: q.quoteType,
             exchange: q.exchange || q.exchDisp || "NASDAQ/NYSE",
             currency: q.currency || inferCurrency(q.symbol, q.exchange || q.exchDisp)
-          });
+          };
+        if (matchesRequestedSearchType(raw, type) && !results.some(r => r.symbol === raw.symbol)) {
+          results.push({ ...raw, type: inferSearchInstrumentType(raw) });
           fetchResolveCount++;
         }
       }
@@ -3945,6 +4040,149 @@ async function searchYahooFinance(query, type = "tradfi") {
   }
 
   return results.slice(0, 10);
+}
+
+async function searchMassiveInstruments(query, type = "all") {
+  if (!MASSIVE_API_KEY) return [];
+  try {
+    const payload = await cachedProviderFetch(
+      `massive:search:${String(query).toLowerCase()}`,
+      () => fetchMassiveRestJson("/v3/reference/tickers", { search: query, active: "true", limit: 12, order: "asc", sort: "ticker" }),
+      60_000
+    );
+    const rows = Array.isArray(payload?.results) ? payload.results : [];
+    return rows
+      .map((row) => ({
+        symbol: row.ticker,
+        name: row.name,
+        type: row.type,
+        exchange: row.primary_exchange,
+        currency: row.currency_name,
+      }))
+      .filter((row) => matchesRequestedSearchType(row, type));
+  } catch (error) {
+    console.warn("[Search] Massive discovery unavailable:", error?.message || error);
+    return [];
+  }
+}
+
+async function searchFmpInstruments(query, type = "all") {
+  try {
+    const rows = await getMarketIntelService().searchCompanies(String(query), 12);
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({ ...row, type: inferSearchInstrumentType(row) }))
+      .filter((row) => matchesRequestedSearchType(row, type));
+  } catch {
+    // FMP is optional and must never make the global discovery path fail.
+    return [];
+  }
+}
+
+async function searchLiveIndicators(query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return [];
+  const matchingConfigs = MACRO_INDICATOR_CONFIG.filter((config) => {
+    const searchable = [config.key, config.label, ...(config.aliases || [])].join(" ").toLowerCase();
+    return searchable.includes(needle);
+  }).slice(0, 8);
+  const countryMatches = searchForexFactoryCountries(query, 8);
+  const values = await Promise.all(matchingConfigs.map(async (config) => {
+    const code = WORLD_BANK_INDICATOR_MAP[config.key];
+    try {
+      const points = code ? await fetchWorldBankIndicatorSeries("USA", code) : [];
+      return toSearchResult({
+        symbol: config.key,
+        name: config.label,
+        countryCode: "USA",
+        updatedAt: points[0]?.date || null,
+      }, "World Bank", { type: "indicator", live: points.length > 0, fallback: points.length === 0, source: points.length > 0 ? "World Bank" : "Indicator catalog" });
+    } catch {
+      return toSearchResult({ symbol: config.key, name: config.label }, "World Bank", { type: "indicator", live: false, fallback: true, source: "Indicator catalog" });
+    }
+  }));
+  const events = (matchingConfigs.length || countryMatches.length) ? await fetchForexFactoryEvents().catch(() => []) : [];
+  const countryRows = countryMatches.map((country) => {
+    const live = events.some((event) => String(event.country || "").toUpperCase() === String(country.currency || "").toUpperCase());
+    return toSearchResult(country, "Forex Factory", {
+      type: "indicator",
+      live,
+      fallback: !live,
+      source: live ? "Forex Factory" : "Macro reference catalog"
+    });
+  });
+  const eventMatches = events
+    .filter((event) => `${event.title} ${event.country}`.toLowerCase().includes(needle))
+    .slice(0, 6)
+    .map((event) => toSearchResult({
+      symbol: `${event.country}:${event.title}`.replace(/\s+/g, "_").toUpperCase(),
+      name: event.title,
+      exchange: event.country,
+      updatedAt: event.asOf,
+    }, "Forex Factory", { type: "indicator", live: true }));
+  return mergeSearchResults([...values, ...countryRows, ...eventMatches], 12);
+}
+
+function searchCatalogFallback(query, type) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return [];
+  const normalized = normalizeSearchType(type);
+  if (normalized === "etf") {
+    return CURATED_ETF_RESULTS
+      .filter((row) => `${row.symbol} ${row.name}`.toLowerCase().includes(needle))
+      .map((row) => toSearchResult(row, row.provider, { type: "etf", live: false, fallback: true, source: "ETF reference catalog" }));
+  }
+  if (normalized === "currency") {
+    return CURATED_FX_RESULTS
+      .filter((row) => `${row.symbol} ${row.name} ${row.baseCurrency || ""} ${row.quoteCurrency || ""}`.toLowerCase().includes(needle))
+      .map((row) => toSearchResult(row, row.provider, { type: "currency", live: false, fallback: true, source: "FX reference catalog" }));
+  }
+  if (normalized === "commodity") {
+    return COMMODITY_UNIVERSE
+      .filter((row) => `${row.symbol} ${row.name} ${row.group}`.toLowerCase().includes(needle))
+      .map((row) => toSearchResult(row, "Commodity catalog", { type: "commodity", live: false, fallback: true, source: "Commodity reference catalog" }));
+  }
+  return [];
+}
+
+const unifiedSearchCache = new Map();
+const UNIFIED_SEARCH_CACHE_TTL_MS = 45_000;
+
+async function searchUnifiedInstruments(query, requestedType = "all") {
+  const type = normalizeSearchType(requestedType);
+  const cacheKey = `${type}:${String(query || "").trim().toLowerCase()}`;
+  const cached = unifiedSearchCache.get(cacheKey);
+  if (cached?.expiresAt > Date.now()) return cached.results;
+  const types = type === "all"
+    ? ["stock", "bond", "etf", "currency", "commodity", "indicator", "crypto"]
+    : [type];
+  const hasTradfi = types.some((entry) => ["stock", "bond", "etf", "currency", "commodity"].includes(entry));
+  const [yahooRows, massiveRows, fmpRows, indicatorRows, cryptoRows, ...myStocksRows] = await Promise.all([
+    hasTradfi ? searchYahooFinance(query, "all") : Promise.resolve([]),
+    types.some((entry) => ["stock", "etf", "currency"].includes(entry)) ? searchMassiveInstruments(query, "all") : Promise.resolve([]),
+    types.some((entry) => ["stock", "bond", "etf", "currency", "commodity"].includes(entry)) ? searchFmpInstruments(query, "all") : Promise.resolve([]),
+    types.includes("indicator") ? searchLiveIndicators(query) : Promise.resolve([]),
+    types.includes("crypto") ? fetchHyperliquidSearchResults(query).then((rows) => rows.length ? rows : searchCoinGeckoCrypto(query)).catch(() => []) : Promise.resolve([]),
+    ...types.filter((entry) => ["stock", "bond", "etf"].includes(entry)).map((entry) =>
+      mystocksIntegration.searchMyStocks({ q: query, type: entry, limit: 12 }).catch(() => [])
+    ),
+  ]);
+
+  const liveRows = [
+    ...yahooRows.map((row) => toSearchResult(row, "Yahoo Finance")),
+    ...massiveRows.map((row) => toSearchResult(row, "Massive")),
+    ...fmpRows.map((row) => toSearchResult(row, "Financial Modeling Prep")),
+    ...indicatorRows,
+    ...cryptoRows.map((row) => toSearchResult(row, row.provider || row.exchange || "Crypto market data", { type: "crypto" })),
+    ...myStocksRows.flat().map((row) => toSearchResult(row, row.provider || "MyStocks Africa")),
+  ].filter((row) => row && (type === "all" || row.type === type));
+
+  const liveByType = new Set(liveRows.map((row) => row.type));
+  const resilienceRows = types
+    .filter((entry) => !liveByType.has(entry))
+    .flatMap((entry) => searchCatalogFallback(query, entry));
+  const results = mergeSearchResults([...liveRows, ...resilienceRows], 36);
+  unifiedSearchCache.set(cacheKey, { results, expiresAt: Date.now() + UNIFIED_SEARCH_CACHE_TTL_MS });
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -4432,50 +4670,43 @@ app.post("/api/alerts/dispatch", requireSignedIn, attachActiveWorkspace, require
     const body = req.body || {};
     const type = normalizeAlertDeliveryType(body.type);
     const symbol = String(body.symbol || body.asset?.symbol || "").trim().toUpperCase();
-    const delivery = await dispatchAlertEmailToUser(req.auth.userId, {
+    const category = type === "watchlist_alert" ? "watchlist" : "market-news";
+    const notification = await dispatchWorkspaceNotification({
+      userId: req.auth.userId,
+      workspaceId: req.workspace.workspace.id,
+      event: {
       type,
+      category,
+      severity: body.severity === "critical" ? "critical" : body.severity === "warning" ? "warning" : "info",
       title: body.title,
       body: body.body,
-      symbol,
-      severity: body.severity || "review",
+      entityType: category,
+      entityId: symbol || body.source || null,
+      metadata: { symbol: symbol || null, source: body.source || null },
       workspaceName: req.workspace.workspace?.name || "Zenin workspace",
-      actionUrl: getFrontendAppUrl(`/app?section=${type === "watchlist_alert" ? "watchlist" : "research"}`)
-    }, {
-      requirePriceAlerts: type === "market_alert" || type === "watchlist_alert"
+      action: { label: "Review alert", actionUrl: getFrontendAppUrl(`/app?section=${type === "watchlist_alert" ? "watchlist" : "research"}`) },
+      requestedChannels: ["inApp", "email"],
+      actionable: true,
+      dedupeKey: `alert:${type}:${symbol || body.source || body.title}`
+      }
     });
 
     await workspaces.recordActivity({
       workspaceId: req.workspace.workspace.id,
       actorUserId: req.auth.userId,
-      eventType: "alert_email_dispatch_requested",
+      eventType: "alert_dispatch_requested",
       entityType: type,
       entityId: symbol || body.source || body.title,
       details: {
-        sent: Boolean(delivery.sent),
-        skipped: Boolean(delivery.skipped),
-        reason: delivery.reason || delivery.error?.message || null,
+        sent: notification?.deliveryResults?.email?.status === "delivered",
+        skipped: notification?.deliveryResults?.email?.status === "skipped",
+        reason: notification?.deliveryResults?.email?.reason || null,
         symbol: symbol || null
       }
     });
-
-    if (delivery.skipped) {
-      return res.status(409).json({
-        error: "Alert email was not sent.",
-        reason: delivery.reason,
-        delivery
-      });
-    }
-
-    if (!delivery.sent) {
-      return res.status(503).json({
-        error: "Alert email delivery failed. Check Resend configuration and sender domain.",
-        delivery
-      });
-    }
-
-    return res.json({ success: true, delivery });
+    return res.status(201).json({ success: true, notification, delivery: notification?.deliveryResults || {} });
   } catch (error) {
-    return handleServerError(res, "Failed to dispatch alert email", error);
+    return handleServerError(res, "Failed to dispatch workspace alert", error);
   }
 });
 
@@ -4553,19 +4784,25 @@ app.put("/api/workspaces/current/alerts", requireSignedIn, attachActiveWorkspace
       details: { status: body.status || "open", assignedToUserId: body.assignedToUserId || null }
     });
 
-    let emailDelivery = null;
+    let notification = null;
     if (body.assignedToUserId && body.status !== "archived") {
-      emailDelivery = await dispatchAlertEmailToUser(body.assignedToUserId, {
+      notification = await dispatchWorkspaceNotification({ userId: body.assignedToUserId, workspaceId: req.workspace.workspace.id, event: {
         type: "workspace_assignment",
+        category: "workspace",
+        severity: body.status === "snoozed" ? "info" : "warning",
         title: "Workspace alert assigned",
         body: `An alert assignment needs attention in ${req.workspace.workspace?.name || "your Zenin workspace"}.\n\nAlert: ${body.alertKey}\nStatus: ${body.status || "open"}`,
-        severity: body.status === "snoozed" ? "info" : "review",
+        entityType: "workspace_alert",
+        entityId: body.alertKey,
         workspaceName: req.workspace.workspace?.name || "Zenin workspace",
-        actionUrl: getFrontendAppUrl("/app?section=watchlist")
-      });
+        action: { label: "Review assignment", actionUrl: getFrontendAppUrl("/app?section=watchlist") },
+        requestedChannels: ["inApp", "email"],
+        actionable: true,
+        dedupeKey: `workspace-assignment:${body.alertKey}:${body.assignedToUserId}`
+      }});
     }
 
-    return res.json({ item: result.rows[0], emailDelivery });
+    return res.json({ item: result.rows[0], notification, emailDelivery: notification?.deliveryResults?.email || null });
   } catch (error) {
     return handleServerError(res, "Failed to update workspace alert assignment", error);
   }
@@ -4598,29 +4835,54 @@ async function generateDailyBriefingPayload(userId, workspaceId, dateStr) {
   const sections = [];
   const metrics = {};
 
-  // Portfolio snapshot
-  const holdingsCount = Array.isArray(holdings) ? holdings.length : 0;
-  const portfolioValue = Array.isArray(holdings)
-    ? holdings.reduce((sum, h) => {
-        const qty = Number(h?.quantity) || 0;
-        const price = Number(h?.price) || Number(h?.entryPrice) || 0;
-        return sum + qty * price;
-      }, 0)
-    : 0;
+  // Portfolio snapshot — prefer unified canonical when enabled.
+  let portfolioValue = 0;
+  let holdingsCount = 0;
+  let portfolioItems = [];
+  let portfolioInsight = "No holdings tracked yet. Connect a read-only source to import positions.";
+
+  if (unifiedPortfolio.isEnabled()) {
+    try {
+      const us = await unifiedPortfolio.getUnifiedSummary(pool, workspaceId);
+      portfolioValue = Number(us.totalValue || 0);
+      holdingsCount = Number(us.sourceCoverage?.total || us.sources?.length || 0);
+      portfolioItems = (us.positions || []).slice(0, 5).map((p) => ({
+        symbol: p.symbol,
+        quantity: Number(p.quantity || 0),
+        price: Number(p.marketValue || 0) / Math.max(1, Number(p.quantity || 1)),
+        name: p.name || null,
+        source: p.source || null,
+        type: p.positionType || p.instrumentType || null
+      }));
+      portfolioInsight = holdingsCount
+        ? `${holdingsCount} source${holdingsCount === 1 ? "" : "s"} across ${us.positions?.length || 0} position${(us.positions?.length || 0) === 1 ? "" : "s"}. Portfolio value ≈ $${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`
+        : "No holdings tracked yet. Connect a read-only source to import positions.";
+    } catch (_) { /* fall through to legacy */ }
+  }
+
+  if (!portfolioValue && Array.isArray(holdings) && holdings.length) {
+    portfolioValue = holdings.reduce((sum, h) => {
+      const qty = Number(h?.quantity) || 0;
+      const price = Number(h?.price) || Number(h?.entryPrice) || 0;
+      return sum + qty * price;
+    }, 0);
+    holdingsCount = holdings.length;
+    portfolioItems = holdings.slice(0, 5).map((h) => ({
+      symbol: h?.symbol || null,
+      quantity: Number(h?.quantity) || 0,
+      price: Number(h?.price) || Number(h?.entryPrice) || 0,
+      name: h?.name || h?.symbol || null
+    }));
+    portfolioInsight = `${holdingsCount} holding${holdingsCount === 1 ? "" : "s"} tracked. Portfolio value ≈ $${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`;
+  }
+
   metrics.portfolioValue = portfolioValue;
   metrics.holdingsCount = holdingsCount;
   sections.push({
     type: "portfolio",
     title: "Portfolio snapshot",
-    items: (Array.isArray(holdings) ? holdings.slice(0, 5) : []).map((h) => ({
-      symbol: h?.symbol || null,
-      quantity: Number(h?.quantity) || 0,
-      price: Number(h?.price) || Number(h?.entryPrice) || 0,
-      name: h?.name || h?.symbol || null
-    })),
-    insight: holdingsCount
-      ? `${holdingsCount} holding${holdingsCount === 1 ? "" : "s"} tracked. Portfolio value ≈ $${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`
-      : "No holdings tracked yet. Connect a read-only source to import positions."
+    items: portfolioItems,
+    insight: portfolioInsight
   });
 
   // Watchlist movers (symbol list — price data would require live feed)
@@ -5304,11 +5566,11 @@ function buildConnectionCapability(exchange) {
   const syncAvailable = SYNC_ENABLED_EXCHANGES.has(normalizedExchange);
   const watchOnly = normalizedExchange === "hyperliquid";
   return {
-    accessMode: watchOnly ? "watch_only" : "read_only_metadata",
+    accessMode: watchOnly ? "watch_only" : (syncAvailable ? "read_only_key" : "read_only_metadata"),
     syncAvailable,
     syncStatus: syncAvailable ? "sync_supported" : "metadata_only",
     nextAction: syncAvailable
-      ? "Run sync to import holdings, balances, and fills."
+      ? (watchOnly ? "Run sync to import holdings, balances, and fills." : "Provide a provider-side read-only API key, then run sync to import holdings, balances, and fills.")
       : "Saved for workspace context. Live sync is not available for this provider yet.",
     supportMessage: syncAvailable
       ? (watchOnly
@@ -5410,12 +5672,16 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
       scopeVerificationMessage: scopeState.scopeVerificationMessage,
       providerScopeMeta: scopeState.providerMeta || {}
     };
-    // Encrypt sensitive data before storing (#EncryptionAtRest)
+    // Encrypt sensitive data before storing (#EncryptionAtRest).
+    // Note: only the credentials (apiKey/apiSecret) are encrypted. extraData holds
+    // non-sensitive metadata (username, venueType, public wallet address, scope
+    // status) and is stored as plain JSONB — encrypting it would make the column
+    // reject the ciphertext ("invalid input syntax for type json").
     const payload = {
       exchange,
       apiKey: workspaceSecretProvider.encryptSecret(apiKey),
       apiSecret: workspaceSecretProvider.encryptSecret(apiSecret),
-      extraData: enrichedExtraData ? workspaceSecretProvider.encryptSecret(JSON.stringify(enrichedExtraData)) : null,
+      extraData: enrichedExtraData || {},
       permissionScope: scopeState.permissionScope,
       canTrade: scopeState.canTrade,
       lastVerifiedScope: scopeState.lastVerifiedScope,
@@ -5486,7 +5752,12 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
 app.delete("/api/db/exchange-keys/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    await userWorkspace.exchangeKeys.remove(req.auth.userId, parseInt(id), req.workspace.workspace.id);
+    // Read the key first so we can scope the cascade to its exchange.
+    const key = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id), req.workspace.workspace.id);
+    if (!key) {
+      return res.status(404).json({ error: "Exchange key not found." });
+    }
+    await userWorkspace.exchangeKeys.remove(req.auth.userId, parseInt(id), req.workspace.workspace.id, key.exchange);
     await workspaces.recordActivity({
       workspaceId: req.workspace.workspace.id,
       actorUserId: req.auth.userId,
@@ -5532,50 +5803,22 @@ function titleCaseVenue(value) {
     .join(" ");
 }
 
+// DEPRECATED: replaced by portfolioTransactions.createPortfolioTransactionNotifications
+// (provider-neutral). Kept for back-compat; routes exchange fills to the new service.
 async function createTradeExecutionNotifications({ userId, workspaceId, exchange, executions = [] }) {
-  const rows = Array.isArray(executions) ? executions.filter(Boolean) : [];
-  if (!rows.length) return [];
-  const venue = titleCaseVenue(exchange || rows[0]?.platform);
-  const notifications = [];
-
-  if (rows.length > 5) {
-    const symbols = [...new Set(rows.map((row) => row.symbol).filter(Boolean))].slice(0, 4);
-    notifications.push(await userWorkspace.notifications.create(userId, {
-      type: "trade_execution.batch_created",
-      title: `${rows.length} new executions synced`,
-      body: `${venue} imported ${rows.length} API-sourced fills${symbols.length ? ` across ${symbols.join(", ")}` : ""}.`,
-      entityType: "trade_execution_batch",
-      entityId: `${exchange || "exchange"}:${Date.now()}`,
-      metadata: {
-        exchange,
-        executionIds: rows.map((row) => row.id).filter(Boolean),
-        symbols
-      }
-    }, workspaceId));
-    return notifications;
-  }
-
-  for (const execution of rows) {
-    const side = String(execution.side || "trade").toLowerCase();
-    const symbol = execution.symbol || "asset";
-    const title = `New ${symbol} ${side} on ${venue}`;
-    const body = `${formatExecutionQuantity(execution.quantity)} ${symbol} at ${formatExecutionPrice(execution.price)}${execution.feeAmount ? ` · fee ${formatExecutionQuantity(execution.feeAmount)} ${execution.feeCurrency || ""}` : ""}`;
-    notifications.push(await userWorkspace.notifications.create(userId, {
-      type: "trade_execution.created",
-      title,
-      body,
-      entityType: "trade_execution",
-      entityId: execution.id,
-      metadata: {
-        exchange,
-        symbol,
-        side,
-        platformFillId: execution.platformFillId,
-        executedAt: execution.executedAt
-      }
-    }, workspaceId));
-  }
-  return notifications;
+  const pt = require("./portfolioTransactions");
+  return pt.createPortfolioTransactionNotifications(
+    {
+      userId, workspaceId,
+      source: { provider: exchange, connectionId: exchange, sourceAccountId: exchange },
+      transactions: (executions || []).map((f) => ({
+        type: f.side || "fill", symbol: f.symbol, quantity: f.quantity, price: f.price,
+        fee: f.feeAmount, currency: f.quoteCurrency || f.currency, executedAt: f.executedAt,
+        externalTransactionId: f.platformFillId || f.id, id: f.id
+      })),
+      opts: { buildActivityUrl: typeof getFrontendAppUrl === "function" ? getFrontendAppUrl : undefined }
+    }
+  );
 }
 
 // Exchange Sync Trigger
@@ -5602,8 +5845,7 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
     // Decrypt credentials for sync
     const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.apiKey);
     const apiSecret = workspaceSecretProvider.decryptSecret(keyRecord.apiSecret);
-    const extraDataStr = workspaceSecretProvider.decryptSecret(keyRecord.extraData);
-    const extraData = extraDataStr ? JSON.parse(extraDataStr) : {};
+    const extraData = parseExchangeExtraData(keyRecord.extraData);
     const syncContext = {
       knownSymbols: await userWorkspace.tradeFills.getKnownSymbols(req.auth.userId, keyRecord.exchange, req.workspace.workspace.id)
     };
@@ -5621,6 +5863,16 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
 
     if (result) {
       await userWorkspace.portfolio.sync(req.auth.userId, keyRecord.exchange, result.holdings, req.workspace.workspace.id);
+      // Real account data is now synced; drop any pre-existing placeholder
+      // (manual / NULL-strategy) holdings so Home/Portfolio show only real data.
+      try {
+        const cleared = await userWorkspace.portfolio.clearPlaceholders(req.auth.userId, req.workspace.workspace.id);
+        if (cleared.removed && cleared.removed.length) {
+          console.log(`[Exchange] Cleared ${cleared.removed.length} placeholder holding(s) after sync for workspace ${req.workspace.workspace.id}`);
+        }
+      } catch (clearErr) {
+        console.warn("[Exchange] placeholder cleanup skipped:", clearErr?.message || clearErr);
+      }
       let fillSyncResult = { inserted: [], updated: [], insertedCount: 0, updatedCount: 0 };
       if (Array.isArray(result.tradeFills) && result.tradeFills.length) {
         fillSyncResult = await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills, req.workspace.workspace.id);
@@ -5629,11 +5881,41 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       if (result.currency && result.cashBalance != null) {
         await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance, req.workspace.workspace.id);
       }
-      const notifications = await createTradeExecutionNotifications({
+      let canonicalSyncStatus = unifiedPortfolio.isEnabled() ? "skipped" : "disabled";
+      let canonicalSource = null;
+      if (unifiedPortfolio.isEnabled()) {
+        try {
+          canonicalSource = unifiedPortfolio.mapExchangeWalletToSource(result, {
+            workspaceId: req.workspace.workspace.id,
+            address: apiKey,
+            connectionId: String(id),
+            provider: keyRecord.exchange,
+            accessMode: keyRecord.exchange === "hyperliquid" ? "watch_only" : "read_only_key",
+            sourceType: keyRecord.exchange === "hyperliquid" ? "wallet" : "exchange"
+          });
+          await unifiedPortfolio.recordSourceSync(pool, req.workspace.workspace.id, canonicalSource);
+          canonicalSyncStatus = "synced";
+        } catch (err) {
+          canonicalSyncStatus = "failed";
+          console.warn(`[unified-portfolio] ${keyRecord.exchange} dual-write skipped:`, err.message);
+        }
+      }
+      const notifications = await portfolioTransactions.createPortfolioTransactionNotifications({
         userId: req.auth.userId,
         workspaceId: req.workspace.workspace.id,
-        exchange: keyRecord.exchange,
-        executions: fillSyncResult.inserted
+        source: { provider: keyRecord.exchange, connectionId: String(id), sourceAccountId: String(id) },
+        transactions: fillSyncResult.inserted.map((f) => ({
+          type: f.side || "fill",
+          symbol: f.symbol,
+          quantity: f.quantity,
+          price: f.price,
+          fee: f.feeAmount,
+          currency: f.quoteCurrency || f.currency,
+          executedAt: f.executedAt,
+          externalTransactionId: f.platformFillId || f.id,
+          id: f.id
+        })),
+        opts: { buildActivityUrl: getFrontendAppUrl }
       });
       invalidateRuntimeSnapshotsByPrefix("app-bootstrap");
       const updatedKey = await userWorkspace.exchangeKeys.updateSyncStatus(req.workspace.workspace.id, parseInt(id), {
@@ -5665,6 +5947,50 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       result.fillSyncResult = fillSyncResult;
       result.notifications = notifications;
       result.updatedKey = updatedKey;
+      result.canonicalSyncStatus = canonicalSyncStatus;
+      result.canonicalSource = canonicalSource ? {
+        sourceType: canonicalSource.sourceType,
+        provider: canonicalSource.provider,
+        label: canonicalSource.label,
+        connectionId: canonicalSource.externalConnectionId,
+        accessMode: canonicalSource.accessMode,
+        connectionStatus: canonicalSource.connectionStatus,
+        syncStatus: canonicalSource.syncStatus,
+        capabilities: canonicalSource.capabilities
+      } : null;
+      // User-facing sync success notification (so the inbox reflects the sync,
+      // and the user can jump straight to the account to retry/remove).
+      try {
+        const newCount = fillSyncResult.insertedCount || 0;
+        await dispatchWorkspaceNotification({
+          userId: req.auth.userId,
+          workspaceId: req.workspace.workspace.id,
+          event: {
+            type: "account_sync_success",
+            category: "account_sync",
+            severity: "success",
+            title: `${keyRecord.exchange === "hyperliquid" ? "Hyperliquid" : keyRecord.exchange} sync complete`,
+            body: newCount > 0
+              ? `Synced ${newCount} new trade${newCount === 1 ? "" : "s"} and refreshed holdings.`
+              : "Holdings and balances refreshed.",
+            entityType: "exchange_key",
+            entityId: String(id),
+            metadata: {
+              exchange: keyRecord.exchange,
+              keyId: String(id),
+              newExecutionCount: newCount,
+              holdingsCount: result?.holdings?.length || 0
+            },
+            action: {
+              label: "Manage account",
+              actionUrl: getFrontendAppUrl("/app?section=settings&tab=accounts")
+            },
+            dedupeKey: `account-sync-success:${req.workspace.workspace.id}:${id}:${new Date().toISOString().slice(0, 10)}`
+          }
+        });
+      } catch (noteErr) {
+        console.warn("[Exchange] sync success notification skipped:", noteErr?.message || noteErr);
+      }
     }
 
     res.json({
@@ -5678,7 +6004,16 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       notifications: result?.notifications || [],
       cashBalance: result?.cashBalance,
       currency: result?.currency,
-      providerTrust: result?.updatedKey ? buildProviderTrust(result.updatedKey) : null
+      providerTrust: result?.updatedKey ? buildProviderTrust(result.updatedKey) : null,
+      canonicalSyncStatus: result?.canonicalSyncStatus || (unifiedPortfolio.isEnabled() ? "skipped" : "disabled"),
+      source: result?.canonicalSource || null,
+      syncResult: result ? {
+        holdingsCount: result?.holdings?.length || 0,
+        tradesCount: result?.trades?.length || 0,
+        tradeFillCount: result?.tradeFills?.length || 0
+      } : null,
+      warnings: result?.canonicalSyncStatus === "failed" ? [{ type: "canonical_sync_failed", message: "Exchange data synced, but canonical source reflection failed." }] : [],
+      nextAction: result?.canonicalSyncStatus === "failed" ? "Retry unified portfolio sync." : null
     });
   } catch (err) {
     if (req.workspace?.workspace?.id && req.params?.id) {
@@ -5694,6 +6029,35 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
         });
       } catch (statusError) {
         console.warn("[Exchange] Failed to persist sync error status:", statusError?.message || statusError);
+      }
+      // User-facing sync failure notification: routes the user to the account
+      // so they can retry the sync or remove the connection before reconnecting.
+      try {
+        await dispatchWorkspaceNotification({
+          userId: req.auth.userId,
+          workspaceId: req.workspace.workspace.id,
+          event: {
+            type: "account_sync_failed",
+            category: "account_sync",
+            severity: "error",
+            title: `${keyRecord.exchange === "hyperliquid" ? "Hyperliquid" : keyRecord.exchange} sync failed`,
+            body: err?.message ? `Sync error: ${String(err.message).slice(0, 180)}` : "Account sync failed. Open the account to retry or remove it.",
+            entityType: "exchange_key",
+            entityId: String(id),
+            metadata: {
+              exchange: keyRecord.exchange,
+              keyId: String(id),
+              error: err?.message || "Exchange sync failed"
+            },
+            action: {
+              label: "Manage account",
+              actionUrl: getFrontendAppUrl("/app?section=settings&tab=accounts")
+            },
+            dedupeKey: `account-sync-failed:${req.workspace.workspace.id}:${id}:${new Date().toISOString().slice(0, 10)}`
+          }
+        });
+      } catch (noteErr) {
+        console.warn("[Exchange] sync failure notification skipped:", noteErr?.message || noteErr);
       }
     }
     const burst = trackSecurityAnomaly(`exchange-sync-failure:${req.workspace?.workspace?.id || "unknown"}`, 10 * 60 * 1000);
@@ -6904,7 +7268,17 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
 
     const session = await issueSessionForUser(created.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
-    
+
+    // Strip guest/demo seed holdings so a new account opens on clean data.
+    try {
+      const cleared = await userWorkspace.portfolio.clearDemoPlaceholders(created.id);
+      if (cleared.removed && cleared.removed.length) {
+        console.log(`[Signup] Cleared ${cleared.removed.length} demo holding(s) for new user ${created.id}`);
+      }
+    } catch (clearErr) {
+      console.warn("[Signup] demo cleanup skipped:", clearErr?.message || clearErr);
+    }
+
     return res.status(201).json({
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(created),
@@ -6971,6 +7345,17 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
       const rememberMe = req.body?.rememberMe !== false;
       const session = await issueSessionForUser(user.id, req, { persistent: rememberMe });
       setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+
+      // Strip guest/demo seed holdings so the user opens on clean data.
+      try {
+        const cleared = await userWorkspace.portfolio.clearDemoPlaceholders(user.id);
+        if (cleared.removed && cleared.removed.length) {
+          console.log(`[Signin] Cleared ${cleared.removed.length} demo holding(s) for user ${user.id}`);
+        }
+      } catch (clearErr) {
+        console.warn("[Signin] demo cleanup skipped:", clearErr?.message || clearErr);
+      }
+
       return res.json({
         expiresAt: session.expiresAt,
         user: sanitizeAuthUser(user),
@@ -7045,6 +7430,17 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
     const rememberMe = req.body?.rememberMe !== false;
     const session = await issueSessionForUser(user.id, req, { persistent: rememberMe });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
+
+    // Strip guest/demo seed holdings so the user opens on clean data.
+    try {
+      const cleared = await userWorkspace.portfolio.clearDemoPlaceholders(user.id);
+      if (cleared.removed && cleared.removed.length) {
+        console.log(`[Signin] Cleared ${cleared.removed.length} demo holding(s) for user ${user.id}`);
+      }
+    } catch (clearErr) {
+      console.warn("[Signin] demo cleanup skipped:", clearErr?.message || clearErr);
+    }
+
     return res.json({
       expiresAt: session.expiresAt,
       user: sanitizeAuthUser(user)
@@ -8540,79 +8936,15 @@ app.get("/api/search", validate(searchQuerySchema, "query"), async (req, res) =>
     return res.status(400).json({ error: "q parameter required" });
   }
   try {
-    const normalizedType = String(type || "tradfi").trim().toLowerCase();
-    let results = [];
-    if (normalizedType === "crypto") {
-      const hyperResults = await fetchHyperliquidSearchResults(q);
-      results = hyperResults.length > 0 ? hyperResults : await searchCoinGeckoCrypto(q);
-    } else if (normalizedType === "etf" || normalizedType === "etfs") {
-      // Curated ETF catalog only (CORE_ETF_SEED + commodity-linked). Inline here
-      // to keep the backend self-contained (CommonJS) and avoid ESM cross-import.
-      const ql = String(q || "").trim().toLowerCase();
-      results = CURATED_ETF_RESULTS
-        .filter((row) => `${row.symbol} ${row.name}`.toLowerCase().includes(ql))
-        .slice(0, 12);
-    } else if (normalizedType === "currency" || normalizedType === "currencies" || normalizedType === "forex") {
-      const ql = String(q || "").trim().toLowerCase();
-      results = CURATED_FX_RESULTS
-        .filter((row) => `${row.symbol} ${row.name} ${row.baseCurrency || ""} ${row.quoteCurrency || ""}`.toLowerCase().includes(ql))
-        .sort((a, b) => {
-          const rank = (row) => {
-            const symbol = String(row.symbol || "").toLowerCase();
-            const name = String(row.name || "").toLowerCase();
-            if (symbol === ql) return 0;
-            if (name === `${ql} currency`) return 1;
-            if (symbol.startsWith(ql) || name.startsWith(ql)) return 2;
-            return 3;
-          };
-          return rank(a) - rank(b) || String(a.symbol).localeCompare(String(b.symbol));
-        })
-        .slice(0, 5);
-    } else if (normalizedType === "commodity" || normalizedType === "commodities") {
-      results = COMMODITY_UNIVERSE
-        .filter((row) => `${row.symbol} ${row.name} ${row.group} ${row.region}`.toLowerCase().includes(String(q || "").toLowerCase()))
-        .slice(0, 12)
-        .map((row) => ({
-          symbol: row.symbol,
-          name: row.name,
-          type: "commodity",
-          category: "commodities",
-          marketType: "commodity",
-          market: "Commodity",
-          group: row.group,
-          region: row.region,
-          currency: "USD",
-          source: "Commodity catalog"
-        }));
-    } else if (normalizedType === "indicator" || normalizedType === "indicators") {
-      results = searchForexFactoryCountries(q, 20);
-    } else {
-      results = await searchYahooFinance(q, normalizedType);
-    }
-    // MyStocks Africa: primary for African exchange-qualified listings. Merge
-    // when searching stocks/etfs/bonds/funds (or with an explicit Africa filter).
-    const africaTypes = ["stock", "stocks", "etf", "etfs", "bond", "bonds", "fund", "funds", "tradfi"];
-    const wantsAfrica = (req.query.region && String(req.query.region).toLowerCase() === "africa") || req.query.exchange;
-    if (africaTypes.includes(normalizedType) || wantsAfrica) {
-      const msResults = await mystocksIntegration
-        .searchMyStocks({ q, type: normalizedType === "tradfi" ? "stock" : normalizedType, exchange: req.query.exchange, country: req.query.country, limit: 12 })
-        .catch(() => []);
-      if (msResults.length) {
-        // Dedupe by provider+exchange+symbol; rank exact exchange-qualified first.
-        const seen = new Set(results.map((r) => `${r.provider || "yahoo"}:${r.exchange || ""}:${r.symbol}`));
-        const merged = [...results];
-        for (const r of msResults) {
-          const key = `${r.provider}:${r.exchange || ""}:${r.symbol}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          merged.push(r);
-        }
-        const rank = (r) => (r.provider === "mystocks" && r.symbol && r.symbol.includes(".") ? 0 : 1);
-        merged.sort((a, b) => rank(a) - rank(b) || String(a.symbol).localeCompare(String(b.symbol)));
-        results = merged.slice(0, 24);
-      }
-    }
-    res.json({ results });
+    const normalizedType = normalizeSearchType(type);
+    const results = await searchUnifiedInstruments(q, normalizedType);
+    res.json({
+      results,
+      query: String(q),
+      type: normalizedType,
+      live: results.some((row) => row.live),
+      providers: [...new Set(results.flatMap((row) => row.providers || [row.provider]).filter(Boolean))]
+    });
   } catch (error) {
     res.status(502).json({ error: error.message });
   }
@@ -12849,7 +13181,12 @@ app.get("/api/crypto-market", async (req, res) => {
 app.get("/api/db/portfolio", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const holdings = await userWorkspace.portfolio.getAll(req.auth.userId, req.workspace?.workspace?.id || null);
-    res.json({ holdings });
+    const result = { holdings };
+    if (unifiedPortfolio.isEnabled()) {
+      const summary = await unifiedPortfolio.getUnifiedSummary(pool, req.workspace?.workspace?.id || null);
+      result.unified = { summary, sources: summary.sources, positions: summary.positions };
+    }
+    res.json(result);
   } catch (error) {
     handleServerError(res, "Portfolio read failed", error);
   }
@@ -12907,8 +13244,400 @@ app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, attachActiveWorkspa
 });
 
 // ---------------------------------------------------------------------------
-// Trade execution endpoints (Journal persistence)
+// Unified multi-source portfolio (Phase A): source-aware read model.
+// Aggregates existing brokerage_*/portfolio_holdings today; canonical layer is
+// populated when ZENIN_UNIFIED_PORTFOLIO is enabled (dual-write, Phase B wiring).
 // ---------------------------------------------------------------------------
+app.get("/api/portfolio/unified/summary", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const summary = await unifiedPortfolio.getUnifiedSummary(pool, workspaceId);
+    res.json(summary);
+  } catch (error) {
+    handleServerError(res, "Unified portfolio summary failed", error);
+  }
+});
+
+app.get("/api/portfolio/unified/positions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const positions = await unifiedPortfolio.getUnifiedPositions(pool, workspaceId);
+    res.json({ positions });
+  } catch (error) {
+    handleServerError(res, "Unified portfolio positions failed", error);
+  }
+});
+
+app.get("/api/portfolio/unified/sources", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const sources = await unifiedPortfolio.getUnifiedSources(pool, workspaceId);
+    res.json({ sources });
+  } catch (error) {
+    handleServerError(res, "Unified portfolio sources failed", error);
+  }
+});
+
+// Per-source sync status + health (freshness, errors, last run).
+app.get("/api/portfolio/unified/sync-status", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const status = await unifiedPortfolio.getUnifiedSyncStatus(pool, workspaceId);
+    res.json(status);
+  } catch (error) {
+    handleServerError(res, "Unified sync status failed", error);
+  }
+});
+
+// Prediction wallet source sync. Public prediction-market feeds remain separate;
+// this endpoint records a user's connected prediction wallet/account as a
+// first-class canonical portfolio source.
+app.post("/api/portfolio/prediction-wallet/sync", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    if (!unifiedPortfolio.isEnabled()) {
+      return res.status(409).json({ error: "Unified portfolio sources are not enabled." });
+    }
+    const workspaceId = req.workspace.workspace.id;
+    const provider = String(req.body?.provider || "polymarket").trim().toLowerCase();
+    const walletAddress = String(req.body?.walletAddress || req.body?.address || req.body?.connectionId || "").trim();
+    if (!walletAddress) return res.status(400).json({ error: "walletAddress is required." });
+    const source = unifiedPortfolio.mapPredictionWalletToSource({
+      provider,
+      walletAddress,
+      connectionId: req.body?.connectionId || walletAddress,
+      label: req.body?.label || null,
+      nativeCurrency: req.body?.nativeCurrency || "USD",
+      positions: Array.isArray(req.body?.positions) ? req.body.positions : [],
+      transactions: Array.isArray(req.body?.transactions) ? req.body.transactions : []
+    });
+    await unifiedPortfolio.recordSourceSync(pool, workspaceId, source);
+    const summary = await unifiedPortfolio.getUnifiedSummary(pool, workspaceId);
+    res.json({
+      success: true,
+      canonicalSyncStatus: "synced",
+      source: {
+        sourceType: source.sourceType,
+        provider: source.provider,
+        label: source.label,
+        connectionId: source.externalConnectionId,
+        accessMode: source.accessMode,
+        connectionStatus: source.connectionStatus,
+        syncStatus: source.syncStatus,
+        capabilities: source.capabilities
+      },
+      syncResult: {
+        positionsCount: source.positions.length,
+        transactionsCount: source.transactions.length
+      },
+      warnings: summary.warnings || [],
+      nextAction: null
+    });
+  } catch (error) {
+    handleServerError(res, "Prediction wallet sync failed", error);
+  }
+});
+
+app.delete("/api/portfolio/prediction-wallet/:connectionId", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const connectionId = String(req.params.connectionId || "").trim();
+    if (!connectionId) return res.status(400).json({ error: "connectionId is required." });
+    await pool.query(
+      `DELETE FROM portfolio_sources
+       WHERE workspace_id=$1 AND source_type='prediction' AND external_connection_id=$2`,
+      [workspaceId, connectionId]
+    );
+    res.json({ success: true, connectionId });
+  } catch (error) {
+    handleServerError(res, "Prediction wallet disconnect failed", error);
+  }
+});
+
+// Unified transactions across all connected sources.
+app.get("/api/portfolio/unified/transactions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const transactions = await unifiedPortfolio.getUnifiedTransactions(pool, workspaceId, limit);
+    res.json({ transactions });
+  } catch (error) {
+    handleServerError(res, "Unified transactions failed", error);
+  }
+});
+
+// Reconciliation: duplicate instruments across sources (warning-only).
+app.get("/api/portfolio/unified/reconciliation", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const reconciliation = await unifiedPortfolio.getUnifiedReconciliation(pool, workspaceId);
+    res.json(reconciliation);
+  } catch (error) {
+    handleServerError(res, "Unified reconciliation failed", error);
+  }
+});
+
+// Persisted FX rates for the workspace base currency (read view).
+app.get("/api/portfolio/unified/fx-rates", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const fx = await unifiedPortfolio.getUnifiedFxRates(pool, workspaceId);
+    res.json(fx);
+  } catch (error) {
+    handleServerError(res, "Unified FX rates failed", error);
+  }
+});
+
+// Set an FX rate (owner/moderator only). Never fabricated by the server — an
+// explicit, audited override. base is taken from the workspace.
+app.post("/api/portfolio/unified/fx-rates", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, isWorkspacePrivileged, writeLimiter, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const base = await unifiedPortfolio.getWorkspaceBaseCurrency(pool, workspaceId);
+    const { quote, rate, asOf } = req.body || {};
+    if (!quote || !Number.isFinite(Number(rate))) {
+      return res.status(400).json({ error: "quote and numeric rate are required" });
+    }
+    await unifiedPortfolio.recordFxRate(pool, base, String(quote).toUpperCase(), Number(rate), { rateSource: "manual", asOf: asOf || null });
+    res.json({ ok: true, base, quote: String(quote).toUpperCase(), rate: Number(rate) });
+  } catch (error) {
+    handleServerError(res, "Failed to record FX rate", error);
+  }
+});
+
+// Immutable end-of-day unified snapshots (EOD history with source breakdown).
+app.get("/api/portfolio/unified/snapshots", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const limit = Math.min(Number(req.query.limit) || 30, 90);
+    const snapshots = await unifiedPortfolio.getUnifiedSnapshots(pool, workspaceId, limit);
+    res.json({ snapshots });
+  } catch (error) {
+    handleServerError(res, "Unified snapshots failed", error);
+  }
+});
+
+// Equity curve reconstructed from synced trade fills (Hyperliquid perps store
+// realised P&L + fees). Backfills history for fresh wallets lacking EOD snapshots.
+// Approximate by design — labelled as such on the client.
+app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const limit = Math.min(Number(req.query.limit) || 180, 365);
+    const curve = await unifiedPortfolio.getUnifiedEquityCurveFromFills(pool, workspaceId, limit);
+    res.json({ curve, approximate: true });
+  } catch (error) {
+    handleServerError(res, "Unified equity curve failed", error);
+  }
+});
+
+// Shadow-compare (staged rollout validation): unified-vs-legacy headline
+// divergence report. Read-only, owner/mod scoped. Never affects production reads.
+app.get("/api/portfolio/unified/shadow-compare", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const comparison = await unifiedPortfolio.getUnifiedShadowComparison(pool, workspaceId);
+    res.json(comparison);
+  } catch (error) {
+    handleServerError(res, "Unified shadow-compare failed", error);
+  }
+});
+
+// with bounded parallelism + retry + per-source isolation via the orchestrator,
+// dual-writes successful wallet results into the canonical layer (flag-gated),
+// then recomputes the read model. One source failing never blocks the others
+// and never overwrites another source's last successful state.
+// ---------------------------------------------------------------------------
+
+async function orchestrateWorkspaceUnifiedSync(workspaceId, userId) {
+  const tasks = [];
+
+  // SnapTrade / brokerage connections
+  const svc = getBrokerageService();
+  if (svc && typeof svc.listConnections === "function") {
+    const connections = await svc.listConnections(workspaceId);
+    for (const conn of connections || []) {
+      tasks.push({
+        id: `brokerage:${conn.id}`,
+        type: "brokerage",
+        run: () => {
+          if (unifiedPortfolio.isEnabled()) {
+            unifiedPortfolio.recordSyncStart(pool, workspaceId, { provider: "snaptrade", sourceType: "brokerage", connectionId: String(conn.id) }).catch(() => {});
+          }
+          return svc.syncConnection(conn.id, workspaceId, { mode: "incremental" });
+        }
+      });
+    }
+  }
+
+  // Exchange wallets (Hyperliquid / Binance / Bybit share the {holdings, cashBalance, currency} shape)
+  let keys = [];
+  if (userId != null && userWorkspace?.exchangeKeys?.list) {
+    keys = await userWorkspace.exchangeKeys.list(userId, workspaceId);
+  } else {
+    // Background path: read keys directly (no req context).
+    const rows = await pool.query(
+      `SELECT id, user_id, exchange, api_key, api_secret, extra_data
+       FROM user_exchange_keys WHERE workspace_id = $1`,
+      [workspaceId]
+    );
+    keys = rows.rows;
+  }
+  for (const keyRecord of keys || []) {
+    const exchange = String(keyRecord.exchange || "").toLowerCase();
+    if (!["hyperliquid", "binance", "bybit"].includes(exchange)) continue;
+    const sourceType = exchange === "hyperliquid" ? "wallet" : "exchange";
+    const accessMode = exchange === "hyperliquid" ? "watch_only" : "read_only_key";
+    const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.api_key);
+    const apiSecret = keyRecord.api_secret ? workspaceSecretProvider.decryptSecret(keyRecord.api_secret) : null;
+    const extraData = parseExchangeExtraData(keyRecord.extra_data);
+    const keyId = keyRecord.id;
+    tasks.push({
+      id: `${sourceType}:${exchange}:${keyId}`,
+      type: sourceType,
+      run: async () => {
+        if (unifiedPortfolio.isEnabled()) {
+          unifiedPortfolio.recordSyncStart(pool, workspaceId, { provider: exchange, sourceType, connectionId: String(keyId) }).catch(() => {});
+        }
+        const syncContext = {
+          knownSymbols: await userWorkspace.tradeFills.getKnownSymbols(userId, exchange, workspaceId)
+        };
+        let result;
+        if (exchange === "hyperliquid") result = await syncHyperliquid(apiKey, extraData, syncContext);
+        else if (exchange === "binance") result = await syncBinance(apiKey, apiSecret, syncContext);
+        else result = await syncBybit(apiKey, apiSecret, syncContext);
+        if (result && unifiedPortfolio.isEnabled()) {
+          await unifiedPortfolio.recordSourceSync(
+            pool,
+            workspaceId,
+            unifiedPortfolio.mapExchangeWalletToSource(result, { workspaceId, address: apiKey, connectionId: String(keyId), provider: exchange, accessMode, sourceType })
+          ).catch((err) => console.warn(`[unified-portfolio] ${exchange} dual-write skipped:`, err.message));
+        }
+        return result;
+      }
+    });
+  }
+
+  // Capture prior state for notification diffing (auth/stale/repeated/recovered/value).
+  let prevStatus = { sources: [] };
+  let prevTotal = null;
+  if (unifiedPortfolio.isEnabled()) {
+    try {
+      prevStatus = await unifiedPortfolio.getUnifiedSyncStatus(pool, workspaceId);
+      const prevSummary = await unifiedPortfolio.getUnifiedSummary(pool, workspaceId);
+      prevTotal = prevSummary.totalValue;
+    } catch (_) { /* notifications are best-effort */ }
+  }
+
+  const orchestration = await orchestrator.orchestrateSources(() => tasks, { concurrency: 3, attempts: 2 });
+  const recompute = await unifiedPortfolio.runWorkspaceSync(pool, workspaceId);
+
+  // Diff prev vs new state -> dispatch unified notifications (best-effort).
+  if (unifiedPortfolio.isEnabled()) {
+    try {
+      const newStatus = await unifiedPortfolio.getUnifiedSyncStatus(pool, workspaceId);
+      const events = unifiedNotifications.buildUnifiedNotifications({
+        sources: newStatus.sources,
+        prevSources: prevStatus.sources,
+        prevTotal,
+        newTotal: recompute.summary.totalValue
+      });
+      await dispatchUnifiedSyncNotifications(workspaceId, userId, events);
+    } catch (err) {
+      console.warn("[unified-notifications] dispatch skipped:", err.message);
+    }
+  }
+
+  return {
+    runId: recompute.runId,
+    perSource: recompute.perSource,
+    triggerErrors: orchestration.triggerErrors,
+    summary: recompute.summary
+  };
+}
+
+// Dispatch unified sync notifications to workspace members. For an on-demand sync
+// (userId known) we notify that user; for the background timer (userId null) we
+// notify all active members so auth/stale/recovery alerts reach owners/mods.
+async function dispatchUnifiedSyncNotifications(workspaceId, userId, events) {
+  if (!events || !events.length) return;
+  let userIds = [];
+  if (userId != null) {
+    userIds = [userId];
+  } else {
+    const rows = await pool.query(
+      `SELECT user_id FROM workspace_members WHERE workspace_id=$1 AND status='active'`,
+      [workspaceId]
+    );
+    userIds = rows.rows.map((r) => r.user_id);
+  }
+  for (const uid of userIds) {
+    for (const ev of events) {
+      await dispatchWorkspaceNotification({
+        userId: uid,
+        workspaceId,
+        event: {
+          type: ev.type,
+          category: ev.category,
+          severity: ev.severity,
+          title: ev.title,
+          body: ev.body,
+          dedupeKey: ev.dedupeKey,
+          action: { label: "Open portfolio", actionUrl: getFrontendAppUrl("/app?section=portfolio") }
+        }
+      }).catch((err) => console.warn("[unified-notifications] dispatch failed:", err.message));
+    }
+  }
+}
+
+app.post("/api/portfolio/sync", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const userId = req.auth.userId;
+    // Coalesce: if a sync for this workspace is already running, reuse it.
+    const result = await orchestrator.coalesceWorkspaceSync(
+      workspaceId,
+      () => orchestrateWorkspaceUnifiedSync(workspaceId, userId)
+    );
+    res.json(result);
+  } catch (error) {
+    handleServerError(res, "Workspace portfolio sync failed", error);
+  }
+});
+
+// Workspace base currency (default USD). Readable by any member; editable only
+// by workspace owners / moderators per the unified-portfolio revision.
+function isWorkspacePrivileged(membership) {
+  const role = String(membership?.role || "").trim().toLowerCase();
+  return role === "owner" || role === "moderator" || role === "admin";
+}
+
+app.get("/api/portfolio/base-currency", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const r = await pool.query(`SELECT base_currency FROM workspaces WHERE id=$1`, [workspaceId]);
+    const baseCurrency = (r.rows[0] && r.rows[0].base_currency) || "USD";
+    res.json({ baseCurrency, editable: isWorkspacePrivileged(req.workspace.membership) });
+  } catch (error) {
+    handleServerError(res, "Failed to read workspace base currency", error);
+  }
+});
+
+app.patch("/api/portfolio/base-currency", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    if (!isWorkspacePrivileged(req.workspace.membership)) {
+      return res.status(403).json({ error: "Only workspace owners or moderators can change the base currency." });
+    }
+    const workspaceId = req.workspace.workspace.id;
+    const baseCurrency = String(req.body?.baseCurrency || "").trim().toUpperCase();
+    if (!baseCurrency || baseCurrency.length > 8) {
+      return res.status(400).json({ error: "Invalid base currency." });
+    }
+    await pool.query(`UPDATE workspaces SET base_currency=$1 WHERE id=$2`, [baseCurrency, workspaceId]);
+    res.json({ baseCurrency });
+  } catch (error) {
+    handleServerError(res, "Failed to update workspace base currency", error);
+  }
+});
 app.get("/api/db/trades", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const trades = await userWorkspace.trades.getAll(req.auth.userId, req.query.limit, req.workspace?.workspace?.id || null);
@@ -12962,6 +13691,41 @@ app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWor
   } catch (error) {
     handleServerError(res, "Notifications read failed", error);
   }
+});
+
+// Authenticated, active-workspace Server-Sent Events stream for realtime notifications.
+// Sends events only after inbox persistence (publisher forwards canonical events).
+app.get("/api/notifications/stream", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  const workspaceId = req.workspace?.workspace?.id;
+  const userId = req.auth.userId;
+  if (workspaceId == null) return res.status(400).json({ error: "no active workspace" });
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  res.write("retry: 3000\n\n"); // client reconnect hint (exponential backoff handled client-side)
+  res.write(`event: open\ndata: ${JSON.stringify({ ok: true, workspaceId, userId })}\n\n`);
+
+  let unregister = null;
+  try {
+    unregister = notificationPublisher.addSseClient(workspaceId, userId, res);
+  } catch (err) {
+    res.end();
+    return;
+  }
+
+  const heartbeat = setInterval(() => {
+    try { res.write(`: heartbeat ${Date.now()}\n\n`); } catch {}
+  }, notificationPublisher.HEARTBEAT_MS);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    try { if (unregister) unregister(); } catch {}
+    try { res.end(); } catch {}
+  });
 });
 
 app.post("/api/notifications/:id/read", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
@@ -15856,6 +16620,12 @@ function connectMassiveStocksSocket() {
         const quote = { price, priceChangePercent, updatedAt, source: "Massive WebSocket", cachedAt: Date.now() };
         massivePriceCache.set(symbol, quote);
         updates[symbol] = quote;
+        // Feed live price into the alert rules engine (throttled per rule inside).
+        // Wrapped so a rules/notify failure can never disrupt the price broadcast.
+        try {
+          const alertRules = getMarketAlertRules();
+          if (alertRules) alertRules.feedPriceEvent(symbol, { price, changePercent: priceChangePercent }).catch(() => {});
+        } catch (_) { /* alert evaluation is best-effort */ }
       });
       if (Object.keys(updates).length) {
         subscribers.forEach((subscription, ws) => {
@@ -16376,6 +17146,43 @@ function stopMarketIntelBackgroundJobs() {
   marketIntelBgTimers = [];
 }
 
+// Unified portfolio 15-minute background sync. Iterates workspaces that have at
+// least one connected source and runs the coalesced orchestration for each.
+// Failures are swallowed per-workspace (logged) so one bad workspace never stops
+// the timer. Keep-last-successful is preserved because failed sources simply don't
+// dual-write / don't replace the prior good canonical state.
+let unifiedSyncTimer = null;
+async function unifiedSyncTick() {
+  try {
+    const rows = await pool.query(`
+      SELECT DISTINCT workspace_id FROM (
+        SELECT workspace_id FROM brokerage_connections WHERE workspace_id IS NOT NULL
+        UNION
+        SELECT workspace_id FROM user_exchange_keys WHERE workspace_id IS NOT NULL
+      ) sub
+    `);
+    for (const { workspace_id: wsId } of rows.rows) {
+      if (!wsId) continue;
+      try {
+        await orchestrator.coalesceWorkspaceSync(wsId, () => orchestrateWorkspaceUnifiedSync(wsId, null));
+      } catch (err) {
+        console.warn(`[Unified] background sync failed for workspace ${wsId}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.warn("[Unified] background sync tick error:", err.message);
+  }
+}
+
+function startUnifiedSyncScheduler() {
+  const intervalMs = Number(process.env.UNIFIED_SYNC_INTERVAL_MS) || 15 * 60 * 1000;
+  if (unifiedSyncTimer) clearInterval(unifiedSyncTimer);
+  unifiedSyncTimer = setInterval(unifiedSyncTick, intervalMs);
+  if (typeof unifiedSyncTimer.unref === "function") unifiedSyncTimer.unref();
+  // Run once shortly after boot so fresh data is available without waiting 15 min.
+  setTimeout(() => unifiedSyncTick().catch(() => {}), 30 * 1000);
+}
+
 async function startServer() {
   await initializeDatabase();
   try {
@@ -16402,6 +17209,24 @@ async function startServer() {
             getBrokerageService().syncConnection(connectionId, workspaceId, { mode: "incremental" })
         });
         console.log("[Brokerage] Background sync scheduler started.");
+      }
+
+      // Unified multi-source portfolio: 15-min background sync across all workspaces
+      // that have at least one connected source (brokerage connection or exchange key).
+      if (process.env.UNIFIED_SYNC_SCHEDULER !== "false") {
+        startUnifiedSyncScheduler();
+        console.log("[Unified] Background sync scheduler started (15m).");
+      }
+
+      // Realtime notification delivery: init publisher + PostgreSQL LISTEN.
+      try {
+        notificationPublisher.initNotificationPublisher(db.pool);
+        notificationPublisher.startNotificationListener().catch((err) => {
+          console.warn("[notification-publisher] listener did not start:", err.message);
+        });
+        console.log("[notification-publisher] realtime delivery initialized.");
+      } catch (err) {
+        console.warn("[notification-publisher] init failed:", err.message);
       }
 
       // Market intelligence background jobs

@@ -16,6 +16,7 @@ import PortfolioImpactEnhanced from "./market/PortfolioImpactEnhanced";
 import FeedHealth from "./market/FeedHealth";
 import StableSignalTables from "./market/StableSignalTables";
 import { StatusIndicator } from "./StatusIndicator.jsx";
+import { WorkspaceMetricStrip } from "./CompactWorkspaceUI";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { DashboardLayout, DashboardHero, DashboardGrid } from "./layout/DashboardLayout";
 import {
@@ -29,6 +30,7 @@ import {
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
+import { UnifiedSourceStrip } from "./UnifiedSourceStrip";
 import { formatLastSync } from "../utils/brokerageStatus.js";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
@@ -101,6 +103,59 @@ function toTitleLabel(value) {
     .join(" ");
 }
 
+const MARKET_EVENT_COUNTRY_NAMES = {
+  US: "United States",
+  USA: "United States",
+  USD: "United States",
+  CA: "Canada",
+  CAN: "Canada",
+  CAD: "Canada",
+  GB: "United Kingdom",
+  GBR: "United Kingdom",
+  UK: "United Kingdom",
+  GBP: "United Kingdom",
+  EU: "Euro Area",
+  EUR: "Euro Area",
+  JP: "Japan",
+  JPN: "Japan",
+  JPY: "Japan",
+  CN: "China",
+  CHN: "China",
+  CNY: "China",
+  AU: "Australia",
+  AUS: "Australia",
+  AUD: "Australia",
+  NZ: "New Zealand",
+  NZL: "New Zealand",
+  NZD: "New Zealand",
+  CH: "Switzerland",
+  CHE: "Switzerland",
+  CHF: "Switzerland",
+  DE: "Germany",
+  DEU: "Germany",
+  FR: "France",
+  FRA: "France",
+  IT: "Italy",
+  ITA: "Italy",
+  ES: "Spain",
+  ESP: "Spain",
+  IN: "India",
+  IND: "India",
+  INR: "India",
+  BR: "Brazil",
+  BRA: "Brazil",
+  BRL: "Brazil",
+  ZA: "South Africa",
+  ZAF: "South Africa",
+  ZAR: "South Africa"
+};
+
+function formatMarketEventCountry(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Global";
+  return MARKET_EVENT_COUNTRY_NAMES[raw.toUpperCase()] || raw;
+}
+
 export function HomeModule({
   portfolio,
   trades = [],
@@ -124,7 +179,8 @@ export function HomeModule({
   openMarketContextOnMount = false,
   onMarketContextOpened,
   brokerageSummary = null,
-  onConnectBrokerage
+  onConnectBrokerage,
+  unifiedPortfolio = null
 }) {
   const moversHorizons = getAppRuntimeConfig()?.ui?.moversHorizons || {
     daily: { label: "Daily", interval: "1D" },
@@ -542,12 +598,31 @@ export function HomeModule({
   const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
   const initialBalance = Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
   const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline) ? activeAccountMetrics.tradeTimeline : [];
+  // Equity-curve precedence for the hero chart:
+  //   1. Unified daily snapshots (EOD, immutable) when present;
+  //   2. Else the fill-reconstructed curve (backfills fresh wallets);
+  //   3. Else the legacy trade timeline.
+  // If none exist, chartData renders a graceful empty state (no fake $10K line).
+  const fillCurve = unifiedPortfolio?.fillEquityCurve;
+  const hasSnapshotTimeline = (unifiedPortfolio?.snapshotTimeline?.length || 0) > 1;
+  const hasFillCurve = Array.isArray(fillCurve) && fillCurve.length > 1;
+  const effectiveTimeline = hasSnapshotTimeline
+    ? unifiedPortfolio.snapshotTimeline
+    : hasFillCurve
+      ? fillCurve
+      : tradeTimeline;
+  const hasPerformanceHistory = hasSnapshotTimeline || hasFillCurve || tradeTimeline.length > 1;
   const liveAvailableBalance = Number.isFinite(Number(activeAccountMetrics?.liveAvailableBalance))
     ? Number(activeAccountMetrics.liveAvailableBalance)
     : initialBalance;
-  const totalAccountEquity = Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
-    ? Number(activeAccountMetrics.totalAccountEquity)
-    : (liveAvailableBalance + portfolioValue);
+  // Prefer the unified multi-source total (Hyperliquid perps + cash) when
+  // available; calculatePortfolioValue() already resolves to it via isUnified.
+  // Falls back to the legacy snapshot only when unified is absent.
+  const totalAccountEquity = Number.isFinite(Number(portfolioValue)) && Number(portfolioValue) > 0
+    ? Number(portfolioValue)
+    : (Number.isFinite(Number(activeAccountMetrics?.totalAccountEquity))
+        ? Number(activeAccountMetrics.totalAccountEquity)
+        : (liveAvailableBalance + portfolioValue));
   const realizedPnl = Number(activeAccountMetrics?.realizedPnl || 0);
   const unrealizedPnl = Number(activeAccountMetrics?.unrealizedPnl || calculatePortfolioGain() || 0);
 
@@ -555,6 +630,10 @@ export function HomeModule({
     const now = Date.now();
     const dayAgo = now - (24 * 60 * 60 * 1000);
     const anchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= dayAgo);
+    // Only compute a daily change when a REAL prior anchor exists. If we fall
+    // back to the synthetic $10K default (no real cost-basis / no prior snapshot),
+    // report neutral (0) — never "equity − $10K", which produced +34700%.
+    if (!anchor) return 0;
     const start = Number(anchor?.equity || initialBalance);
     return totalAccountEquity - start;
   }, [tradeTimeline, totalAccountEquity, initialBalance]);
@@ -564,6 +643,7 @@ export function HomeModule({
     const now = Date.now();
     const weekAgo = now - (7 * 24 * 60 * 60 * 1000);
     const weekAnchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= weekAgo);
+    if (!weekAnchor) return 0;
     const start = Number(weekAnchor?.equity || initialBalance);
     return totalAccountEquity - start;
   }, [tradeTimeline, totalAccountEquity, initialBalance]);
@@ -572,6 +652,7 @@ export function HomeModule({
     const now = new Date();
     const ytdStartTs = new Date(now.getFullYear(), 0, 1).getTime();
     const ytdAnchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= ytdStartTs);
+    if (!ytdAnchor) return 0;
     const start = Number(ytdAnchor?.equity || initialBalance);
     return totalAccountEquity - start;
   }, [tradeTimeline, totalAccountEquity, initialBalance]);
@@ -750,7 +831,9 @@ export function HomeModule({
   };
 
   const handleMissingDataAction = (mode) => {
-    const symbol = String(flowSelection?.symbol || "ASSET").toUpperCase();
+    const rows = Array.isArray(flowSelection?.rows) ? flowSelection.rows : [flowSelection];
+    const symbols = rows.map((row) => String(row?.symbol || "ASSET").toUpperCase());
+    const symbol = symbols.length === 1 ? symbols[0] : `${symbols.length} assets`;
     const issue = flowSelection?.issue || "Missing price data";
     runFlowProcessing(
       4,
@@ -758,14 +841,21 @@ export function HomeModule({
       3,
       0,
       async () => {
-        const nextTasks = await queueWorkspaceTask("missing-data", { mode, symbol, issue });
+        let nextTasks = null;
+        for (const row of rows) {
+          nextTasks = await queueWorkspaceTask("missing-data", {
+            mode,
+            symbol: String(row?.symbol || "ASSET").toUpperCase(),
+            issue
+          });
+        }
         setSavedHomeTasks(nextTasks);
         handleRefreshDashboard("");
         setFlowOutcome({
           title: mode === "source" ? "Refresh queued" : "Manual review saved",
           message: mode === "source"
-            ? `${symbol} was saved to ${getSaveTargetLabel()} for refresh follow-up. You can review it from Saved Items.`
-            : `${symbol} was saved to ${getSaveTargetLabel()} for manual follow-up. You can review it from Saved Items.`
+            ? `${symbol} ${symbols.length === 1 ? "was" : "were"} saved to ${getSaveTargetLabel()} for refresh follow-up. You can review the batch from Saved Items.`
+            : `${symbol} ${symbols.length === 1 ? "was" : "were"} saved to ${getSaveTargetLabel()} for manual follow-up. You can review the batch from Saved Items.`
         });
       }
     );
@@ -1129,6 +1219,16 @@ export function HomeModule({
     return rows.slice(0, 6);
   }, [moversHorizon, moversUniverse, moversPerformanceByKey]);
 
+  const missingFlowGroups = useMemo(() => {
+    const groups = new Map();
+    missingFlowRows.forEach((row) => {
+      const existing = groups.get(row.issue) || [];
+      existing.push(row);
+      groups.set(row.issue, existing);
+    });
+    return Array.from(groups, ([issue, rows]) => ({ issue, rows }));
+  }, [missingFlowRows]);
+
   const volatilityFlowRows = useMemo(() => {
     const rows = [...(Array.isArray(moversWithChange) ? moversWithChange : [])]
       .sort((a, b) => Math.abs(Number(b.__moverChange || 0)) - Math.abs(Number(a.__moverChange || 0)))
@@ -1158,7 +1258,7 @@ export function HomeModule({
     if (selection) {
       setFlowSelection(selection);
     } else if (flowKind === "missing") {
-      setFlowSelection(missingFlowRows[0] || null);
+      setFlowSelection(missingFlowGroups[0] || null);
     } else if (flowKind === "rebalance") {
       setFlowSelection(rebalancePlanRows.rows[0] || null);
     } else if (flowKind === "research-trigger") {
@@ -1235,8 +1335,8 @@ export function HomeModule({
       if (chartInterval === "1M") return now - 30 * 24 * 60 * 60 * 1000;
       if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
       if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
-      if (chartInterval === "ALL") {
-        const firstTradeTs = tradeTimeline[0]?.t;
+       if (chartInterval === "ALL") {
+        const firstTradeTs = effectiveTimeline[0]?.t;
         return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
       }
       if (chartInterval === "YTD") {
@@ -1244,12 +1344,12 @@ export function HomeModule({
         return new Date(d.getFullYear(), 0, 1).getTime();
       }
       if (chartInterval === "5Y") return now - 5 * 365 * 24 * 60 * 60 * 1000;
-      const firstTradeTs = tradeTimeline[0]?.t;
+      const firstTradeTs = effectiveTimeline[0]?.t;
       return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 30 * 24 * 60 * 60 * 1000;
     })();
 
-    const inRangeTrades = tradeTimeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
-    const beforeRangeTrade = [...tradeTimeline]
+    const inRangeTrades = effectiveTimeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
+    const beforeRangeTrade = [...effectiveTimeline]
       .reverse()
       .find((trade) => trade.t < start && Number.isFinite(trade.equity));
     const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
@@ -1297,7 +1397,7 @@ export function HomeModule({
         Number(toSeriesValue(equity).toFixed(2))
       ];
     });
-  }, [chartInterval, chartMode, tradeTimeline, totalAccountEquity, optionTimelineAdjustments, initialBalance]);
+  }, [chartInterval, chartMode, effectiveTimeline, totalAccountEquity, optionTimelineAdjustments, initialBalance]);
   const isProfitable = totalAccountEquity >= initialBalance;
 
   const chartColor = chartMode === "pnl"
@@ -1556,7 +1656,7 @@ export function HomeModule({
           title: e.title,
           time: e.time,
           impact: e.impact,
-          country: e.country
+          country: formatMarketEventCountry(e.country)
         };
       });
     }
@@ -1566,7 +1666,7 @@ export function HomeModule({
       title: event?.title || event?.event || event?.symbol || "Earnings event",
       time: event?.time || event?.period || "",
       impact: event?.impact || "Watch",
-      country: event?.country || "Earnings"
+      country: formatMarketEventCountry(event?.country || "Earnings")
     }));
   }, [eventRows, eventsData]);
 
@@ -1858,7 +1958,7 @@ export function HomeModule({
   const dayRange = useMemo(() => {
     const now = Date.now();
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
-    const points = (Array.isArray(tradeTimeline) ? tradeTimeline : [])
+    const points = (Array.isArray(effectiveTimeline) ? effectiveTimeline : [])
       .filter((point) => Number(point?.t) >= oneDayAgo && Number.isFinite(Number(point?.equity)))
       .map((point) => Number(point.equity));
     points.push(totalAccountEquity);
@@ -1868,7 +1968,7 @@ export function HomeModule({
       low: Number.isFinite(low) ? low : totalAccountEquity,
       high: Number.isFinite(high) ? high : totalAccountEquity
     };
-  }, [tradeTimeline, totalAccountEquity]);
+  }, [effectiveTimeline, totalAccountEquity]);
 
   const totalGainLoss = realizedPnl + unrealizedPnl;
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
@@ -1995,7 +2095,7 @@ export function HomeModule({
   const healthTone = healthState === "Optimal" ? "optimal" : healthState === "Watch" ? "watch" : "risk";
 
   const attentionFlowSteps = {
-    missing: ["Missing Data List", "Asset Detail", "Updating", "Success"],
+    missing: ["Data Gaps", "Choose Fix", "Updating", "Complete"],
     rebalance: ["Overview", "Plan", "Confirm", "Success"],
     volatility: ["Volatility List", "Detail", "Insights", "Complete"],
     "research-trigger": ["Trigger", "Action", "Saving", "Complete"]
@@ -2028,22 +2128,22 @@ export function HomeModule({
       if (attentionFlowStep === 1) {
         flowBody = (
           <div className="home-v2-flow-card">
-            <div className="home-v2-flow-headline"><h3>Missing Data</h3><span>{missingFlowRows.length} Assets</span></div>
-            <p>These assets are missing price or reference data.</p>
+            <div className="home-v2-flow-headline"><h3>Missing Data</h3><span>{missingFlowRows.length} Assets · {missingFlowGroups.length} Fixes</span></div>
+            <p>Group similar gaps together and repair every affected asset in one action.</p>
             <div className="home-v2-flow-list">
-              {missingFlowRows.map((row) => (
-                <div key={`miss-${row.symbol}`} className="home-v2-flow-list-row">
-                  <div className="home-v2-flow-list-main"><strong>{row.symbol}</strong><span>{row.type}</span></div>
-                  <div className="home-v2-flow-list-issue"><strong>{row.issue}</strong><span>{row.updatedAt}</span></div>
+              {missingFlowGroups.map((group) => (
+                <div key={`miss-${group.issue}`} className="home-v2-flow-list-row home-v2-flow-group-row">
+                  <div className="home-v2-flow-list-main"><strong>{group.issue}</strong><span>{group.rows.length} affected asset{group.rows.length === 1 ? "" : "s"}</span></div>
+                  <div className="home-v2-flow-list-issue"><strong>{group.rows.map((row) => row.symbol).join(", ")}</strong><span>{group.rows.map((row) => row.type).filter((v, i, a) => a.indexOf(v) === i).join(" · ")}</span></div>
                   <button
                     type="button"
                     className="home-v2-flow-btn ghost"
                     onClick={() => {
-                      setFlowSelection(row);
+                      setFlowSelection(group);
                       setAttentionFlowStep(2);
                     }}
                   >
-                    Fix
+                    Fix all
                   </button>
                 </div>
               ))}
@@ -2053,10 +2153,10 @@ export function HomeModule({
       } else if (attentionFlowStep === 2) {
         flowBody = (
           <div className="home-v2-flow-card">
-            <div className="home-v2-flow-headline"><h3>{selectedSymbol || "Asset"} — Fix Data</h3><span>{flowSelection?.type || "Asset"}</span></div>
+            <div className="home-v2-flow-headline"><h3>{flowSelection?.issue || "Missing data"}</h3><span>{flowSelection?.rows?.length || 1} assets</span></div>
             <div className="home-v2-flow-detail-grid">
-              <div><strong>What&apos;s missing?</strong><p>{flowSelection?.issue || "Real-time price data"}</p></div>
-              <div><strong>How to fix</strong><p>Reconnect your data source or update this asset manually.</p></div>
+              <div><strong>Affected assets</strong><p>{(flowSelection?.rows || [flowSelection]).map((row) => row?.symbol).join(", ")}</p></div>
+              <div><strong>How to fix</strong><p>Apply one source refresh or manual review to the entire group.</p></div>
             </div>
             <div className="home-v2-flow-actions">
               <button type="button" className="home-v2-flow-btn primary warn" onClick={() => handleMissingDataAction("source")}>Queue Source Refresh</button>
@@ -2532,23 +2632,11 @@ export function HomeModule({
           </div>
         </header>
 
-        <section className="market-context-panel market-summary-panel">
-          <div className="market-panel-head">
-            <div>
-              <h3>Market Summary</h3>
-              <p>Live desk snapshot pulled from equities breadth, flows, movers, and portfolio telemetry.</p>
-            </div>
-          </div>
+        <section className="market-context-panel market-summary-panel market-summary-variant--quiet">
+          <div className="market-panel-head"><div><h3>Market Summary</h3><p>Current market read.</p></div></div>
           <div className="market-summary-grid">
-            {marketSummaryCards.map((card) => (
-              <MarketSummaryCard key={card.label} {...card} />
-            ))}
-            <div className="market-summary-card market-regime-card">
-              <span>Market Regime</span>
-              <div className={riskOn ? "market-regime-value positive" : "market-regime-value negative"}>{riskOn ? "Risk-On" : "Risk-Off"}</div>
-              <p>{riskOn ? "Breadth and volatility favour risk participation." : "Volatility or breadth still argue for defensive positioning."}</p>
-              <MarketRegimeGauge value={marketRegimeScore} />
-            </div>
+            {marketSummaryCards.map((card) => <MarketSummaryCard key={card.label} {...card} />)}
+            <div className="market-summary-card market-regime-card"><span>Market Regime</span><div className={riskOn ? "market-regime-value positive" : "market-regime-value negative"}>{riskOn ? "Risk-On" : "Risk-Off"}</div><p>{riskOn ? "Breadth and volatility favour risk participation." : "Volatility or breadth still argue for defensive positioning."}</p><MarketRegimeGauge value={marketRegimeScore} /></div>
           </div>
         </section>
 
@@ -2648,9 +2736,9 @@ export function HomeModule({
           <div className="market-context-panel">
             <div className="market-panel-head">
               <div><h3>Macro Context</h3><p>Country-level macro indicators from the live backend feed.</p></div>
-              <button type="button" onClick={() => onOpenAnalytics?.()}>Open analytics</button>
+              <button type="button" onClick={() => onOpenAnalytics?.("macro")}>Open analytics</button>
             </div>
-            <MacroContextEnhanced macroData={macroData} onOpenMacroDesk={() => onOpenAnalytics?.()} />
+            <MacroContextEnhanced macroData={macroData} onOpenMacroDesk={() => onOpenAnalytics?.("macro")} />
             <div className="market-macro-table">
               {macroContextRows.length ? macroContextRows.map((row) => (
                 <div key={row.indicator} className="market-macro-row">
@@ -2691,7 +2779,7 @@ export function HomeModule({
                   <div className="market-catalyst-copy">
                     <span>{marketEventSourceLabel}</span>
                     <strong>{nextMarketEvent.title}</strong>
-                    <p>{String(nextMarketEvent.impact || "Watch")} impact · {nextMarketEvent.country || "Global"} · {upcomingEvents.length} event{upcomingEvents.length === 1 ? "" : "s"} tracked</p>
+                    <p>{String(nextMarketEvent.impact || "Watch")} impact · {formatMarketEventCountry(nextMarketEvent.country)} · {upcomingEvents.length} event{upcomingEvents.length === 1 ? "" : "s"} tracked</p>
                   </div>
                 </div>
                 <div className="market-catalyst-next-list" aria-label="Upcoming catalyst preview">
@@ -2704,7 +2792,7 @@ export function HomeModule({
                     >
                       <span>{event.date || "Upcoming"}</span>
                       <strong>{event.title}</strong>
-                      <em>{event.impact || "Watch"}</em>
+                      <em>{formatMarketEventCountry(event.country)} · {event.impact || "Watch"}</em>
                     </button>
                   ))}
                 </div>
@@ -2748,9 +2836,6 @@ export function HomeModule({
             {refreshState === "idle" && <span className="home-refresh-state home-refresh-state--stale"><span className="home-refresh-state__dot" aria-hidden="true" /><span>Showing last confirmed data</span></span>}
           </div>
           <div className="home-exec-header-actions">
-            <button type="button" className="home-exec-btn secondary" onClick={() => setShowSavedItemsDrawer(true)}>
-              Saved Items{savedItemsCount ? ` (${savedItemsCount})` : ""}
-            </button>
             <button
               type="button"
               className="home-exec-btn secondary"
@@ -2759,14 +2844,6 @@ export function HomeModule({
               aria-busy={refreshState === "refreshing"}
               aria-label="Refresh market data"
             >{refreshState === "refreshing" ? "Refreshing…" : "Refresh"}</button>
-            <button
-              type="button"
-              className="home-exec-btn primary"
-              onClick={handleSaveHomeView}
-              disabled={saveViewState === "saving"}
-              aria-busy={saveViewState === "saving"}
-              aria-label="Save current Home view"
-            >{saveViewState === "saving" ? "Saving…" : saveViewState === "success" ? "Saved" : saveViewState === "error" ? "Retry save" : "Save View"}</button>
           </div>
         </div>
       </header>
@@ -2788,6 +2865,15 @@ export function HomeModule({
                 <span>Total return {totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%</span>
                 <span>{positionsCount} positions in scope</span>
               </div>
+              {unifiedPortfolio?.isUnified && (
+                <UnifiedSourceStrip
+                  sources={unifiedPortfolio.sources}
+                  isPartial={unifiedPortfolio.isPartial}
+                  onRefresh={unifiedPortfolio.refresh}
+                  onSync={unifiedPortfolio.triggerSync}
+                  syncing={unifiedPortfolio.syncing}
+                />
+              )}
               {/* Connected brokerage (SnapTrade pilot): value + freshness, read-only,
                   never merged into account equity. Links to Portfolio → Connected Accounts. */}
               {Array.isArray(brokerageSummary?.holdings) && brokerageSummary.holdings.length > 0 ? (
@@ -2825,36 +2911,16 @@ export function HomeModule({
               </Select>
             </div>
           </div>
-          <div className="home-exec-command-metrics">
-              <div className="home-exec-hero-side-metric home-exec-command-metric">
-                <span>Today&apos;s P&amp;L</span>
-                <strong className={dailyChange >= 0 ? "positive" : "negative"}>
-                  {formatSignedMoney(dailyChange)}
-                </strong>
-              </div>
-              <div className="home-exec-hero-side-metric home-exec-command-metric">
-                <span>Total G/L</span>
-                <strong className={totalGainLoss >= 0 ? "positive" : "negative"}>
-                  {formatSignedMoney(totalGainLoss)}
-                </strong>
-              </div>
-              <div className="home-exec-hero-side-metric home-exec-command-metric">
-                <span>Buying Power</span>
-                <strong>{formatMoney(liveAvailableBalance)}</strong>
-                <em>{buyingPowerPct.toFixed(1)}% of equity</em>
-              </div>
-              <div className="home-exec-hero-side-metric home-exec-command-metric range">
-                <span>Day&apos;s Range</span>
-                <div className="home-exec-range-row">
-                  <strong>{`${formatCompactMoney(dayRange.low)} - ${formatCompactMoney(dayRange.high)}`}</strong>
-                  <div className="home-exec-range-track" aria-hidden="true">
-                    <span className="home-exec-range-fill" style={{ width: `${Math.max(14, rangeNeedlePct)}%` }} />
-                    <span className="home-exec-range-needle" style={{ left: `${rangeNeedlePct}%` }} />
-                  </div>
-                </div>
-                <em>Needle at {rangeNeedlePct.toFixed(0)}% of session range</em>
-              </div>
-          </div>
+          <WorkspaceMetricStrip
+            className="home-exec-command-metrics"
+            label="Portfolio performance summary"
+            items={[
+              { label: "Today’s P&L", value: formatSignedMoney(dailyChange), tone: dailyChange >= 0 ? "success" : "risk", featured: true },
+              { label: "Total G/L", value: formatSignedMoney(totalGainLoss), tone: totalGainLoss >= 0 ? "success" : "risk" },
+              { label: "Buying power", value: formatMoney(liveAvailableBalance), helper: `${buyingPowerPct.toFixed(1)}% of equity`, tone: "info" },
+              { label: "Day’s range", value: `${formatCompactMoney(dayRange.low)} – ${formatCompactMoney(dayRange.high)}`, helper: `Session position ${rangeNeedlePct.toFixed(0)}%`, tone: "neutral" },
+            ]}
+          />
         </section>
 
         <aside className="home-exec-panel home-exec-monitor-panel">
@@ -2982,15 +3048,22 @@ export function HomeModule({
                 </Select>
               </div>
             </div>
-            <TradingViewChart
-              options={performanceChartOptions}
-              series={performanceChartSeries}
-              priceLines={performancePriceLines}
-              valueFormatter={(value) => yFormatter(Number(value))}
-              timeFormatter={formatPerformanceTime}
-              height={360}
-              width="100%"
-            />
+            {hasPerformanceHistory ? (
+              <TradingViewChart
+                options={performanceChartOptions}
+                series={performanceChartSeries}
+                priceLines={performancePriceLines}
+                valueFormatter={(value) => yFormatter(Number(value))}
+                timeFormatter={formatPerformanceTime}
+                height={360}
+                width="100%"
+              />
+            ) : (
+              <div className="home-exec-chart-empty">
+                <span>No performance history yet.</span>
+                <span className="home-exec-chart-empty-sub">Synced trades build your equity curve over time.</span>
+              </div>
+            )}
             <div className="home-exec-chart-stats">
               <div><span>Best Period</span><strong className={bestDay >= 0 ? "positive" : "negative"}>{formatSignedMoney(bestDay)}</strong></div>
               <div><span>Worst Period</span><strong className="negative">{formatSignedMoney(worstDay)}</strong></div>
@@ -3037,7 +3110,6 @@ export function HomeModule({
                 <p>Live macro, breadth, and mover signals affecting today&apos;s book.</p>
               </div>
               <div className="home-exec-market-context-actions">
-                <button type="button" className="home-exec-link" onClick={refreshMarketDetail}>Refresh</button>
                 <button type="button" className="home-exec-btn secondary small" onClick={openMarketContextDetail}>Open Full Page</button>
               </div>
             </div>
@@ -3114,6 +3186,29 @@ export function HomeModule({
                       </div>
                     </div>
                   </div>
+                  {unifiedPortfolio?.isUnified && (unifiedPortfolio.sources?.length || 0) > 0 && (
+                    <div className="home-exec-market-preview-block home-exec-connected-strip">
+                      <div className="home-exec-market-preview-head">
+                        <strong>Connected Sources</strong>
+                        <span>{unifiedPortfolio.sources.length} synced</span>
+                      </div>
+                      <div className="home-exec-market-preview-list">
+                        {unifiedPortfolio.sources.slice(0, 5).map((src) => (
+                          <div key={`conn-${src.provider}-${src.sourceType}`} className="home-exec-market-preview-row">
+                            <div className="home-exec-market-preview-symbol">
+                              <div>
+                                <strong>{String(src.provider || src.sourceType || "source").toUpperCase()}</strong>
+                                <span>{src.status === "synced" ? `${src.positionCount || 0} positions` : src.status || "pending"}</span>
+                              </div>
+                            </div>
+                            <em className="positive">
+                              {src.marketValue != null ? `$${Math.round(Number(src.marketValue)).toLocaleString()}` : "—"}
+                            </em>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -3563,10 +3658,18 @@ function MarketSummaryCard({ label, value, change, tone, caption }) {
 
 function MarketRegimeGauge({ value = 70 }) {
   const clamped = Math.max(0, Math.min(100, Number(value) || 0));
+  const tone = clamped >= 50 ? "positive" : "negative";
   return (
-    <div className="market-regime-gauge" style={{ "--gauge-value": `${clamped}%` }}>
-      <span />
-      <i />
+    <div className={`market-regime-gauge ${tone}`} aria-hidden="true">
+      <svg viewBox="0 0 96 56" className="market-regime-gauge-svg">
+        <path className="market-regime-gauge-track" d="M8 48 A40 40 0 0 1 88 48" pathLength="100" />
+        <path
+          className="market-regime-gauge-fill"
+          d="M8 48 A40 40 0 0 1 88 48"
+          pathLength="100"
+          style={{ strokeDasharray: `${clamped} 100` }}
+        />
+      </svg>
     </div>
   );
 }
