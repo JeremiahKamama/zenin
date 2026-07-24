@@ -7,6 +7,7 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
+import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "../utils/portfolioHeadline";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { zeninFetchJson } from "../utils/zeninFetch";
 import MarketSignals2 from "./market/MarketSignals2";
@@ -294,8 +295,14 @@ export function HomeModule({
     });
   };
 
+  // Single source of truth for positions: unified read model when active, else legacy.
+  const displayPositions = useMemo(
+    () => resolveDisplayPositions({ unified: unifiedPortfolio, legacyPortfolio: portfolio }),
+    [unifiedPortfolio, portfolio]
+  );
+
   const topPositions = useMemo(() => {
-    const spotPositions = (Array.isArray(portfolio) ? portfolio : []).map((asset) => {
+    const spotPositions = (Array.isArray(displayPositions) ? displayPositions : []).map((asset) => {
       const currency = asset?.currency || asset?.quotedCurrency || "USD";
       const rawValue = (Number(asset?.price) || 0) * (Number(asset?.quantity) || 0);
       const __positionValue = convertToUSD(rawValue, currency, spotPrices);
@@ -327,7 +334,7 @@ export function HomeModule({
     return [...spotPositions, ...optionPositions]
       .sort((a, b) => (Number(b.__positionValue) || 0) - (Number(a.__positionValue) || 0))
       .slice(0, 8);
-  }, [portfolio, activeOptionsTrades, multiChainCache, spotPrices]);
+  }, [displayPositions, activeOptionsTrades, multiChainCache, spotPrices]);
 
   const resolveMoverType = (asset) => {
     const type = String(asset?.type || "").toLowerCase();
@@ -366,7 +373,7 @@ export function HomeModule({
       };
     };
 
-    const holdingsSource = (Array.isArray(portfolio) ? portfolio : [])
+    const holdingsSource = (Array.isArray(displayPositions) ? displayPositions : [])
       .map(normalizePortfolioAsset)
       .filter((asset) => asset.symbol);
     const watchlistSource = Array.isArray(watchlistAssets) ? watchlistAssets : [];
@@ -412,7 +419,7 @@ export function HomeModule({
     });
 
     return [...deduped.values()];
-  }, [watchlistAssets, marketMovers, assets, portfolio, marketScope]);
+  }, [watchlistAssets, marketMovers, assets, displayPositions, marketScope]);
 
   const moversUniverseKey = useMemo(
     () => moversUniverse.map((a) => `${a.symbol}:${a.__moverType}`).join("|"),
@@ -596,25 +603,27 @@ export function HomeModule({
     [trades, portfolioValue, balance]
   );
   const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
-  const initialBalance = Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
+  // Fall back to the current equity when no real cost-basis exists (e.g. synced
+  // wallet with no manual purchase history) — never $10K, which produces +34700%.
+  const initialBalance = activeAccountMetrics?.initialBalance != null
+    ? Number(activeAccountMetrics.initialBalance)
+    : (Number.isFinite(totalAccountEquity) && totalAccountEquity > 0 ? totalAccountEquity : INITIAL_ACCOUNT_BALANCE);
   const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline) ? activeAccountMetrics.tradeTimeline : [];
-  // Equity-curve precedence for the hero chart:
-  //   1. Unified daily snapshots (EOD, immutable) when present;
-  //   2. Else the fill-reconstructed curve (backfills fresh wallets);
-  //   3. Else the legacy trade timeline.
-  // If none exist, chartData renders a graceful empty state (no fake $10K line).
-  const fillCurve = unifiedPortfolio?.fillEquityCurve;
-  const hasSnapshotTimeline = (unifiedPortfolio?.snapshotTimeline?.length || 0) > 1;
-  const hasFillCurve = Array.isArray(fillCurve) && fillCurve.length > 1;
-  const effectiveTimeline = hasSnapshotTimeline
+  // Equity-curve timeline: one shared selector so Home + Portfolio agree on which
+  // source to use. Precedence: unified snapshots > fill-reconstructed curve > legacy.
+  const effectiveTimeline = resolvePerformanceTimeline({ unified: unifiedPortfolio, legacyTimeline: tradeTimeline });
+  // Real unified EOD history (snapshots). When present, the hero curve + %/P&L
+  // rebaseline against the FIRST snapshot's value — never the $10K placeholder.
+  const unifiedTimeline = Array.isArray(unifiedPortfolio?.snapshotTimeline) && unifiedPortfolio.snapshotTimeline.length > 1
     ? unifiedPortfolio.snapshotTimeline
-    : hasFillCurve
-      ? fillCurve
-      : tradeTimeline;
-  const hasPerformanceHistory = hasSnapshotTimeline || hasFillCurve || tradeTimeline.length > 1;
-  const liveAvailableBalance = Number.isFinite(Number(activeAccountMetrics?.liveAvailableBalance))
-    ? Number(activeAccountMetrics.liveAvailableBalance)
-    : initialBalance;
+    : [];
+  const historyBaseValue = unifiedTimeline.length > 0 ? unifiedTimeline[0].equity : initialBalance;
+  const hasPerformanceHistory = Array.isArray(effectiveTimeline) && effectiveTimeline.length > 1;
+  const liveAvailableBalance = hasConnectedSources(unifiedPortfolio)
+    ? 0
+    : (Number.isFinite(Number(activeAccountMetrics?.liveAvailableBalance))
+      ? Number(activeAccountMetrics.liveAvailableBalance)
+      : initialBalance);
   // Prefer the unified multi-source total (Hyperliquid perps + cash) when
   // available; calculatePortfolioValue() already resolves to it via isUnified.
   // Falls back to the legacy snapshot only when unified is absent.
@@ -629,33 +638,30 @@ export function HomeModule({
   const dailyChange = useMemo(() => {
     const now = Date.now();
     const dayAgo = now - (24 * 60 * 60 * 1000);
-    const anchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= dayAgo);
-    // Only compute a daily change when a REAL prior anchor exists. If we fall
-    // back to the synthetic $10K default (no real cost-basis / no prior snapshot),
-    // report neutral (0) — never "equity − $10K", which produced +34700%.
+    const anchor = [...effectiveTimeline].reverse().find((point) => Number(point?.t) <= dayAgo);
     if (!anchor) return 0;
     const start = Number(anchor?.equity || initialBalance);
     return totalAccountEquity - start;
-  }, [tradeTimeline, totalAccountEquity, initialBalance]);
+  }, [effectiveTimeline, totalAccountEquity, initialBalance]);
 
   const weeklyChange = useMemo(() => {
-    if (tradeTimeline.length < 2) return 0;
+    if (effectiveTimeline.length < 2) return 0;
     const now = Date.now();
     const weekAgo = now - (7 * 24 * 60 * 60 * 1000);
-    const weekAnchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= weekAgo);
+    const weekAnchor = [...effectiveTimeline].reverse().find((point) => Number(point?.t) <= weekAgo);
     if (!weekAnchor) return 0;
     const start = Number(weekAnchor?.equity || initialBalance);
     return totalAccountEquity - start;
-  }, [tradeTimeline, totalAccountEquity, initialBalance]);
+  }, [effectiveTimeline, totalAccountEquity, initialBalance]);
 
   const ytdChange = useMemo(() => {
     const now = new Date();
     const ytdStartTs = new Date(now.getFullYear(), 0, 1).getTime();
-    const ytdAnchor = [...tradeTimeline].reverse().find((point) => Number(point?.t) <= ytdStartTs);
+    const ytdAnchor = [...effectiveTimeline].reverse().find((point) => Number(point?.t) <= ytdStartTs);
     if (!ytdAnchor) return 0;
     const start = Number(ytdAnchor?.equity || initialBalance);
     return totalAccountEquity - start;
-  }, [tradeTimeline, totalAccountEquity, initialBalance]);
+  }, [effectiveTimeline, totalAccountEquity, initialBalance]);
 
   const alerts = useMemo(() => {
     const rows = [];
@@ -687,10 +693,10 @@ export function HomeModule({
     const rows = [];
     if ((watchlistAssets || []).length === 0) rows.push("Watchlist is empty. Add symbols for stronger alert coverage.");
     if (moversCoverage.unavailable > 0) rows.push(`${moversCoverage.unavailable} assets have stale or missing interval performance data.`);
-    if ((portfolio || []).length === 0) rows.push("Portfolio has no open positions.");
+    if ((displayPositions || []).length === 0) rows.push("Portfolio has no open positions.");
     if (Math.abs(weeklyChange) > Math.max(500, totalAccountEquity * 0.05)) rows.push("Weekly equity swing exceeded 5% of account value.");
     return rows;
-  }, [watchlistAssets, moversCoverage.unavailable, portfolio, weeklyChange, totalAccountEquity]);
+  }, [watchlistAssets, moversCoverage.unavailable, displayPositions, weeklyChange, totalAccountEquity]);
 
   const quickActions = [
     { id: "trade", label: "Add Trade", action: () => onSelectAsset?.(gainers[0] || moversUniverse[0] || null) },
@@ -1326,6 +1332,8 @@ export function HomeModule({
   };
 
   const chartData = useMemo(() => {
+    const timeline = unifiedTimeline.length ? unifiedTimeline : effectiveTimeline;
+    const baseValue = unifiedTimeline.length ? historyBaseValue : initialBalance;
     const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
     const points = pointCountMap[chartInterval] || 24;
     const now = Date.now();
@@ -1336,7 +1344,7 @@ export function HomeModule({
       if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
       if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
        if (chartInterval === "ALL") {
-        const firstTradeTs = effectiveTimeline[0]?.t;
+        const firstTradeTs = timeline[0]?.t;
         return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
       }
       if (chartInterval === "YTD") {
@@ -1344,15 +1352,15 @@ export function HomeModule({
         return new Date(d.getFullYear(), 0, 1).getTime();
       }
       if (chartInterval === "5Y") return now - 5 * 365 * 24 * 60 * 60 * 1000;
-      const firstTradeTs = effectiveTimeline[0]?.t;
+      const firstTradeTs = timeline[0]?.t;
       return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 30 * 24 * 60 * 60 * 1000;
     })();
 
-    const inRangeTrades = effectiveTimeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
-    const beforeRangeTrade = [...effectiveTimeline]
+    const inRangeTrades = timeline.filter((trade) => trade.t >= start && trade.t <= now && Number.isFinite(trade.equity));
+    const beforeRangeTrade = [...timeline]
       .reverse()
       .find((trade) => trade.t < start && Number.isFinite(trade.equity));
-    const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : initialBalance;
+    const startEquity = Number.isFinite(beforeRangeTrade?.equity) ? beforeRangeTrade.equity : baseValue;
 
     const optionOpenAnchors = optionTimelineAdjustments.map((entry, idx) => ({
       t: entry.openedAt,
@@ -1381,8 +1389,8 @@ export function HomeModule({
 
     const toSeriesValue = (equity) => {
       if (chartMode === "equity") return equity;
-      if (chartMode === "percentage") return ((equity - initialBalance) / initialBalance) * 100;
-      return equity - initialBalance;
+      if (chartMode === "percentage") return ((equity - baseValue) / baseValue) * 100;
+      return equity - baseValue;
     };
 
     return Array.from({ length: points }, (_, i) => {
@@ -1390,14 +1398,14 @@ export function HomeModule({
       while (anchorIdx + 1 < anchors.length && anchors[anchorIdx + 1].t <= t) {
         anchorIdx += 1;
       }
-      const baseEquity = Number(anchors[anchorIdx]?.equity ?? initialBalance);
+      const baseEquity = Number(anchors[anchorIdx]?.equity ?? baseValue);
       const equity = baseEquity + getOptionAdjustmentAt(t);
       return [
         t,
         Number(toSeriesValue(equity).toFixed(2))
       ];
     });
-  }, [chartInterval, chartMode, effectiveTimeline, totalAccountEquity, optionTimelineAdjustments, initialBalance]);
+  }, [chartInterval, chartMode, effectiveTimeline, unifiedTimeline, historyBaseValue, totalAccountEquity, optionTimelineAdjustments, initialBalance]);
   const isProfitable = totalAccountEquity >= initialBalance;
 
   const chartColor = chartMode === "pnl"
@@ -1565,7 +1573,7 @@ export function HomeModule({
     .slice(0, 5);
 
   const portfolioImpactRows = useMemo(() => {
-    const spotRows = (Array.isArray(portfolio) ? portfolio : []).map((asset) => {
+    const spotRows = (Array.isArray(displayPositions) ? displayPositions : []).map((asset) => {
       const quantity = Number(asset?.quantity || 0);
       const price = Number(asset?.price || 0);
       const value = Number.isFinite(quantity * price) ? quantity * price : 0;
@@ -1616,7 +1624,7 @@ export function HomeModule({
     return [...spotRows, ...optionRows]
       .sort((a, b) => Math.abs(Number(b.impact || 0)) - Math.abs(Number(a.impact || 0)))
       .slice(0, 6);
-  }, [activeOptionsTrades, moversWithChange, multiChainCache, portfolio, spotPrices, totalAccountEquity]);
+  }, [activeOptionsTrades, moversWithChange, multiChainCache, displayPositions, spotPrices, totalAccountEquity]);
 
   const macroContextRows = useMemo(() => {
     if (macroData.length > 0) {
@@ -1733,7 +1741,7 @@ export function HomeModule({
   };
 
   const topHoldingsRows = useMemo(() => {
-    const spotRows = (Array.isArray(portfolio) ? portfolio : [])
+    const spotRows = (Array.isArray(displayPositions) ? displayPositions : [])
       .map((item) => {
         const price = Number(item?.price) || 0;
         const quantity = Number(item?.quantity) || 0;
@@ -1751,10 +1759,10 @@ export function HomeModule({
         __allocationPercent: alloc
       };
     });
-  }, [portfolio]);
+  }, [displayPositions]);
 
   const allocationBreakdown = useMemo(() => {
-    const spotRows = Array.isArray(portfolio) ? portfolio : [];
+    const spotRows = Array.isArray(displayPositions) ? displayPositions : [];
     let cryptoValue = 0;
     let stablecoinValue = 0;
     spotRows.forEach((item) => {
@@ -1772,7 +1780,7 @@ export function HomeModule({
     const cryptoPercent = total > 0 ? (cryptoValue / total) * 100 : 0;
     const cashPercent = total > 0 ? (cashValue / total) * 100 : 0;
     return { cryptoValue, cashValue, total, cryptoPercent, cashPercent };
-  }, [portfolio, liveAvailableBalance]);
+  }, [displayPositions, liveAvailableBalance]);
 
   const rebalanceDriftPct = Math.abs(allocationBreakdown.cryptoPercent - 50);
 
@@ -1786,11 +1794,11 @@ export function HomeModule({
       });
     });
     return map;
-  }, [portfolio, watchlistAssets, assets, marketMovers, moversUniverse]);
+  }, [displayPositions, watchlistAssets, assets, marketMovers, moversUniverse]);
 
   const portfolioWeightBySymbol = useMemo(() => {
     const map = new Map();
-    (Array.isArray(portfolio) ? portfolio : []).forEach((asset) => {
+    (Array.isArray(displayPositions) ? displayPositions : []).forEach((asset) => {
       const symbol = String(asset?.symbol || "").trim().toUpperCase();
       if (!symbol) return;
       const currency = asset?.currency || asset?.quotedCurrency || "USD";
@@ -1799,7 +1807,7 @@ export function HomeModule({
       map.set(symbol, totalAccountEquity > 0 ? (value / totalAccountEquity) * 100 : 0);
     });
     return map;
-  }, [portfolio, spotPrices, totalAccountEquity]);
+  }, [displayPositions, spotPrices, totalAccountEquity]);
 
   const activeResearchTriggerRows = useMemo(() => {
     const triggerRows = Array.isArray(researchTriggers) ? researchTriggers : [];
@@ -1918,10 +1926,13 @@ export function HomeModule({
   }, [rebalanceDriftPct]);
 
   const recentActivityRows = useMemo(() => {
-    const rows = (Array.isArray(trades) ? trades : [])
+    const sourceTrades = (unifiedPortfolio?.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0)
+      ? unifiedPortfolio.transactions.map((t) => ({ ...t, date: t.executedAt, __ts: new Date(t.executedAt || 0).getTime() }))
+      : (Array.isArray(trades) ? trades : []);
+    const rows = sourceTrades
       .map((trade) => ({
         ...trade,
-        __ts: new Date(trade?.executedAt || trade?.date || 0).getTime()
+        __ts: Number.isFinite(trade.__ts) ? trade.__ts : new Date(trade?.executedAt || trade?.date || 0).getTime()
       }))
       .filter((trade) => Number.isFinite(trade.__ts) && trade.__ts > 0)
       .sort((a, b) => b.__ts - a.__ts)
@@ -1985,7 +1996,7 @@ export function HomeModule({
     return Math.min(maxDd, value - peak);
   }, 0);
   const cashWeightPct = totalAccountEquity > 0 ? (allocationBreakdown.cashValue / totalAccountEquity) * 100 : 0;
-  const positionsCount = (Array.isArray(portfolio) ? portfolio.length : 0) + (Array.isArray(activeOptionsTrades) ? activeOptionsTrades.length : 0);
+  const positionsCount = (Array.isArray(displayPositions) ? displayPositions.length : 0) + (Array.isArray(activeOptionsTrades) ? activeOptionsTrades.length : 0);
   const betaProxy = Math.max(0, Math.min(1.5, (100 - cashWeightPct) / 100));
   const buyingPowerPct = totalAccountEquity > 0 ? (liveAvailableBalance / totalAccountEquity) * 100 : 0;
   const impliedVolDisplay = Number.isFinite(Number(todayView.vix))
@@ -2869,6 +2880,7 @@ export function HomeModule({
                 <UnifiedSourceStrip
                   sources={unifiedPortfolio.sources}
                   isPartial={unifiedPortfolio.isPartial}
+                  hasManualExcluded={unifiedPortfolio.hasManualExcluded}
                   onRefresh={unifiedPortfolio.refresh}
                   onSync={unifiedPortfolio.triggerSync}
                   syncing={unifiedPortfolio.syncing}

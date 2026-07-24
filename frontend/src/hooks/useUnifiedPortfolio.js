@@ -18,6 +18,7 @@ import {
   fetchUnifiedFxRates,
   fetchUnifiedSnapshots,
   fetchUnifiedEquityCurve,
+  fetchUnifiedTransactions,
   fetchUnifiedShadowComparison,
   triggerUnifiedSync
 } from "@/services/portfolioService";
@@ -33,6 +34,7 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
   const [fxRates, setFxRates] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [fillEquityCurve, setFillEquityCurve] = useState([]);
+  const [transactions, setTransactions] = useState([]);
   const [shadow, setShadow] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -46,7 +48,7 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
     inFlight.current = true;
     setLoading(true);
     try {
-      const [s, p, src, st, rec, fx, snaps, curve, sh] = await Promise.all([
+      const [s, p, src, st, rec, fx, snaps, curve, txns, sh] = await Promise.all([
         fetchUnifiedSummary().catch(() => null),
         fetchUnifiedPositions().catch(() => []),
         fetchUnifiedSources().catch(() => []),
@@ -55,6 +57,7 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
         fetchUnifiedFxRates().catch(() => null),
         fetchUnifiedSnapshots().catch(() => []),
         fetchUnifiedEquityCurve().catch(() => []),
+        fetchUnifiedTransactions().catch(() => []),
         fetchUnifiedShadowComparison().catch(() => null)
       ]);
       if (!mountedRef.current) return;
@@ -66,6 +69,7 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
       setFxRates(fx);
       setSnapshots(Array.isArray(snaps) ? snaps : []);
       setFillEquityCurve(Array.isArray(curve) ? curve : []);
+      setTransactions(Array.isArray(txns) ? txns : []);
       setShadow(sh);
       setError(null);
     } catch (err) {
@@ -124,6 +128,7 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
     fxRates,
     snapshots,
     fillEquityCurve,
+    transactions,
     shadow,
     warnings,
     unvaluedTotal,
@@ -139,11 +144,12 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
     derivativeGrossExposure: summary ? Number(summary.derivativeGrossExposure || 0) : null,
     derivativeNetExposure: summary ? Number(summary.derivativeNetExposure || 0) : null,
     isPartial: summary ? !!summary.isPartial : false,
+    hasManualExcluded: summary ? !!summary.hasManualExcluded : false,
     // Unified daily snapshots → tradeTimeline format for the equity chart.
     snapshotTimeline: Array.isArray(snapshots) && snapshots.length > 0
       ? snapshots
-          .filter((s) => s.snapshotDate && Number.isFinite(s.portfolioValue))
-          .map((s) => ({ t: new Date(s.snapshotDate).getTime(), equity: Number(s.portfolioValue) }))
+          .filter((s) => (s.snapshotDate || s.snapshot_date) && Number.isFinite(Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value)))
+          .map((s) => ({ t: new Date(s.snapshotDate || s.snapshot_date).getTime(), equity: Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value) }))
           .sort((a, b) => a.t - b.t)
       : [],
     refresh,
