@@ -10,6 +10,7 @@ import { zeninFetch } from "../utils/zeninFetch";
 import {
   fetchNeedsJournaling,
   dismissJournalEvent,
+  bulkDismissJournalEvents,
   snoozeJournalEvent,
   linkJournalEvent,
   classifyJournalEvent,
@@ -22,7 +23,6 @@ import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup,
 import { AsyncState, DataFreshnessSummary, ResponsiveActionBar, normalizeFreshnessStatus } from "@/components/ui/async-state";
 import { Button } from "@/components/ui/button";
 import DecisionComposer from "./DecisionComposer";
-import { DecisionLedgerTransmission } from "../transmission/TransmissionSurfaces";
 import { fetchDecisionOutcomes } from "../utils/decisionOutcomes";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
@@ -66,7 +66,8 @@ export function JournalModule({
   activeOptionsTrades = [],
   multiChainCache = {},
   spotPrices = {},
-  journalThreadContext = null
+  journalThreadContext = null,
+  unifiedPortfolio = null
 }) {
   const [reportPage, setReportPage] = useState(1);
   const [recentPage, setRecentPage] = useState(1);
@@ -89,6 +90,33 @@ export function JournalModule({
   // any snapshot has been generated).
   const [snapshotsByDate, setSnapshotsByDate] = useState(() => new Map());
   const [snapshotsLoadedFor, setSnapshotsLoadedFor] = useState("");
+
+  // Unified read model is the single source of truth for transactions when active
+  // (covers Hyperliquid + SnapTrade brokerage + exchanges + manual). Falls back to
+  // the legacy `trades` prop otherwise. Maps unified transactions to the legacy
+  // trade shape the rest of this module expects.
+  const displayTransactions = useMemo(() => {
+    if (unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0) {
+      return unifiedPortfolio.transactions.map((t) => ({
+        executedAt: t.executedAt,
+        date: t.executedAt,
+        symbol: t.symbol,
+        side: String(t.side || "").toUpperCase() === "BUY" ? "BUY" : String(t.side || "").toUpperCase() === "SELL" ? "SELL" : (t.side || "BUY"),
+        type: t.type || (t.sourceType === "wallet" ? "crypto" : "equity"),
+        notional: Number(t.notional || 0),
+        fee: Number(t.fee || 0),
+        quantity: Number(t.quantity || 0),
+        unitPrice: Number(t.unitPrice || 0),
+        currency: t.currency || "USD",
+        platform: t.provider || t.sourceType || "unknown",
+        sourceType: t.sourceType,
+        // Realized P&L for perps/crypto comes from closedPnl when present.
+        pnl: Number(t.closedPnl != null ? t.closedPnl : (t.pnl != null ? t.pnl : 0)),
+        accountEquityAfter: null
+      }));
+    }
+    return Array.isArray(trades) ? trades : [];
+  }, [unifiedPortfolio, trades]);
   // Phase 3: trade-journaling "Needs journaling" queue + event drawer.
   // Loaded lazily when the queue tab is active; refreshed after actions.
   const [needsJournaling, setNeedsJournaling] = useState([]);
@@ -97,6 +125,7 @@ export function JournalModule({
   const [activeJournalEvent, setActiveJournalEvent] = useState(null);
   const [isEventDrawerOpen, setIsEventDrawerOpen] = useState(false);
   const [eventActionState, setEventActionState] = useState({ id: null, busy: false });
+  const [bulkDismissBusy, setBulkDismissBusy] = useState(false);
   // Reuses the component's existing legacy toast state (setToast) for action
   // feedback, consistent with <JournalToast> rendered at the root.
 
@@ -126,6 +155,19 @@ export function JournalModule({
         ? prev.filter((e) => e.id !== updatedEvent.id)
         : prev
     );
+  }, []);
+
+  const handleBulkDismiss = useCallback(async () => {
+    setBulkDismissBusy(true);
+    try {
+      const result = await bulkDismissJournalEvents({});
+      setToast({ message: `Dismissed ${result?.dismissed || 0} journal reminder${result?.dismissed === 1 ? "" : "s"}.`, tone: "info" });
+      setNeedsJournaling([]);
+    } catch (err) {
+      setToast({ message: err?.message || "Please try again.", tone: "error" });
+    } finally {
+      setBulkDismissBusy(false);
+    }
   }, []);
 
   const handleDismissEvent = useCallback(async (event) => {
@@ -234,7 +276,8 @@ export function JournalModule({
     search: "",
     regime: "all",
     side: "all",
-    status: "all"
+    status: "all",
+    source: "all"
   });
   const [expandedExecutionGroups, setExpandedExecutionGroups] = useState({});
   const [journalView, setJournalView] = useState("overview");
@@ -416,7 +459,7 @@ export function JournalModule({
           .filter(Boolean)
       );
       const additions = [];
-      (Array.isArray(trades) ? trades : []).forEach((trade, idx) => {
+      (Array.isArray(displayTransactions) ? displayTransactions : []).forEach((trade, idx) => {
         const sourceTradeKey = String(
           trade?.clientId ||
           trade?.id ||
@@ -454,7 +497,7 @@ export function JournalModule({
       if (!additions.length) return prev;
       return [...additions, ...prev].slice(0, 500);
     });
-  }, [trades]);
+  }, [displayTransactions]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -507,7 +550,7 @@ export function JournalModule({
 
   const reportSymbols = useMemo(() => {
     const symbols = new Set();
-    (Array.isArray(trades) ? trades : []).forEach((trade) => {
+    (Array.isArray(displayTransactions) ? displayTransactions : []).forEach((trade) => {
       const symbol = String(trade?.asset || "").trim().toUpperCase();
       if (symbol) symbols.add(symbol);
     });
@@ -516,12 +559,12 @@ export function JournalModule({
       if (symbol) symbols.add(symbol);
     });
     return [...symbols];
-  }, [trades, portfolio]);
+  }, [displayTransactions, portfolio]);
 
   useEffect(() => {
     setReportPage(1);
     setRecentPage(1);
-  }, [trades]);
+  }, [displayTransactions]);
 
   const handleCloseOption = (tradeId) => {
   const tradeToClose = activeOptionsTrades.find(t => t.id === tradeId);
@@ -621,7 +664,7 @@ export function JournalModule({
 
   const executionRows = useMemo(() => {
     const normalizeSymbol = (value) => String(value || "UNKNOWN").trim().toUpperCase();
-    const ordered = [...trades].sort((a, b) => {
+    const ordered = [...displayTransactions].sort((a, b) => {
       const ta = new Date(a.executedAt || a.date || 0).getTime() || 0;
       const tb = new Date(b.executedAt || b.date || 0).getTime() || 0;
       if (ta !== tb) return ta - tb;
@@ -659,7 +702,7 @@ export function JournalModule({
     });
 
     return rows.reverse();
-  }, [trades]);
+  }, [displayTransactions]);
 
   const notify = (message, tone = "info") => {
     setToast({ id: Date.now(), message, tone });
@@ -769,7 +812,7 @@ export function JournalModule({
       return `${asset}::options::${strategy}`;
     };
 
-    const sortedTrades = [...trades].sort((a, b) => {
+    const sortedTrades = [...displayTransactions].sort((a, b) => {
       const ta = parseTradeDate(a.executedAt || a.date)?.getTime() ?? 0;
       const tb = parseTradeDate(b.executedAt || b.date)?.getTime() ?? 0;
       if (ta !== tb) return ta - tb;
@@ -1159,7 +1202,7 @@ export function JournalModule({
       tradedAssetsReport,
       realizedTrades: realized
     };
-  }, [trades, portfolio, livePriceBySymbol, nowTs, activeOptionsTrades, multiChainCache, spotPrices]);
+  }, [displayTransactions, portfolio, livePriceBySymbol, nowTs, activeOptionsTrades, multiChainCache, spotPrices]);
 
   const weeklyMonthlyReview = useMemo(() => {
     const now = Date.now();
@@ -1858,7 +1901,7 @@ export function JournalModule({
 
   const resetFilters = () => {
     setSelectedSymbols([]);
-    setJournalFilters((prev) => ({ ...prev, dateWindow: "all", strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", search: "" }));
+    setJournalFilters((prev) => ({ ...prev, dateWindow: "all", strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", source: "all", search: "" }));
   };
 
   const saveJournalNoteEntry = ({ title, body, status = "Saved", learned = "" }) => {
@@ -2161,6 +2204,14 @@ export function JournalModule({
               onExportChoice={handleExportChoice}
               onNewEntry={openNewEntry}
               onSaveSnapshot={saveReviewSnapshot}
+              activeJournalEvent={activeJournalEvent}
+              isEventDrawerOpen={isEventDrawerOpen}
+              onCloseEventDrawer={() => setIsEventDrawerOpen(false)}
+              onJournalEvent={handleJournalEvent}
+              onSnoozeEvent={handleSnoozeEvent}
+              onDismissEvent={handleDismissEvent}
+              onClassifyEvent={handleClassifyEvent}
+              eventActionState={eventActionState}
             />
           ) : (
             <JournalHeader
@@ -2183,6 +2234,8 @@ export function JournalModule({
               onOpenEvent={openJournalEvent}
               onDismiss={handleDismissEvent}
               onSnooze={handleSnoozeEvent}
+              onBulkDismiss={handleBulkDismiss}
+              bulkDismissBusy={bulkDismissBusy}
               eventActionState={eventActionState}
               formatValue={formatValue}
             />
@@ -2371,7 +2424,15 @@ function JournalDebriefHeader({
   exportMenuRef,
   onExportChoice,
   onNewEntry,
-  onSaveSnapshot
+  onSaveSnapshot,
+  activeJournalEvent,
+  isEventDrawerOpen,
+  onCloseEventDrawer,
+  onJournalEvent,
+  onSnoozeEvent,
+  onDismissEvent,
+  onClassifyEvent,
+  eventActionState
 }) {
   return (
     <>
@@ -2402,15 +2463,14 @@ function JournalDebriefHeader({
         </div>
       )}
     </CompactPageHeader>
-    <DecisionLedgerTransmission regime="Expansion" driver="Energy" tone="bullish" confidence={84} />
     <JournalEventDrawer
       event={activeJournalEvent}
       isOpen={isEventDrawerOpen}
-      onClose={() => setIsEventDrawerOpen(false)}
-      onJournal={handleJournalEvent}
-      onSnooze={handleSnoozeEvent}
-      onDismiss={handleDismissEvent}
-      onClassify={onClassify}
+      onClose={onCloseEventDrawer}
+      onJournal={onJournalEvent}
+      onSnooze={onSnoozeEvent}
+      onDismiss={onDismissEvent}
+      onClassify={onClassifyEvent}
       actionState={eventActionState}
     />
     </>
@@ -2870,6 +2930,16 @@ function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilte
               <option value="open">Open</option>
               <option value="closed">Closed</option>
               <option value="review">Review</option>
+            </select>
+          </label>
+          <label>
+            <span>Source</span>
+            <select value={filters.source} onChange={(event) => setFilters((prev) => ({ ...prev, source: event.target.value }))}>
+              <option value="all">All Sources</option>
+              <option value="hyperliquid">Hyperliquid</option>
+              <option value="brokerage">Brokerage (SnapTrade)</option>
+              <option value="exchange">Exchange</option>
+              <option value="manual">Manual</option>
             </select>
           </label>
           <button type="button" className="journal-btn secondary" onClick={onReset}>Reset</button>
@@ -3700,6 +3770,8 @@ function JournalNeedsJournalingView({
   onOpenEvent,
   onDismiss,
   onSnooze,
+  onBulkDismiss,
+  bulkDismissBusy,
   eventActionState,
   formatValue,
 }) {
@@ -3732,7 +3804,8 @@ function JournalNeedsJournalingView({
       <JournalEmptyState
         title="Nothing needs journaling"
         description="When you execute or sync a decision-relevant trade, it shows up here so you can capture the thesis, emotion, and lesson while it's fresh."
-        cta={{ label: "Refresh", onClick: onLoad }}
+        cta="Refresh"
+        onAction={onLoad}
       />
     );
   }
@@ -3742,6 +3815,15 @@ function JournalNeedsJournalingView({
       <div className="journal-needs-head">
         <h2>Needs journaling</h2>
         <span className="journal-count-pill">{items.length}</span>
+        <button
+          type="button"
+          className="journal-btn secondary journal-dismiss-all"
+          onClick={onBulkDismiss}
+          disabled={bulkDismissBusy || items.length === 0}
+          aria-label="Dismiss all journal reminders"
+        >
+          {bulkDismissBusy ? "Dismissing…" : "Dismiss all"}
+        </button>
       </div>
       <p className="journal-muted">Open decision-relevant events. Journal them while the trade is fresh, or snooze and revisit later.</p>
       <ul className="journal-event-list">

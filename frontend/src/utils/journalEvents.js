@@ -44,6 +44,17 @@ export async function dismissJournalEvent(id) {
   return data?.event || null;
 }
 
+// Bulk-dismiss journal events. Pass { ids } to dismiss specific events, or {}
+// to dismiss all open events (clears a historical reminder flood in one call).
+export async function bulkDismissJournalEvents(payload = {}) {
+  const res = await zeninFetch(`/api/journal-events/bulk-dismiss`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  const data = await parseOrThrow(res);
+  return data || { dismissed: 0, ids: [] };
+}
+
 export async function snoozeJournalEvent(id, until) {
   const res = await zeninFetch(`/api/journal-events/${encodeURIComponent(id)}/snooze`, {
     method: "POST",
