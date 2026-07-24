@@ -13,10 +13,38 @@
 //  - Overlap guard prevents a slow tick from stacking.
 
 const db = require("./database");
-const { sendJournalReminderEmail, isEmailDeliveryProductionReady } = require("./email");
+const { dispatchWorkspaceNotification } = require("./workspaceNotificationDispatcher");
 
 const DEFAULT_INTERVAL_MS = 60 * 1000; // 1 minute sweep
 const TICK_TIMEOUT_MS = 30 * 1000;
+
+// Plan gating for reminder delivery. Mirrors the rank used by the API's
+// requirePlan() so the worker honours the same tier rules: in-app reminders
+// are allowed on every plan, but email delivery requires a paid plan. This
+// keeps free-tier users from being emailed while still getting in-app nudges.
+const PLAN_RANK = { starter: 0, pro: 1, desk: 2, enterprise: 3 };
+const EMAIL_MIN_PLAN = "pro";
+function planRank(plan) { return PLAN_RANK[String(plan || "starter").trim().toLowerCase()] || 0; }
+
+async function fetchEffectivePlan(userId, workspaceId) {
+  try {
+    const ws = await db.query?.(
+      `SELECT w.plan AS workspace_plan, u.current_plan AS user_plan
+       FROM workspaces w
+       LEFT JOIN users u ON u.id = $1
+       WHERE w.id = $2 LIMIT 1`,
+      [userId, workspaceId]
+    ).catch(() => null);
+    const row = ws?.rows?.[0];
+    if (!row) return "starter";
+    const userPlan = row.user_plan || "starter";
+    const wsPlan = row.workspace_plan || "starter";
+    // Higher of the two wins (matches getEffectivePlan in index.js).
+    return planRank(wsPlan) > planRank(userPlan) ? wsPlan : userPlan;
+  } catch {
+    return "starter";
+  }
+}
 
 function titleFor(event, reminderType) {
   const sym = event.symbol ? ` ${event.symbol}` : "";
@@ -48,33 +76,29 @@ async function processDueReminders(before = new Date()) {
       const title = titleFor(event, task.reminderType);
       const body = bodyFor(event, task.reminderType);
 
-      await db.userWorkspace.notifications.create(task.userId, {
+      // Tier gate: email delivery requires a paid plan; in-app is always allowed.
+      const effectivePlan = await fetchEffectivePlan(task.userId, task.workspaceId);
+      const requestedChannels = planRank(effectivePlan) >= planRank(EMAIL_MIN_PLAN)
+        ? ["inApp", "email"]
+        : ["inApp"];
+
+      const notification = await dispatchWorkspaceNotification({ userId: task.userId, workspaceId: task.workspaceId, event: {
         type: "journal_reminder",
+        category: "journal",
+        severity: task.reminderType === "follow_up" ? "warning" : "info",
         title,
         body,
         entityType: "journal_event",
         entityId: task.eventId,
         metadata: { reminderType: task.reminderType, symbol: event.symbol, classification: event.classification },
-      }, task.workspaceId);
+        action: { label: "Open journal", actionUrl: "/app?section=journal" },
+        requestedChannels,
+        dedupeKey: `journal-reminder:${task.eventId}:${task.reminderType}`
+      }});
       notifications += 1;
-
-      const channelResults = { inApp: true };
-      const prefs = await db.userWorkspace.journalReminders.getPrefs(task.userId, task.workspaceId);
-      if (isEmailDeliveryProductionReady() && prefs && prefs.email) {
-        const emailAddr = await db.userWorkspace.journalReminders.getUserEmail(task.userId);
-        if (emailAddr) {
-          const result = await sendJournalReminderEmail(emailAddr, {
-            reminderType: task.reminderType,
-            symbol: event.symbol,
-            side: event.side,
-            workspaceName: "Zenin workspace",
-          });
-          channelResults.email = result;
-          if (result && result.sent) emails += 1;
-        }
-      }
-
-      await db.userWorkspace.journalReminders.complete(task.userId, task.id, channelResults, task.workspaceId);
+      const email = notification?.deliveryResults?.email;
+      if (email?.status === "delivered") emails += 1;
+      await db.userWorkspace.journalReminders.complete(task.userId, task.id, notification?.deliveryResults || { inApp: true }, task.workspaceId);
     } catch (err) {
       errors += 1;
       console.error("[JournalReminderWorker] task", task && task.id, "failed:", err && err.message);

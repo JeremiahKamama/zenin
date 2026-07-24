@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { DataHealthBadge } from "@/components/ui/async-state";
 import { DataTable } from "./data-table/DataTable";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-import { WatchlistTransmission } from "../transmission/TransmissionSurfaces";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
@@ -10,9 +9,10 @@ import { zeninFetchJson } from "../utils/zeninFetch";
 import { getCurrencySymbol, inferAssetCurrency } from "../utils/currencyUtils";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { normalizeInstrumentSymbol, resolveCurrencyInstrument } from "../utils/currencyInstruments.js";
-import { DensePanelHeader, GuidedEmptyState, InlineControlGroup } from "./CompactWorkspaceUI";
+import { ContextRail, DensePanelHeader, GuidedEmptyState, InlineControlGroup, WorkspaceMetricStrip, WorkspacePageHeader } from "./CompactWorkspaceUI";
 import { IntelligenceCenter } from "./intelligence/index.jsx";
 import { SharedWatchlistWorkspacePanel } from "./InstitutionalPanels";
+import { PlanLockOverlay } from "./PlanLockOverlay";
 import {
   UNSUPPORTED_IMPORT_EXTENSIONS,
   parseWatchlistImportPayload
@@ -68,6 +68,9 @@ export function Watchlist({
   onUpdateAlertAssignment,
   currentUserId = "",
   hasDeskFeatureAccess = false,
+  sharedWatchlistLocked = false,
+  lockedPlanLabel = "desk",
+  onUpgrade,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("list"); // "grid" or "list"
@@ -114,6 +117,7 @@ export function Watchlist({
   const [importError, setImportError] = useState("");
   const [importNotice, setImportNotice] = useState("");
   const [importBusy, setImportBusy] = useState(false);
+  const [showControls, setShowControls] = useState(false);
   const normalizeSymbol = (value) => String(value || "").trim().toUpperCase();
   const normalizeMarketType = (value) => String(value || "").trim().toLowerCase() || "spot";
   const normalizeCategory = (value) => String(value || "").trim().toLowerCase();
@@ -668,17 +672,30 @@ useEffect(() => {
     return Number.isFinite(change) && Math.abs(change) >= alertThresholdPct && asset?.isMarketOpen !== false;
   };
 
+  const watchlistMetrics = useMemo(() => {
+    const moves = displayedAssets
+      .map((asset) => Number(asset?.priceChangePercent))
+      .filter(Number.isFinite);
+    const reviewCount = displayedAssets.filter((asset) => isAlertTriggered(asset)).length;
+    const positiveCount = moves.filter((move) => move > 0).length;
+    return [
+      { label: "Tracked", value: displayedAssets.length, helper: `${activeCategory} in scope`, featured: true },
+      { label: "Need review", value: reviewCount, helper: `Move ≥ ${alertThresholdPct}%`, tone: reviewCount ? "warning" : "neutral" },
+      { label: "Advancing", value: `${positiveCount}/${moves.length || 0}`, helper: "Names with a positive session", tone: positiveCount ? "success" : "neutral" },
+      { label: "Data", value: liveStatus === "live" ? "Live" : liveStatus === "loading" ? "Syncing" : "Cached", helper: lastLivePriceAt ? `Last tick ${new Date(lastLivePriceAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No confirmed tick", tone: liveStatus === "live" ? "success" : "stale" },
+    ];
+  }, [activeCategory, alertThresholdPct, displayedAssets, lastLivePriceAt, liveStatus]);
+
   // ── TanStack DataTable column definitions ──────────────────────────
   // Defined after the cell-renderer helpers (formatAssetPrice, isAlertTriggered,
-  // etc.) so the memo closes over them correctly. Sortable=false because the
-  // blotter is sorted alphabetically by Symbol by default; the manual SORT
-  // toolbar was removed. A follow-up can consolidate sorting into TanStack's
-  // native sort model if per-column sorting is wanted again.
+  // etc.) so the memo closes over them correctly. Symbol and % Chg are
+  // TanStack-sortable (click the header to toggle asc/desc).
   const watchlistColumns = useMemo(() => [
     {
       key: "symbol",
       header: "Symbol",
-      sortable: false,
+      sortable: true,
+      sortValue: (asset) => asset.symbol,
       cell: (asset) => (
         <div className="watchlist-symbol-cell">
           <strong>{asset.symbol}</strong>
@@ -702,7 +719,8 @@ useEffect(() => {
       key: "priceChangePercent",
       header: "% Chg",
       align: "right",
-      sortable: false,
+      sortable: true,
+      sortValue: (asset) => Number(asset?.priceChangePercent ?? 0),
       cell: (asset) => {
         const change = Number(asset?.priceChangePercent);
         const hasChange = Number.isFinite(change) && asset?.isMarketOpen !== false;
@@ -713,12 +731,6 @@ useEffect(() => {
           </span>
         );
       },
-    },
-    {
-      key: "transmission",
-      header: "Transmission",
-      sortable: false,
-      cell: (asset) => <WatchlistTransmission count={Number(asset?.transmissionCount ?? 0) || 0} node={asset.symbol} />,
     },
     {
       key: "thesis",
@@ -756,7 +768,6 @@ useEffect(() => {
       sortable: false,
       cell: (asset) => {
         const assignment = getAlertAssignment(asset);
-        const isOpen = !assignment || assignment.status === "open";
         const key = buildAlertKey(asset);
         const busy = alertActionBusy[key];
         return (
@@ -765,17 +776,6 @@ useEffect(() => {
             <button type="button" className="watchlist-action-btn" onClick={() => handleIntent(asset, "journal")}>Journal</button>
             {isAlertTriggered(asset) ? (
               <>
-                {isOpen ? (
-                  <button
-                    type="button"
-                    className="watchlist-action-btn primary"
-                    disabled={busy || alertsLoading}
-                    onClick={() => handleAlertAction(asset, "assign")}
-                    title="Assign this alert to me"
-                  >
-                    {busy === "assign" ? "…" : "Assign"}
-                  </button>
-                ) : null}
                 {assignment?.status === "open" || assignment?.status === "snoozed" ? (
                   <button
                     type="button"
@@ -798,15 +798,6 @@ useEffect(() => {
                     {busy === "archive" ? "…" : "Archive"}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className="watchlist-action-btn"
-                  disabled={busy || alertsLoading}
-                  onClick={() => handleAlertAction(asset, "alert")}
-                  title="Send watchlist alert email"
-                >
-                  {busy === "alert" ? "…" : "Email"}
-                </button>
               </>
             ) : null}
             <button
@@ -876,31 +867,42 @@ useEffect(() => {
 
   return (
     <>
-      <section className="watchlist-panel watchlist-panel-compact">
-      <header className="watchlist-header">
-        <div className="category-tabs compact">
+      <section className="watchlist-panel watchlist-panel-compact watchlist-workspace">
+      <WorkspacePageHeader
+        eyebrow="Monitor"
+        title="Watchlist"
+        description="Tracked names first. Filters and display preferences stay out of the way until you need them."
+        status={<span className={`watchlist-freshness watchlist-freshness--${liveStatus}`}>{liveStatus === "live" ? "Live prices" : liveStatus === "loading" ? "Refreshing prices" : "Showing last confirmed data"}</span>}
+        primaryAction={activeCategory !== "indicators" ? (
+          <button type="button" className="watchlist-import-trigger" onClick={() => setIsImportOpen((value) => !value)} aria-expanded={isImportOpen} aria-controls="watchlist-import-panel">
+            {isImportOpen ? "Close import" : "Import list"}
+          </button>
+        ) : null}
+        secondaryActions={activeCategory !== "indicators" ? (
+          <button type="button" className="watchlist-controls-trigger" onClick={() => setShowControls((value) => !value)} aria-expanded={showControls} aria-controls="watchlist-secondary-controls">
+            {showControls ? "Hide controls" : "Filters & view"}
+          </button>
+        ) : null}
+      />
+      <div className="watchlist-scope-row">
+        <div className="category-tabs compact" role="tablist" aria-label="Watchlist asset class">
           {categories.map((category) => (
             <button
               key={category}
               className={category === activeCategory ? "active" : ""}
               onClick={() => onCategorySelect(category)}
+              role="tab"
+              aria-selected={category === activeCategory}
             >
               {category.toUpperCase()}
             </button>
           ))}
         </div>
+      </div>
 
-        {activeCategory !== "indicators" ? (
-          <div className="watchlist-header-actions compact">
-            <button
-              type="button"
-              className="watchlist-import-trigger"
-              onClick={() => setIsImportOpen((value) => !value)}
-              aria-expanded={isImportOpen}
-              aria-controls="watchlist-import-panel"
-            >
-              Import
-            </button>
+      {activeCategory !== "indicators" && showControls ? (
+          <section className="watchlist-secondary-controls" id="watchlist-secondary-controls" aria-label="Watchlist filters and display">
+            <div className="watchlist-header-actions compact">
             <button
               type="button"
               className="watchlist-import-trigger"
@@ -962,9 +964,23 @@ useEffect(() => {
               />
               <span>%</span>
             </label>
-          </div>
-        ) : null}
-      </header>
+            </div>
+            {activeCategory === "stocks" ? (
+              <div className="theme-tabs watchlist-theme-strip" aria-label="Stock themes">
+                {mergedStockThemes.map((theme) => (
+                  <button
+                    key={theme}
+                    className={`theme-pill ${activeTheme === theme ? "active" : ""}`}
+                    onClick={() => onThemeSelect(theme)}
+                  >
+                    {theme}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </section>
+      ) : null}
+
       {isImportOpen ? (
         <section className="watchlist-import-panel" id="watchlist-import-panel" aria-label="Import watchlist">
           <div className="watchlist-import-head">
@@ -1048,19 +1064,6 @@ useEffect(() => {
           </div>
         </section>
       ) : null}
-      {activeCategory === "stocks" && (
-        <div className="theme-tabs watchlist-theme-strip" style={{ paddingTop: 0, marginBottom: "10px" }}>
-          {mergedStockThemes.map((theme) => (
-            <button
-              key={theme}
-              className={`theme-pill ${activeTheme === theme ? "active" : ""}`}
-              onClick={() => onThemeSelect(theme)}
-            >
-              {theme}
-            </button>
-          ))}
-        </div>
-      )}
       {loading ? (
         <div className="loading-state">Loading market data...</div>
       ) : activeCategory === "indicators" ? (
@@ -1258,7 +1261,7 @@ useEffect(() => {
             </div>
 
             {activeCategory === "stocks" ? (
-              <aside className="watchlist-earnings-rail">
+              <ContextRail title="Catalyst context" className="watchlist-earnings-rail">
                 <DensePanelHeader
                   title="Upcoming"
                   subtitle="Nearest earnings in focus"
@@ -1321,7 +1324,7 @@ useEffect(() => {
                 {earningsStale && earningsNotice ? (
                   <div className="snapshot-inline-note">{earningsNotice}</div>
                 ) : null}
-              </aside>
+              </ContextRail>
             ) : null}
           </div>
 
@@ -1348,11 +1351,19 @@ useEffect(() => {
       </section>
 
       {hasDeskFeatureAccess ? (
-        <SharedWatchlistWorkspacePanel
-          activeCategory={activeCategory}
-          activeTheme={activeTheme}
-          assets={displayedAssets}
-        />
+        <PlanLockOverlay
+          locked={sharedWatchlistLocked}
+          requiredPlan={lockedPlanLabel}
+          title="Shared Desk Watchlists"
+          description="Collaborative desk watchlists are a Desk plan feature. Upgrade to share and manage a live desk view."
+          onUpgrade={onUpgrade}
+        >
+          <SharedWatchlistWorkspacePanel
+            activeCategory={activeCategory}
+            activeTheme={activeTheme}
+            assets={displayedAssets}
+          />
+        </PlanLockOverlay>
       ) : null}
 
       {selectedIndicatorMetric ? (
